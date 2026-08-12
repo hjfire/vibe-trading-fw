@@ -183,6 +183,8 @@ app.middleware("http")(_apply_security_headers)
 
 
 # Route registration + re-exports
+import sys as _sys_mod
+_sys_mod.modules.setdefault("api_server", _sys_mod.modules[__name__])
 
 # --- Runs ---
 from src.api.runs_routes import register_runs_routes  # noqa: E402
