@@ -1,0 +1,36 @@
+# 每日自动同步上游官方仓库 HKUDS/Vibe-Trading
+# 任务运行在 GitHub 服务器上，无需本地电脑开机。
+# 若合并出现冲突，本任务会失败并通过邮件通知仓库主人。
+name: Sync upstream
+
+on:
+  schedule:
+    # UTC 12:00 = 北京时间 20:00
+    - cron: "0 12 * * *"
+  workflow_dispatch: # 允许在 Actions 页面随时手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout my repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream/main into main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/HKUDS/Vibe-Trading.git
+          git fetch upstream
+          if git merge-base --is-ancestor upstream/main main; then
+            echo "Already up to date - nothing to sync."
+            exit 0
+          fi
+          git merge upstream/main --no-edit
+          git push origin main
