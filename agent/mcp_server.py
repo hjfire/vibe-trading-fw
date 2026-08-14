@@ -2347,6 +2347,11 @@ def _run_to_dict(run, *, timed_out: bool = False, is_stale: bool = False) -> dic
     threshold. No disk state is changed by setting this — the explicit
     :func:`reap_stale_runs` tool is what finalizes a stale run.
     """
+    from src.swarm.models import (
+        public_model_metadata,
+        public_provider_metadata,
+        public_reasoning_effort,
+    )
     from src.swarm.serialization import run_level_error, serialize_task
 
     return {
@@ -2360,6 +2365,10 @@ def _run_to_dict(run, *, timed_out: bool = False, is_stale: bool = False) -> dic
         "final_report": run.final_report,
         "total_input_tokens": run.total_input_tokens,
         "total_output_tokens": run.total_output_tokens,
+        "provider": public_provider_metadata(run.provider),
+        "model": public_model_metadata(run.model),
+        "reasoning_effort": public_reasoning_effort(run.reasoning_effort),
+        "use_responses_api": run.use_responses_api,
         "timed_out": timed_out,
         "is_stale": is_stale,
     }
@@ -2446,6 +2455,12 @@ def list_runs(limit: int = 20) -> str:
     Args:
         limit: Maximum number of runs to return (default 20).
     """
+    from src.swarm.models import (
+        public_model_metadata,
+        public_provider_metadata,
+        public_reasoning_effort,
+    )
+
     store = _get_swarm_store()
     runs = store.list_runs(limit=limit)
     items = []
@@ -2468,6 +2483,10 @@ def list_runs(limit: int = 20) -> str:
                 "task_counts": counts,
                 "total_input_tokens": reconciled.total_input_tokens,
                 "total_output_tokens": reconciled.total_output_tokens,
+                "provider": public_provider_metadata(reconciled.provider),
+                "model": public_model_metadata(reconciled.model),
+                "reasoning_effort": public_reasoning_effort(reconciled.reasoning_effort),
+                "use_responses_api": reconciled.use_responses_api,
             }
         )
     return json.dumps(items, ensure_ascii=False, indent=2)

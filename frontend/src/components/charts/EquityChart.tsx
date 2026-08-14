@@ -5,13 +5,15 @@ import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
 import { echarts, CHART_GROUP, connectCharts } from "@/lib/echarts";
 import { useThemeDark } from "@/lib/theme-store";
+import type { DrawdownZone } from "@/lib/tearsheet";
 
 interface Props {
   data: EquityPoint[];
   height?: number;
+  drawdownZones?: DrawdownZone[];
 }
 
-export function EquityChart({ data, height = 300 }: Props) {
+export function EquityChart({ data, height = 300, drawdownZones }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const dark = useThemeDark();
 
@@ -21,6 +23,7 @@ export function EquityChart({ data, height = 300 }: Props) {
     const chart = echarts.init(ref.current);
     chart.group = CHART_GROUP;
     connectCharts();
+    const zones = drawdownZones ?? [];
 
     const dates = data.map((d) => d.time);
     const equity = data.map((d) => Number(d.equity));
@@ -86,6 +89,19 @@ export function EquityChart({ data, height = 300 }: Props) {
           areaStyle: {
             color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: t.infoColor + "40" }, { offset: 1, color: t.infoColor + "00" }] },
           },
+          ...(zones.length > 0 ? {
+            markArea: {
+              silent: true,
+              data: zones.map((zone) => [
+                {
+                  xAxis: zone.startTime,
+                  itemStyle: { color: t.downColor + "14" },
+                  label: { show: true, position: "insideTopLeft", formatter: `#${zone.rank}`, fontSize: 9, color: t.downColor },
+                },
+                { xAxis: zone.endTime },
+              ]),
+            },
+          } : {}),
         },
         {
           name: "Drawdown%", type: "line", xAxisIndex: 1, yAxisIndex: 1,
@@ -115,7 +131,7 @@ export function EquityChart({ data, height = 300 }: Props) {
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       chart.dispose();
     };
-  }, [data, dark]);
+  }, [data, drawdownZones, dark]);
 
   if (data.length === 0) {
     return <div className="text-muted-foreground text-sm p-4">{i18n.t("charts.noEquityData")}</div>;

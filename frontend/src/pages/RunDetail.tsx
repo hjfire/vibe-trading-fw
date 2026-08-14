@@ -1,12 +1,13 @@
 import i18n from '@/i18n';
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useNavigate } from "react-router";
+import { useParams, useNavigate, useSearchParams } from "react-router";
 import {
   AlertTriangle,
   ArrowLeft,
   BarChart3,
+  CalendarRange,
   CheckCircle2,
   Code2,
   Copy,
@@ -16,6 +17,7 @@ import {
   Fingerprint,
   Gauge,
   List,
+  LayoutDashboard,
   Loader2,
   ShieldCheck,
   XCircle,
@@ -23,19 +25,30 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { api, type BacktestMetrics, type RebalanceNotesPayload, type RiskXRayPayload, type RunCard, type RunData, type ValidationData } from "@/lib/api";
+import { api, type BacktestMetrics, type EquityPoint, type RebalanceNotesPayload, type RiskXRayPayload, type RunCard, type RunData, type ValidationData } from "@/lib/api";
+import {
+  computeAnnualReturns,
+  computeMonthlyReturns,
+  computeTopDrawdowns,
+  normalizeEquitySeries,
+  toDrawdownZones,
+} from "@/lib/tearsheet";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import { AnnualReturnsChart } from "@/components/charts/AnnualReturnsChart";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
 import { EquityChart } from "@/components/charts/EquityChart";
+import { MonthlyReturnsHeatmap } from "@/components/charts/MonthlyReturnsHeatmap";
+import { TopDrawdownsPanel } from "@/components/charts/TopDrawdownsPanel";
 import { MetricsCard } from "@/components/chat/MetricsCard";
 import { ValidationPanel } from "@/components/charts/ValidationPanel";
 import { Skeleton, SkeletonMetrics, SkeletonChart } from "@/components/common/Skeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import { getStrategyReportIdentity, StrategyResearchDashboard } from "@/components/charts/StrategyResearchDashboard";
 
 const rehypePlugins = [rehypeHighlight];
 
-type Tab = "chart" | "trades" | "runCard" | "code" | "validation" | "studio";
+type Tab = "dashboard" | "chart" | "tearsheet" | "trades" | "runCard" | "code" | "validation" | "studio";
 type ChartPayload = Pick<RunData, "price_series" | "indicator_series" | "trade_markers">;
 type ChartCache = Record<string, ChartPayload>;
 type ChartLoadProgress = { done: number; total: number };
@@ -97,11 +110,13 @@ function yieldToBrowser(): Promise<void> {
 
 export function RunDetail() {
   const { runId } = useParams<{ runId: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedInitialTab: Tab = searchParams.get("view") === "dashboard" ? "dashboard" : "chart";
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [run, setRun] = useState<RunData | null>(null);
   const [code, setCode] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<Tab>("chart");
+  const [tab, setTab] = useState<Tab>(requestedInitialTab);
   const [loading, setLoading] = useState(true);
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [chartPickerSymbol, setChartPickerSymbol] = useState("");
@@ -117,8 +132,11 @@ export function RunDetail() {
   const hasValidation = !!run?.validation;
   const hasRunCard = !!run?.run_card;
   const hasStudio = !!run?.risk_xray || !!run?.rebalance_notes;
+  const hasTearsheet = (run?.artifacts_equity_csv?.length ?? 0) > 0 || (run?.equity_curve?.length ?? 0) > 0;
   const TABS: { id: Tab; label: string; icon: typeof BarChart3; hidden?: boolean }[] = [
+    { id: "dashboard", label: i18n.t("runDetail.dashboard"), icon: LayoutDashboard },
     { id: "chart", label: i18n.t("runDetail.chart"), icon: BarChart3 },
+    { id: "tearsheet", label: i18n.t("runDetail.tearsheet"), icon: CalendarRange, hidden: !hasTearsheet },
     { id: "trades", label: i18n.t("runDetail.trades"), icon: List },
     { id: "studio", label: i18n.t("runDetail.studio"), icon: Gauge, hidden: !hasStudio },
     { id: "validation", label: i18n.t("runDetail.validation"), icon: ShieldCheck, hidden: !hasValidation },
@@ -131,7 +149,7 @@ export function RunDetail() {
     cancelBulkChartLoadRef.current = true;
     setRun(null);
     setCode({});
-    setTab("chart");
+    setTab(requestedInitialTab);
     setLoading(true);
     setSelectedSymbol("");
     setChartPickerSymbol("");
@@ -173,7 +191,7 @@ export function RunDetail() {
       cancelBulkChartLoadRef.current = true;
       if (runGenerationRef.current === generation) runGenerationRef.current += 1;
     };
-  }, [runId]);
+  }, [runId, requestedInitialTab]);
 
   if (loading) {
     return (
@@ -201,6 +219,7 @@ export function RunDetail() {
 
   const ok = run.status === "success";
   const cancelled = run.status === "cancelled";
+  const reportIdentity = getStrategyReportIdentity(run);
 
   async function loadChartSymbol(
     symbol: string,
@@ -317,7 +336,10 @@ export function RunDetail() {
               <span className="sr-only">{t("swarm.status.failed")}</span>
             </>
           )}
-          <h1 className="font-mono text-2xl font-semibold">{runId}</h1>
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold tracking-tight">{reportIdentity.title}</h1>
+            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">RUN {runId}</p>
+          </div>
           {run.elapsed_seconds && <span className="text-xs text-muted-foreground">{run.elapsed_seconds.toFixed(1)}s</span>}
         </div>
         {run.prompt && <p className="text-sm text-muted-foreground">{run.prompt}</p>}
@@ -366,6 +388,7 @@ export function RunDetail() {
 
       <div className="flex-1 overflow-auto">
         <ErrorBoundary>
+          {tab === "dashboard" && <div className="p-4"><StrategyResearchDashboard run={run} /></div>}
           {tab === "chart" && (
             <ChartTab
               run={run}
@@ -383,6 +406,7 @@ export function RunDetail() {
               onCancelLoadAll={handleCancelLoadAllCharts}
             />
           )}
+          {tab === "tearsheet" && hasTearsheet && <TearsheetTab run={run} />}
           {tab === "trades" && <TradesTab run={run} />}
           {tab === "validation" && run.validation && <ValidationPanel data={run.validation} />}
           {tab === "studio" && hasStudio && (
@@ -567,6 +591,47 @@ function StudioTab({ xray, notes }: { xray?: RiskXRayPayload; notes?: RebalanceN
           )}
         </RunCardPanel>
       )}
+    </div>
+  );
+}
+
+function TearsheetTab({ run }: { run: RunData }) {
+  const equityPoints = useMemo(
+    () => normalizeEquitySeries(run.artifacts_equity_csv ?? run.equity_curve),
+    [run.artifacts_equity_csv, run.equity_curve],
+  );
+  const monthly = useMemo(() => computeMonthlyReturns(equityPoints), [equityPoints]);
+  const annual = useMemo(() => computeAnnualReturns(equityPoints), [equityPoints]);
+  const drawdowns = useMemo(() => computeTopDrawdowns(equityPoints, 5), [equityPoints]);
+  const zones = useMemo(() => {
+    const lastTime = equityPoints.length > 0 ? equityPoints[equityPoints.length - 1].time : "";
+    return toDrawdownZones(drawdowns, lastTime);
+  }, [drawdowns, equityPoints]);
+
+  if (equityPoints.length < 2) {
+    return <div className="p-8 text-muted-foreground text-sm">{i18n.t("runDetail.noTearsheetData")}</div>;
+  }
+
+  const chartData: EquityPoint[] = equityPoints.map((p) => ({ time: p.time, equity: p.equity, drawdown: p.drawdown }));
+  const yearCount = new Set(monthly.map((m) => m.year)).size;
+  const heatmapHeight = Math.min(420, Math.max(200, 40 + 34 * yearCount));
+
+  return (
+    <div className="p-4 space-y-4">
+      <RunCardPanel title={i18n.t("runDetail.equityDrawdown")} icon={BarChart3}>
+        <EquityChart data={chartData} drawdownZones={zones} height={300} />
+      </RunCardPanel>
+      <RunCardPanel title={i18n.t("runDetail.monthlyReturns")} icon={CalendarRange}>
+        <MonthlyReturnsHeatmap data={monthly} annual={annual} height={heatmapHeight} />
+      </RunCardPanel>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <RunCardPanel title={i18n.t("runDetail.annualReturns")} icon={BarChart3}>
+          <AnnualReturnsChart data={annual} height={260} />
+        </RunCardPanel>
+        <RunCardPanel title={i18n.t("runDetail.topDrawdowns")} icon={AlertTriangle}>
+          <TopDrawdownsPanel episodes={drawdowns} />
+        </RunCardPanel>
+      </div>
     </div>
   );
 }

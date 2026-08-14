@@ -153,6 +153,8 @@ def search_instruments(
     *,
     limit: int = 10,
     mode: str = "auto",
+    instrument_type_id: int | None = None,
+    include_rates: bool = False,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Search tradable instruments (eToro Public API)."""
@@ -167,6 +169,8 @@ def search_instruments(
             module.build_config(profile.config, overrides),
             limit=limit,
             mode=mode,
+            instrument_type_id=instrument_type_id,
+            include_rates=include_rates,
         ),
     )
 
@@ -418,6 +422,21 @@ def _etoro_error(message: str) -> dict[str, Any]:
     return {"status": "error", "error": message}
 
 
+def _etoro_copy_unavailable_on_paper(profile: TradingProfile) -> dict[str, Any] | None:
+    if profile.environment != "paper":
+        return None
+    from src.trading.connectors.etoro.copy_trading import COPY_TRADING_PAPER_UNSUPPORTED
+
+    return _with_profile(
+        profile,
+        {
+            "status": "error",
+            "error": COPY_TRADING_PAPER_UNSUPPORTED,
+            "error_code": "copy_unavailable_on_paper",
+        },
+    )
+
+
 def _close_etoro_position(
     module: Any,
     config: Any,
@@ -651,6 +670,9 @@ def etoro_copy_precheck(
     profile = profile_by_id(profile_id)
     if profile.connector != "etoro":
         return _unsupported_etoro(profile, "copy.precheck")
+    blocked = _etoro_copy_unavailable_on_paper(profile)
+    if blocked is not None:
+        return blocked
     module = _sdk_module(profile.connector)
     config = module.build_config(profile.config, overrides)
     return _with_profile(
@@ -677,6 +699,9 @@ def etoro_copy_start(
     profile = profile_by_id(profile_id)
     if profile.connector != "etoro":
         return _unsupported_etoro(profile, "copy.start")
+    blocked = _etoro_copy_unavailable_on_paper(profile)
+    if blocked is not None:
+        return blocked
     overrides = dict(overrides)
     overrides.pop("session_id", None)
     module = _sdk_module(profile.connector)
@@ -755,6 +780,9 @@ def etoro_copy_poll(
     profile = profile_by_id(profile_id)
     if profile.connector != "etoro":
         return _unsupported_etoro(profile, "copy.poll")
+    blocked = _etoro_copy_unavailable_on_paper(profile)
+    if blocked is not None:
+        return blocked
     module = _sdk_module(profile.connector)
     config = module.build_config(profile.config, overrides)
     return _with_profile(profile, module.copy_poll(config, reference_id=reference_id, request_id=request_id))
@@ -772,6 +800,9 @@ def etoro_copy_close(
     profile = profile_by_id(profile_id)
     if profile.connector != "etoro":
         return _unsupported_etoro(profile, "copy.close")
+    blocked = _etoro_copy_unavailable_on_paper(profile)
+    if blocked is not None:
+        return blocked
     overrides = dict(overrides)
     overrides.pop("session_id", None)
     module = _sdk_module(profile.connector)

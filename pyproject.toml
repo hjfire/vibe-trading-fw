@@ -118,6 +118,13 @@ mt5 = [
 deepseek = [
     "langchain-deepseek>=1.0.0,<2",
 ]
+copilot = [
+    # Official GitHub Copilot SDK (provider="copilot"). Optional: every import
+    # of it in copilot_auth.py is already lazy and raises an actionable install
+    # hint when absent, so the base install stays lean — and the Windows desktop
+    # build's embedded runtime does not have to carry it.
+    "github-copilot-sdk>=1.0.8,<2",
+]
 anthropic = [
     # Native Anthropic Messages API adapter (provider="anthropic"). Optional:
     # _build_anthropic lazy-imports it and raises an actionable install hint

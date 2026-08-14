@@ -59,6 +59,15 @@ _SYMBOL_ARGUMENT_KEYS = {
 # many candidates by design. Requiring a locked identity there stalls every
 # discovery task before it can load a screening skill, which is #955.
 _RESOLUTION_INCOMPLETE_STATUSES = {"unresolved", "conflicting", "invalidated"}
+# Bounded read-only recovery (#1081): a missing instrument identity or price
+# evidence is often recoverable deterministically, so the loop should keep
+# driving the original task through `search_symbol` and `get_market_data`
+# instead of handing the user a terminal "confirm and continue" fallback.
+# These budgets are separate from the rejected-draft count so real recovery
+# progress is never cut off at the three-draft retry cap.
+MAX_GROUNDING_RECOVERY_ROUNDS = 6
+MAX_SYMBOL_RESOLUTION_ATTEMPTS = 2
+MAX_PRICE_EVIDENCE_ATTEMPTS = 3
 _PRICE_FIELDS = {"open", "high", "low", "close", "adj_close", "price"}
 _TIMESTAMP_FIELDS = ("trade_date", "date", "datetime", "timestamp", "time", "index")
 _MAX_GENERIC_EVIDENCE = 2_000
@@ -183,6 +192,15 @@ _NUMBER_RE = re.compile(
 # and whitespace, so an in-text decimal like "1.5" (digit after the dot) is
 # never affected.
 _MD_LIST_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
+# Unitless identity constants in a symbolic rate formula are not quoted prices.
+# Without this mask, ``1 - 单边成本率`` in a position-sizing formula is read as
+# a one-yuan price merely because the same clause also mentions a close price.
+# Keep the relaxation narrow: only 0/1 directly participating in arithmetic
+# with a token explicitly labelled as a rate is removed.
+_RATE_FORMULA_IDENTITY_RE = re.compile(
+    r"\b[01](?=\s*[-+]\s*(?:[A-Za-z_][A-Za-z0-9_]*_?rate\b|[^\d\s()+*/=-]{0,12}(?:成本率|费率|税率|滑点率)))",
+    re.IGNORECASE,
+)
 _DATE_RE = re.compile(r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b")
 # A year-less "8/5" is how a trading day is written in running prose, and it
 # contributed 8 and 5 as candidate prices (#983). The month and day ranges are
@@ -226,7 +244,7 @@ _QUANTITY_WITH_UNIT_RE = re.compile(
     r"(?:\s*[-–—~至]\s*\d[\d,]*(?:\.\d+)?)?"
     r"\s*[-–—]?\s*"
     r"(?:"
-    r"(?:股|手|张|份|口|笔|倍|个月|周|天|日|年|次)"
+    r"(?:股|手|张|份|口|笔|倍|个月|周|天|日|年|次|个交易日|项|行)"
     r"|(?:shares?|contracts?|lots?|units?|sessions?|bars?|periods?|"
     r"wks?|weeks?|months?|days?|years?|yrs?)\b"
     r")",
@@ -256,6 +274,73 @@ _INDICATOR_VALUE_RE = re.compile(
     r"[-+]?\d[\d,]*(?:\.\d+)?",
     re.IGNORECASE,
 )
+# A currency token may sit between a level marker or comparison operator and
+# the number: "收盘 <$2.86", "目标位 C$6.80", "trigger at $119.68". Without
+# it, the number survives masking and is compared against observed OHLC as a
+# price claim even though it is a prospective level, not an observed quote.
+_CURRENCY_TOKEN = r"(?:\$|US\$|C\$|HK\$|CAD|USD|CNY|HKD|¥|￥)?"
+# A historical reference names a price the instrument once traded at — an
+# all-time high, a 52-week extreme — and the answer is not claiming it as
+# today's observed quote. "8/12 高 149.60 为 6/16 ATH 225.64 以来最高" was
+# rejected because 225.64 (the June ATH) fell outside this session's observed
+# OHLC range. The marker must be adjacent to the number, so a plain field
+# reading such as "8/12 高 149.60" stays checked: its 高 carries no historical
+# qualifier. "创历史新高" shares the 历史新高 marker and is masked with it; the
+# relaxation follows the same trade-off as prospective levels — the historical
+# extreme is a reference, not an assertion about the current bar.
+_REFERENCE_LEVEL_RE = re.compile(
+    r"(?:"
+    r"\bATH\b|all[- ]?time\s+(?:high|low)|"
+    r"52\s*[- ]?W(?:EEK)?\s*(?:high|low)|52\s*[- ]?W(?:EEK)?\s*高(?:点|位)?|"
+    r"52\s*周(?:高|低)(?:点|位)?|"
+    r"历史(?:最高|最低|新高|新低|高|低)(?:点|位|价)?|"
+    r"上市以来(?:最高|最低)(?:点|位|价)?"
+    r")"
+    r"\s*(?:of|为|是|约|at)?\s*[:：]?\s*\(?"
+    r"\s*" + _CURRENCY_TOKEN + r"\s*[-+]?\d[\d,]*(?:\.\d+)?",
+    re.IGNORECASE,
+)
+# A date-anchored reference puts the historical extreme after the number:
+# "7/10(150.57)以来最高" and "highest since 7/10 (150.57)". The parenthesized
+# value is the earlier high/low, not a current quote, and was rejected against
+# the session's observed window (which does not reach back to July).
+_SINCE_REFERENCE_RE = re.compile(
+    r"[-+]?\d[\d,]*(?:\.\d+)?\s*\)?\s*以来(?:最高|最低|高|低)(?:点|位)?"
+    # Dates are masked before this runs, so "since 7/10 (150.57)" has lost its
+    # date digits by the time the connector is matched.
+    r"|(?:highest|lowest)\s+since[^0-9\n]{0,16}"
+    r"[-+]?\d[\d,]*(?:\.\d+)?",
+    re.IGNORECASE,
+)
+# A validation report cites a plan file by line number — "~line 206",
+# "第 206 行" — and the number is a document location, not a price. Before
+# this mask, "**文档 ~line 206「…」不成立" contributed 206.0 as a candidate
+# price claim and was rejected against the observed OHLC range.
+_LINE_REFERENCE_RE = re.compile(
+    r"(?:~\s*)?\blines?\b\s*[:#]?\s*\d{1,5}(?:\s*[-–—至~]\s*\d{1,5})?"
+    r"|第\s*\d{1,5}(?:\s*[-–—至~]\s*\d{1,5})?\s*行"
+    r"|行\s*[:：]?\s*\d{1,5}(?:\s*[-–—至~]\s*\d{1,5})?",
+    re.IGNORECASE,
+)
+# A numbered markdown heading ("### 6. 关键价位") names a section index, not
+# a price. The ordered-list mask only covers line-leading "1." and stops at
+# the "### " prefix, so the section number was extracted as a claim.
+_NUMBERED_HEADING_RE = re.compile(r"(?m)^\s*#{1,6}\s*\d+(?:[.、．])?\s*")
+# A ratio ("6:1 折算", "10:1") names a conversion basis, not a quote price.
+_RATIO_RE = re.compile(r"\d+(?:\.\d+)?\s*[:：]\s*\d+(?:\.\d+)?")
+# A currency conversion cited inside a report ("USD/CAD≈1.36") is a basis, not
+# an instrument quote. But `EUR/USD` IS this project's canonical forex symbol
+# (``backtest/engines/forex.py``, and akshare_loader accepts the slash form), so
+# masking every ``AAA/BBB <number>`` would stop checking real FX quotes on a
+# first-class market — an invented rate would pass. The pair form therefore
+# requires an approximation marker, which a conversion basis carries and a quote
+# does not: "USD/CAD≈1.36" is masked, bare "USD/CAD 1.36" stays checked. The
+# labelled 汇率 / "exchange rate" form is unambiguous and needs no marker.
+_FX_RATE_RE = re.compile(
+    r"[A-Z]{3}\s*/\s*[A-Z]{3}\s*(?:≈|~|约)\s*\d+(?:\.\d+)?"
+    r"|(?:汇率|FX\s*rate|exchange\s+rate)\s*(?:≈|~|=|为|是)?\s*\d+(?:\.\d+)?",
+    re.IGNORECASE,
+)
 # A trading plan quotes levels it does not claim to have observed. In the
 # committee report attached to #983, "收盘 ≥6.45 且量 ≥35M手" is an entry
 # trigger, "年线 4.63 成目标区" is a target zone, and neither asserts anything
@@ -277,15 +362,19 @@ _INDICATOR_VALUE_RE = re.compile(
 _PROSPECTIVE_LEVEL_RE = re.compile(
     r"(?:"
     # (a) comparison operator immediately before the number
-    r"(?:>=|<=|≥|≤|>|<|大于|小于|不低于|不高于|高于|低于)\s*[-+]?\d[\d,]*(?:\.\d+)?"
+    r"(?:>=|<=|≥|≤|>|<|大于|小于|不低于|不高于|高于|低于)"
+    r"\s*" + _CURRENCY_TOKEN + r"\s*[-+]?\d[\d,]*(?:\.\d+)?"
     r"|"
     # (b) a level marker introducing the number
-    r"(?:目标位|目标区|目标价|止损位?|止盈位?|触发价|触发位|触发点|上看|下看|"
-    r"target\s+(?:price|level|zone)|trigger|stop[-\s]?loss|take[-\s]?profit)"
-    r"\s*(?:为|是|至|到|on|at|of|=)?\s*[:：]?\s*[-+]?\d[\d,]*(?:\.\d+)?"
+    r"(?:目标位|目标区|目标价|均值目标(?:价)?|平均目标(?:价)?|止损位?|止盈位?|触发价|触发位|触发点|上看|下看|"
+    r"支撑(?:阶梯|位|线)?|阻力(?:位|线)?|压力位|压力线|support(?:\s+(?:level|line|zone))?|"
+    r"resistance(?:\s+(?:level|line|zone))?|target\s+(?:price|level|zone)|trigger|stop[-\s]?loss|take[-\s]?profit)"
+    r"\s*(?:为|是|至|到|on|at|of|=)?\s*[:：]?\s*"
+    + _CURRENCY_TOKEN
+    + r"\s*[-+]?\d[\d,]*(?:\.\d+)?"
     r"|"
     # (c) the number followed by a level marker
-    r"[-+]?\d[\d,]*(?:\.\d+)?\s*(?:一线|附近)?\s*(?:成为?|作为|是)?\s*"
+    r"" + _CURRENCY_TOKEN + r"[-+]?\d[\d,]*(?:\.\d+)?\s*(?:一线|附近)?\s*(?:成为?|作为|是)?\s*"
     r"(?:目标区|目标位|止损位|止盈位)"
     r"|"
     # (d) a conditional opener before the number, digits fencing the reach
@@ -745,6 +834,9 @@ class GroundingLedger:
         self._evidence: list[EvidenceRecord] = []
         self._tool_failures: list[dict[str, Any]] = []
         self._validations: list[dict[str, Any]] = []
+        self._recovery_rounds = 0
+        self._symbol_resolution_attempts = 0
+        self._price_evidence_attempts = 0
         self._ingested_csvs: set[str] = set()
         self._identity_required = bool(_ACTIONABLE_MARKET_RE.search(user_message))
         self._buffer_output = self._identity_required
@@ -813,6 +905,18 @@ class GroundingLedger:
             "status": self.identity_status,
             "authorized_symbols": sorted(self.authorized_symbols),
             "records": [asdict(record) for record in self._identities.values()],
+            "recovery": self.recovery_summary(),
+        }
+
+    def recovery_summary(self) -> dict[str, Any]:
+        """Return bounded-recovery budget state for traces and the artifact."""
+        return {
+            "rounds": self._recovery_rounds,
+            "max_rounds": MAX_GROUNDING_RECOVERY_ROUNDS,
+            "symbol_resolution_attempts": self._symbol_resolution_attempts,
+            "max_symbol_resolution_attempts": MAX_SYMBOL_RESOLUTION_ATTEMPTS,
+            "price_evidence_attempts": self._price_evidence_attempts,
+            "max_price_evidence_attempts": MAX_PRICE_EVIDENCE_ATTEMPTS,
         }
 
     def authorize_tool_call(
@@ -893,16 +997,65 @@ class GroundingLedger:
             if self._match_authorized_symbol(symbol, authorized) is None
         )
         if mismatched:
+            message = (
+                "Consumer symbol/venue differs from the locked resolver identity; "
+                "silent suffix or exchange rewrites are forbidden."
+            )
+            hints = [
+                hint
+                for symbol in mismatched
+                for hint in self._venue_mismatch_hints(symbol, authorized)
+            ]
+            if hints:
+                message += " " + " ".join(hints)
             return ToolAuthorization(
                 allowed=False,
                 error_code="identity_mismatch",
-                message=(
-                    "Consumer symbol/venue differs from the locked resolver identity; "
-                    "silent suffix or exchange rewrites are forbidden."
-                ),
+                message=message,
                 symbols=mismatched,
             )
         return ToolAuthorization(allowed=True, symbols=symbols)
+
+    @staticmethod
+    def _venue_mismatch_hints(
+        requested_symbol: str,
+        authorized_symbols: Iterable[str],
+    ) -> list[str]:
+        """Turn a same-issuer venue mismatch into an actionable resolver hint.
+
+        ``BLDP.US`` against a locked ``BLDP.TO`` is not a typo of one identity;
+        it is a second listing of the same company that was never resolved.
+        Naming the exact ``search_symbol`` query keeps the model from retrying
+        the identical unauthorized call. A bare ticker that collides with
+        several locked venues gets a "use the full suffix" hint instead.
+        """
+        requested = _normalize_symbol(requested_symbol)
+        authorized = {_normalize_symbol(item) for item in authorized_symbols}
+        if "." in requested:
+            base = requested.rsplit(".", 1)[0]
+            same_issuer = sorted(
+                item
+                for item in authorized
+                if "." in item and item.rsplit(".", 1)[0] == base
+            )
+            if same_issuer:
+                return [
+                    f"[{requested_symbol} is a second venue of {', '.join(same_issuer)}; "
+                    f"call search_symbol('{requested_symbol}') in a separate turn "
+                    f"before querying it.]"
+                ]
+            return []
+        matches = sorted(
+            item
+            for item in authorized
+            if "." in item and item.rsplit(".", 1)[0] == requested
+        )
+        if len(matches) > 1:
+            return [
+                f"[{requested_symbol} matches multiple locked identities "
+                f"({', '.join(matches)}); use the full venue-suffixed symbol.]"
+            ]
+        return []
 
     @staticmethod
     def _match_authorized_symbol(
@@ -1020,10 +1173,92 @@ class GroundingLedger:
                 "For every derived number, label it as derived and show the source inputs and formula.",
                 "Do not attach figures to a symbol no tool call in this session handled; "
                 "report it as not retrieved instead.",
-                "If evidence is unavailable or conflicting, say so and ask for clarification; do not guess.",
             ]
         )
+        recovery = self.recovery_action(validation)
+        if recovery == _RESOLVER_TOOL:
+            lines.extend(
+                [
+                    "Instrument identity is unresolved. Call `search_symbol` for the "
+                    "candidate name in a separate tool-call turn, lock the exact canonical "
+                    "symbol and venue it returns, then call `get_market_data` before finalizing.",
+                    "Do NOT ask the user to confirm or continue while this read-only recovery "
+                    "remains available.",
+                ]
+            )
+        elif recovery == "get_market_data":
+            lines.extend(
+                [
+                    "Identity is locked but price evidence is missing. Call `get_market_data` "
+                    "for the locked canonical symbol and venue in a separate tool-call turn, "
+                    "then regenerate and re-validate the final answer.",
+                    "Do NOT ask the user to confirm or continue while this read-only recovery "
+                    "remains available.",
+                ]
+            )
+        else:
+            lines.append(
+                "If evidence is genuinely unavailable or conflicting and recovery is "
+                "exhausted, say so and ask for clarification; do not guess."
+            )
         return "\n".join(lines)
+
+    def recovery_action(self, validation: ValidationResult) -> str | None:
+        """Decide the next safe read-only recovery step for a rejected draft.
+
+        Returns ``search_symbol`` when instrument identity is unresolved and
+        resolution attempts remain; ``get_market_data`` when identity is locked
+        but a price claim has no observed evidence and fetch attempts remain;
+        otherwise ``None`` (genuinely ambiguous, conflicting, or exhausted —
+        the loop must then ask the user or fail closed).
+
+        This is the deterministic half of #1081: recoverable missing evidence is
+        often obtainable through read-only tools, so a rejected draft should
+        drive the original task forward instead of stopping.
+        """
+        if self._recovery_rounds >= MAX_GROUNDING_RECOVERY_ROUNDS:
+            return None
+        if self._identity_required and self.identity_status == "unresolved":
+            if self._symbol_resolution_attempts < MAX_SYMBOL_RESOLUTION_ATTEMPTS:
+                return _RESOLVER_TOOL
+            return None
+        if self.identity_status == "locked" and any(
+            issue.get("code") in {"numeric_claim_unavailable", "unsourced_symbol_figures"}
+            for issue in validation.issues
+        ):
+            if self._price_evidence_attempts < MAX_PRICE_EVIDENCE_ATTEMPTS:
+                return "get_market_data"
+        return None
+
+    def record_recovery(self, action: str) -> None:
+        """Account one bounded recovery attempt against its budget."""
+        self._recovery_rounds += 1
+        if action == _RESOLVER_TOOL:
+            self._symbol_resolution_attempts += 1
+        elif action == "get_market_data":
+            self._price_evidence_attempts += 1
+
+    def recovery_prompt(self, action: str, validation: ValidationResult) -> str:
+        """Build an executable next-step message for one bounded recovery turn."""
+        if action == _RESOLVER_TOOL:
+            return (
+                "[GROUNDING RECOVERY] Instrument identity is not yet locked and is "
+                "recoverable with read-only tools. Call `search_symbol` for the candidate "
+                "name in a separate assistant tool-call turn, lock and reuse the exact "
+                "canonical symbol and venue it returns, then call `get_market_data`. "
+                "Do NOT ask the user to confirm or continue while this read-only recovery "
+                "remains available, and do NOT finalize yet."
+            )
+        if action == "get_market_data":
+            return (
+                "[GROUNDING RECOVERY] Identity is locked but price evidence is missing. "
+                "Call `get_market_data` for the locked canonical symbol and venue in a "
+                "separate tool-call turn and use its existing bounded provider fallback, "
+                "then regenerate and re-validate the final answer. Do NOT ask the user to "
+                "confirm or continue while this read-only recovery remains available, and "
+                "do NOT finalize yet."
+            )
+        return self.correction_prompt(validation)
 
     def safe_fallback(self) -> str:
         """Return a deterministic fail-closed answer after repeated rejection."""
@@ -2097,6 +2332,7 @@ class GroundingLedger:
             Candidate price values, in order of appearance.
         """
         masked = _MD_LIST_ITEM_RE.sub(" ", text)
+        masked = _RATE_FORMULA_IDENTITY_RE.sub(" ", masked)
         masked = _CANONICAL_SYMBOL_RE.sub(" ", masked)
         masked = _LOCALIZED_DATE_RE.sub(" ", masked)
         masked = _DATE_RE.sub(" ", masked)
@@ -2106,6 +2342,12 @@ class GroundingLedger:
         masked = _LABELLED_SCORE_RE.sub(" ", masked)
         masked = _INDICATOR_VALUE_RE.sub(" ", masked)
         masked = _PROSPECTIVE_LEVEL_RE.sub(" ", masked)
+        masked = _REFERENCE_LEVEL_RE.sub(" ", masked)
+        masked = _SINCE_REFERENCE_RE.sub(" ", masked)
+        masked = _LINE_REFERENCE_RE.sub(" ", masked)
+        masked = _NUMBERED_HEADING_RE.sub(" ", masked)
+        masked = _RATIO_RE.sub(" ", masked)
+        masked = _FX_RATE_RE.sub(" ", masked)
         without_dates = _QUANTITY_WITH_UNIT_RE.sub(" ", masked)
         values: list[float] = []
         for match in _NUMBER_RE.finditer(without_dates):

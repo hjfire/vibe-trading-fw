@@ -1295,6 +1295,176 @@ def test_plan_level_mask_leaves_observed_quotes_checked(
     assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
 
 
+# A currency token between the anchor and the number used to break every
+# prospective branch: "收盘 <$2.86" left 2.86 to be compared against observed
+# OHLC, "目标位 $6.80" left 6.8, and "trigger at $119.68" left 119.68. These
+# are levels, not observed quotes, so each must mask entirely.
+_CURRENCY_PREFIXED_PLAN_LEVELS = [
+    "收盘 <$2.86",
+    "目标位 $6.80，止损位 C$5.20",
+    "trigger at $119.68",
+    "支撑位 $190.12",
+    "target price of $6.80",
+    "收盘 ≥ $135 且低点 > $119.68",
+]
+
+
+@pytest.mark.parametrize(
+    "segment", _CURRENCY_PREFIXED_PLAN_LEVELS, ids=range(len(_CURRENCY_PREFIXED_PLAN_LEVELS))
+)
+def test_currency_prefixed_plan_levels_are_not_read_as_observed_prices(segment: str) -> None:
+    """A currency-prefixed trigger or target is prospective, not observed."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == []
+
+
+# A historical reference names a price the instrument once traded at. The
+# SPCX.US weekly plan quoted "6/16 ATH 225.64" next to the 8/12 high 149.60;
+# 225.64 fell outside the session's observed OHLC range (105.11–149.6) and was
+# rejected as a conflict even though it is a reference, not a current quote.
+_REFERENCE_LEVEL_SEGMENTS = [
+    ("8/12 高 149.60 为 6/16 ATH 225.64 以来最高", [149.60]),
+    ("8/12 高 149.60 为 6/16 历史高点 225.64 以来最高", [149.60]),
+    ("8/12 高 149.60 为 6/16 all-time high 225.64 以来最高", [149.60]),
+    ("52W 高 543.14", []),
+    ("52-week low of $190.12", []),
+    ("52W low (C$7.27)", []),
+    ("历史最低 $60.82", []),
+    ("ATH (C$7.31)", []),
+]
+
+
+@pytest.mark.parametrize(
+    "segment,expected",
+    _REFERENCE_LEVEL_SEGMENTS,
+    ids=[c[0][:28] for c in _REFERENCE_LEVEL_SEGMENTS],
+)
+def test_reference_levels_are_not_read_as_observed_price_claims(
+    segment: str, expected: list[float],
+) -> None:
+    """An ATH/52-week/historical extreme is a reference, not a current quote."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
+
+
+# A validation report cites a plan file by line number ("~line 206",
+# "第 206 行"). The number is a document location, not a price, and was
+# compared against observed OHLC as a claim before this mask existed.
+_LINE_REFERENCE_SEGMENTS = [
+    "**文档 ~line 206「8/12 高 149.60 为 6/16 ATH 225.64 以来最高」不成立",
+    "line 206",
+    "lines 206-208",
+    "第 206 行",
+    "第 206–208 行",
+    "行 206",
+]
+
+
+@pytest.mark.parametrize(
+    "segment", _LINE_REFERENCE_SEGMENTS, ids=range(len(_LINE_REFERENCE_SEGMENTS))
+)
+def test_line_number_references_are_not_read_as_price_claims(segment: str) -> None:
+    """A line citation is a document location, not an observed price."""
+    if segment.startswith("**文档"):
+        # The quoted 149.60 beside the line citation stays checked.
+        assert GroundingLedger._numbers_without_dates_or_percent(segment) == [149.6]
+    else:
+        assert GroundingLedger._numbers_without_dates_or_percent(segment) == []
+
+
+# Validation summaries count findings: "1 项事实错误", "2 项不一致", and
+# "16 个交易日" are count nouns, not prices. The count survived extraction
+# and was rejected against the observed OHLC range before 项/个交易日 joined
+# the quantity units.
+_COUNT_NOUN_SEGMENTS = [
+    ("- ❌ **1 项事实错误**:", []),
+    ("⚠️ **2 项不一致**", []),
+    ("3 项", []),
+    ("16 个交易日", []),
+    # 149.60 is masked here too: "高点高于 149.60" is a comparison level.
+    ("6/17–7/10 有 16 个交易日高点高于 149.60", []),
+]
+
+
+@pytest.mark.parametrize(
+    "segment,expected",
+    _COUNT_NOUN_SEGMENTS,
+    ids=[c[0][:22] for c in _COUNT_NOUN_SEGMENTS],
+)
+def test_count_nouns_are_not_read_as_price_claims(
+    segment: str, expected: list[float],
+) -> None:
+    """项/个交易日 counts are quantities, not prices."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
+
+
+_SINCE_REFERENCE_SEGMENTS = [
+    ("正确为 7/10(150.57)以来最高", []),
+    ("收 146.15 为 7/9(收 152.16)以来最高", [146.15]),
+    ("highest since 7/10 (150.57)", []),
+    # The current bar's own high is not a since-reference and stays checked.
+    ("8/12 高 149.60 为 6/16 ATH 225.64 以来最高", [149.6]),
+]
+
+
+@pytest.mark.parametrize(
+    "segment,expected",
+    _SINCE_REFERENCE_SEGMENTS,
+    ids=[c[0][:24] for c in _SINCE_REFERENCE_SEGMENTS],
+)
+def test_since_references_are_not_read_as_observed_price_claims(
+    segment: str, expected: list[float],
+) -> None:
+    """A date-anchored "highest since" value is a reference, not a quote."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
+
+
+_NUMBERED_HEADING_SEGMENTS = [
+    "### 6. 关键价位/旁证核验",
+    "## 12. 结论",
+    "# 3. 身份与数据源",
+    "### 8/13 周中判定",
+    # The section number masks; the observed quote beside it stays checked.
+    ("### 6. 8/12 高 149.60 为 6/16 ATH 以来最高", [149.6]),
+]
+
+
+@pytest.mark.parametrize(
+    "segment", _NUMBERED_HEADING_SEGMENTS, ids=range(len(_NUMBERED_HEADING_SEGMENTS))
+)
+def test_numbered_headings_are_not_read_as_price_claims(segment: str) -> None:
+    """A markdown heading number is a section index, not a price."""
+    if isinstance(segment, tuple):
+        segment, expected = segment
+        assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
+    else:
+        assert GroundingLedger._numbers_without_dates_or_percent(segment) == []
+
+
+_RATIO_AND_FX_SEGMENTS = [
+    ("TO 报价实际是按 6:1 平价锚定的", []),
+    ("25/25 行 OHLCV、25/25 项派生百分比、7/7 日 CDR 6:1 折算", []),
+    ("远小于当前 USD/CAD≈1.36 的量级", []),
+    ("汇率 1.36", []),
+    # `EUR/USD` is this project's canonical forex symbol, so an asserted pair
+    # rate is a quote and stays checked; only an approximated conversion basis
+    # is masked. Masking both would let an invented FX rate through the gate.
+    ("usd/cad=1.36", [1.36]),
+    ("USD/CAD 1.36", [1.36]),
+    ("USD/CAD ≈ 1.36", []),
+]
+
+
+@pytest.mark.parametrize(
+    "segment,expected",
+    _RATIO_AND_FX_SEGMENTS,
+    ids=[c[0][:24] for c in _RATIO_AND_FX_SEGMENTS],
+)
+def test_ratios_and_fx_rates_are_not_read_as_price_claims(
+    segment: str, expected: list[float],
+) -> None:
+    """A conversion ratio or forex rate is not an instrument quote."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == expected
+
+
 def test_plan_level_mask_does_not_shield_a_wrong_quote_end_to_end(tmp_path: Path) -> None:
     """The end-to-end gate still rejects a fabricated quote beside a plan level."""
     ledger = _screened_ledger(tmp_path)
@@ -1314,6 +1484,112 @@ def test_plan_level_alone_reaches_a_valid_answer(tmp_path: Path) -> None:
     result = ledger.validate_final_answer(
         "000543.SZ 收盘价 8.20 CNY（source: tencent）。"
         "转多信号：收盘 ≥9.10；转空强化：收盘 <7.40 且 3 日不收复 → 目标位 6.90。"
+    )
+
+    assert result.valid is True, result.issues
+
+
+def _spcx_us_ledger(tmp_path: Path) -> GroundingLedger:
+    """A ledger that locked SPCX.US and observed 8/7–8/12 OHLC bars."""
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="以 SPCX.US（纳斯达克，SpaceX 本体）作为美股侧参考",
+    )
+    query = "SPCX.US"
+    ledger.authorize_tool_call(
+        "search_symbol",
+        {"query": query},
+        batch_authorized_symbols=ledger.authorized_symbols,
+        call_id="resolve",
+    )
+    ledger.ingest_tool_result(
+        tool_name="search_symbol",
+        arguments={"query": query},
+        result=_resolver_payload(symbol="SPCX.US", query=query),
+        call_id="resolve",
+        success=True,
+    )
+    payload = json.dumps(
+        {
+            "SPCX.US": [
+                {
+                    "trade_date": "2026-08-07",
+                    "open": 114.97,
+                    "high": 133.48,
+                    "low": 114.53,
+                    "close": 133.11,
+                    "volume": 242130700,
+                },
+                {
+                    "trade_date": "2026-08-10",
+                    "open": 134.95,
+                    "high": 139.26,
+                    "low": 130.17,
+                    "close": 138.74,
+                    "volume": 169934300,
+                },
+                {
+                    "trade_date": "2026-08-11",
+                    "open": 138.66,
+                    "high": 139.98,
+                    "low": 130.50,
+                    "close": 133.29,
+                    "volume": 108900600,
+                },
+                {
+                    "trade_date": "2026-08-12",
+                    "open": 135.05,
+                    "high": 149.60,
+                    "low": 134.01,
+                    "close": 146.15,
+                    "volume": 165771792,
+                },
+            ],
+            "_provenance": {
+                "SPCX.US": {
+                    "source": "yahoo",
+                    "requested_source": "auto",
+                    "detected_source": "yahoo",
+                    "fallback_used": False,
+                    "currency_conversion": "none",
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    ledger.ingest_tool_result(
+        tool_name="get_market_data",
+        arguments={"codes": ["SPCX.US"]},
+        result=payload,
+        call_id="prices",
+        success=True,
+    )
+    return ledger
+
+
+def test_reference_level_and_currency_thresholds_pass_end_to_end(tmp_path: Path) -> None:
+    """The SPCX.US verdict prose passes once references and thresholds mask."""
+    ledger = _spcx_us_ledger(tmp_path)
+
+    result = ledger.validate_final_answer(
+        "SPCX.US 8/10 收 138.74 USD、8/12 高 149.60 USD（source: yahoo）。"
+        "8/12 高 149.60 为 6/16 ATH 225.64 以来最高；"
+        "8/10 收盘 138.74 ≥ $135 且 ≥ $119.68 触发成立。"
+    )
+
+    assert result.valid is True, result.issues
+
+
+def test_validation_summary_with_counts_and_line_cites_passes_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """A validation verdict naming counts and line citations passes the gate."""
+    ledger = _spcx_us_ledger(tmp_path)
+
+    result = ledger.validate_final_answer(
+        "SPCX.US 核验(USD, source: yahoo):❌ 1 项事实错误 — "
+        "文档 ~line 206「8/12 高 149.60 为 6/16 ATH 以来最高」不成立,"
+        "6/17–7/10 有 16 个交易日高点高于 149.60,正确为 7/10(150.57)以来最高。"
     )
 
     assert result.valid is True, result.issues
@@ -1811,6 +2087,24 @@ def test_markdown_list_marker_mask_does_not_weaken_contradiction_check(
     codes = [issue["code"] for issue in result.issues]
     assert "numeric_claim_conflict" in codes
     assert [issue["value"] for issue in result.issues if issue["code"] == "numeric_claim_conflict"] == [42.0]
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        "买入股数 = 初始资金 × (1 - 单边成本率) / 期初收盘价",
+        "期末市值 = 买入股数 × 期末收盘价 × (1 - fee_rate)",
+        "net proceeds = shares * closing price * (1 - transaction_rate)",
+    ],
+)
+def test_rate_formula_identity_is_not_read_as_a_price(segment: str) -> None:
+    """The identity in ``1 - rate`` is arithmetic, not a one-unit quote."""
+    assert GroundingLedger._numbers_without_dates_or_percent(segment) == []
+
+
+def test_rate_formula_mask_does_not_hide_an_observed_one_unit_quote() -> None:
+    """A genuine price of 1 remains checked outside a rate expression."""
+    assert GroundingLedger._numbers_without_dates_or_percent("closing price = 1 CNY") == [1.0]
 
 
 def test_in_text_decimal_survives_list_marker_mask(

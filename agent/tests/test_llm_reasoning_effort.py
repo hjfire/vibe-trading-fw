@@ -4,20 +4,21 @@ The setting has two mutually exclusive delivery paths:
 
 * Relays that require an opt-in (OpenRouter, Requesty) receive
   ``extra_body={"reasoning": {"effort": ...}}``.
-* Direct OpenAI receives a top-level ``reasoning_effort``. Its ``gpt-5.6-*``
+* ChatOpenAI-compatible providers receive a top-level ``reasoning_effort``. Its ``gpt-5.6-*``
   models reject function tools on ``/v1/chat/completions`` without one::
 
       Function tools with reasoning_effort are not supported for gpt-5.6-sol
       in /v1/chat/completions. To use function tools, use /v1/responses or set
       reasoning_effort to 'none'.
 
-Every other OpenAI-compatible provider must receive neither, because a stale
-global effort value would otherwise ride along on payloads that can reject the
-unknown field (DeepSeek is the documented case in ``test_provider_diagnostics``).
+Any ChatOpenAI-compatible provider/model with an effort and no explicit
+transport setting uses Chat Completions; explicit ``true`` selects the
+Responses API for endpoints that support it.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from fastapi.testclient import TestClient
 
 import api_server
 import src.providers.llm as llm_mod
-from src.providers.llm import build_llm
+from src.providers.llm import build_llm, uses_responses_api
 
 
 @pytest.fixture(autouse=True)
@@ -110,9 +111,32 @@ def _capture_kwargs(env: dict[str, str]) -> dict[str, Any]:
     return captured
 
 
-class TestDirectOpenAI:
-    """Direct OpenAI is the one provider verified to take the top-level field."""
+@pytest.mark.parametrize(
+    ("provider", "adapter", "native_available", "expected"),
+    [
+        ("openai", None, False, True),
+        ("anthropic", None, False, False),
+        ("openai-codex", None, False, False),
+        ("deepseek", "openai-compatible", True, True),
+        ("deepseek", "compat", True, True),
+        ("deepseek", "native", False, False),
+        ("deepseek", "auto", True, False),
+        ("deepseek", "auto", False, True),
+    ],
+)
+def test_uses_responses_api_matches_provider_route(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    adapter: str | None,
+    native_available: bool,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(llm_mod, "_native_deepseek_adapter_available", lambda: native_available)
 
+    assert uses_responses_api(provider, True, adapter) is expected
+
+
+class TestDirectOpenAI:
     def test_explicit_none_is_forwarded(self) -> None:
         """'none' is a real value here, not a synonym for unset."""
         kwargs = _capture_kwargs(
@@ -121,6 +145,7 @@ class TestDirectOpenAI:
                 "OPENAI_API_KEY": "sk-test",
                 "LANGCHAIN_MODEL_NAME": "gpt-5.6-sol",
                 "LANGCHAIN_REASONING_EFFORT": "none",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
@@ -134,10 +159,59 @@ class TestDirectOpenAI:
                 "OPENAI_API_KEY": "sk-test",
                 "LANGCHAIN_MODEL_NAME": "gpt-5.6-sol",
                 "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
         assert kwargs["reasoning_effort"] == "high"
+
+    def test_foreign_gateway_behind_the_openai_label_is_not_sent_the_field(self) -> None:
+        """A base-URL override means the OpenAI label is no longer OpenAI.
+
+        Ollama, LiteLLM and corporate proxies speak the OpenAI wire format
+        without promising to accept every OpenAI field, and a strict body
+        validator rejects the unknown key outright. The label alone cannot
+        authorize it — only the host can.
+        """
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "gpt-5.6-luna",
+                "LANGCHAIN_REASONING_EFFORT": "high",
+            }
+        )
+
+        assert kwargs["reasoning_effort"] is None
+
+    def test_openai_host_receives_the_field(self) -> None:
+        """No override means the request really does reach api.openai.com."""
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "LANGCHAIN_MODEL_NAME": "gpt-5.6-luna",
+                "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
+            }
+        )
+
+        assert kwargs["reasoning_effort"] == "high"
+
+    def test_deepseek_flash_model_keeps_effort_on_openai_wire(self) -> None:
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "deepseek-v4-flash-0731",
+                "LANGCHAIN_REASONING_EFFORT": "max",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
+            }
+        )
+
+        assert kwargs["reasoning_effort"] == "max"
 
     def test_unset_effort_stays_absent(self) -> None:
         kwargs = _capture_kwargs(
@@ -153,41 +227,61 @@ class TestDirectOpenAI:
 
 
 class TestUnsupportedProviders:
-    """A configured effort must never leak onto unverified providers."""
-
-    def test_deepseek_never_receives_top_level_effort(self) -> None:
-        """DeepSeek's documented invariant covers both delivery paths."""
+    def test_deepseek_openai_compatible_receives_top_level_effort(self) -> None:
         kwargs = _capture_kwargs(
             {
                 "LANGCHAIN_PROVIDER": "deepseek",
                 "DEEPSEEK_API_KEY": "ds-test",
-                "DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1",
-                "LANGCHAIN_MODEL_NAME": "deepseek-v4-pro",
+                "DEEPSEEK_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "deepseek-v4-flash",
                 "LANGCHAIN_REASONING_EFFORT": "high",
                 "VIBE_TRADING_DEEPSEEK_ADAPTER": "openai-compatible",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
-        assert kwargs["reasoning_effort"] is None
+        assert kwargs["reasoning_effort"] == "high"
         assert kwargs["extra_body"] is None
 
-    def test_gemini_never_receives_top_level_effort(self) -> None:
-        """Second unsupported provider: Gemini's OpenAI-compatible endpoint."""
+    def test_gemini_is_not_on_the_allowlist(self) -> None:
+        """Gemini's OpenAI-compatible endpoint has not been verified for this field.
+
+        ``top_level_reasoning_effort`` is a positive allowlist: a provider joins
+        it once a real request to it has been watched to succeed, not because it
+        speaks the OpenAI wire format. Until then the effort is a no-op for
+        Gemini, which is the safe failure — the alternative is every request
+        failing on a rejected key.
+        """
         kwargs = _capture_kwargs(
             {
                 "LANGCHAIN_PROVIDER": "gemini",
                 "GEMINI_API_KEY": "gm-test",
-                "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "GEMINI_BASE_URL": "https://gateway.example/v1",
                 "LANGCHAIN_MODEL_NAME": "gemini-3.5-flash",
                 "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
         assert kwargs["reasoning_effort"] is None
         assert kwargs["extra_body"] is None
 
-    def test_model_inferred_provider_wins_over_openai_default(self) -> None:
-        """provider=openai + a deepseek model resolves to DeepSeek, not OpenAI."""
+    def test_every_allowlisted_provider_has_a_recorded_reason(self) -> None:
+        """The allowlist stays short and every entry is accounted for here.
+
+        A new provider flipping ``top_level_reasoning_effort=True`` has to be
+        added to this set deliberately, with live evidence, rather than picked
+        up by a broad predicate. If this fails, someone widened the allowlist —
+        confirm a real request to that endpoint succeeded before updating it.
+        """
+        from src.providers.capabilities import _PROVIDERS
+
+        allowlisted = {
+            name for name, caps in _PROVIDERS.items() if caps.top_level_reasoning_effort
+        }
+        assert allowlisted == {"openai", "deepseek"}
+
+    def test_explicit_openai_provider_keeps_effort_for_deepseek_model(self) -> None:
         kwargs = _capture_kwargs(
             {
                 "LANGCHAIN_PROVIDER": "openai",
@@ -195,23 +289,26 @@ class TestUnsupportedProviders:
                 "LANGCHAIN_MODEL_NAME": "deepseek-v4-pro",
                 "LANGCHAIN_REASONING_EFFORT": "high",
                 "VIBE_TRADING_DEEPSEEK_ADAPTER": "openai-compatible",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
-        assert kwargs["reasoning_effort"] is None
+        assert kwargs["reasoning_effort"] == "high"
 
-    def test_unknown_provider_does_not_inherit_openai_fallback(self) -> None:
-        """Unknown names fall back to OpenAI capabilities but stay unverified."""
+    def test_unknown_openai_compatible_provider_receives_top_level_effort(
+        self,
+    ) -> None:
         kwargs = _capture_kwargs(
             {
                 "LANGCHAIN_PROVIDER": "some-openai-compatible-gateway",
                 "OPENAI_API_KEY": "sk-test",
                 "LANGCHAIN_MODEL_NAME": "house-model-1",
                 "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
-        assert kwargs["reasoning_effort"] is None
+        assert kwargs["reasoning_effort"] == "high"
 
 
 class TestRelayOptIn:
@@ -225,6 +322,7 @@ class TestRelayOptIn:
                 "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
                 "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v4-pro",
                 "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
@@ -239,6 +337,7 @@ class TestRelayOptIn:
                 "REQUESTY_BASE_URL": "https://router.requesty.ai/v1",
                 "LANGCHAIN_MODEL_NAME": "openai/gpt-4o-mini",
                 "LANGCHAIN_REASONING_EFFORT": "medium",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
             }
         )
 
@@ -266,6 +365,188 @@ class TestRequestPayload:
     def test_absent_effort_is_dropped_from_the_request(self) -> None:
         """None must not serialize as a null field on unsupported providers."""
         assert "reasoning_effort" not in self._payload(None)
+
+    def test_deepseek_flash_effort_is_serialized_for_chat_completions(self) -> None:
+        if llm_mod.ChatOpenAIWithReasoning is None:
+            pytest.skip("langchain-openai is not installed")
+        from langchain_core.messages import HumanMessage
+
+        instance = llm_mod.ChatOpenAIWithReasoning(
+            model="deepseek-v4-flash-0731",
+            api_key="sk-test",
+            reasoning_effort="max",
+        )
+
+        payload = instance._get_request_payload([HumanMessage(content="hi")])
+
+        assert payload["reasoning_effort"] == "max"
+
+
+class TestResponsesAPI:
+    def test_reasoning_effort_defaults_to_chat_completions(self) -> None:
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "LANGCHAIN_MODEL_NAME": "gpt-5.6-sol",
+                "LANGCHAIN_REASONING_EFFORT": "high",
+            }
+        )
+
+        assert kwargs["use_responses_api"] is False
+        assert kwargs["output_version"] is None
+        assert kwargs["reasoning"] is None
+        assert kwargs["reasoning_effort"] == "high"
+
+    def test_any_provider_and_model_can_opt_into_responses_reasoning(self) -> None:
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "arbitrary-reasoning-model",
+                "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "true",
+            }
+        )
+
+        assert kwargs["use_responses_api"] is True
+        assert kwargs["output_version"] == "responses/v1"
+        assert kwargs["reasoning"] == {"effort": "high"}
+        assert kwargs["reasoning_effort"] is None
+
+    def test_named_deepseek_can_opt_into_responses_reasoning(self) -> None:
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "deepseek",
+                "DEEPSEEK_API_KEY": "ds-test",
+                "DEEPSEEK_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "deepseek-v4-flash",
+                "LANGCHAIN_REASONING_EFFORT": "max",
+                "VIBE_TRADING_DEEPSEEK_ADAPTER": "openai-compatible",
+                "LANGCHAIN_USE_RESPONSES_API": "true",
+            }
+        )
+
+        assert kwargs["reasoning"] == {"effort": "max"}
+        assert kwargs["reasoning_effort"] is None
+
+    def test_explicit_chat_mode_remains_available_for_legacy_endpoints(self) -> None:
+        kwargs = _capture_kwargs(
+            {
+                "LANGCHAIN_PROVIDER": "some-openai-compatible-gateway",
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://gateway.example/v1",
+                "LANGCHAIN_MODEL_NAME": "arbitrary-reasoning-model",
+                "LANGCHAIN_REASONING_EFFORT": "high",
+                "LANGCHAIN_USE_RESPONSES_API": "false",
+            }
+        )
+
+        assert kwargs["use_responses_api"] is False
+        assert kwargs["reasoning"] is None
+
+    def test_responses_payload_does_not_assume_chat_messages(self) -> None:
+        if llm_mod.ChatOpenAIWithReasoning is None:
+            pytest.skip("langchain-openai is not installed")
+        from langchain_core.messages import HumanMessage
+
+        instance = llm_mod.ChatOpenAIWithReasoning(
+            model="arbitrary-reasoning-model",
+            api_key="sk-test",
+            use_responses_api=True,
+            output_version="responses/v1",
+            reasoning={"effort": "high"},
+        )
+
+        payload = instance._get_request_payload([HumanMessage(content="hi")])
+
+        assert payload["reasoning"] == {"effort": "high"}
+
+    def test_responses_transport_sends_reasoning_to_the_responses_path(self) -> None:
+        if llm_mod.ChatOpenAIWithReasoning is None:
+            pytest.skip("langchain-openai is not installed")
+        import httpx
+
+        seen: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "reasoning-model",
+                    "output": [
+                        {
+                            "id": "msg_test",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                },
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            llm = llm_mod.ChatOpenAIWithReasoning(
+                model="reasoning-model",
+                api_key="sk-test",
+                base_url="https://gateway.invalid/v1",
+                http_client=client,
+                use_responses_api=True,
+                output_version="responses/v1",
+                reasoning={"effort": "max"},
+            )
+            assert llm.invoke("hi").content
+
+        assert seen["path"] == "/v1/responses"
+        assert seen["body"]["reasoning"] == {"effort": "max"}
+
+    def test_chat_transport_sends_reasoning_effort_to_chat_completions(self) -> None:
+        if llm_mod.ChatOpenAIWithReasoning is None:
+            pytest.skip("langchain-openai is not installed")
+        import httpx
+
+        seen: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl_test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "reasoning-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            llm = llm_mod.ChatOpenAIWithReasoning(
+                model="reasoning-model",
+                api_key="sk-test",
+                base_url="https://gateway.invalid/v1",
+                http_client=client,
+                reasoning_effort="max",
+            )
+            assert llm.invoke("hi").content == "ok"
+
+        assert seen["path"] == "/v1/chat/completions"
+        assert seen["body"]["reasoning_effort"] == "max"
 
 
 class TestSettingsAllowlist:

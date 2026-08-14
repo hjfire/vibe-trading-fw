@@ -1,5 +1,10 @@
 import i18n from "@/i18n";
 import { authHeaders, withAuthTicket } from "@/lib/apiAuth";
+import type {
+  OptionsChainResponse,
+  OptionsPayoffRequest,
+  OptionsPayoffResponse,
+} from "@/lib/options";
 
 const BASE = "";
 
@@ -61,7 +66,9 @@ async function errorFromResponse(res: Response): Promise<ApiError> {
   let detail = `HTTP ${res.status}`;
   try {
     const body = await res.json();
-    detail = body.detail || body.message || detail;
+    // Options endpoints report errors under an `error` key
+    // ({status:"error", error} / {ok:false, error}) rather than detail/message.
+    detail = body.detail || body.message || body.error || detail;
   } catch { /* ignore */ }
   if (res.status === 401 || res.status === 403) {
     detail = getAuthRequiredMessage();
@@ -252,6 +259,19 @@ export const api = {
     }),
   alphaCompareStreamUrl: (jobId: string) =>
     withAuthTicket(`${BASE}/alpha/compare/${encodeURIComponent(jobId)}/stream`),
+
+  // Options Lab
+  analyzeOptionsPayoff: (body: OptionsPayoffRequest) =>
+    request<OptionsPayoffResponse>("/options/payoff", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getOptionsChain: (ticker: string, expiration?: number) => {
+    const q = new URLSearchParams();
+    q.set("ticker", ticker);
+    if (expiration !== undefined) q.set("expiration", String(expiration));
+    return request<OptionsChainResponse>(`/options/chain?${q.toString()}`);
+  },
 
   // Connector runtime channel — privileged surface actions (NOT agent tools).
   // commit is the ONLY action that writes a mandate; halt trips the kill switch.
@@ -613,6 +633,10 @@ export interface RunData {
   trade_markers?: TradeMarker[];
   equity_curve?: EquityPoint[];
   trade_log?: Array<Record<string, string>>;
+  /** Full equity.csv rows (timestamp/equity/drawdown as strings); not capped like equity_curve. */
+  artifacts_equity_csv?: Array<Record<string, string>>;
+  artifacts_metrics_csv?: Array<Record<string, string>>;
+  artifacts_trades_csv?: Array<Record<string, string>>;
   run_logs?: Array<{ source?: string; line_number?: number; message?: string }>;
 }
 

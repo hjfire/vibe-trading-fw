@@ -18,6 +18,7 @@ import copy
 import json
 import logging
 import queue
+import shutil
 import sys
 import threading
 import time as _time
@@ -47,7 +48,8 @@ from src.providers.content_filter import (
 from src.config.accessor import get_env_config
 from src.config.paths import get_runs_dir, get_sessions_dir
 from src.tools.background_tools import get_background_manager
-from src.config.limits import TOOL_RESULT_LIMIT, truncate_tool_result
+from src.config.limits import truncate_tool_result
+from src.tools.path_utils import safe_run_dir
 from src.tools.redaction import redact_payload, redact_tool_result
 
 RUNS_DIR = get_runs_dir()
@@ -577,6 +579,62 @@ def _normalize_tool_run_dir(args: dict[str, Any], memory_run_dir: str | None) ->
     return normalized
 
 
+def _archive_backtest_result(result: str, active_run_dir: str | None) -> bool:
+    """Copy a successful detached backtest into the active, reportable run.
+
+    The model may choose another allowed run directory while iterating.  The
+    CLI and web API, however, identify the turn by ``active_run_dir``.  Keep
+    that public identity stable by copying only deterministic backtest output
+    into the active run as soon as the backtest tool succeeds.
+
+    Both paths are re-validated here.  ``backtest`` already refuses a run_dir
+    outside the allowed roots, so today the source cannot be arbitrary — but
+    that invariant lives in another module and this function reads its path back
+    out of a *tool result* rather than from the validated arguments.  Checking
+    locally keeps a copy loop from depending on a guarantee made elsewhere.
+    """
+    if not active_run_dir:
+        return False
+    try:
+        payload = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    source_value = payload.get("run_dir")
+    if not source_value:
+        return False
+    try:
+        source = safe_run_dir(str(source_value))
+        target = safe_run_dir(str(active_run_dir))
+    except ValueError:
+        logger.warning("Refusing to archive backtest output from outside the allowed run roots")
+        return False
+    if source == target or not (source / "artifacts" / "metrics.csv").is_file():
+        return False
+
+    target.mkdir(parents=True, exist_ok=True)
+    for directory in ("artifacts", "code", "logs"):
+        source_dir = source / directory
+        if source_dir.is_dir():
+            shutil.copytree(source_dir, target / directory, dirs_exist_ok=True)
+    for filename in (
+        "config.json",
+        "design_spec.json",
+        "planner_output.json",
+        "rag_metadata.json",
+        "review_report.json",
+        "run_card.json",
+        "run_card.md",
+        "llm_usage.json",
+    ):
+        source_file = source / filename
+        if source_file.is_file():
+            shutil.copy2(source_file, target / filename)
+    return (target / "artifacts" / "metrics.csv").is_file()
+
+
 class AgentLoop:
     """ReAct Agent core loop.
 
@@ -1056,6 +1114,29 @@ class AgentLoop:
                             messages.append(
                                 {"role": "assistant", "content": final_content}
                             )
+                            recovery = self._grounding.recovery_action(validation)
+                            if recovery is not None and iteration < self.max_iterations:
+                                self._grounding.record_recovery(recovery)
+                                trace.write(
+                                    {
+                                        "type": "grounding_recovery",
+                                        "iter": current_iter,
+                                        "action": recovery,
+                                    }
+                                )
+                                react_trace.append(
+                                    {"type": "grounding_recovery", "action": recovery}
+                                )
+                                messages.append(
+                                    {
+                                        "role": "system",
+                                        "content": self._grounding.recovery_prompt(
+                                            recovery, validation
+                                        ),
+                                    }
+                                )
+                                final_content = ""
+                                continue
                             messages.append(
                                 {
                                     "role": "system",
@@ -1822,6 +1903,11 @@ class AgentLoop:
         success = _is_tool_success(result)
         if success:
             self._called_ok.add(tc.name)
+            if tc.name == "backtest":
+                try:
+                    _archive_backtest_result(result, self.memory.run_dir)
+                except OSError as exc:
+                    logger.warning("Could not archive backtest output into active run: %s", exc)
 
         if self._grounding is not None:
             self._grounding.ingest_tool_result(

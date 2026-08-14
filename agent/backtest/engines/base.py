@@ -409,6 +409,11 @@ class BaseEngine(ABC):
         self.fill_records: List[FillRecord] = []
         self.trades: List[TradeRecord] = []
         self.equity_snapshots: List[EquitySnapshot] = []
+        # Per-bar, post-fill portfolio weights.  These are deliberately kept
+        # separate from ``target_pos``: market rules, lot rounding, fees, and
+        # insufficient cash can all make the executed book differ from the
+        # optimiser's request.
+        self.actual_position_snapshots: List[tuple[pd.Timestamp, Dict[str, float]]] = []
         self._bar_idx: int = 0
         self._active_symbol: str = ""  # set by _rebalance/_close_position for subclass use
 
@@ -716,6 +721,7 @@ class BaseEngine(ABC):
 
         # 4. Bar-by-bar execution
         self._execute_bars(dates, data_map, close_df, target_pos, valid_codes)
+        actual_pos = self._actual_positions_frame(valid_codes)
 
         # 5. Build output series
         equity_series = pd.Series(
@@ -760,7 +766,7 @@ class BaseEngine(ABC):
             self.initial_capital,
             bars_per_year,
             bench_ret,
-            target_pos,
+            actual_pos,
             turnover_series=realized_turnover,
         )
         m.update(benchmark_metadata)
@@ -807,7 +813,7 @@ class BaseEngine(ABC):
             write_risk_xray,
         )
         try:
-            basket_weights, avg_invested = average_invested_weights(target_pos)
+            basket_weights, avg_invested = average_invested_weights(actual_pos)
             risk_xray = compute_risk_xray(
                 close_df, basket_weights, periods_per_year=bars_per_year,
             )
@@ -881,6 +887,7 @@ class BaseEngine(ABC):
         # Store as instance attrs for use in _calc_equity / _safe_price
         self._close_arr = _close_arr
         self._code_to_col = _code_to_col
+        self.actual_position_snapshots = []
 
         for i, ts in enumerate(dates):
             self._bar_idx = i
@@ -906,7 +913,8 @@ class BaseEngine(ABC):
                 self._execute_target_rebalance(target_weights, data_map, ts, equity, codes)
                 target_weights = {}
 
-            # b. Release capital before opening replacement positions.  A
+            # b. In legacy hold mode, release capital before opening replacement
+            # positions or increasing other positions.  A
             # single mixed close/open pass makes rotations depend on symbol
             # iteration order when the new name is visited before the old one.
             for c in codes:
@@ -981,6 +989,9 @@ class BaseEngine(ABC):
 
             # e. Record equity snapshot
             snap_equity = self._calc_equity(close_df, ts)
+            self.actual_position_snapshots.append(
+                (ts, self._actual_weights(close_df, ts, codes, snap_equity))
+            )
             if self.positions and type(self)._calc_pnl is BaseEngine._calc_pnl:
                 _syms = list(self.positions.keys())
                 _eps = np.array([p.entry_price for p in self.positions.values()])
@@ -1037,6 +1048,10 @@ class BaseEngine(ABC):
                     unrealized=0.0,
                     equity=self.capital,
                     positions=0,
+                )
+            if self.actual_position_snapshots:
+                self.actual_position_snapshots[-1] = (
+                    last_ts, {code: 0.0 for code in codes}
                 )
 
         # Clean up temporary instance attributes
@@ -1501,6 +1516,46 @@ class BaseEngine(ABC):
             reason="signal",
         )
 
+    def _actual_weights(
+        self,
+        close_df: pd.DataFrame,
+        ts: pd.Timestamp,
+        codes: List[str],
+        equity: float,
+    ) -> Dict[str, float]:
+        """Return post-fill, mark-to-market weights for the currently held book."""
+        weights = {code: 0.0 for code in codes}
+        if abs(equity) <= 1e-12:
+            return weights
+        for symbol, pos in self.positions.items():
+            price = self._safe_price(
+                close_df,
+                ts,
+                symbol,
+                pos.entry_price,
+                _arr=getattr(self, "_close_arr", None),
+                _row=getattr(self, "_bar_idx", None),
+                _col=getattr(self, "_code_to_col", {}).get(symbol),
+            )
+            margin_value = self._calc_margin(
+                symbol, pos.size, price, pos.leverage
+            )
+            weights[symbol] = pos.direction * margin_value / equity
+        return weights
+
+    def _actual_positions_frame(self, codes: List[str]) -> pd.DataFrame:
+        """Materialize recorded post-fill weights as an artifact-ready frame."""
+        if not self.actual_position_snapshots:
+            return pd.DataFrame(columns=codes, dtype=float)
+        frame = pd.DataFrame(
+            [weights for _, weights in self.actual_position_snapshots],
+            index=[timestamp for timestamp, _ in self.actual_position_snapshots],
+            columns=codes,
+            dtype=float,
+        )
+        frame.index.name = "timestamp"
+        return frame
+
     def _close_position(
         self,
         symbol: str,
@@ -1659,9 +1714,13 @@ class BaseEngine(ABC):
         eq_df.index.name = "timestamp"
         eq_df.to_csv(out / "equity.csv")
 
-        # Position weights (target, for compatibility)
-        target_pos.index.name = "timestamp"
-        target_pos.to_csv(out / "positions.csv")
+        # ``positions.csv`` is execution truth.  Keep optimiser requests in a
+        # separate artifact so blocked/rounded/scaled fills remain auditable.
+        actual_pos = self._actual_positions_frame(codes)
+        actual_pos.to_csv(out / "positions.csv")
+        target_out = target_pos.copy()
+        target_out.index.name = "timestamp"
+        target_out.to_csv(out / "target_positions.csv")
 
         # Trades (compatible format)
         trade_rows = []
