@@ -9,8 +9,8 @@ on:
     - cron: "0 12 * * *"
   workflow_dispatch: # 允许在 Actions 页面随时手动触发
 
-# 不声明 permissions：声明会收窄令牌权限，导致推送含 .github/workflows/
-# 变更的官方提交时被拒。使用仓库默认读写权限（Settings→Actions→General）。
+# 不声明 permissions：推送含 .github/workflows/ 变更的官方提交时，
+# GITHUB_TOKEN 会被硬性拒绝，改用仓库密钥 SYNC_TOKEN（个人访问令牌）推送。
 
 jobs:
   sync:
@@ -21,6 +21,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }} # 用个人访问令牌作为推送凭证
 
       - name: Merge upstream/main into main
         run: |
