@@ -9,9 +9,8 @@ on:
     - cron: "0 12 * * *"
   workflow_dispatch: # 允许在 Actions 页面随时手动触发
 
-permissions:
-  contents: write
-  workflows: write # 官方提交可能包含 .github/workflows/ 变更，推送需此权限
+# 不声明 permissions：声明会收窄令牌权限，导致推送含 .github/workflows/
+# 变更的官方提交时被拒。使用仓库默认读写权限（Settings→Actions→General）。
 
 jobs:
   sync:
