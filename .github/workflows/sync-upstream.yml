@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write # 官方提交可能包含 .github/workflows/ 变更，推送需此权限
 
 jobs:
   sync:
