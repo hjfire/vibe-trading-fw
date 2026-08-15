@@ -549,6 +549,7 @@
     "goBack": "Volver",
     "chart": "Gráfico",
     "trades": "Operaciones",
+    "factor": "Investigación de factores",
     "studio": "Estudio de portafolio",
     "riskXray": "Radiografía de riesgo",
     "rebalanceNotes": "Notas de rebalanceo",
@@ -1299,5 +1300,27 @@
     "colQty": "Cantidad",
     "colPnl": "P&L",
     "colReason": "Motivo"
+  },
+  "factor": {
+    "title": "Investigación de factores",
+    "selectFactor": "Seleccionar factor",
+    "icSeries": "IC diario",
+    "icMa": "Media móvil de 20 períodos",
+    "icStats": "Estadísticas de IC",
+    "icMean": "Media de IC",
+    "icStd": "Desviación de IC",
+    "ir": "IR",
+    "icPositiveRatio": "Ratio IC>0",
+    "icCount": "Observaciones de IC",
+    "longShortSpread": "Diferencial largo-corto",
+    "nGroups": "Grupos de cuantiles",
+    "quantileEquity": "Capital de grupos de cuantiles",
+    "quantileEquityNote": "Group_1 contiene los valores más bajos del factor y Group_N los más altos; la brecha entre el cuantil superior y el inferior mide el poder de selección.",
+    "correlation": "Correlación de IC",
+    "correlationNote": "Correlación por pares de las series diarias de IC entre factores; los factores muy correlacionados aportan información superpuesta.",
+    "insufficientOverlap": "La correlación de IC no está disponible porque las series de IC no se solapan suficiente en fechas comunes.",
+    "loading": "Cargando resultados de factores…",
+    "error": "Error al cargar los resultados de factores",
+    "noFactorData": "No hay resultados de análisis de factores disponibles para esta ejecución."
   }
 }

@@ -544,6 +544,7 @@
     "goBack": "뒤로",
     "chart": "차트",
     "trades": "거래",
+    "factor": "팩터 분석",
     "studio": "포트폴리오 스튜디오",
     "riskXray": "리스크 엑스레이",
     "rebalanceNotes": "리밸런스 노트",
@@ -1299,5 +1300,27 @@
     "colQty": "수량",
     "colPnl": "손익",
     "colReason": "사유"
+  },
+  "factor": {
+    "title": "팩터 분석",
+    "selectFactor": "팩터 선택",
+    "icSeries": "일별 IC",
+    "icMa": "20기간 이동평균",
+    "icStats": "IC 통계",
+    "icMean": "IC 평균",
+    "icStd": "IC 표준편차",
+    "ir": "IR",
+    "icPositiveRatio": "IC>0 비율",
+    "icCount": "IC 관측치",
+    "longShortSpread": "롱-숏 스프레드",
+    "nGroups": "분위 그룹 수",
+    "quantileEquity": "분위 그룹 자산",
+    "quantileEquityNote": "Group_1은 팩터 값이 가장 낮은 그룹이고 Group_N은 가장 높은 그룹입니다. 최상위와 최하위 분위의 차이는 종목 선정력을 나타냅니다.",
+    "correlation": "IC 상관관계",
+    "correlationNote": "팩터 간 일별 IC 시계열의 쌍별 상관관계입니다. 상관계수가 높은 팩터는 중복된 정보를 담고 있습니다.",
+    "insufficientOverlap": "팩터 IC 시계열의 공통 날짜 중복이 부족하여 IC 상관관계를 계산할 수 없습니다.",
+    "loading": "팩터 분석 결과를 불러오는 중…",
+    "error": "팩터 분석 결과를 불러오지 못했습니다",
+    "noFactorData": "이 실행에는 사용 가능한 팩터 분석 결과가 없습니다."
   }
 }

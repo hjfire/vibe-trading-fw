@@ -544,6 +544,7 @@
     "goBack": "返回",
     "chart": "图表",
     "trades": "交易",
+    "factor": "因子研究",
     "studio": "组合工作室",
     "riskXray": "风险透视",
     "rebalanceNotes": "调仓笔记",
@@ -1299,5 +1300,27 @@
     "colQty": "数量",
     "colPnl": "盈亏",
     "colReason": "原因"
+  },
+  "factor": {
+    "title": "因子研究",
+    "selectFactor": "选择因子",
+    "icSeries": "日度 IC",
+    "icMa": "20 期均线",
+    "icStats": "IC 统计",
+    "icMean": "IC 均值",
+    "icStd": "IC 标准差",
+    "ir": "IR",
+    "icPositiveRatio": "IC>0 占比",
+    "icCount": "IC 样本数",
+    "longShortSpread": "多空收益差",
+    "nGroups": "分组数",
+    "quantileEquity": "分位数组合净值",
+    "quantileEquityNote": "Group_1 为因子值最低组，Group_N 为因子值最高组；首尾分位组的净值差距衡量因子的选股能力。",
+    "correlation": "IC 相关性",
+    "correlationNote": "各因子日度 IC 时间序列两两之间的相关系数；高度相关的因子携带的信息高度重叠。",
+    "insufficientOverlap": "各因子 IC 序列的共同日期重叠不足，无法计算 IC 相关性。",
+    "loading": "正在加载因子分析结果…",
+    "error": "加载因子分析结果失败",
+    "noFactorData": "本次运行没有可用的因子分析结果。"
   }
 }

@@ -146,6 +146,7 @@ export const api = {
     return request<RunData>(`/runs/${id}${qs ? `?${qs}` : ""}`);
   },
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
+  getRunFactor: (id: string) => request<FactorReportPayload>(`/runs/${id}/factor`),
   getRunPine: (id: string) => request<PineScriptResult>(`/runs/${id}/pine`),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
@@ -611,6 +612,37 @@ export interface RebalanceNotesPayload {
   };
 }
 
+export interface FactorIcStats {
+  ic_mean?: number | null;
+  ic_std?: number | null;
+  ir?: number | null;
+  ic_positive_ratio?: number | null;
+  ic_count?: number | null;
+  [key: string]: unknown;
+}
+
+export interface FactorResult {
+  name: string;
+  path: string;
+  ic_series: Array<{ date: string; ic: number }>;
+  ic_stats?: FactorIcStats;
+  group_equity: Array<{ date: string } & Record<string, number | string>>;
+  n_groups: number;
+  long_short_spread: number | null;
+  group_final_equity: Record<string, number>;
+  truncated?: {
+    ic_series?: boolean;
+    ic_stats?: boolean;
+    group_equity?: boolean;
+  };
+}
+
+export interface FactorReportPayload {
+  exists: boolean;
+  factors: FactorResult[];
+  ic_correlation: { labels: string[]; matrix: number[][] } | null;
+}
+
 export interface RunData {
   status: string;
   run_id: string;
@@ -626,6 +658,7 @@ export interface RunData {
   risk_xray?: RiskXRayPayload;
   rebalance_notes?: RebalanceNotesPayload;
   validation?: ValidationData;
+  has_factor_artifacts?: boolean;
 
   chart_symbols?: string[];
   price_series?: Record<string, PriceBar[]>;

@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import csv
 import json
+import math
+import os
+import statistics
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Deque, Dict, Generator, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -18,6 +22,16 @@ from fastapi.responses import JSONResponse
 # ---------------------------------------------------------------------------
 # Helper functions (module-level; host Pydantic models resolved via sys.modules)
 # ---------------------------------------------------------------------------
+
+_FACTOR_MAX_RESULTS = 20
+_FACTOR_MAX_SCAN_ENTRIES = 4096
+_FACTOR_MAX_SCAN_DEPTH = 8
+_FACTOR_MAX_FILE_BYTES = 2 * 1024 * 1024
+_FACTOR_MAX_SUMMARY_BYTES = 128 * 1024
+_FACTOR_MAX_TOTAL_ARTIFACT_BYTES = 8 * 1024 * 1024
+_FACTOR_MAX_ROWS_PER_CSV = 5000
+_FACTOR_MAX_TOTAL_ROWS = 20_000
+_FACTOR_MAX_GROUP_COLUMNS = 100
 
 
 def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:
@@ -42,6 +56,408 @@ def _load_csv_to_dict(path: Path, limit: Optional[int] = None) -> List[Dict[str,
         return rows
     except Exception:
         return []
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    """Parse a finite float, returning ``None`` for invalid values.
+
+    Args:
+        value: Candidate numeric value.
+
+    Returns:
+        Parsed finite float, or ``None``.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _sanitize_finite_json(value: Any) -> Any:
+    """Replace non-finite JSON numeric leaves with ``None`` recursively.
+
+    Args:
+        value: Parsed JSON value.
+
+    Returns:
+        JSON-compatible value without NaN or infinities.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _sanitize_finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_finite_json(item) for item in value]
+    return value
+
+
+def _claim_factor_artifact(
+    path: Path,
+    *,
+    max_file_bytes: int,
+    remaining_bytes: int,
+) -> Tuple[bool, int, bool]:
+    """Check whether an artifact can be read inside the response byte budget.
+
+    Symlinks are rejected so companion files cannot escape the discovered
+    bundle. The returned tuple is ``(readable, charged_bytes, degraded)``;
+    missing optional files are not considered degraded.
+
+    Args:
+        path: Candidate artifact path.
+        max_file_bytes: Per-file byte ceiling.
+        remaining_bytes: Remaining aggregate byte budget.
+
+    Returns:
+        Tuple of readability, charged bytes, and degraded status.
+    """
+    try:
+        if path.is_symlink():
+            return False, 0, True
+        if not path.is_file():
+            return False, 0, False
+        size = path.stat().st_size
+    except OSError:
+        return False, 0, True
+    if size < 0 or size > max_file_bytes or size > remaining_bytes:
+        return False, 0, True
+    return True, size, False
+
+
+def _load_ic_series_csv(path: Path, row_limit: int) -> Tuple[List[Dict[str, Any]], bool]:
+    """Load an ``ic_series.csv`` file into ``{"date", "ic"}`` rows.
+
+    The first CSV column is treated as the date column regardless of its
+    header name (the factor tool writes it with an empty or varying index
+    label). Rows whose IC value does not parse as a float are skipped.
+
+    Args:
+        path: Path to the ic_series.csv file.
+        row_limit: Maximum source rows to parse.
+
+    Returns:
+        Tuple of rows with raw string dates and finite IC values plus a flag
+        indicating that the source was truncated or could not be parsed.
+    """
+    if row_limit <= 0:
+        return [], True
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames
+            if not fieldnames or fieldnames[0] is None:
+                return [], True
+            date_col = fieldnames[0]
+            rows: List[Dict[str, Any]] = []
+            truncated = False
+            for source_index, row in enumerate(reader):
+                if source_index >= row_limit:
+                    truncated = True
+                    break
+                date_value = row.get(date_col)
+                if date_value is None:
+                    continue
+                ic_value = _finite_float(row.get("IC"))
+                if ic_value is None:
+                    continue
+                rows.append({"date": date_value, "ic": ic_value})
+            return rows, truncated
+    except Exception:
+        return [], True
+
+
+def _load_group_equity_csv(
+    path: Path,
+    row_limit: int,
+) -> Tuple[List[Dict[str, Any]], List[str], bool]:
+    """Load a ``group_equity.csv`` file into dated rows of float group values.
+
+    The first column is the date; every remaining column is kept in file
+    order and parsed as float. Cells that fail to parse are dropped.
+
+    Args:
+        path: Path to the group_equity.csv file.
+        row_limit: Maximum source rows to parse.
+
+    Returns:
+        Tuple of (rows, value column names in file order, truncated/degraded).
+    """
+    if row_limit <= 0:
+        return [], [], True
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames
+            if not fieldnames or fieldnames[0] is None or len(fieldnames) < 2:
+                return [], [], True
+            date_col = fieldnames[0]
+            all_value_cols = [col for col in fieldnames[1:] if col]
+            value_cols = all_value_cols[:_FACTOR_MAX_GROUP_COLUMNS]
+            truncated = len(value_cols) < len(all_value_cols)
+            rows: List[Dict[str, Any]] = []
+            for source_index, row in enumerate(reader):
+                if source_index >= row_limit:
+                    truncated = True
+                    break
+                date_value = row.get(date_col)
+                if date_value is None:
+                    continue
+                parsed: Dict[str, Any] = {"date": date_value}
+                for col in value_cols:
+                    numeric_value = _finite_float(row.get(col))
+                    if numeric_value is not None:
+                        parsed[col] = numeric_value
+                rows.append(parsed)
+            return rows, value_cols, truncated
+    except Exception:
+        return [], [], True
+
+
+def _load_factor_summary(path: Path) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Load a factor summary while removing non-finite numeric leaves.
+
+    Args:
+        path: Path to ``ic_summary.json``.
+
+    Returns:
+        Sanitized summary and whether parsing degraded.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None, True
+        return _sanitize_finite_json(payload), False
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return None, True
+
+
+def _iter_factor_series_files(
+    run_dir: Path,
+    *,
+    max_results: int,
+) -> Generator[Path, None, None]:
+    """Yield bounded, non-symlinked ``ic_series.csv`` paths.
+
+    Directory entries, nesting depth, and result count are all capped. Unlike
+    ``Path.rglob()``, this iterator never constructs the complete match list
+    and never follows a symlinked directory.
+
+    Args:
+        run_dir: Root directory of the run.
+        max_results: Maximum factor marker paths to yield.
+
+    Yields:
+        Safe paths to factor IC-series artifacts.
+    """
+    artifacts_dir = run_dir / "artifacts"
+    if not artifacts_dir.is_dir() or artifacts_dir.is_symlink() or max_results <= 0:
+        return
+
+    pending: Deque[Tuple[Path, int]] = deque([(artifacts_dir, 0)])
+    entries_seen = 0
+    yielded = 0
+    while pending and entries_seen < _FACTOR_MAX_SCAN_ENTRIES and yielded < max_results:
+        directory, depth = pending.popleft()
+        child_directories: List[Path] = []
+        try:
+            with os.scandir(directory) as scan:
+                iterator = iter(scan)
+                while entries_seen < _FACTOR_MAX_SCAN_ENTRIES:
+                    try:
+                        entry = next(iterator)
+                    except StopIteration:
+                        break
+                    entries_seen += 1
+                    if entry.name.startswith("."):
+                        continue
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.name == "ic_series.csv" and entry.is_file(follow_symlinks=False):
+                            yield Path(entry.path)
+                            yielded += 1
+                            if yielded >= max_results:
+                                return
+                        elif depth < _FACTOR_MAX_SCAN_DEPTH and entry.is_dir(follow_symlinks=False):
+                            child_directories.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+        child_directories.sort(key=lambda path: path.name)
+        pending.extend((path, depth + 1) for path in child_directories)
+
+
+def _has_factor_artifacts(run_dir: Path) -> bool:
+    """Return whether a bounded directory-entry scan finds a factor bundle."""
+    candidates = _iter_factor_series_files(run_dir, max_results=1)
+    try:
+        return next(candidates, None) is not None
+    finally:
+        candidates.close()
+
+
+def _scan_factor_results(run_dir: Path) -> List[Dict[str, Any]]:
+    """Scan a run directory for factor-analysis artifact bundles.
+
+    A factor result is any directory under ``run_dir/artifacts`` (recursive)
+    that contains an ``ic_series.csv`` file. Traversal, nesting, factor count,
+    file sizes, source rows, columns, and aggregate response inputs are all
+    bounded. Symlinked directories and files are ignored.
+
+    Args:
+        run_dir: Root directory of the run.
+    Returns:
+        Factor result dicts sorted by name ascending.
+    """
+    artifacts_dir = run_dir / "artifacts"
+    results: List[Dict[str, Any]] = []
+    remaining_bytes = _FACTOR_MAX_TOTAL_ARTIFACT_BYTES
+    remaining_rows = _FACTOR_MAX_TOTAL_ROWS
+    for csv_path in _iter_factor_series_files(run_dir, max_results=_FACTOR_MAX_RESULTS):
+        try:
+            relative_dir = csv_path.parent.relative_to(run_dir)
+        except ValueError:
+            continue
+        directory = csv_path.parent
+        name = "factor_analysis" if directory == artifacts_dir else directory.name
+
+        truncated: Dict[str, bool] = {}
+        ic_rows: List[Dict[str, Any]] = []
+        ic_readable, ic_size, ic_degraded = _claim_factor_artifact(
+            csv_path,
+            max_file_bytes=_FACTOR_MAX_FILE_BYTES,
+            remaining_bytes=remaining_bytes,
+        )
+        if ic_readable:
+            remaining_bytes -= ic_size
+            ic_rows, ic_rows_truncated = _load_ic_series_csv(
+                csv_path,
+                min(_FACTOR_MAX_ROWS_PER_CSV, remaining_rows),
+            )
+            remaining_rows -= len(ic_rows)
+            if ic_rows_truncated:
+                truncated["ic_series"] = True
+        elif ic_degraded:
+            truncated["ic_series"] = True
+
+        summary: Optional[Dict[str, Any]] = None
+        summary_path = directory / "ic_summary.json"
+        summary_readable, summary_size, summary_degraded = _claim_factor_artifact(
+            summary_path,
+            max_file_bytes=_FACTOR_MAX_SUMMARY_BYTES,
+            remaining_bytes=remaining_bytes,
+        )
+        if summary_readable:
+            remaining_bytes -= summary_size
+            summary, summary_parse_degraded = _load_factor_summary(summary_path)
+            if summary_parse_degraded:
+                truncated["ic_stats"] = True
+        elif summary_degraded:
+            truncated["ic_stats"] = True
+
+        equity_rows: List[Dict[str, Any]] = []
+        equity_cols: List[str] = []
+        equity_path = directory / "group_equity.csv"
+        equity_readable, equity_size, equity_degraded = _claim_factor_artifact(
+            equity_path,
+            max_file_bytes=_FACTOR_MAX_FILE_BYTES,
+            remaining_bytes=remaining_bytes,
+        )
+        if equity_readable:
+            remaining_bytes -= equity_size
+            equity_rows, equity_cols, equity_rows_truncated = _load_group_equity_csv(
+                equity_path,
+                min(_FACTOR_MAX_ROWS_PER_CSV, remaining_rows),
+            )
+            remaining_rows -= len(equity_rows)
+            if equity_rows_truncated:
+                truncated["group_equity"] = True
+        elif equity_degraded:
+            truncated["group_equity"] = True
+
+        group_cols = [col for col in equity_cols if col.startswith("Group_")]
+        spread_cols = group_cols or equity_cols
+        long_short_spread: Optional[float] = None
+        group_final_equity: Dict[str, Any] = {}
+        if equity_rows and spread_cols:
+            last_row = equity_rows[-1]
+            first_value = last_row.get(spread_cols[0])
+            last_value = last_row.get(spread_cols[-1])
+            if first_value is not None and last_value is not None:
+                spread = last_value - first_value
+                if math.isfinite(spread):
+                    long_short_spread = round(spread, 6)
+            group_final_equity = {col: last_row[col] for col in equity_cols if col in last_row}
+        entry: Dict[str, Any] = {
+            "name": name,
+            "path": relative_dir.as_posix(),
+            "ic_series": ic_rows,
+        }
+        if isinstance(summary, dict):
+            entry["ic_stats"] = summary
+        entry["group_equity"] = equity_rows
+        entry["n_groups"] = len(group_cols)
+        entry["long_short_spread"] = long_short_spread
+        entry["group_final_equity"] = group_final_equity
+        if truncated:
+            entry["truncated"] = truncated
+        results.append(entry)
+    results.sort(key=lambda item: (str(item["name"]), str(item["path"])))
+    return results
+
+
+def _pearson_correlation(x_values: List[float], y_values: List[float]) -> float:
+    """Compute Pearson correlation, degrading to 0.0 for degenerate input.
+
+    Args:
+        x_values: First series of values.
+        y_values: Second series of values (same length).
+
+    Returns:
+        Pearson correlation in [-1, 1], or 0.0 when a variance is zero.
+    """
+    try:
+        correlation = statistics.correlation(x_values, y_values)
+    except (statistics.StatisticsError, ValueError, OverflowError, ZeroDivisionError):
+        return 0.0
+    if not math.isfinite(correlation):
+        return 0.0
+    return max(-1.0, min(1.0, correlation))
+
+
+def _factor_ic_correlation(factors: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Build the pairwise IC correlation matrix across factor results.
+
+    Args:
+        factors: Factor result dicts from ``_scan_factor_results``.
+
+    Returns:
+        Labels plus a symmetric Pearson correlation matrix rounded to four
+        decimals, or ``None`` when fewer than two factors exist or any pair
+        shares fewer than 10 dates.
+    """
+    if len(factors) < 2:
+        return None
+    series: List[Dict[str, float]] = []
+    for factor in factors:
+        series.append({str(row["date"]): float(row["ic"]) for row in factor.get("ic_series") or []})
+    for i in range(len(series)):
+        for j in range(i + 1, len(series)):
+            if len(series[i].keys() & series[j].keys()) < 10:
+                return None
+    size = len(series)
+    matrix: List[List[float]] = [[1.0 if i == j else 0.0 for j in range(size)] for i in range(size)]
+    for i in range(size):
+        for j in range(i + 1, size):
+            common_dates = sorted(series[i].keys() & series[j].keys())
+            x_values = [series[i][date] for date in common_dates]
+            y_values = [series[j][date] for date in common_dates]
+            correlation = round(_pearson_correlation(x_values, y_values), 4)
+            matrix[i][j] = correlation
+            matrix[j][i] = correlation
+    return {"labels": [str(factor["name"]) for factor in factors], "matrix": matrix}
 
 
 def _run_response_payload(response: Any) -> Dict[str, Any]:
@@ -141,6 +557,8 @@ def _build_response_from_run_dir(
                         exists=True,
                     )
                 )
+
+    response.has_factor_artifacts = _has_factor_artifacts(run_dir)
 
     equity_path = run_dir / "artifacts" / "equity.csv"
     if equity_path.exists():
@@ -308,6 +726,33 @@ def register_runs_routes(
         return {
             "exists": True,
             "content": pine_path.read_text(encoding="utf-8"),
+        }
+
+    @app.get("/runs/{run_id}/factor", dependencies=[Depends(require_auth)])
+    async def get_run_factor(run_id: str):
+        """Return factor-analysis artifacts for a run.
+
+        Args:
+            run_id: Run identifier.
+
+        Returns:
+            Object with exists flag, factor results sorted by name, and the
+            pairwise IC correlation matrix (null when not computable).
+        """
+        _host_validate_path_param(run_id, "run_id")
+        run_dir = _host_RUNS_DIR() / run_id
+        if not run_dir.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run {run_id} not found"
+            )
+        factors = _scan_factor_results(run_dir)
+        if not factors:
+            return {"exists": False, "factors": [], "ic_correlation": None}
+        return {
+            "exists": True,
+            "factors": factors,
+            "ic_correlation": _factor_ic_correlation(factors),
         }
 
     @app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_auth)])

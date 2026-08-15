@@ -544,6 +544,7 @@
     "goBack": "戻る",
     "chart": "チャート",
     "trades": "トレード",
+    "factor": "ファクター分析",
     "studio": "ポートフォリオスタジオ",
     "riskXray": "リスクエックス線",
     "rebalanceNotes": "リバランスノート",
@@ -1299,5 +1300,27 @@
     "colQty": "数量",
     "colPnl": "損益",
     "colReason": "理由"
+  },
+  "factor": {
+    "title": "ファクター分析",
+    "selectFactor": "ファクターを選択",
+    "icSeries": "日次 IC",
+    "icMa": "20期間移動平均",
+    "icStats": "IC 統計",
+    "icMean": "IC 平均",
+    "icStd": "IC 標準偏差",
+    "ir": "IR",
+    "icPositiveRatio": "IC>0 比率",
+    "icCount": "IC サンプル数",
+    "longShortSpread": "ロング・ショート差",
+    "nGroups": "分位グループ数",
+    "quantileEquity": "分位グループ純資産",
+    "quantileEquityNote": "Group_1 はファクター値が最も低いグループ、Group_N は最も高いグループです。上位と下位の分位グループ間の差が選別力を示します。",
+    "correlation": "IC 相関",
+    "correlationNote": "各ファクターの日次 IC 時系列のペアワイズ相関。相関が高いファクターは重複した情報を持ちます。",
+    "insufficientOverlap": "ファクター IC シリーズの共通日付の重複が不十分なため、IC 相関を計算できません。",
+    "loading": "ファクター分析結果を読み込み中…",
+    "error": "ファクター分析結果の読み込みに失敗しました",
+    "noFactorData": "この実行には利用可能なファクター分析結果がありません。"
   }
 }

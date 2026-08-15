@@ -549,6 +549,7 @@
     "goBack": "Go back",
     "chart": "Chart",
     "trades": "Trades",
+    "factor": "Factor Research",
     "studio": "Portfolio Studio",
     "riskXray": "Risk X-Ray",
     "rebalanceNotes": "Rebalance Notes",
@@ -1299,5 +1300,27 @@
     "colQty": "Qty",
     "colPnl": "PnL",
     "colReason": "Reason"
+  },
+  "factor": {
+    "title": "Factor Research",
+    "selectFactor": "Select factor",
+    "icSeries": "Daily IC",
+    "icMa": "20-period MA",
+    "icStats": "IC Statistics",
+    "icMean": "IC Mean",
+    "icStd": "IC Std",
+    "ir": "IR",
+    "icPositiveRatio": "IC > 0 Ratio",
+    "icCount": "IC Observations",
+    "longShortSpread": "Long-Short Spread",
+    "nGroups": "Quantile Groups",
+    "quantileEquity": "Quantile Group Equity",
+    "quantileEquityNote": "Group_1 holds the lowest factor values and Group_N the highest; the gap between the top and bottom quantiles measures selection power.",
+    "correlation": "IC Correlation",
+    "correlationNote": "Pairwise correlation of the daily IC time series across factors; highly correlated factors carry overlapping information.",
+    "insufficientOverlap": "IC correlation is unavailable because the factor IC series do not overlap enough on common dates.",
+    "loading": "Loading factor results…",
+    "error": "Failed to load factor results",
+    "noFactorData": "No factor analysis results are available for this run."
   }
 }

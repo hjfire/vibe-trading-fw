@@ -10,6 +10,23 @@ interface Props {
   height?: number;
 }
 
+const RDBU_STOPS = ["#2166ac", "#4393c3", "#92c5de", "#d1e5f0", "#f7f7f7", "#fddbc7", "#f4a582", "#d6604d", "#b2182b"];
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function cellTextColor(value: number): string {
+  const pos = Math.min(1, Math.max(0, (value + 1) / 2)) * (RDBU_STOPS.length - 1);
+  const idx = Math.min(RDBU_STOPS.length - 2, Math.floor(pos));
+  const frac = pos - idx;
+  const [r1, g1, b1] = hexToRgb(RDBU_STOPS[idx]);
+  const [r2, g2, b2] = hexToRgb(RDBU_STOPS[idx + 1]);
+  const luminance = (0.299 * (r1 + (r2 - r1) * frac) + 0.587 * (g1 + (g2 - g1) * frac) + 0.114 * (b1 + (b2 - b1) * frac)) / 255;
+  return luminance > 0.55 ? "#1f2937" : "#ffffff";
+}
+
 export function CorrelationMatrix({ labels, matrix, height = 500 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const dark = useThemeDark();
@@ -20,12 +37,12 @@ export function CorrelationMatrix({ labels, matrix, height = 500 }: Props) {
     const t = getChartTheme();
     const chart = echarts.init(ref.current);
 
-    // Build heatmap data: [xIdx, yIdx, value]
-    const data: [number, number, number][] = [];
+    // Build heatmap data: [xIdx, yIdx, value] with per-cell label color for readability on saturated cells
+    const data: { value: [number, number, number]; label: { color: string } }[] = [];
     for (let i = 0; i < labels.length; i++) {
       for (let j = 0; j < labels.length; j++) {
-        const val = matrix[i]?.[j] ?? 0;
-        data.push([j, i, parseFloat(val.toFixed(4))]);
+        const val = parseFloat((matrix[i]?.[j] ?? 0).toFixed(4));
+        data.push({ value: [j, i, val], label: { color: cellTextColor(val) } });
       }
     }
 
@@ -40,8 +57,8 @@ export function CorrelationMatrix({ labels, matrix, height = 500 }: Props) {
         borderColor: t.tooltipBorder,
         textStyle: { color: t.tooltipText, fontSize: 12 },
         formatter: (params: unknown) => {
-          const p = params as { data: [number, number, number] };
-          const [x, y, v] = p.data;
+          const p = params as { data: { value: [number, number, number] } };
+          const [x, y, v] = p.data.value;
           return `<b>${labels[x]}</b> vs <b>${labels[y]}</b><br/>r = <b>${v.toFixed(4)}</b>`;
         },
       },
@@ -75,7 +92,7 @@ export function CorrelationMatrix({ labels, matrix, height = 500 }: Props) {
         top: "center",
         textStyle: { color: t.textColor, fontSize: 11 },
         inRange: {
-          color: ["#2166ac", "#4393c3", "#92c5de", "#d1e5f0", "#f7f7f7", "#fddbc7", "#f4a582", "#d6604d", "#b2182b"],
+          color: RDBU_STOPS,
         },
       },
       series: [
@@ -86,7 +103,6 @@ export function CorrelationMatrix({ labels, matrix, height = 500 }: Props) {
           label: {
             show: labels.length <= 8,
             fontSize: 10,
-            color: t.textColor,
             formatter: (params: unknown) => {
               const p = params as { value: [number, number, number] };
               return p.value[2].toFixed(2);
