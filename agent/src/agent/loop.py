@@ -579,6 +579,37 @@ def _normalize_tool_run_dir(args: dict[str, Any], memory_run_dir: str | None) ->
     return normalized
 
 
+#: Names the backtest an archived run currently describes, and the files that
+#: archive placed there, so the next one can replace exactly its own output.
+_ARCHIVE_MANIFEST = ".archived_backtest.json"
+
+
+def _previously_archived(target: Path) -> set[str]:
+    """Return the run-relative files the previous archive copied into ``target``.
+
+    The caller deletes what this returns, and the names are read back off disk,
+    so each one is confined to ``target`` here — a manifest carrying ``..`` must
+    not become a way to delete a file elsewhere. An unreadable or malformed
+    manifest yields an empty set: the worst case is the pre-#1094 merge for one
+    turn, which beats refusing to archive a backtest the user is waiting for.
+    """
+    try:
+        payload = json.loads((target / _ARCHIVE_MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        return set()
+    root = target.resolve()
+    return {
+        str(name)
+        for name in files
+        if isinstance(name, str)
+        and (root / name).resolve().is_relative_to(root)
+        and (root / name).resolve() != root
+    }
+
+
 def _archive_backtest_result(result: str, active_run_dir: str | None) -> bool:
     """Copy a successful detached backtest into the active, reportable run.
 
@@ -592,6 +623,16 @@ def _archive_backtest_result(result: str, active_run_dir: str | None) -> bool:
     that invariant lives in another module and this function reads its path back
     out of a *tool result* rather than from the validated arguments.  Checking
     locally keeps a copy loop from depending on a guarantee made elsewhere.
+
+    The copy REPLACES the previous archive rather than merging with it (#1094).
+    An agent may backtest more than once in a turn, and the copy is a plain
+    merge, so a file only the earlier backtest produced used to survive
+    alongside the later one's output — one artifacts directory describing two
+    different runs, which ``/runs/{id}`` then lists as artifacts of the current
+    one.  Only files a previous archive placed here are removed, recorded in
+    :data:`_ARCHIVE_MANIFEST`; anything the active run wrote itself (notably
+    ``code/signal_engine.py``, written before ``backtest`` is called) is
+    untouched, which is why the manifest exists instead of a blanket wipe.
     """
     if not active_run_dir:
         return False
@@ -615,10 +656,23 @@ def _archive_backtest_result(result: str, active_run_dir: str | None) -> bool:
         return False
 
     target.mkdir(parents=True, exist_ok=True)
+    previously_archived = _previously_archived(target)
+    archived: list[str] = []
     for directory in ("artifacts", "code", "logs"):
         source_dir = source / directory
         if source_dir.is_dir():
             shutil.copytree(source_dir, target / directory, dirs_exist_ok=True)
+            archived += [
+                str(path.relative_to(source))
+                for path in source_dir.rglob("*")
+                if path.is_file()
+            ]
+    for stale in previously_archived - set(archived):
+        (target / stale).unlink(missing_ok=True)
+    (target / _ARCHIVE_MANIFEST).write_text(
+        json.dumps({"source_run": source.name, "files": sorted(archived)}, indent=2),
+        encoding="utf-8",
+    )
     for filename in (
         "config.json",
         "design_spec.json",
@@ -1071,8 +1125,8 @@ class AgentLoop:
                         break
                     trace.write({"type": "content_filter_skipped", "iter": current_iter})
                     messages.append({
-                        "role": "system",
-                        "content": CONTENT_FILTER_SKIP_MESSAGE,
+                        "role": "user",
+                        "content": f"<system>{CONTENT_FILTER_SKIP_MESSAGE}</system>",
                     })
                     continue
 
@@ -1129,18 +1183,16 @@ class AgentLoop:
                                 )
                                 messages.append(
                                     {
-                                        "role": "system",
-                                        "content": self._grounding.recovery_prompt(
-                                            recovery, validation
-                                        ),
+                                        "role": "user",
+                                        "content": f"<system>{self._grounding.recovery_prompt(recovery, validation)}</system>",
                                     }
                                 )
                                 final_content = ""
                                 continue
                             messages.append(
                                 {
-                                    "role": "system",
-                                    "content": self._grounding.correction_prompt(validation),
+                                    "role": "user",
+                                    "content": f"<system>{self._grounding.correction_prompt(validation)}</system>",
                                 }
                             )
                             final_content = ""

@@ -356,6 +356,86 @@ class TestArchiveBacktestResult:
         assert (active / "code" / "signal_engine.py").is_file()
         assert (active / "config.json").is_file()
 
+    def test_two_backtests_in_one_turn_do_not_mix_artifacts(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The active run must describe ONE backtest, not the union of two (#1094).
+
+        The archive used to be a plain merge, so a file only the first backtest
+        produced survived next to the second one's output, and ``/runs/{id}``
+        listed it as an artifact of the current run.
+        """
+        monkeypatch.setenv("VIBE_TRADING_ALLOWED_RUN_ROOTS", str(tmp_path))
+        active = tmp_path / "active"
+        (active / "code").mkdir(parents=True)
+        # Written by the agent into the ACTIVE run before backtest is called;
+        # it is the reason a blanket wipe of the target is not the fix.
+        (active / "code" / "signal_engine.py").write_text("own\n", encoding="utf-8")
+
+        def _backtest(name: str, extra: str | None) -> Path:
+            source = tmp_path / name
+            (source / "artifacts").mkdir(parents=True)
+            (source / "artifacts" / "metrics.csv").write_text(
+                f"total_return\n{name}\n", encoding="utf-8"
+            )
+            if extra:
+                (source / "artifacts" / extra).write_text("stale\n", encoding="utf-8")
+            return source
+
+        first = _backtest("run-a", "extra.csv")
+        assert _archive_backtest_result(
+            json.dumps({"status": "ok", "run_dir": str(first)}), str(active)
+        )
+        assert (active / "artifacts" / "extra.csv").is_file()
+
+        second = _backtest("run-b", None)
+        assert _archive_backtest_result(
+            json.dumps({"status": "ok", "run_dir": str(second)}), str(active)
+        )
+
+        # run-a's file is gone; run-b's output is what the run reports.
+        assert not (active / "artifacts" / "extra.csv").exists()
+        assert (active / "artifacts" / "metrics.csv").read_text(
+            encoding="utf-8"
+        ) == "total_return\nrun-b\n"
+        # The active run's own code survives — only prior ARCHIVE output is dropped.
+        assert (active / "code" / "signal_engine.py").read_text(encoding="utf-8") == "own\n"
+        # Provenance records which backtest the artifacts describe.
+        manifest = json.loads(
+            (active / ".archived_backtest.json").read_text(encoding="utf-8")
+        )
+        assert manifest["source_run"] == "run-b"
+        assert "artifacts/metrics.csv" in manifest["files"]
+
+    def test_manifest_cannot_delete_outside_the_active_run(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A manifest is read back off disk, so its names must stay contained.
+
+        Without the containment check the delete step is an arbitrary-file-unlink
+        primitive driven by a file inside a run directory.
+        """
+        monkeypatch.setenv("VIBE_TRADING_ALLOWED_RUN_ROOTS", str(tmp_path))
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep me\n", encoding="utf-8")
+        active = tmp_path / "active"
+        active.mkdir()
+        (active / ".archived_backtest.json").write_text(
+            json.dumps({"source_run": "spoofed", "files": ["../victim.txt"]}),
+            encoding="utf-8",
+        )
+        source = tmp_path / "detached"
+        (source / "artifacts").mkdir(parents=True)
+        (source / "artifacts" / "metrics.csv").write_text(
+            "total_return\n0.1\n", encoding="utf-8"
+        )
+
+        assert _archive_backtest_result(
+            json.dumps({"status": "ok", "run_dir": str(source)}), str(active)
+        )
+
+        assert victim.read_text(encoding="utf-8") == "keep me\n"
+
     def test_ignores_result_without_metrics(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("VIBE_TRADING_ALLOWED_RUN_ROOTS", str(tmp_path))
         source = tmp_path / "not-a-backtest"
