@@ -1346,6 +1346,7 @@
     "engine": "엔진",
     "portfolio": "포트폴리오",
     "systematicStrategy": "시스테매틱 전략",
+    "strategyInferred": "추정",
     "strategyMacd": "MACD 추세 전략",
     "strategyRsi": "RSI 타이밍 전략",
     "strategyMomentum": "모멘텀 전략",

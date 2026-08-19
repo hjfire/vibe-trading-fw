@@ -48,6 +48,9 @@ class _ScriptedChatLLM:
     def __call__(self, *args, **kwargs) -> "_ScriptedChatLLM":
         return self
 
+    def close(self) -> None:
+        """No-op: the scripted stub owns no HTTP client."""
+
     def stream_chat(
         self, messages, tools=None, on_text_chunk=None, timeout=None
     ) -> LLMResponse:

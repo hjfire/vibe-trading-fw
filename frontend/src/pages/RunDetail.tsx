@@ -352,7 +352,14 @@ export function RunDetail() {
             </>
           )}
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold tracking-tight">{reportIdentity.title}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-semibold tracking-tight">{reportIdentity.title}</h1>
+              {reportIdentity.strategyInferred && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#ff8a3d]/30 bg-[#ff8a3d]/10 px-2 py-0.5 text-[11px] text-[#c25a14]">
+                  {t("runDashboard.strategyInferred")}
+                </span>
+              )}
+            </div>
             <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">RUN {runId}</p>
           </div>
           {run.elapsed_seconds && <span className="text-xs text-muted-foreground">{run.elapsed_seconds.toFixed(1)}s</span>}

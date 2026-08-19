@@ -1346,6 +1346,7 @@
     "engine": "回测引擎",
     "portfolio": "投资组合",
     "systematicStrategy": "系统化交易策略",
+    "strategyInferred": "推断",
     "strategyMacd": "MACD 趋势策略",
     "strategyRsi": "RSI 择时策略",
     "strategyMomentum": "动量策略",

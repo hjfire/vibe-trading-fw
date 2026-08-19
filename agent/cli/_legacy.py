@@ -5013,6 +5013,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from cli.commands.research_playbook import add_subparser as _add_playbook_subparser
     _add_playbook_subparser(subparsers)
 
+    # Strategy-evidence cache refresh (manifest-driven rebuild)
+    from cli.commands.strategy_evidence import add_subparser as _add_strategy_evidence_subparser
+    _add_strategy_evidence_subparser(subparsers)
+
     return parser
 
 
@@ -5901,7 +5905,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list":
         return _coerce_exit_code(cmd_list(args.list_limit))
     if args.command == "show":
-        return _coerce_exit_code(cmd_show(args.show))
+        return _coerce_exit_code(cmd_show(args.run_id))
     if args.command == "chat":
         return _coerce_exit_code(cmd_interactive(args.chat_max_iter))
     if args.command == "update":
@@ -5917,6 +5921,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "playbook":
         from cli.commands.research_playbook import dispatch as _playbook_dispatch
         return _coerce_exit_code(_playbook_dispatch(args))
+    if args.command == "strategy-evidence":
+        from cli.commands.strategy_evidence import dispatch as _strategy_evidence_dispatch
+        return _coerce_exit_code(_strategy_evidence_dispatch(args))
     if args.command == "connector":
         return _coerce_exit_code(_dispatch_connector(args))
     if args.command == "memory":

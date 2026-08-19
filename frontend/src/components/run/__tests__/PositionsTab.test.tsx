@@ -221,15 +221,18 @@ describe("PositionsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve industries" }));
 
+    // Wait on the re-render itself, not on the spinner going away: when the
+    // stubbed fetch settles before waitFor's first poll, "Resolving..." is never
+    // observed, the wait returns immediately and the sector chart has not been
+    // re-rendered yet.
     await waitFor(() => {
-      expect(screen.queryByText("Resolving...")).not.toBeInTheDocument();
+      expect(barCategoryAxes().some((names) => names.includes("白酒Ⅱ"))).toBe(true);
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/runs/run-test/positions/sectors",
       expect.objectContaining({ headers: expect.anything() }),
     );
-    expect(barCategoryAxes().some((names) => names.includes("白酒Ⅱ"))).toBe(true);
   });
 
   it("shows an inline retryable error when sector resolution fails", async () => {

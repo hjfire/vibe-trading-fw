@@ -50,15 +50,25 @@ jobs:
           python -m pip install --dry-run --ignore-installed --require-hashes -r requirements-channels-lock.txt
 
   test:
+    name: test / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the ceiling of `requires-python` in pyproject.toml.
+        # The ceiling leg exists because the <3.14 cap came off in 0bb1d870:
+        # supporting a version nothing exercises is how the cap got stale in
+        # the first place. Raise the upper leg whenever the floor or a new
+        # CPython release moves.
+        python-version: ["3.11", "3.14"]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies

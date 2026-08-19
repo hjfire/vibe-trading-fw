@@ -1346,6 +1346,7 @@
     "engine": "Engine",
     "portfolio": "Portfolio",
     "systematicStrategy": "Systematische Strategie",
+    "strategyInferred": "Inferiert",
     "strategyMacd": "MACD-Trend-Strategie",
     "strategyRsi": "RSI-Timing-Strategie",
     "strategyMomentum": "Momentum-Strategie",

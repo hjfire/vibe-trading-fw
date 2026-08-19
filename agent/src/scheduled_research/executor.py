@@ -81,8 +81,15 @@ def is_due(job: ScheduledResearchJob, now_ms: int) -> bool:
     what failed), so excluding it here prevents a re-dispatch loop every tick.
     Already-running jobs are left alone during live polling. Executor startup
     recovers stale persisted ``RUNNING`` jobs separately.
+
+    A firing whose outbox row is still PENDING or SENDING is also left alone:
+    dispatch returns once the run is accepted, not once it is delivered, so a
+    schedule shorter than that gap would otherwise re-dispatch onto the same
+    row and overwrite it, orphaning the briefing a sweep still owes.
     """
     if job.status in {JobStatus.CANCELLED, JobStatus.RUNNING, JobStatus.FAILED}:
+        return False
+    if job.delivery.status in {DeliveryStatus.PENDING, DeliveryStatus.SENDING}:
         return False
     return job.next_run_at <= now_ms
 

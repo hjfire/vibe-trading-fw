@@ -1346,6 +1346,7 @@
     "engine": "motor",
     "portfolio": "Cartera",
     "systematicStrategy": "Estrategia sistemática",
+    "strategyInferred": "Inferido",
     "strategyMacd": "Estrategia de tendencia MACD",
     "strategyRsi": "Estrategia de timing RSI",
     "strategyMomentum": "Estrategia de momentum",

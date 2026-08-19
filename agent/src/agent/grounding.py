@@ -219,7 +219,10 @@ _DATE_RE = re.compile(r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", re.ASCII)
 # A year-less "8/5" is how a trading day is written in running prose, and it
 # contributed 8 and 5 as candidate prices (#983). The month and day ranges are
 # bounded, and both sides are fenced off from a longer slash run, so the window
-# enumeration "20/50/200-day" cannot be mistaken for a date.
+# enumeration "20/50/200-day" cannot be mistaken for a date. Reports also write
+# the same day as "08-10(一)" or "08-10盘中"; that dash form is masked by
+# ``_DASH_DATE_RE`` below, where a zero-padded month or a weekday/session
+# marker is required so a quoted price range like "8-10 元" stays checkable.
 _SHORT_DATE_RE = re.compile(
     r"(?<![\d/])(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?![\d/])"
 )
@@ -450,6 +453,8 @@ _PROSPECTIVE_LEVEL_RE = re.compile(
 # parentheses are deliberately not separators: an explicit derivation such as
 # "(8.5 - 7.9) / 2" must stay in one segment for the formula check.
 _CLAUSE_SEPARATOR_RE = re.compile(r"[,，;；。、\n（）【】]")
+
+
 # The ASCII comma both separates clauses and groups thousands, and the clause
 # split ran first: "收盘价 ¥1,309.22" became a clause ending in "¥1", whose 1 was
 # compared against the observed 1300.01–1363.35 range and rejected as a
@@ -585,9 +590,10 @@ def _symbol_from_csv_filename(stem: str) -> str | None:
     """Map a run-dir CSV stem back to a canonical project symbol.
 
     The bash workaround writes filesystem-safe stems: ``BYN_V.csv`` -> ``BYN.V``,
-    ``PDI_TO.csv`` -> ``PDI.TO``, ``GC_F.csv`` -> ``GC=F``. A stem without a
-    recognized suffix (e.g. a bare US name ``AAPL``) maps to None because the
-    project convention requires an explicit venue suffix.
+    ``PDI_TO.csv`` -> ``PDI.TO``, ``GC_F.csv`` -> ``GC=F``, ``INTC_US.csv`` ->
+    ``INTC.US``. A stem without a recognized suffix (e.g. a bare US name
+    ``AAPL``) maps to None because the project convention requires an explicit
+    venue suffix.
 
     Args:
         stem: CSV filename without the ``.csv`` extension.
@@ -666,7 +672,45 @@ _YEARLESS_CLAIM_DATE_RE = re.compile(
     + _TRADING_DAY_SUFFIX
     + r"$"
 )
+# Two-digit day alternatives are tried before a bare digit so an
+# unanchored prefix match consumes the full day ("10" of "08-10(一)")
+# instead of stopping at "1".
+_ISO_CLAIM_DATE_PREFIX_RE = re.compile(
+    r"^\s*((?:19|20)\d{2})\s*[-/]\s*(0?[1-9]|1[0-2])\s*[-/]\s*([12]\d|3[01]|0?[1-9])"
+)
+_YEARLESS_CLAIM_DATE_PREFIX_RE = re.compile(
+    r"^\s*(0?[1-9]|1[0-2])\s*[-/月]\s*([12]\d|3[01]|0?[1-9])"
+)
 _ISO_TIMESTAMP_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})")
+
+
+def _claim_date_tuple(date_value: str) -> tuple[int, int] | None:
+    """Extract the (month, day) named by a report-style date cell.
+
+    Reports routinely annotate a trading day: the date column reads
+    ``08-10(一)``, ``08-10(周一)盘中`` or ``08-10盘中`` rather than the bare
+    ``08-10`` the strict full-cell matchers accept. Any leading month-day (or
+    full ISO date) prefix is therefore accepted so such a claim still compares
+    against the matching evidence row instead of being reported as
+    unevidenced.
+
+    Args:
+        date_value: Date cell as written in the answer.
+
+    Returns:
+        The (month, day) tuple, or None when no date prefix is present.
+    """
+    claim = (date_value or "").strip()
+    match = _YEARLESS_CLAIM_DATE_RE.match(claim)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    match = _ISO_CLAIM_DATE_PREFIX_RE.match(claim)
+    if match:
+        return (int(match.group(2)), int(match.group(3)))
+    match = _YEARLESS_CLAIM_DATE_PREFIX_RE.match(claim)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    return None
 
 
 def _timestamp_matches_claim_date(timestamp: str, date_value: str) -> bool:
@@ -679,11 +723,12 @@ def _timestamp_matches_claim_date(timestamp: str, date_value: str) -> bool:
     evidence while that evidence sat right there (#983: 79 such rejections in
     one run, every value inside the observed range).
 
-    A year-less date is matched on month and day. That is deliberately looser:
-    where the evidence spans more than one year, such a claim matches the same
-    calendar day in either. Matching the wrong year is a smaller failure than
-    matching nothing, but it is a real one, so the caller still compares the
-    value against every record that matched rather than trusting the date.
+    A year-less date is matched on month and day, and a date cell may carry
+    weekday or intraday annotations (``08-10(一)``, ``08-10盘中``) whose
+    leading month-day is still recognized. Matching the wrong year is a
+    smaller failure than matching nothing, but it is a real one, so the
+    caller still compares the value against every record that matched rather
+    than trusting the date.
 
     Args:
         timestamp: Evidence timestamp, normally ISO ``YYYY-MM-DD``.
@@ -698,14 +743,11 @@ def _timestamp_matches_claim_date(timestamp: str, date_value: str) -> bool:
         return False
     if stamp.startswith(claim):
         return True
-    yearless = _YEARLESS_CLAIM_DATE_RE.match(claim)
+    claim_tuple = _claim_date_tuple(claim)
     iso = _ISO_TIMESTAMP_RE.match(stamp)
-    if not yearless or not iso:
+    if claim_tuple is None or not iso:
         return False
-    return (int(iso.group(2)), int(iso.group(3))) == (
-        int(yearless.group(1)),
-        int(yearless.group(2)),
-    )
+    return (int(iso.group(2)), int(iso.group(3))) == claim_tuple
 
 
 def _price_field_for_path(path: str) -> str | None:
@@ -1240,10 +1282,44 @@ class GroundingLedger:
         ]
         for issue in validation.issues[:12]:
             lines.append(f"- {issue.get('message', issue.get('code', 'grounding error'))}")
+        # Name the exact values that must be REMOVED, not rephrased. The model
+        # tends to restate a rejected figure in a new format; the gate then
+        # rejects it again and the run burns iterations until the fallback.
+        banned: list[str] = []
+        for issue in validation.issues:
+            code = issue.get("code")
+            value = issue.get("value")
+            if code in {"numeric_claim_conflict", "numeric_claim_unavailable", "unsourced_symbol_figures"} and value is not None:
+                symbol = issue.get("symbol") or ""
+                label = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+                banned.append(f"{label} ({symbol})" if symbol else label)
+        if banned:
+            deduped = list(dict.fromkeys(banned))
+            lines.append(
+                "REMOVE these rejected value(s) entirely - do NOT restate, rephrase, "
+                "or recompute them in any other format: " + ", ".join(deduped) + "."
+            )
+            repeated: list[str] = []
+            for prior in self._validations:
+                for prior_issue in prior.get("issues", []):
+                    prior_value = prior_issue.get("value")
+                    if isinstance(prior_value, (int, float)):
+                        mark = f"{prior_value:g}"
+                        if any(entry.startswith(mark) for entry in deduped):
+                            repeated.append(mark)
+            if repeated:
+                lines.append(
+                    "These value(s) have now been rejected repeatedly across drafts: "
+                    + ", ".join(dict.fromkeys(repeated))
+                    + ". Repeating them in any form keeps failing; drop them, or show "
+                    "the full derivation from the observed inputs."
+                )
         lines.extend(
             [
+                "If a value is a derived or prospective level (stop, target, entry, etc.), "
+                "you must EITHER show the full derivation with the observed inputs and the "
+                "formula, OR omit it from the draft.",
                 "Reuse the exact locked symbol and venue.",
-                "For every derived number, label it as derived and show the source inputs and formula.",
                 "Do not attach figures to a symbol no tool call in this session handled; "
                 "report it as not retrieved instead.",
             ]
@@ -1363,6 +1439,29 @@ class GroundingLedger:
                 "I rejected the previous draft because its prices conflicted with tool evidence. "
                 f"The verified observed OHLC range is: {joined}. "
                 "I will not invent an entry price without a visible derivation or refreshed evidence."
+            )
+        # No observed price evidence: distinguish "identity unresolved" from
+        # "the draft cited prices this session never observed". Reporting the
+        # identity message for the latter is misleading (the run may not even
+        # have touched the market tools).
+        issue_codes = {
+            code
+            for validation in self._validations
+            for code in (issue.get("code") for issue in validation.get("issues", []))
+        }
+        if issue_codes & {
+            "numeric_claim_unavailable", "numeric_claim_conflict", "unsourced_symbol_figures"
+        }:
+            if is_zh:
+                return (
+                    "我的回答被安全门槛拒绝:草稿引用了本会话未通过工具获取的价格数字,无法核验。"
+                    "请重新发起任务,让模型先调用行情工具获取数据,或要求它去掉这些价格引用后重试。"
+                )
+            return (
+                "My previous answer was rejected by the verification gate: it cited price "
+                "figures that this session never obtained through a tool, so they could not "
+                "be verified. Re-run the task and let the agent fetch the market data first, "
+                "or ask it to answer without the unverified prices."
             )
         if is_zh:
             return (

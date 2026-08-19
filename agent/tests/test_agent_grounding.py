@@ -15,6 +15,8 @@ from src.agent.grounding import (
     _infer_currency,
     _infer_venue,
     _scan_symbols,
+    _symbol_from_csv_filename,
+    _timestamp_matches_claim_date,
 )
 from src.agent.loop import AgentLoop, _is_tool_success
 from src.agent.tools import BaseTool, ToolRegistry
@@ -746,6 +748,85 @@ def test_run_dir_ohlc_csv_tsx_filename_maps_symbol(tmp_path: Path) -> None:
     assert good.valid is True, good.issues
 
 
+def test_weekday_suffixed_claim_dates_match_evidence() -> None:
+    """Yearless dates with weekday/intraday annotations still match evidence.
+
+    Reports write a trading day as ``08-10(一)``, ``08-10(周一)盘中`` or
+    ``08-10盘中`` rather than bare ``08-10``. Before the prefix matcher, such
+    a date cell matched no evidence row and every correct price in the row
+    was rejected as ``numeric_claim_unavailable`` (#1015 session regression).
+    """
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "08-10(一)") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "08-10(周一)盘中") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "08-10盘中") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "08-10") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "2026-08-10") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "2026-08-10(一)") is True
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "08-11") is False
+    assert _timestamp_matches_claim_date("2026-08-10T00:00:00", "no-date") is False
+
+
+def test_run_dir_ohlc_csv_us_filename_maps_symbol(tmp_path: Path) -> None:
+    """INTC_US.csv maps to INTC.US and grounds weekday-suffixed date rows.
+
+    Regression for a real session: the agent wrote ``data/raw/INTC_US.csv``
+    and drafted the report in the file's own date format (``08-10(一)``).
+    The filename used to map to None (no ``_US`` rule), so the CSV was never
+    ingested; combined with the weekday-suffixed date cell, every correct
+    price in the draft was rejected and the run surrendered after three
+    failed drafts without updating the report.
+    """
+    raw = tmp_path / "data" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "INTC_US.csv").write_text(
+        "Date,Open,High,Low,Close,Adj Close,Volume\n"
+        "2026-08-07,102.33,103.66,98.03,101.65,101.65,76760600\n"
+        "2026-08-10,98.26,100.03,96.30,97.52,97.52,101153400\n",
+        encoding="utf-8",
+    )
+
+    assert _symbol_from_csv_filename("INTC_US") == "INTC.US"
+
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="please update intel-tech-trend-6-months.md",
+    )
+    ledger.ingest_tool_result(
+        tool_name="search_symbol",
+        arguments={"query": "INTC"},
+        result=json.dumps({
+            "ok": True,
+            "data": {
+                "candidates": [
+                    {"symbol": "INTC.US", "name": "Intel Corporation", "market": "us",
+                     "type": "equity", "exchange": "NMS", "source": "yahoo"},
+                ]
+            },
+        }),
+        call_id="lock1",
+        success=True,
+    )
+
+    table = (
+        "INTC.US（yfinance，USD）日线如下：\n"
+        "| 日期 | 开盘 | 最高 | 最低 | 收盘 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 08-07(五) | 102.33 | 103.66 | 98.03 | 101.65 |\n"
+        "| 08-10(一) | 98.26 | 100.03 | 96.30 | 97.52 |\n"
+    )
+    result = ledger.validate_final_answer(table)
+    assert result.valid is True, result.issues
+
+    # The date is masked in prose, but a fabricated price is still caught.
+    fabricated = ledger.validate_final_answer(
+        "INTC.US（yfinance，USD）08-10(一) 开盘价 88.88，收盘价 97.52，数据源 yahoo。"
+    )
+    assert fabricated.valid is False
+    assert any(
+        issue["code"] == "numeric_claim_conflict" for issue in fabricated.issues
+    )
+
+
 def test_run_dir_ohlc_csv_stray_symbol_is_ignored(tmp_path: Path) -> None:
     """A CSV for a symbol the run never handled does not mint identity."""
     raw = tmp_path / "data" / "raw"
@@ -869,6 +950,8 @@ class _CorrectingLLM:
         tools: list[Any] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
         on_reasoning_chunk: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        idle_timeout_s: float | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> _Response:
         self.messages_history.append(list(messages))
@@ -2160,6 +2243,60 @@ def test_in_text_decimal_survives_list_marker_mask(
     ):
         result = ledger.validate_final_answer(draft)
         assert result.valid is True, (draft, result.issues)
+
+
+def test_order_level_prices_are_not_observed_quotes(tmp_path: Path) -> None:
+    """GTC order limits (100 @ $3.50) are prospective, not observed prices.
+
+    Regression for the RXRX run: the draft "两档 GTC (100 @ $3.50 / 100 @ $4.00)
+    均未触发 (周高 $3.42 < $3.50)" was rejected with numeric_claim_conflict for
+    100, 3.5 and 4.0 against the observed OHLC range. Order levels are levels,
+    like targets/stops, and share counts are quantities - neither is a claim
+    about an observed quote.
+    """
+    raw = tmp_path / "data" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "RXRX_US.csv").write_text(
+        "Date,Open,High,Low,Close\n"
+        "2026-08-07,3.25,3.26,3.18,3.20\n"
+        "2026-08-08,3.10,3.42,3.05,3.35\n",
+        encoding="utf-8",
+    )
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="请分析 RXRX.US 并更新周报",
+    )
+    ledger.ingest_tool_result(
+        tool_name="search_symbol",
+        arguments={"query": "RXRX"},
+        result=json.dumps({
+            "ok": True,
+            "data": {
+                "candidates": [
+                    {"symbol": "RXRX.US", "name": "Recursion Pharmaceuticals", "market": "us",
+                     "type": "equity", "exchange": "NMS", "source": "yahoo"},
+                ]
+            },
+        }),
+        call_id="lock1",
+        success=True,
+    )
+
+    answer = (
+        "RXRX.US（yahoo，USD）本周高 $3.42。订单: 两档 GTC (100 @ $3.50 / 100 @ $4.00) "
+        "均未触发 (周高 $3.42 < $3.50) — 价格推断未成交。"
+    )
+    result = ledger.validate_final_answer(answer)
+    assert result.valid is True, result.issues
+
+    # A genuinely fabricated close is still rejected.
+    fabricated = ledger.validate_final_answer(
+        "RXRX.US（yahoo，USD）本周高 $3.42。另: 收盘 2.50 已确认。"
+    )
+    assert fabricated.valid is False
+    assert any(
+        issue["code"] == "numeric_claim_conflict" for issue in fabricated.issues
+    )
 
 
 def test_dash_form_trading_day_is_a_date_but_a_price_range_is_not() -> None:

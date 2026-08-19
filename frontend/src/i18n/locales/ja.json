@@ -1346,6 +1346,7 @@
     "engine": "エンジン",
     "portfolio": "ポートフォリオ",
     "systematicStrategy": "システマティック戦略",
+    "strategyInferred": "推定",
     "strategyMacd": "MACD トレンド戦略",
     "strategyRsi": "RSI タイミング戦略",
     "strategyMomentum": "モメンタム戦略",

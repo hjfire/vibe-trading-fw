@@ -18,6 +18,7 @@ from src.agent.loop import (
     _is_tool_success,
     _normalize_tool_run_dir,
     _archive_backtest_result,
+    _llm_timeout_seconds,
 )
 
 
@@ -472,3 +473,61 @@ class TestArchiveBacktestResult:
 
         assert archived is False
         assert not (active / "artifacts").exists()
+
+
+def test_llm_timeout_seconds_default_and_override(monkeypatch) -> None:
+    """The LLM call timeout reads config and honors a module-level override."""
+    import src.agent.loop as loop_module
+
+    assert _llm_timeout_seconds() > 0
+    monkeypatch.setattr(loop_module, "LLM_TIMEOUT_SECONDS", 42.0, raising=False)
+    assert _llm_timeout_seconds() == 42.0
+    monkeypatch.delattr(loop_module, "LLM_TIMEOUT_SECONDS", raising=False)
+    assert _llm_timeout_seconds() > 0
+
+def test_pending_write_directive_tracks_written_targets(tmp_path: Path) -> None:
+    """A named target file that was not written yields a write directive.
+
+    Regression for runs that ended "success" without delivering a file
+    (2026-08-15 mutual-fund update): the loop must remind the model to write
+    the task target before the forced-text final iteration. The directive
+    clears once the file is written directly (write_file/edit_file) or by
+    any process with a newer mtime (the bash workaround), and only fires for
+    messages with create/update intent.
+    """
+    import os
+    import time
+
+    import src.agent.loop as loop_module
+    from src.agent.loop import AgentLoop
+    from src.agent.tools import ToolRegistry
+
+    agent = AgentLoop(registry=ToolRegistry(), llm=None)
+    now = time.time()
+    target = str(tmp_path / "plan.md")
+    msg = f"please update {target}"
+
+    assert loop_module._TARGET_ACTION_RE.search(msg)
+    assert not loop_module._TARGET_ACTION_RE.search("what is the weather?")
+
+    unwritten = agent._pending_write_directive(msg, now)
+    assert "NOT been written" in unwritten and "plan.md" in unwritten
+
+    agent._record_written_target({"path": target})
+    assert agent._pending_write_directive(msg, now) == ""
+
+    # A bash-style write (mtime newer than run start) also counts.
+    agent2 = AgentLoop(registry=ToolRegistry(), llm=None)
+    p = tmp_path / "bash_plan.md"
+    p.write_text("x", encoding="utf-8")
+    os.utime(p, (now, now))
+    assert agent2._pending_write_directive(
+        f"please update {p}", now - 10,
+    ) == ""
+    # An old file not written this run still fires.
+    old = tmp_path / "old_plan.md"
+    old.write_text("x", encoding="utf-8")
+    os.utime(old, (now - 100, now - 100))
+    assert "old_plan.md" in agent2._pending_write_directive(
+        f"please update {old}", now - 10,
+    )
