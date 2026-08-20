@@ -300,6 +300,7 @@ class ScheduledRunResponse(BaseModel):
     delivery_status: str = "none"
     delivery_error: Optional[str] = None
     delivery_updated_at: Optional[int] = None
+    last_verdict: Optional[Dict[str, Any]] = None
 
 
 def _job_to_response(job: ScheduledResearchJob) -> "ScheduledRunResponse":
@@ -317,8 +318,10 @@ def _job_to_response(job: ScheduledResearchJob) -> "ScheduledRunResponse":
     """
     payload = job.to_dict()
     delivery = payload.pop("delivery", {}) or {}
+    last_verdict = payload.pop("last_verdict", None)
     return ScheduledRunResponse(
         **payload,
+        last_verdict=last_verdict,
         delivery_status=delivery.get("status", "none"),
         delivery_error=delivery.get("error"),
         delivery_updated_at=delivery.get("updated_at"),

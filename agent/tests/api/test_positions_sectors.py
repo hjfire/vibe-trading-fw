@@ -4,6 +4,15 @@ All Eastmoney HTTP is mocked at the import sites in ``src.tools.sector_tool``
 (:func:`get_json` / :func:`resolve_secid`), so no test touches a live endpoint.
 Run directories are fabricated under ``tmp_path`` mirroring the layout the
 run-detail handler expects (``RUNS_DIR/<run_id>/artifacts/positions.csv``).
+
+Call counts are asserted as ``len(mock.call_args_list)``, never
+``mock.call_count``. These lookups run on a four-thread executor, and
+``unittest.mock`` is not thread-safe: ``call_count += 1`` is a read-modify-write
+that loses increments under contention, while ``call_args_list.append`` is a
+single atomic list op. On Python 3.11 a 400-call assertion was observed
+landing anywhere in the low 300s; 3.12+ specializes the increment and hid it,
+so the whole class of failure only ever surfaced on the floor of
+``requires-python``.
 """
 
 from __future__ import annotations
@@ -107,11 +116,11 @@ def test_positions_sectors_happy_path(tmp_path: Path, monkeypatch) -> None:
     assert payload["symbol_limit"] == 200
 
     # One spt=1 industry request per A-share symbol; US symbols never resolve.
-    assert get.call_count == 2
+    assert len(get.call_args_list) == 2
     for call in get.call_args_list:
         assert call.kwargs["params"]["spt"] == "1"
         assert "slist/get" in call.args[0]
-    assert resolve.call_count == 2
+    assert len(resolve.call_args_list) == 2
 
     cache_path = tmp_path / "runs" / RUN_ID / "artifacts" / "sector_map.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -188,7 +197,7 @@ def test_positions_sectors_refresh_bypasses_cache(tmp_path: Path, monkeypatch) -
     assert first.json()["cached"] is False
     assert second.json()["cached"] is False
     assert second.json()["symbols"]["600519.SH"]["industry"] == "白酒Ⅱ"
-    assert get.call_count == 2
+    assert len(get.call_args_list) == 2
 
 
 def test_positions_sectors_corrupt_cache_recomputes(tmp_path: Path, monkeypatch) -> None:
@@ -205,7 +214,7 @@ def test_positions_sectors_corrupt_cache_recomputes(tmp_path: Path, monkeypatch)
     payload = response.json()
     assert payload["cached"] is False
     assert payload["symbols"]["600519.SH"]["industry"] == "白酒Ⅱ"
-    assert get.call_count == 1
+    assert len(get.call_args_list) == 1
 
 
 # ============================================================================
@@ -379,7 +388,7 @@ def test_large_symbol_list_caps_network_lookups(tmp_path: Path, monkeypatch) -> 
     assert payload["total_symbols"] == total
     assert payload["symbol_limit"] == 200
     # Bounded: the capped tail never reaches the network.
-    assert get.call_count == 200
+    assert len(get.call_args_list) == 200
     # Asset-class grouping still covers every symbol.
     assert len(payload["symbols"]) == total
     assert payload["symbols"][symbols[0]]["industry"] == "银行Ⅱ"
@@ -435,7 +444,7 @@ def test_mixed_book_resolves_a_shares_after_non_a_share_prefix(tmp_path: Path, m
     payload = response.json()
     assert payload["total_symbols"] == len(symbols)
     # Every A-share resolves despite sitting at list indices 205-209.
-    assert get.call_count == len(a_shares)
+    assert len(get.call_args_list) == len(a_shares)
     for symbol in a_shares:
         assert payload["symbols"][symbol]["industry"] == "银行Ⅱ"
     assert payload["unresolved"] == []
@@ -464,7 +473,7 @@ def test_mixed_book_cap_still_bounds_a_share_lookups(tmp_path: Path, monkeypatch
     payload = response.json()
     assert payload["total_symbols"] == len(symbols)
     assert payload["symbol_limit"] == 200
-    assert get.call_count == 200
+    assert len(get.call_args_list) == 200
     assert payload["symbols"][a_shares[0]]["industry"] == "银行Ⅱ"
     assert payload["symbols"][a_shares[-1]]["industry"] is None
     assert payload["unresolved"] == a_shares[200:]
@@ -520,7 +529,7 @@ def test_shared_executor_created_once_and_bounded(tmp_path: Path, monkeypatch) -
     assert first.status_code == 200
     assert second.status_code == 200
     # The shared executor still caps lookups at 200 on every request.
-    assert get.call_count == 2 * runs_routes._POSITIONS_SECTOR_MAX_SYMBOLS
+    assert len(get.call_args_list) == 2 * runs_routes._POSITIONS_SECTOR_MAX_SYMBOLS
     assert first.json()["symbol_limit"] == runs_routes._POSITIONS_SECTOR_MAX_SYMBOLS
     # Exactly one executor was created across both requests, bounded by
     # _POSITIONS_SECTOR_WORKERS, and never shut down (process-lifetime).

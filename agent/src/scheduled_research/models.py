@@ -16,6 +16,8 @@ from enum import Enum
 from typing import Any, Dict, Optional, Set
 from zoneinfo import ZoneInfo
 
+from .verdict import VerdictRecord
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -296,6 +298,28 @@ class DeliveryRecord:
 # ---------------------------------------------------------------------------
 
 
+def _verdict_record_or_none(data: Any, job_id: str) -> Optional[VerdictRecord]:
+    """Parse a persisted last_verdict, degrading an unreadable one to None.
+
+    A malformed verdict must never take the job down with it, the same way an
+    unusable timezone degrades to UTC rather than quarantining the record.
+    """
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            "scheduled research job %s drops a non-dict last_verdict %r", job_id, data
+        )
+        return None
+    try:
+        return VerdictRecord.from_dict(data)
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "scheduled research job %s drops an unreadable last_verdict: %r", job_id, exc
+        )
+        return None
+
+
 @dataclass
 class ScheduledResearchJob:
     """Mutable persisted state for a scheduled research / backtest job.
@@ -326,6 +350,9 @@ class ScheduledResearchJob:
         delivery: Outbox state for the most recent firing. Separate from
             ``status`` because dispatch returns at enqueue: a job can be
             COMPLETED (accepted) while its briefing is still PENDING delivery.
+        last_verdict: The latest run's parsed verdict record, or ``None`` when
+            no completed run produced one yet. Embedded with its own
+            ``previous`` so the list view renders a delta in one query.
     """
 
     id: str
@@ -343,6 +370,7 @@ class ScheduledResearchJob:
     delivery_channel: Optional[str] = None
     delivery_target: Optional[str] = None
     delivery: DeliveryRecord = field(default_factory=DeliveryRecord)
+    last_verdict: Optional[VerdictRecord] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain JSON-serializable dict.
@@ -367,6 +395,7 @@ class ScheduledResearchJob:
             "delivery_channel": self.delivery_channel,
             "delivery_target": self.delivery_target,
             "delivery": self.delivery.to_dict(),
+            "last_verdict": self.last_verdict.to_dict() if self.last_verdict else None,
         }
 
     @classmethod
@@ -450,4 +479,5 @@ class ScheduledResearchJob:
             delivery_channel=delivery_channel,
             delivery_target=delivery_target,
             delivery=DeliveryRecord.from_dict(data.get("delivery")),
+            last_verdict=_verdict_record_or_none(data.get("last_verdict"), job_id),
         )

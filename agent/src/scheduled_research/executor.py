@@ -27,6 +27,13 @@ from src.scheduled_research.models import (
     validate_timezone,
 )
 from src.scheduled_research.store import ScheduledResearchJobStore
+from src.scheduled_research.verdict import (
+    VerdictRecord,
+    outcome_of,
+    parse_verdict_section,
+)
+
+from dataclasses import replace as _dc_replace
 from src.tools.redaction import redact_internal_paths, redact_text
 
 logger = logging.getLogger(__name__)
@@ -416,17 +423,27 @@ class ScheduledResearchExecutor:
         dispatch_error: Exception | None = None
         try:
             session_id = await self._dispatch(job)
-            if job.delivery_channel and isinstance(session_id, str) and session_id:
-                # Arm the outbox in the same write that records the firing.
-                # The row exists before anything can be sent, so a crash can
-                # only ever lose the *speed* of delivery, never the fact that
-                # one is owed.
-                job.delivery = DeliveryRecord(
-                    status=DeliveryStatus.PENDING,
-                    session_id=session_id,
-                    key=f"{job.id}:{session_id}:{job.delivery_channel}",
-                    updated_at=now_ms,
-                )
+            if isinstance(session_id, str) and session_id:
+                if job.delivery_channel:
+                    # Arm the outbox in the same write that records the firing.
+                    # The row exists before anything can be sent, so a crash can
+                    # only ever lose the *speed* of delivery, never the fact that
+                    # one is owed.
+                    job.delivery = DeliveryRecord(
+                        status=DeliveryStatus.PENDING,
+                        session_id=session_id,
+                        key=f"{job.id}:{session_id}:{job.delivery_channel}",
+                        updated_at=now_ms,
+                    )
+                else:
+                    # No delivery owed, but the verdict sweep still needs the
+                    # link from this job to its run: the session id rides the
+                    # record with an explicit NONE so the outbox never picks it.
+                    job.delivery = DeliveryRecord(
+                        status=DeliveryStatus.NONE,
+                        session_id=session_id,
+                        updated_at=now_ms,
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -541,15 +558,25 @@ class ScheduledResearchExecutor:
         Returns:
             The number of rows whose state changed.
         """
-        if self._briefing_reader is None or self._channel_sender is None:
+        if self._briefing_reader is None:
             return 0
 
         changed = 0
         now = self._now_fn()
         for job in list(self._store.load().values()):
+            if not job.delivery.session_id:
+                continue
+            if job.delivery.status is DeliveryStatus.NONE:
+                # No briefing is owed to a channel, but this sweep is the only
+                # terminal-observer a channel-less monitor has: read the run's
+                # end state here and persist its verdict once it lands.
+                changed += self._record_verdict_if_terminal(job, now)
+                continue
+            if not job.delivery_channel:
+                continue
             if not self._delivery_is_eligible(job, now):
                 continue
-            if not job.delivery.session_id or not job.delivery_channel:
+            if self._channel_sender is None:
                 continue
             try:
                 outcome = self._briefing_reader(job.delivery.session_id)
@@ -597,9 +624,67 @@ class ScheduledResearchExecutor:
             current.delivery.status = DeliveryStatus.SENT
             current.delivery.error = None
             current.delivery.updated_at = self._now_fn()
+            # The verdict rides the same write as the terminal delivery state,
+            # never a second pass over the job (#1140's clobbering lesson).
+            if (
+                current.last_verdict is None
+                or current.last_verdict.session_id != current.delivery.session_id
+            ):
+                self._record_verdict_on(current, current.delivery.session_id, text, now)
             self._store.upsert(current, validate=False)
             changed += 1
         return changed
+
+    def _record_verdict_on(
+        self, job: ScheduledResearchJob, session_id: str, text: str, now_ms: int
+    ) -> None:
+        """Write the run's verdict record onto ``job``, shifting the prior one.
+
+        The previous record embeds one level only: a verdict chain any deeper
+        is noise for the list view.
+        """
+        parse, items = parse_verdict_section(text)
+        previous = job.last_verdict
+        if previous is not None:
+            previous = _dc_replace(previous, previous=None)
+        job.last_verdict = VerdictRecord(
+            session_id=session_id,
+            recorded_at=now_ms,
+            parse=parse,
+            outcome=outcome_of(items),
+            items=items,
+            previous=previous,
+        )
+
+    def _record_verdict_if_terminal(self, job: ScheduledResearchJob, now_ms: int) -> int:
+        """Persist the run's verdict once its session reaches a terminal state.
+
+        Channel-less jobs have no outbox, so this sweep is the only place their
+        terminal briefing is ever read. In-flight runs return ``None`` from the
+        briefing reader and are left for a later pass; failed or cancelled runs
+        produce no briefing, so the prior verdict simply stays visible as stale.
+
+        Returns:
+            1 when the job record changed, else 0.
+        """
+        session_id = job.delivery.session_id
+        if not session_id:
+            return 0
+        if job.last_verdict is not None and job.last_verdict.session_id == session_id:
+            return 0  # this firing is already recorded
+        try:
+            outcome = self._briefing_reader(session_id) if self._briefing_reader else None
+        except Exception:
+            logger.error("verdict read failed for job %s", job.id, exc_info=True)
+            return 0
+        if outcome is None:
+            return 0
+        status, text = outcome
+        if status != "completed":
+            return 0
+        self._record_verdict_on(job, session_id, text, now_ms)
+        self._store.upsert(job, validate=False)
+        return 1
 
     def _mark_delivery_failed(
         self, job: ScheduledResearchJob, exc: Exception, *, retryable: bool
