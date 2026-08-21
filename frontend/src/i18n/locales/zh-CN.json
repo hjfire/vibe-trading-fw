@@ -173,7 +173,12 @@
     "delivery_pending": "待推送到 {{channel}}",
     "delivery_sending": "正在推送到 {{channel}}",
     "delivery_sent": "已推送到 {{channel}}",
-    "delivery_failed": "推送到 {{channel}} 失败"
+    "delivery_failed": "推送到 {{channel}} 失败",
+    "verdictEmpty": "尚无判定",
+    "verdictUnreadable": "最新判定无法解析",
+    "verdictNoCalls": "无调用",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "记于 {{when}}"
   },
   "reports": {
     "badge": "报告",

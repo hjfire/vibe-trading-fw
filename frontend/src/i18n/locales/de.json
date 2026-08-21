@@ -178,7 +178,12 @@
     "delivery_pending": "Briefing wartet auf Versand an {{channel}}",
     "delivery_sending": "Briefing wird an {{channel}} gesendet",
     "delivery_sent": "Briefing an {{channel}} gesendet",
-    "delivery_failed": "Versand an {{channel}} fehlgeschlagen"
+    "delivery_failed": "Versand an {{channel}} fehlgeschlagen",
+    "verdictEmpty": "Noch kein Urteil",
+    "verdictUnreadable": "Letztes Urteil nicht lesbar",
+    "verdictNoCalls": "Keine Calls",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "Stand {{when}}"
   },
   "reports": {
     "badge": "Berichte",

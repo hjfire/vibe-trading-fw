@@ -178,7 +178,12 @@
     "delivery_pending": "Briefing owed to {{channel}}",
     "delivery_sending": "Sending the briefing to {{channel}}",
     "delivery_sent": "Briefing delivered to {{channel}}",
-    "delivery_failed": "Could not deliver to {{channel}}"
+    "delivery_failed": "Could not deliver to {{channel}}",
+    "verdictEmpty": "No verdict yet",
+    "verdictUnreadable": "Latest verdict unreadable",
+    "verdictNoCalls": "No calls",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "as of {{when}}"
   },
   "reports": {
     "badge": "Reports",

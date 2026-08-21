@@ -173,7 +173,12 @@
     "delivery_pending": "{{channel}}(으)로 전달 대기 중",
     "delivery_sending": "{{channel}}(으)로 전달하는 중",
     "delivery_sent": "{{channel}}(으)로 전달했습니다",
-    "delivery_failed": "{{channel}}(으)로 전달하지 못했습니다"
+    "delivery_failed": "{{channel}}(으)로 전달하지 못했습니다",
+    "verdictEmpty": "아직 판정 없음",
+    "verdictUnreadable": "최신 판정을 읽을 수 없음",
+    "verdictNoCalls": "호출 없음",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "{{when}} 기준"
   },
   "reports": {
     "badge": "리포트",

@@ -173,7 +173,12 @@
     "delivery_pending": "{{channel}} への配信待ちです",
     "delivery_sending": "{{channel}} へ配信中です",
     "delivery_sent": "{{channel}} へ配信しました",
-    "delivery_failed": "{{channel}} へ配信できませんでした"
+    "delivery_failed": "{{channel}} へ配信できませんでした",
+    "verdictEmpty": "判定はまだありません",
+    "verdictUnreadable": "最新の判定を読み取れません",
+    "verdictNoCalls": "コールなし",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "{{when}} 時点"
   },
   "reports": {
     "badge": "レポート",

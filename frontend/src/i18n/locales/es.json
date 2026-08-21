@@ -178,7 +178,12 @@
     "delivery_pending": "Informe pendiente de envío a {{channel}}",
     "delivery_sending": "Enviando el informe a {{channel}}",
     "delivery_sent": "Informe enviado a {{channel}}",
-    "delivery_failed": "No se pudo enviar a {{channel}}"
+    "delivery_failed": "No se pudo enviar a {{channel}}",
+    "verdictEmpty": "Sin veredicto aún",
+    "verdictUnreadable": "No se pudo leer el último veredicto",
+    "verdictNoCalls": "Sin señales",
+    "verdictDelta": "{{was}} → {{now}}",
+    "verdictRecorded": "a fecha de {{when}}"
   },
   "reports": {
     "badge": "Informes",
