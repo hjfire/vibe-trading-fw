@@ -32,8 +32,11 @@ code count moves, which is what this file is for.
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -253,6 +256,59 @@ def test_repo_tree_states_the_real_mcp_count(name: str) -> None:
 
     assert len(tree) == 1, f"{name}: expected one mcp_server.py tree line, found {len(tree)}"
     assert str(len(_mcp_tool_names())) in _numbers(tree[0])
+
+
+# Environment variables that make a credential-gated tool register. The
+# repository-tree line has always carried the keyless registry size (the count a
+# fresh install sees), so those gates are closed while measuring it.
+_CREDENTIAL_GATES = ("FRED_API_KEY", "VIBE_TRADING_IWENCAI_KEY", "QVERIS_API_KEY", "VIBE_TW_STOCK_DB")
+
+
+@functools.lru_cache(maxsize=1)
+def _keyless_agent_tool_count() -> int:
+    """Return the registry size a fresh, credential-free install ships.
+
+    Measured in a child interpreter, not in-process: ``_discover_subclasses``
+    walks ``BaseTool.__subclasses__()`` and caches the result, so a stub tool
+    class defined by any earlier test in the session would be counted too
+    (the full suite measured 107 where a clean process measures 106). Shell
+    tools stay off (as they are for ``serve``), and every credential-gated
+    tool is hidden by clearing its gate, so the number does not depend on
+    which API keys happen to be configured on the machine running the suite.
+
+    Returns:
+        The number of locally registered agent tools.
+    """
+    env = dict(os.environ)
+    for name in _CREDENTIAL_GATES:
+        env.pop(name, None)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from src.tools import build_registry; print(len(build_registry().tool_names))",
+        ],
+        cwd=AGENT_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=300,
+    )
+    return int(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("name", READMES)
+def test_repo_tree_states_the_real_agent_tool_count(name: str) -> None:
+    """The repository-tree comment on src/tools/ must state the real registry size.
+
+    This line sat at 97 while the registry shipped 105 — an eight-tool silent
+    drift that no test could see, because nothing measured it.
+    """
+    tree = [line for line in _read(name).splitlines() if re.search(r"│\s+│\s+├── tools/\s+#", line)]
+
+    assert len(tree) == 1, f"{name}: expected one src/tools/ tree line, found {len(tree)}"
+    assert str(_keyless_agent_tool_count()) in _numbers(tree[0])
 
 
 @pytest.mark.parametrize("name", READMES)

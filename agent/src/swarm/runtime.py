@@ -508,6 +508,37 @@ class SwarmRuntime:
                                 },
                             ),
                         )
+                    elif result.status == "cancelled":
+                        # The worker stopped because cancel_run() was
+                        # signalled mid-flight; that is a user stop, not a
+                        # worker error. Persist it as cancelled — the same
+                        # terminal state _cancel_remaining_tasks gives tasks
+                        # that never started — so the dashboard, the run
+                        # summary and a later resume all see one consistent
+                        # story instead of a spurious "worker did not
+                        # complete" failure.
+                        all_succeeded = False
+                        task_store.update_status(
+                            tid,
+                            TaskStatus.cancelled,
+                            summary=result.summary,
+                            completed_at=datetime.now(timezone.utc).isoformat(),
+                            artifacts=result.artifact_paths,
+                            worker_iterations=result.iterations,
+                        )
+                        self._emit_event(
+                            run_id,
+                            self._make_event(
+                                "task_cancelled",
+                                task_id=tid,
+                                data={
+                                    "status": result.status,
+                                    "iterations": result.iterations,
+                                    "input_tokens": result.input_tokens,
+                                    "output_tokens": result.output_tokens,
+                                },
+                            ),
+                        )
                     else:
                         all_succeeded = False
                         task_store.update_status(
@@ -919,6 +950,7 @@ class SwarmRuntime:
                     run_id=run.id,
                     include_shell_tools=include_shell_tools,
                     grounding_block=grounding_block,
+                    cancel_event=cancel_event,
                 )
                 futures[future] = tid
                 per_task_budget = agent_spec.timeout_seconds * (agent_spec.max_retries + 1)
@@ -977,6 +1009,7 @@ class SwarmRuntime:
         run_id: str,
         include_shell_tools: bool = False,
         grounding_block: str = "",
+        cancel_event: threading.Event | None = None,
     ) -> WorkerResult:
         """Run a worker with automatic retry on failure.
 
@@ -996,6 +1029,10 @@ class SwarmRuntime:
             grounding_block: Pre-rendered "Ground Truth" markdown spliced
                 into the worker's system prompt. Empty string when no
                 symbols were extracted from user_vars.
+            cancel_event: Optional cancellation signal from cancel_run().
+                Forwarded to run_worker() so a signalled cancellation reaches
+                an already-dispatched worker. A "cancelled" result is never
+                retried (see the status check below).
 
         Returns:
             WorkerResult from the last attempt.
@@ -1044,6 +1081,7 @@ class SwarmRuntime:
                 include_shell_tools=include_shell_tools,
                 grounding_block=grounding_block,
                 agent_config=self._agent_config,
+                cancel_event=cancel_event,
             )
 
             cumulative_input_tokens += result.input_tokens

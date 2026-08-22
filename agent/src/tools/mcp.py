@@ -94,6 +94,51 @@ def _fingerprint_auth(auth: MCPOAuthConfig | None) -> str:
     return _fingerprint(canonical)
 
 
+class _GuardedOAuth(OAuth):
+    """FastMCP OAuth that can refuse to start a browser-based authorization flow.
+
+    Non-interactive callers (background pollers, API request handlers, scheduled
+    jobs) must never have a browser window opened on the host on their behalf.
+    Constructing this provider with ``allow_interactive=False`` turns the
+    browser step into a loud ``RuntimeError`` so the caller can tell the user to
+    run the explicit connect/reconnect step instead. With
+    ``allow_interactive=True`` the provider behaves exactly like
+    :class:`fastmcp.client.auth.OAuth`.
+    """
+
+    def __init__(self, *args: Any, allow_interactive: bool = True, **kwargs: Any) -> None:
+        """Initialize the OAuth provider.
+
+        Args:
+            *args: Positional arguments forwarded to ``fastmcp``'s ``OAuth``.
+            allow_interactive: When False, ``redirect_handler`` raises instead of
+                opening a browser for user consent.
+            **kwargs: Keyword arguments forwarded to ``fastmcp``'s ``OAuth``.
+        """
+        self._allow_interactive = allow_interactive
+        super().__init__(*args, **kwargs)
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        """Hand the authorization URL to the user's browser, or refuse to.
+
+        Args:
+            authorization_url: Authorization endpoint URL built by the OAuth
+                client for user consent.
+
+        Returns:
+            None.
+
+        Raises:
+            RuntimeError: If this provider was built with
+                ``allow_interactive=False``.
+        """
+        if not self._allow_interactive:
+            raise RuntimeError(
+                "OAuth authorization required; run the interactive connect/reconnect step"
+            )
+        await super().redirect_handler(authorization_url)
+
+
 def _make_cache_key(server_name: str, server_config: "MCPServerConfig") -> tuple[str, ...]:
     """Build a content-based cache key for MCP tool discovery results.
 
@@ -422,6 +467,7 @@ class MCPServerAdapter:
         local_server_name: str | None = None,
         client_factory: ClientFactory | None = None,
         max_list_tools_attempts: int = 2,
+        interactive_oauth: bool = True,
     ) -> None:
         """Initialize the MCP server adapter.
 
@@ -435,12 +481,16 @@ class MCPServerAdapter:
                 Defaults to 2 (one transient retry). The authorize bootstrap
                 sets this to 1 so a retry cannot start a second OAuth callback
                 server and orphan an in-progress sign-in.
+            interactive_oauth: When False, an OAuth flow that needs fresh user
+                consent raises instead of opening a browser on the host. Callers
+                that run without a user in front of them pass False.
         """
         self.server_name = server_name
         self.local_server_name = local_server_name or server_name
         self.server_config = server_config
         self._client_factory = client_factory or self._build_client
         self._list_tools_attempts = max(1, max_list_tools_attempts)
+        self._interactive_oauth = interactive_oauth
 
     def discover_tools(self) -> list[MCPRemoteToolSpec]:
         """Discover enabled tools from the remote MCP server.
@@ -553,12 +603,21 @@ class MCPServerAdapter:
             auth = None
             if self.server_config.auth is not None:
                 oauth_config = self.server_config.auth
+                # fastmcp's OAuth pre-flights the authorization URL with a
+                # client built by `httpx_client_factory`; httpx defaults that to
+                # a 5 s deadline, which is short for a consent endpoint. Reuse
+                # the server's configured init_timeout instead.
+                oauth_http_timeout = (
+                    self.server_config.init_timeout
+                    if self.server_config.init_timeout is not None
+                    else max(self.server_config.tool_timeout, 30.0)
+                )
                 # `mcp_url` is intentionally omitted — StreamableHttpTransport
                 # calls `auth._bind(self.url)` so the URL fills in from the
                 # transport. Token cache is persistent (FileTreeStore), so the
                 # channel stays authorized across CLI invocations and refresh is
                 # handled inside the MCP lib's OAuthClientProvider.
-                auth = OAuth(
+                auth = _GuardedOAuth(
                     scopes=list(oauth_config.scopes) or None,
                     client_name=oauth_config.client_name,
                     token_storage=_build_token_store(oauth_config.cache_dir),
@@ -566,6 +625,11 @@ class MCPServerAdapter:
                     client_id=oauth_config.client_id,
                     client_secret=oauth_config.client_secret,
                     client_metadata_url=oauth_config.client_metadata_url,
+                    httpx_client_factory=lambda: httpx.AsyncClient(
+                        timeout=oauth_http_timeout,
+                        trust_env=True,
+                    ),
+                    allow_interactive=self._interactive_oauth,
                 )
             transport = StreamableHttpTransport(
                 url=self.server_config.url,

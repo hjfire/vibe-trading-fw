@@ -32,7 +32,8 @@
     "skipToMain": "Zum Hauptinhalt springen",
     "sidebar": "Vibe-Trading-Seitenleiste",
     "mainNavigation": "Hauptnavigation",
-    "about": "Über"
+    "about": "Über",
+    "portfolio": "Portfolio"
   },
   "runtime": {
     "monitorBadge": "Runtime-Monitor",
@@ -1407,5 +1408,151 @@
     "loading": "Faktor-Ergebnisse werden geladen…",
     "error": "Faktor-Ergebnisse konnten nicht geladen werden",
     "noFactorData": "Für diesen Lauf sind keine Faktor-Analyseergebnisse verfügbar."
+  },
+  "portfolio": {
+    "page": {
+      "badge": "Lokal & schreibgeschützt · Mehrere Konten",
+      "title": "Portfolio",
+      "subtitle": "Eine Bewertung über alle aktivierten schreibgeschützten Verbindungen. Ein Konto, das nicht gelesen werden kann, wird als Fehler gemeldet und bleibt aus den Summen heraus.",
+      "fxFresh": "USD/CNY {{rate}} · aktueller Kurs",
+      "fxCached": "USD/CNY {{rate}} · zwischengespeicherter Kurs",
+      "manageAccounts": "Konten verwalten",
+      "exportCsv": "CSV exportieren",
+      "refreshAll": "Alle aktualisieren",
+      "refreshing": "Wird aktualisiert",
+      "warningsTitle": "Hinweise zu den Daten",
+      "emptyTitle": "Noch kein Portfolio-Snapshot",
+      "emptyBody": "Fügen Sie mindestens ein schreibgeschütztes Konto hinzu, um zu beginnen.",
+      "emptyAction": "Konto hinzufügen",
+      "errorLoad": "Portfolio nicht verfügbar",
+      "errorRefresh": "Aktualisierung fehlgeschlagen",
+      "errorReconnect": "Erneutes Verbinden des Kontos fehlgeschlagen",
+      "errorSaveSettings": "Portfolio-Einstellungen konnten nicht gespeichert werden",
+      "errorExport": "Export fehlgeschlagen"
+    },
+    "metrics": {
+      "total": "Gesamtvermögen",
+      "change": "Heutige Vermögensänderung",
+      "changeNote": "Enthält Marktbewegungen sowie Ein- und Auszahlungen",
+      "coverage": "Bewertungsabdeckung",
+      "coverageNote": "Bewertet {{priced}} · Bargeld {{cash}}",
+      "lastComplete": "Letzte vollständige Aktualisierung",
+      "excluded": "{{count}} Konten konnten nicht gelesen werden und fehlen in dieser Summe"
+    },
+    "allocation": {
+      "byAccount": "Aufteilung nach Konto",
+      "byHolding": "Aufteilung nach Position",
+      "center": "Positionen",
+      "other": "Weitere Positionen",
+      "cash": "Bargeld",
+      "unpriced": "Ohne Kurs / Sonstiges",
+      "cashUnpriced": "Bargeld / ohne Kurs"
+    },
+    "accounts": {
+      "title": "Kontostatus",
+      "hint": "Auf ein Konto klicken, um die Positionen zu filtern",
+      "clearFilter": "Filter zurücksetzen",
+      "positions": "{{count}} Positionen",
+      "fresh": "Erfolgreich gelesen",
+      "failed": "Konnte nicht gelesen werden — nicht in der Summe enthalten",
+      "lastSuccess": "Letzter erfolgreicher Abruf {{time}}",
+      "noSuccess": "Noch kein erfolgreicher Abruf",
+      "reconnect": "Neu verbinden"
+    },
+    "holdings": {
+      "title": "Positionen",
+      "count": "{{count}} Positionen",
+      "search": "Broker, Symbol oder Markt suchen",
+      "colBroker": "Konto",
+      "colSymbol": "Symbol",
+      "colType": "Typ",
+      "colQuantity": "Stückzahl",
+      "colCostPrice": "Einstand / Kurs",
+      "colValue": "Wert",
+      "colWeight": "Gewicht",
+      "colPnl": "Nicht realisierte G/V",
+      "colData": "Daten",
+      "priced": "Bewertet",
+      "unpriced": "Ohne Kurs"
+    },
+    "history": {
+      "title": "Vermögensverlauf",
+      "hint": "Nur vollständige Snapshots; Änderungen können Ein- und Auszahlungen enthalten.",
+      "count": "{{count}} vollständige Snapshots",
+      "empty": "Der Verlauf beginnt nach der ersten vollständigen Aktualisierung"
+    },
+    "credentials": {
+      "title": "Verbindungen und Zugangsdaten",
+      "readOnlyProfile": "Schreibgeschütztes Profil",
+      "writableProfile": "Schreibfähiges Profil",
+      "renewalAutomatic": "Erneuerung durch den Connector",
+      "renewalSession": "Lokale Sitzung",
+      "renewalProvider": "Gültigkeit vom Anbieter verwaltet"
+    },
+    "status": {
+      "title": "Aktivierte Konten werden nacheinander gelesen",
+      "reading": "Wird gelesen",
+      "done": "Fertig",
+      "failed": "Fehlgeschlagen",
+      "waiting": "Wartet"
+    },
+    "env": {
+      "live": "Live",
+      "paper": "Paper"
+    },
+    "editor": {
+      "title": "Portfolio-Konten verwalten",
+      "subtitle": "Hier werden nur die Kontoauswahl und Anzeigeeinstellungen gespeichert.",
+      "close": "Schließen",
+      "currency": "Primäre Anzeigewährung",
+      "selected": "Ausgewählte Konten",
+      "selectedHint": "Mit den Pfeiltasten die Anzeigereihenfolge ändern.",
+      "enableAccount": "Konto aktivieren",
+      "accountLabel": "Kontobezeichnung",
+      "moveUp": "Nach oben",
+      "moveDown": "Nach unten",
+      "removeAccount": "Konto entfernen",
+      "includeCash": "Bargeld dieses Kontos einbeziehen",
+      "noAccounts": "Keine Konten ausgewählt",
+      "addTitle": "Lokale schreibgeschützte Verbindung hinzufügen",
+      "addHint": "Wählen Sie aus den bereits auf diesem Computer angelegten Verbindungen.",
+      "openConnections": "Verbindungszentrale öffnen",
+      "chooseConnection": "Verbindung wählen…",
+      "noConnections": "Keine Verbindungen verfügbar",
+      "add": "Hinzufügen",
+      "footerHint": "Nach dem Speichern werden die aktivierten Konten aktualisiert.",
+      "cancel": "Abbrechen",
+      "save": "Speichern und aktualisieren",
+      "saving": "Wird gespeichert"
+    },
+    "connections": {
+      "title": "Lokale Verbindungszentrale",
+      "subtitle": "Definitionen bleiben lokal; Geheimnisse landen ausschließlich im Anmeldeinformationsspeicher des Systems.",
+      "close": "Verbindungszentrale schließen",
+      "createTitle": "Kontoverbindung anlegen",
+      "createHint": "Ein Profil ist eine öffentliche Vorlage; eine Verbindung gehört nur zu diesem Computer.",
+      "profile": "Schreibgeschütztes Profil",
+      "chooseProfile": "Profil wählen…",
+      "localId": "Lokale Verbindungs-ID",
+      "displayName": "Anzeigename",
+      "displayNamePlaceholder": "Mein Hauptkonto",
+      "create": "Verbindung anlegen",
+      "created": "Lokale Verbindung angelegt.",
+      "listTitle": "Verbindungen auf diesem Computer",
+      "listCount": "{{count}} Verbindungen",
+      "empty": "Noch keine lokalen Verbindungen",
+      "codexTitle": "Broker mit Codex ergänzen",
+      "codexBody": "Lassen Sie Codex connector init ausführen, den Leseadapter anhand der offiziellen Dokumentation implementieren, ihn validieren und dann installieren. Das Plugin bleibt außerhalb des Repositorys.",
+      "readOnly": "Schreibgeschützt",
+      "credentialSaved": "gespeichert",
+      "oauthNote": "Nutzt OAuth; bei Bedarf über das erneute Verbinden autorisieren.",
+      "localNote": "Die Zugangsdaten verwaltet die vorhandene lokale Connector-Konfiguration.",
+      "saveVault": "Im Speicher ablegen",
+      "savedVault": "Zugangsdaten im Systemspeicher abgelegt.",
+      "test": "Testen",
+      "testOk": "{{label}} ist bereit.",
+      "delete": "Löschen",
+      "configured": "Erforderliche Zugangsdaten konfiguriert"
+    }
   }
 }

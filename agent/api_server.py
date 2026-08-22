@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, status  # noqa: F401
 from fastapi.responses import FileResponse  # noqa: F401
@@ -256,6 +256,13 @@ from src.api.swarm_routes import _get_swarm_runtime  # noqa: F401, E402
 from src.api.live_routes import register_live_routes  # noqa: E402
 register_live_routes(app)
 
+# --- Read-only portfolio dashboard ---
+from src.api.portfolio_routes import register_portfolio_routes  # noqa: E402
+register_portfolio_routes(app)
+
+from src.api.connection_routes import register_connection_routes  # noqa: E402
+register_connection_routes(app)
+
 from src.api.live_routes import (  # noqa: F401, E402
     CommitMandateRequest,
     LiveHaltRequest,
@@ -325,19 +332,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     import argparse
     import subprocess
     import uvicorn
-    from fastapi.staticfiles import StaticFiles
-    from starlette.exceptions import HTTPException as StarletteHTTPException
-
-    class SPAStaticFiles(StaticFiles):
-        """Serve index.html for browser refreshes on client-side routes."""
-
-        async def get_response(self, path: str, scope: Dict[str, Any]):
-            try:
-                return await super().get_response(path, scope)
-            except StarletteHTTPException as exc:
-                if exc.status_code != status.HTTP_404_NOT_FOUND:
-                    raise
-                return await super().get_response("index.html", scope)
+    from src.api.spa import SPAStaticFiles
 
     parser = argparse.ArgumentParser(description="Vibe-Trading Server")
     parser.add_argument("--port", type=int, default=8000, help="Listen port (default 8000)")

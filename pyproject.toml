@@ -163,6 +163,13 @@ smc = [
     # Intel-Mac install into a source build that needs cmake (discussion #1035).
     "smartmoneyconcepts>=0.0.27",
 ]
+keyring = [
+    # OS credential vault (Keychain / Credential Manager / Secret Service) for
+    # user-installed local read-only connector plugins. CredentialStore imports
+    # it lazily and raises an actionable hint naming this extra, so a base
+    # install stays lean for users who configure no local connector.
+    "keyring>=25.0.0",
+]
 dingtalk = [
     "dingtalk-stream>=0.24.0",
 ]

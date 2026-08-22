@@ -10,6 +10,7 @@ import {
   MarkLineComponent,
   MarkAreaComponent,
   VisualMapComponent,
+  GraphicComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
@@ -19,6 +20,7 @@ echarts.use([
   DataZoomComponent, MarkPointComponent,
   ToolboxComponent, MarkLineComponent, MarkAreaComponent,
   VisualMapComponent,
+  GraphicComponent,
   CanvasRenderer,
 ]);
 
