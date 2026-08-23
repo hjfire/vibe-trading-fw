@@ -265,12 +265,14 @@ if ChatOpenAI is not None:
         _vibe_api_key: str = PrivateAttr(default="")
         _vibe_ambient_header_names: tuple[str, ...] = PrivateAttr(default=())
         _vibe_has_explicit_authorization: bool = PrivateAttr(default=False)
+        _vibe_owned_http_clients: tuple[Any, ...] = PrivateAttr(default=())
 
         def __init__(
             self,
             *args: Any,
             vibe_provider: str | None = None,
             vibe_api_key: str | None = None,
+            vibe_owned_http_clients: Sequence[Any] | None = None,
             **kwargs: Any,
         ) -> None:
             """Initialize while retaining the resolved provider name."""
@@ -287,6 +289,7 @@ if ChatOpenAI is not None:
             super().__init__(*args, **kwargs)
             self._vibe_provider = vibe_provider
             self._vibe_api_key = vibe_api_key or ""
+            self._vibe_owned_http_clients = tuple(vibe_owned_http_clients or ())
             self._vibe_ambient_header_names = tuple(
                 name for name in ambient_names if name not in explicit_names
             )
@@ -1455,4 +1458,5 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
         sync_client, async_client = _build_proxy_free_http_clients()
         kwargs["http_client"] = sync_client
         kwargs["http_async_client"] = async_client
+        kwargs["vibe_owned_http_clients"] = (sync_client, async_client)
     return ChatOpenAIWithReasoning(**kwargs)

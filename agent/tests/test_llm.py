@@ -553,6 +553,7 @@ class TestDisableHttpProxy:
         build_clients.assert_called_once_with()
         assert captured["http_client"] is sync_client
         assert captured["http_async_client"] is async_client
+        assert captured["vibe_owned_http_clients"] == (sync_client, async_client)
         assert "http_socket_options" not in captured
 
     def test_build_llm_leaves_default_transport_when_disabled(self) -> None:
@@ -577,6 +578,7 @@ class TestDisableHttpProxy:
 
         assert "http_client" not in captured
         assert "http_async_client" not in captured
+        assert "vibe_owned_http_clients" not in captured
 
     def test_direct_clients_do_not_install_environment_proxy_mounts(self) -> None:
         import asyncio

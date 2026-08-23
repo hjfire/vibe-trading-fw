@@ -127,7 +127,7 @@ def test_ibkr_seed_is_official_readonly_oauth_probe() -> None:
     cfg = AgentConfig.model_validate({"mcpServers": {"ibkr": IBKR_MCP_SERVER_SEED}})
     ibkr = cfg.mcp_servers["ibkr"]
     assert ibkr.resolved_transport() == "streamableHttp"
-    assert ibkr.url == "https://api.ibkr.com/v1/api/mcp"
+    assert ibkr.url == "https://api.ibkr.com/v1/api/mcp-public"
     assert ibkr.auth is not None and ibkr.auth.type == "oauth"
     assert ibkr.auth.scopes == ["mcp.read"]
     assert ibkr.auth.cache_dir == "~/.vibe-trading/live/ibkr/oauth"
@@ -185,7 +185,7 @@ def test_ibkr_rejects_wildcard_when_write_scope_is_requested() -> None:
                 "mcpServers": {
                     "ibkr": {
                         "type": "streamableHttp",
-                        "url": "https://api.ibkr.com/v1/api/mcp",
+                        "url": "https://api.ibkr.com/v1/api/mcp-public",
                         "auth": {"type": "oauth", "scopes": ["mcp.read", "mcp.write"]},
                         "enabledTools": ["*"],
                     }
@@ -201,7 +201,7 @@ def test_ibkr_rejects_wildcard_without_read_scope() -> None:
                 "mcpServers": {
                     "ibkr": {
                         "type": "streamableHttp",
-                        "url": "https://api.ibkr.com/v1/api/mcp",
+                        "url": "https://api.ibkr.com/v1/api/mcp-public",
                         "auth": {"type": "oauth", "scopes": ["openid"]},
                         "enabledTools": ["*"],
                     }
