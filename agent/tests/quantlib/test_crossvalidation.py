@@ -300,6 +300,16 @@ def test_mismatched_label_length_rejected():
         list(purged_kfold_splits(100, np.arange(50), n_folds=4))
 
 
+def test_excessive_embargo_removing_all_training_samples_rejected():
+    # A 2-fold split with 80% embargo removes all training samples
+    with pytest.raises(ValueError, match="removed all training samples"):
+        list(purged_kfold_splits(10, np.arange(10), n_folds=2, embargo_fraction=0.8))
+
+    groups = [1, 1, 2, 2]
+    with pytest.raises(ValueError, match="removed all training samples"):
+        list(group_purged_kfold_splits(groups, n_folds=2, embargo_fraction=0.8))
+
+
 @pytest.mark.parametrize("n_test_groups", [0, 6, 7])
 def test_bad_combinatorial_group_count_rejected(n_test_groups):
     with pytest.raises(ValueError, match="n_test_groups"):

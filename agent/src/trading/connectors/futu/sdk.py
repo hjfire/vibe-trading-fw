@@ -279,7 +279,16 @@ def get_account_snapshot(config: FutuConfig | None = None) -> dict[str, Any]:
     try:
         acc_id = _resolve_acc_id(cfg, trade_ctx)
         trd_env = _trd_env_enum(cfg)
-        rows = _records(_unwrap(trade_ctx.accinfo_query(trd_env=trd_env, acc_id=acc_id)))
+        result = trade_ctx.accinfo_query(trd_env=trd_env, acc_id=acc_id)
+        ret = result[0] if isinstance(result, (list, tuple)) and len(result) >= 2 else None
+        futu = _require_futu()
+        if ret is not None and ret != getattr(futu, "RET_OK", 0):
+            return {
+                "status": "error",
+                "error": f"futu accinfo_query failed: ret={ret} data={result[1]}",
+                "assets": [],
+            }
+        rows = _records(_unwrap(result))
         return {
             "status": "ok",
             "profile": cfg.profile,
@@ -298,7 +307,19 @@ def get_positions(config: FutuConfig | None = None) -> dict[str, Any]:
     try:
         acc_id = _resolve_acc_id(cfg, trade_ctx)
         trd_env = _trd_env_enum(cfg)
-        rows = _records(_unwrap(trade_ctx.position_list_query(trd_env=trd_env, acc_id=acc_id)))
+        result = trade_ctx.position_list_query(trd_env=trd_env, acc_id=acc_id)
+        ret = result[0] if isinstance(result, (list, tuple)) and len(result) >= 2 else None
+        futu = _require_futu()
+        if ret is not None and ret != getattr(futu, "RET_OK", 0):
+            # The mandate gate fails closed only on an explicit error, so a
+            # rejected query must not flatten into an empty position list
+            # (#1207 Phase 0).
+            return {
+                "status": "error",
+                "error": f"futu position_list_query failed: ret={ret} data={result[1]}",
+                "positions": [],
+            }
+        rows = _records(_unwrap(result))
         return {
             "status": "ok",
             "profile": cfg.profile,
