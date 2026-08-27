@@ -27,7 +27,6 @@ DataFrame which we convert with ``to_dict("records")`` before field mapping.
 from __future__ import annotations
 
 import json
-import os
 import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -1172,6 +1171,7 @@ def _account_to_dict(row: Mapping[str, Any]) -> dict[str, Any]:
         "market_val": _first(row, ("market_val",)),
         "available_funds": _first(row, ("available_funds",)),
         "securities_assets": _first(row, ("securities_assets",)),
+        "currency": str(_first(row, ("currency",), "") or "").upper(),
     }
 
 
@@ -1185,6 +1185,8 @@ def _position_to_dict(row: Mapping[str, Any]) -> dict[str, Any]:
         "pl_ratio": _first(row, ("pl_ratio",)),
         "pl_val": _first(row, ("pl_val",)),
         "position_side": str(_first(row, ("position_side",), "")),
+        "market": str(_first(row, ("position_market",), "") or "").upper(),
+        "currency": str(_first(row, ("currency",), "") or "").upper(),
     }
 
 

@@ -23,12 +23,21 @@ pytestmark = pytest.mark.unit
 def test_short_position_gets_negative_quantity() -> None:
     row = _position_to_dict({"symbol": "AAPL", "side": "short", "qty": "400", "market_value": "-50000"})
     assert row["quantity"] == -400.0
+    assert row["exact_quantity"] == "-400"
     assert row["side"] == "short"
 
 
 def test_long_position_quantity_passes_through() -> None:
     row = _position_to_dict({"symbol": "AAPL", "side": "long", "qty": "400", "market_value": "50000"})
     assert row["quantity"] == "400"
+    assert row["exact_quantity"] == "400"
+
+
+def test_fractional_position_keeps_an_exact_recovery_quantity() -> None:
+    row = _position_to_dict(
+        {"symbol": "AAPL", "side": "short", "qty": "0.123456789123456789"}
+    )
+    assert row["exact_quantity"] == "-0.123456789123456789"
 
 
 def test_short_position_without_qty_stays_none() -> None:

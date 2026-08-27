@@ -212,6 +212,27 @@ def test_combinatorial_holds_out_more_than_one_block_at_a_time():
         assert split.test.size >= 3 * (n // 6) - 3
 
 
+def test_combinatorial_gap_between_test_blocks_stays_trainable():
+    # Rows between two held-out blocks belong to neither test segment, so
+    # with zero-width labels and no embargo they must survive the purge.
+    n = 600
+    labels = np.arange(n)
+    saw_gap = False
+    for split in combinatorial_purged_splits(
+        n, labels, n_groups=6, n_test_groups=2, embargo_fraction=0.0
+    ):
+        test = np.sort(split.test)
+        blocks = np.split(test, np.flatnonzero(np.diff(test) > 1) + 1)
+        if len(blocks) < 2:
+            continue  # adjacent held-out groups merge into one segment
+        saw_gap = True
+        for left, right in zip(blocks, blocks[1:]):
+            gap = np.arange(left[-1] + 1, right[0])
+            assert gap.size > 0
+            assert np.isin(gap, split.train).all()
+    assert saw_gap
+
+
 # --- label end times as a pandas Series of timestamps ---
 
 
