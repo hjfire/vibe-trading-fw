@@ -1477,6 +1477,7 @@
       "errorLoad": "تعذّر عرض المحفظة",
       "errorRefresh": "فشل التحديث",
       "errorReconnect": "فشلت إعادة ربط الحساب",
+      "errorReconnectTimeout": "انتهت مهلة تفويض المتصفح. أعد الاتصال وأكمل تفويض الوسيط سريعًا.",
       "errorSaveSettings": "تعذّر حفظ إعدادات المحفظة",
       "errorExport": "فشل التصدير"
     },
@@ -1507,7 +1508,8 @@
       "failed": "تعذّرت قراءته — غير محتسب في الإجمالي",
       "lastSuccess": "آخر قراءة ناجحة {{time}}",
       "noSuccess": "لا توجد قراءة ناجحة بعد",
-      "reconnect": "إعادة الاتصال"
+      "reconnect": "إعادة الاتصال",
+      "retryRead": "إعادة محاولة القراءة"
     },
     "holdings": {
       "title": "تفاصيل الحيازات",
@@ -1549,6 +1551,11 @@
     "env": {
       "live": "حي",
       "paper": "ورقي"
+    },
+    "compatibility": {
+      "native": "موصل أصلي",
+      "contractTested": "مختبر بالعقد",
+      "experimental": "تجريبي"
     },
     "editor": {
       "title": "إدارة حسابات المحفظة",
@@ -1595,12 +1602,17 @@
       "codexBody": "اطلب من Codex تشغيل connector init، ثم كتابة موصل القراءة اعتمادًا على وثائق الوسيط الرسمية، واجتياز validate قبل install. تبقى الإضافة خارج مستودع المشروع.",
       "readOnly": "للقراءة فقط",
       "credentialSaved": "محفوظ",
+      "optional": "(اختياري)",
+      "authType": "المصادقة",
+      "dependency": "اعتماد محلي",
       "oauthNote": "يستخدم OAuth؛ امنح التفويض عبر إعادة الاتصال عند الحاجة.",
       "localNote": "تدير بيانات الاعتماد إعدادات الموصل المحلي الحالية.",
       "saveVault": "حفظ في الخزنة",
       "savedVault": "حُفظت بيانات الاعتماد في خزنة النظام.",
       "test": "اختبار",
       "testOk": "{{label}} جاهز.",
+      "testFailed": "فشل اختبار {{label}}: {{error}}",
+      "unknownTestError": "أرجع الموصل خطأ غير معروف.",
       "delete": "حذف",
       "configured": "بيانات الاعتماد المطلوبة مضبوطة"
     }
