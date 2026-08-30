@@ -614,6 +614,8 @@
     "runNotFound": "Ejecución no encontrada",
     "runNotFoundDesc": "El directorio de la ejecución puede haberse eliminado, o tu navegador puede no tener el acceso a la API configurado. Verifica que la clave de autenticación de la API esté configurada en Configuración si accedes de forma remota.",
     "goBack": "Volver",
+    "showFullPrompt": "Ver prompt completo",
+    "showLessPrompt": "Ver menos",
     "chart": "Gráfico",
     "trades": "Operaciones",
     "factor": "Investigación de factores",
@@ -1399,6 +1401,8 @@
   },
   "runDashboard": {
     "eyebrow": "Investigación cuantitativa · Backtest",
+    "noBacktestData": "Este run no tiene datos de backtest que graficar",
+    "noBacktestDataStudioHint": "Parece un análisis de cartera/riesgo — consulta sus números en la pestaña Studio.",
     "engine": "motor",
     "portfolio": "Cartera",
     "systematicStrategy": "Estrategia sistemática",

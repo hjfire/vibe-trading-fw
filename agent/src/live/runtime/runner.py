@@ -55,7 +55,7 @@ from src.live.runtime.sweep_latch import (
 )
 from src.live.runtime.liveness import write_heartbeat
 from src.live.runtime.scheduler import Job
-from src.live.runtime.triggers import Trigger
+from src.live.runtime.triggers import Trigger, due_now
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 TICK_HALTED = "halted"
 TICK_NO_MANDATE = "no_mandate"
 TICK_EXPIRED = "expired"
+TICK_MARKET_CLOSED = "market_closed"
 TICK_RECONCILE_UNSAFE = "reconcile_unsafe"
 TICK_RECONCILE_ERROR = "reconcile_error"
 TICK_INVOKED = "invoked"
@@ -423,11 +424,14 @@ class LiveRunner:
         2. **Mandate + proactive expiry** — load the mandate; if absent or past
            ``expires_at``, trip a stop + clear authority + audit, and return
            BEFORE any agent invocation. A dead mandate never reaches step 5.
-        3. **Reconcile** — pull broker truth via the injected READ callables; an
+        3. **Market hours** — with market triggers attached, skip the tick when
+           every one of their markets is closed, so a weekend tick cannot queue
+           orders into the next open.
+        4. **Reconcile** — pull broker truth via the injected READ callables; an
            unsafe/ambiguous report aborts the tick (no auto-resend, §8 finding 5).
-        4. **Pin + invoke** — build the autonomous-turn prompt with the full
+        5. **Pin + invoke** — build the autonomous-turn prompt with the full
            mandate inline and invoke the agent through the public caller.
-        5. **Audit** — record the tick outcome.
+        6. **Audit** — record the tick outcome.
 
         Returns:
             A JSON-serializable tick result (see :meth:`TickResult.to_dict`).
@@ -443,6 +447,14 @@ class LiveRunner:
             return self._no_mandate_result()
         if _mandate_is_expired(mandate, now):
             return self._expired_result()
+
+        if not self._any_market_open(now):
+            logger.info("tick skipped for %s: market closed", self.broker)
+            return TickResult(
+                outcome=TICK_MARKET_CLOSED,
+                broker=self.broker,
+                reason="market closed",
+            ).to_dict()
 
         reconcile_outcome = self._run_reconcile()
         if reconcile_outcome is not None:
@@ -928,6 +940,25 @@ class LiveRunner:
             except Exception:  # noqa: BLE001 — persistence is best-effort at start
                 logger.exception("job store save failed for %s", self.broker)
         return synthesized
+
+    def _any_market_open(self, now: datetime) -> bool:
+        """Whether any attached MARKET trigger's market is open at ``now``.
+
+        Runners without MARKET triggers are always open (interval-only or
+        event-driven channels never gate on sessions). With several MARKET
+        triggers the union wins: one open market is enough to trade. 24/7
+        markets (crypto) report open at every instant, so they never block.
+        """
+        now_ms = int(now.timestamp() * 1000)
+        market_triggers = [
+            trigger
+            for trigger in self._triggers or []
+            if getattr(getattr(trigger, "kind", None), "value", getattr(trigger, "kind", None))
+            == "market"
+        ]
+        if not market_triggers:
+            return True
+        return any(due_now(trigger, now_ms) for trigger in market_triggers)
 
     def _jobs_from_triggers(self, now: datetime) -> list[Job]:
         """Convert the injected triggers (R3) into schedulable watch jobs (R1).
