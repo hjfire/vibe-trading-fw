@@ -384,6 +384,68 @@ def test_provider_spellings_of_one_instrument_are_one_identity(
     assert authorization.allowed is True
 
 
+def test_binance_pair_resolution_authorizes_crypto_consumers(tmp_path: Path) -> None:
+    """Issue #1234: an exact connector pair must survive unrelated Yahoo hits."""
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="Check the ETH-USDT orderbook and current price.",
+    )
+    before_resolution = ledger.authorized_symbols
+    resolver = ledger.authorize_tool_call(
+        "search_symbol",
+        {"query": "ETH-USDT"},
+        batch_authorized_symbols=before_resolution,
+        call_id="resolve-crypto",
+    )
+    assert resolver.allowed is True
+
+    ledger.ingest_tool_result(
+        tool_name="search_symbol",
+        arguments={"query": "ETH-USDT"},
+        result=json.dumps(
+            {
+                "ok": True,
+                "source": "symbol_search",
+                "data": {
+                    "query": "ETH-USDT",
+                    "count": 2,
+                    "sources": {"binance": "ok", "yahoo": "ok"},
+                    "candidates": [
+                        {
+                            "symbol": "ETH-USDT",
+                            "market": "crypto",
+                            "type": "cryptocurrency",
+                            "exchange": "BINANCE",
+                            "source": "binance",
+                        },
+                        {
+                            "symbol": "AETHUSDT-USD",
+                            "market": "global",
+                            "type": "cryptocurrency",
+                            "exchange": "CCC",
+                            "source": "yahoo",
+                        },
+                    ],
+                },
+            }
+        ),
+        call_id="resolve-crypto",
+        success=True,
+    )
+
+    authorization = ledger.authorize_tool_call(
+        "orderbook_depth",
+        {"symbol": "ETH-USDT", "exchange": "binance"},
+        batch_authorized_symbols=ledger.authorized_symbols,
+        batch_identity_status=ledger.identity_status,
+        call_id="crypto-book",
+    )
+
+    assert ledger.identity_status == "locked"
+    assert ledger.authorized_symbols == {"ETH-USDT"}
+    assert authorization.allowed is True
+
+
 def test_stale_history_identity_does_not_unlock_new_subject(tmp_path: Path) -> None:
     """A previous turn's AAPL identity cannot authorize a SpaceX price request."""
     ledger = GroundingLedger(
@@ -2002,6 +2064,134 @@ def test_an_unevidenced_price_is_still_rejected_without_any_tool_call(
     }
 
 
+@pytest.mark.parametrize(
+    ("draft", "paren_width"),
+    [
+        ("同期五粮液（000858.SZ）收 168.50 元。", "full-width"),
+        ("同期五粮液(000858.SZ)收 168.50 元。", "half-width"),
+    ],
+)
+def test_fullwidth_parentheses_do_not_split_symbol_from_figure(
+    tmp_path: Path,
+    draft: str,
+    paren_width: str,
+) -> None:
+    """#1260: 公司名（代码）价格 must stay in one clause for the gate.
+
+    Full-width （） were treated as clause separators, so the symbol landed in
+    one segment and the figure in the next and the unsourced-symbol gate
+    never saw them together — a false negative that flipped on parenthesis
+    width alone. Both widths must fire now; the half-width form is the
+    control that already passed.
+    """
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="What is Kweichow Moutai (600519.SH) trading at this week?",
+    )
+    ledger.ingest_tool_result(
+        tool_name="get_market_data",
+        arguments={
+            "codes": ["600519.SH"],
+            "start_date": "2026-08-24",
+            "end_date": "2026-08-28",
+            "source": "baostock",
+        },
+        result=json.dumps(
+            {
+                "600519.SH": [
+                    {
+                        "trade_date": "2026-08-28T00:00:00",
+                        "open": 1289.0,
+                        "high": 1297.89,
+                        "low": 1288.0,
+                        "close": 1297.4,
+                        "volume": 16126.11,
+                    }
+                ],
+                "_provenance": {
+                    "600519.SH": {
+                        "source": "baostock",
+                        "fallback_used": False,
+                        "currency_conversion": "none",
+                        "volume_unit": "lots",
+                    }
+                },
+            }
+        ),
+        call_id="c1",
+        success=True,
+    )
+
+    issues = [
+        issue
+        for issue in ledger.validate_final_answer(draft).issues
+        if issue.get("code") == "unsourced_symbol_figures"
+    ]
+
+    assert issues, f"{paren_width} parentheses must fire unsourced_symbol_figures"
+    # Pin the offending symbol, not just "some issue fired": the gate must
+    # blame the unsourced 000858.SZ, not the sourced 600519.SH.
+    assert [issue["symbol"] for issue in issues] == ["000858.SZ"]
+
+
+def test_unsourced_symbol_without_a_figure_stays_silent(tmp_path: Path) -> None:
+    """#1260 guard arm: figure co-presence is what the gate checks.
+
+    The regression test above pins that the gate fires when symbol and figure
+    share a clause. This arm pins the inverse: an unsourced symbol with NO
+    nearby figure must not fire unsourced_symbol_figures, so the gate's
+    figure-presence guard (_numbers_without_dates_or_percent) cannot be
+    dropped without this test failing.
+    """
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="What is Kweichow Moutai (600519.SH) trading at this week?",
+    )
+    ledger.ingest_tool_result(
+        tool_name="get_market_data",
+        arguments={
+            "codes": ["600519.SH"],
+            "start_date": "2026-08-24",
+            "end_date": "2026-08-28",
+            "source": "baostock",
+        },
+        result=json.dumps(
+            {
+                "600519.SH": [
+                    {
+                        "trade_date": "2026-08-28T00:00:00",
+                        "open": 1289.0,
+                        "high": 1297.89,
+                        "low": 1288.0,
+                        "close": 1297.4,
+                        "volume": 16126.11,
+                    }
+                ],
+                "_provenance": {
+                    "600519.SH": {
+                        "source": "baostock",
+                        "fallback_used": False,
+                        "currency_conversion": "none",
+                        "volume_unit": "lots",
+                    }
+                },
+            }
+        ),
+        call_id="c1",
+        success=True,
+    )
+
+    issues = [
+        issue
+        for issue in ledger.validate_final_answer(
+            "同期五粮液（000858.SZ）是知名白酒企业。"
+        ).issues
+        if issue.get("code") == "unsourced_symbol_figures"
+    ]
+
+    assert issues == []
+
+
 def test_a_shortlist_answers_the_user_but_still_cannot_fetch_a_quote(
     tmp_path: Path,
 ) -> None:
@@ -2409,3 +2599,105 @@ def test_a_us_csv_stem_resolves_to_its_venue_suffix() -> None:
     assert _symbol_from_csv_filename("GC_F") == "GC=F"
     # A bare name has no venue suffix and must stay unresolvable.
     assert _symbol_from_csv_filename("AAPL") is None
+
+
+class TestFiatPairAndIndexNormalization:
+    """Search, fetch and grounding agree on one FX spelling; ^ is a symbol."""
+
+    def test_fiat_pair_spellings_normalize_to_yahoo_form(self) -> None:
+        from src.agent.grounding import _normalize_symbol
+
+        assert _normalize_symbol("GBP/USD") == "GBPUSD=X"
+        assert _normalize_symbol("GBPUSD") == "GBPUSD=X"
+        assert _normalize_symbol("GBPUSD=X") == "GBPUSD=X"
+        # Crypto/metals keep their pair form — not fiat/fiat FX.
+        assert _normalize_symbol("ETH/USD") == "ETH-USD"
+        assert _normalize_symbol("XAU/USD") == "XAU-USD"
+
+    def test_scanned_slashed_pair_matches_resolver_answer(self) -> None:
+        """The query-as-asserted scan must agree with the chosen candidate."""
+        from src.agent.grounding import _scan_symbols
+
+        assert _scan_symbols("use GBP/USD spot") == {"GBPUSD=X"}
+
+    def test_index_symbols_are_scanned_and_typed(self) -> None:
+        from src.agent.grounding import (
+            _infer_currency,
+            _infer_instrument_type,
+            _scan_symbols,
+        )
+
+        assert _scan_symbols("quote ^SPX") == {"^SPX"}
+        assert _infer_instrument_type("^SPX", "INDEX") == "index"
+        assert _infer_instrument_type("^SPX") == "index"
+        assert _infer_currency("GBPUSD=X") == "USD"
+
+    def test_ingest_search_symbol_does_not_create_conflicting_identity(self) -> None:
+        """The flagship regression: ingest('GBP/USD') must lock, never conflict."""
+        from src.agent.grounding import _normalize_symbol
+
+        # Chosen (from search_symbol) and asserted (the query text) must be
+        # the same canonical identity — the comparison in _ingest_resolution.
+        chosen = _normalize_symbol("GBPUSD=X")
+        asserted = _scan_symbols("GBP/USD")
+        assert chosen in asserted
+
+
+def test_fx_pair_resolution_authorizes_market_data_consumer(tmp_path: Path) -> None:
+    """Issue: search_symbol('GBP/USD') must lock, and get_market_data('GBPUSD=X')
+    must be authorized — the slashed query used to normalize to the crypto
+    spelling (GBP-USD), disagreeing with the chosen GBPUSD=X candidate and
+    creating a conflicting identity that outranked every later lock.
+    """
+    ledger = GroundingLedger(
+        run_dir=tmp_path,
+        user_message="Get me the GBP/USD spot rate.",
+    )
+    before_resolution = ledger.authorized_symbols
+    resolver = ledger.authorize_tool_call(
+        "search_symbol",
+        {"query": "GBP/USD"},
+        batch_authorized_symbols=before_resolution,
+        call_id="resolve-fx",
+    )
+    assert resolver.allowed is True
+
+    ledger.ingest_tool_result(
+        tool_name="search_symbol",
+        arguments={"query": "GBP/USD"},
+        result=json.dumps(
+            {
+                "ok": True,
+                "source": "symbol_search",
+                "data": {
+                    "query": "GBP/USD",
+                    "count": 1,
+                    "sources": {"yahoo": "ok", "fx_normalizer": "ok"},
+                    "candidates": [
+                        {
+                            "symbol": "GBPUSD=X",
+                            "name": "GBP/USD",
+                            "market": "fx",
+                            "type": "currency",
+                            "exchange": "CCY",
+                            "source": "fx_normalizer",
+                        },
+                    ],
+                },
+            }
+        ),
+        call_id="resolve-fx",
+        success=True,
+    )
+
+    authorization = ledger.authorize_tool_call(
+        "get_market_data",
+        {"codes": ["GBPUSD=X"]},
+        batch_authorized_symbols=ledger.authorized_symbols,
+        batch_identity_status=ledger.identity_status,
+        call_id="fx-prices",
+    )
+
+    assert ledger.identity_status == "locked"
+    assert ledger.authorized_symbols == {"GBPUSD=X"}
+    assert authorization.allowed is True
