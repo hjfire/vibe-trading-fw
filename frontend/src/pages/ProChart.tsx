@@ -5,6 +5,9 @@ import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import WatchList from "@/components/charts/WatchList";
+import IndicatorEditor from "@/components/charts/IndicatorEditor";
+import { applyUserIndicator } from "@/lib/indicatorLang";
+import { loadUserIndicators } from "@/lib/indicatorStore";
 
 /**
  * Phase-A pro chart: open-source KLineChart (Apache-2.0) wired to this project's
@@ -78,6 +81,26 @@ export function ProChart() {
     source: "",
   });
   const dark = useThemeDark();
+  // Indicator-formula workbench (local custom ⑩).
+  const [indPanelOpen, setIndPanelOpen] = useState(false);
+  const [indCount, setIndCount] = useState(() => loadUserIndicators().filter((x) => x.enabled).length);
+  // Which chart instances have already had the saved indicators replayed.
+  // Per-instance on purpose: React StrictMode mounts this effect twice in dev,
+  // and a single boolean would be consumed by the first (already disposed)
+  // chart, leaving the live chart blank of user indicators (e2e 2026-09-04).
+  const restoredChartsRef = useRef<WeakSet<Chart>>(new WeakSet());
+  // Restore-time formula failures, kept in their own state: the backward page
+  // load KLineChart fires right after startup resets status.error and would
+  // swallow the message within a second (e2e 2026-09-04).
+  const [formulaError, setFormulaError] = useState<string | null>(null);
+  const refreshIndCount = () =>
+    setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
+  // Both entry points behave the same: the banner is a restore-time notice,
+  // and once the workbench is open each row reports its own state there.
+  const openFormulaPanel = () => {
+    setFormulaError(null);
+    setIndPanelOpen(true);
+  };
   // Minute bars are served only for .SH/.SZ A-shares (see market_routes.py);
   // greying out the buttons for other symbols avoids a guaranteed 400.
   const canMinute = /\.(SH|SZ)$/.test(symbol);
@@ -128,6 +151,27 @@ export function ProChart() {
           const bars = res.bars as KLineData[];
           callback(bars, { backward: bars.length >= PAGE, forward: false });
           setStatus({ loading: false, error: null, source: res.source });
+          // Re-mount persisted user indicators once real data exists (their
+          // formulas trial-compute against the current bars on apply).
+          if (
+            chartRef.current === chart &&
+            bars.length > 0 &&
+            !restoredChartsRef.current.has(chart)
+          ) {
+            restoredChartsRef.current.add(chart);
+            const problems: string[] = [];
+            for (const it of loadUserIndicators()) {
+              if (!it.enabled) continue;
+              try {
+                const err = applyUserIndicator(chart, it);
+                if (err) problems.push(`「${it.label}」${err}`);
+              } catch (e) {
+                problems.push(`「${it.label}」${e instanceof Error ? e.message : String(e)}`);
+              }
+            }
+            // A saved formula that no longer computes must not fail silently.
+            setFormulaError(problems.length > 0 ? problems.join("；") : null);
+          }
         } catch (e) {
           callback([], false);
           setStatus({ loading: false, error: e instanceof Error ? e.message : String(e), source: "" });
@@ -242,6 +286,13 @@ export function ProChart() {
           })}
         </div>
         <div className="mx-2 h-5 w-px bg-border" />
+        <button
+          className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+          title="编写/管理自定义指标公式（保存在本地）"
+          onClick={openFormulaPanel}
+        >
+          ƒ 指标公式{indCount > 0 ? ` · ${indCount}` : ""}
+        </button>
         <span className="text-xs text-muted-foreground">画线:</span>
         <div className="flex gap-1">
           {DRAW_TOOLS.map((t) => (
@@ -262,6 +313,19 @@ export function ProChart() {
         </div>
       </div>
 
+      {formulaError && (
+        <div className="text-xs text-red-500">
+          已保存的指标公式未能加载：{formulaError}
+          <button
+            type="button"
+            className="ml-2 underline hover:no-underline"
+            onClick={openFormulaPanel}
+          >
+            去修正
+          </button>
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1 gap-3">
         <WatchList symbols={watch} active={symbol} onPick={applySymbol} onChange={setWatch} />
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
@@ -269,6 +333,12 @@ export function ProChart() {
       <div className="text-xs text-muted-foreground">
         数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移、左侧工具栏画线，指标 MA/VOL/MACD 内置。
       </div>
+      <IndicatorEditor
+        open={indPanelOpen}
+        onClose={() => setIndPanelOpen(false)}
+        getChart={() => chartRef.current}
+        onChartIndicatorsChanged={refreshIndCount}
+      />
     </div>
   );
 }
