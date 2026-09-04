@@ -4,7 +4,8 @@ Mounted by ``agent/api_server.py`` via ``register_market_routes(app)``.
 
 Routes (auth via the caller-supplied ``require_auth`` dependency):
 
-- ``GET /market/kline`` — single-instrument OHLCV bars for interactive charts.
+- ``GET /market/kline``  — single-instrument OHLCV bars for interactive charts.
+- ``GET /market/quote``  — batch last-price + change-pct quotes for the watchlist.
 
 Daily bars walk the same loader fallback chain ``/correlation`` uses
 (``backtest.correlation._fetch_price_series``), so any instrument the
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -37,8 +39,37 @@ logger = logging.getLogger(__name__)
 AuthDep = Callable[..., Awaitable[Any] | Any]
 
 _MAX_BARS = 2000
+_MAX_QUOTE_SYMBOLS = 30
 _MINUTE_PERIODS = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
 _ADJUSTS = {"none": "", "qfq": "qfq", "hfq": "hfq"}
+
+# akshare decrypts Sina responses through py_mini_racer, whose bundled Chromium
+# hard-crashes the whole process when first used off the main thread on Windows
+# (V8 partition_address_space FATAL, seen 2026-09-04). All Sina/akshare calls
+# are therefore funnelled onto ONE dedicated, reused worker thread; serialising
+# them on that thread also keeps the non-thread-safe loader chain quiet.
+_sina_lock = threading.Lock()
+_sina_thread: threading.Thread | None = None
+
+
+def _run_sina(fn, *args, **kwargs):
+    """Run ``fn`` on a single reused worker thread, serialised by a lock."""
+    global _sina_thread
+    with _sina_lock:
+        box: dict[str, Any] = {}
+
+        def _work() -> None:
+            try:
+                box["value"] = fn(*args, **kwargs)
+            except BaseException as exc:  # re-raise on the caller side
+                box["error"] = exc
+
+        _sina_thread = threading.Thread(target=_work, daemon=True)
+        _sina_thread.start()
+        _sina_thread.join()
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
 
 def _bars_from_frame(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -80,16 +111,65 @@ def _bars_from_frame(df: pd.DataFrame) -> list[dict[str, Any]]:
     return bars
 
 
-def _fetch_daily(symbol: str, count: int, before: int | None) -> list[dict[str, Any]]:
+def _fetch_daily_sina_a_share(
+    symbol: str, count: int, before: int | None
+) -> list[dict[str, Any]]:
+    """A-share daily bars via Sina's ``stock_zh_a_daily`` (qfq), e.g. sh600519.
+
+    Preferred source for A-share daily: fast and, unlike the tencent (HTTP 501
+    under load) / eastmoney (proxy-blocked) loaders on the primary chain, it
+    stayed reachable through the residential proxy (verified 2026-09-04).
+    """
+    code, _, suffix = symbol.partition(".")
+    if suffix not in {"SH", "SZ"}:
+        raise LookupError("sina daily is only available for .SH/.SZ A-shares")
+    import akshare as ak
+
+    buffer_days = int(count * 1.7) + 30
+    if before:
+        end = datetime.fromtimestamp(before / 1000, tz=timezone.utc).date()
+    else:
+        end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=buffer_days)
+    raw = _run_sina(
+        ak.stock_zh_a_daily,
+        symbol=f"{suffix.lower()}{code}",
+        start_date=start.strftime("%Y%m%d"),
+        end_date=end.strftime("%Y%m%d"),
+        adjust="qfq",
+    )
+    if raw is None or raw.empty:
+        raise LookupError(f"sina returned no daily data for {symbol}")
+    frame = raw.copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame = frame.set_index("date")
+    bars = _bars_from_frame(frame)
+    if before:
+        bars = [b for b in bars if b["timestamp"] < before]
+    return bars[-count:]
+
+
+def _fetch_daily(symbol: str, count: int, before: int | None) -> tuple[list[dict[str, Any]], str]:
     """Walk the market's loader fallback chain for up to ``count`` daily bars.
 
-    ``before`` (epoch **milliseconds**) caps the window to older-than that
-    timestamp so KLineChart can page backwards on scroll; ``None`` returns the
-    latest bars.
+    Returns ``(bars, source)`` so callers can label which path actually served
+    the data. ``before`` (epoch **milliseconds**) caps the window to
+    older-than that timestamp so KLineChart can page backwards on scroll;
+    ``None`` returns the latest bars.
     """
     from backtest.correlation import _fetch_price_series, infer_market
 
     market = infer_market(symbol)
+    # A-share daily: prefer Sina, then fall through to the loader chain if it
+    # ever comes back dry (see _fetch_daily_sina_a_share for the rationale).
+    if symbol.rsplit(".", 1)[-1] in {"SH", "SZ"}:
+        try:
+            return (
+                _fetch_daily_sina_a_share(symbol, count, before),
+                "akshare:sina_stock_zh_a_daily",
+            )
+        except LookupError:
+            pass
     # Calendar buffer: trading days ≈ 0.68 calendar days; holidays stack up.
     buffer_days = int(count * 1.7) + 30
     if before:
@@ -105,7 +185,7 @@ def _fetch_daily(symbol: str, count: int, before: int | None) -> list[dict[str, 
     bars = _bars_from_frame(frames[symbol])
     if before:
         bars = [b for b in bars if b["timestamp"] < before]
-    return bars[-count:]
+    return bars[-count:], "backtest:loader_fallback_chain"
 
 
 def _fetch_minute_a_share(
@@ -117,8 +197,11 @@ def _fetch_minute_a_share(
         raise ValueError("minute bars are only supported for .SH/.SZ A-share symbols")
     import akshare as ak
 
-    raw = ak.stock_zh_a_minute(
-        symbol=f"{suffix.lower()}{code}", period=period, adjust=_ADJUSTS[adjust]
+    raw = _run_sina(
+        ak.stock_zh_a_minute,
+        symbol=f"{suffix.lower()}{code}",
+        period=period,
+        adjust=_ADJUSTS[adjust],
     )
     if raw is None or raw.empty:
         raise LookupError(f"sina returned no minute data for {symbol}")
@@ -140,9 +223,42 @@ def _kline_sync(
         bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
         source = "akshare:sina_stock_zh_a_minute"
     else:
-        bars = _fetch_daily(symbol, count, before)
-        source = "backtest:loader_fallback_chain"
+        bars, source = _fetch_daily(symbol, count, before)
     return {"status": "ok", "symbol": symbol, "interval": interval, "source": source, "bars": bars}
+
+
+def _quote_one(symbol: str) -> dict[str, Any]:
+    """Latest daily bar + previous close -> a compact quote row (any market).
+
+    Errors are returned in-row (``ok: false``) so one bad symbol never sinks
+    a whole watchlist batch.
+    """
+    s = symbol.strip().upper()
+    try:
+        # Same canonical form the /market/kline route accepts (e.g. 600519.SH,
+        # AAPL.US, BTC-USDT) — the loader chain normalizes internally.
+        bars, _src = _fetch_daily(s, count=2, before=None)
+    except Exception as exc:  # noqa: BLE001 — per-row containment is the point
+        return {"symbol": s, "ok": False, "error": str(exc)[:200]}
+    if not bars:
+        return {"symbol": s, "ok": False, "error": "no data"}
+    last = float(bars[-1]["close"])
+    prev = float(bars[-2]["close"]) if len(bars) > 1 else last
+    change_pct = ((last - prev) / prev * 100.0) if prev else 0.0
+    return {
+        "symbol": s,
+        "ok": True,
+        "last": round(last, 4),
+        "change_pct": round(change_pct, 2),
+        "timestamp": int(bars[-1]["timestamp"]),
+    }
+
+
+def _quote_batch(items: list[str]) -> list[dict[str, Any]]:
+    # Sequential on purpose: the loader fallback chain (shared akshare/yfinance
+    # sessions and caches) is not thread-safe — concurrent walks returned data
+    # only for the first symbol (verified 2026-09-04).
+    return [_quote_one(s) for s in items]
 
 
 def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) -> None:
@@ -189,3 +305,31 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
             return JSONResponse(
                 status_code=502, content={"status": "error", "error": "kline fetch failed"}
             )
+
+    @app.get("/market/quote", dependencies=[Depends(require_auth)])
+    async def market_quote(
+        symbols: str = Query(..., min_length=1, description="Comma-separated symbols (<= 30)"),
+    ) -> Response:
+        """Batch watchlist quotes: last price + day-over-day change per symbol.
+
+        Goes through the same daily loader chain as ``/market/kline``, two bars
+        per symbol, fetched sequentially (the chain is not thread-safe).
+        Per-symbol failures show up in-row (``ok: false``) instead of failing
+        the request.
+        """
+        items = [s.strip().upper() for s in symbols.split(",") if s.strip()][
+            : _MAX_QUOTE_SYMBOLS
+        ]
+        if not items:
+            return JSONResponse(
+                status_code=400, content={"status": "error", "error": "no symbols provided"}
+            )
+        try:
+            # Loader calls are blocking — keep the event loop free.
+            quotes = await asyncio.to_thread(_quote_batch, items)
+        except Exception:  # noqa: BLE001 — defensive; per-row errors are contained
+            logger.exception("market quote batch failed (%d symbols)", len(items))
+            return JSONResponse(
+                status_code=502, content={"status": "error", "error": "quote fetch failed"}
+            )
+        return {"status": "ok", "quotes": quotes}

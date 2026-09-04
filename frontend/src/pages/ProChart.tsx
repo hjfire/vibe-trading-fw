@@ -4,6 +4,7 @@ import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
+import WatchList from "@/components/charts/WatchList";
 
 /**
  * Phase-A pro chart: open-source KLineChart (Apache-2.0) wired to this project's
@@ -15,6 +16,7 @@ import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib
 
 const DEFAULT_SYMBOL = "600519.SH";
 const PAGE = 500;
+const WATCH_KEY = "pro-chart.watchlist.v1";
 
 const PRESETS = [
   { label: "贵州茅台", symbol: "600519.SH" },
@@ -80,6 +82,29 @@ export function ProChart() {
   // greying out the buttons for other symbols avoids a guaranteed 400.
   const canMinute = /\.(SH|SZ)$/.test(symbol);
 
+  // Watchlist (step ②): persisted in localStorage, defaults to the presets.
+  const [watch, setWatch] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(WATCH_KEY);
+      if (raw) {
+        const arr: unknown = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          return arr.filter((x): x is string => typeof x === "string" && x.length > 0);
+        }
+      }
+    } catch {
+      /* corrupted storage -> fall back to defaults */
+    }
+    return PRESETS.map((p) => p.symbol);
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(WATCH_KEY, JSON.stringify(watch));
+    } catch {
+      /* quota errors are non-fatal for a convenience list */
+    }
+  }, [watch]);
+
   // Create/destroy the chart once per mount.
   useEffect(() => {
     if (!hostRef.current) return;
@@ -131,11 +156,20 @@ export function ProChart() {
     chartRef.current?.setStyles(chartStyles(dark));
   }, [dark]);
 
+  const applySymbol = (s: string) => {
+    setInput(s);
+    setSymbol(s);
+    chartRef.current?.setSymbol({ ticker: s, pricePrecision: 2, volumePrecision: 0 });
+  };
+
   const loadSymbol = () => {
     const s = input.trim().toUpperCase();
     if (!s) return;
-    setSymbol(s);
-    chartRef.current?.setSymbol({ ticker: s, pricePrecision: 2, volumePrecision: 0 });
+    applySymbol(s);
+  };
+
+  const addToWatch = () => {
+    if (!watch.includes(symbol)) setWatch([...watch, symbol]);
   };
 
   const pickInterval = (iv: IntervalKey) => {
@@ -158,22 +192,28 @@ export function ProChart() {
           onKeyDown={(e) => e.key === "Enter" && loadSymbol()}
           placeholder="600519.SH / AAPL.US / BTC-USDT"
         />
-        <button className="rounded-md border px-3 py-1 text-sm hover:bg-accent" onClick={loadSymbol}>
+        <button className="rounded-md border px-3 py-1 text-sm hover:bg-muted" onClick={loadSymbol}>
           加载
+        </button>
+        <button
+          className={cn(
+            "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+            watch.includes(symbol) && "text-primary",
+          )}
+          title={watch.includes(symbol) ? "已在自选列表" : "把当前标的加入自选"}
+          onClick={addToWatch}
+        >
+          {watch.includes(symbol) ? "★ 已自选" : "☆ 加自选"}
         </button>
         <div className="flex gap-1">
           {PRESETS.map((p) => (
             <button
               key={p.symbol}
               className={cn(
-                "rounded-md border px-2 py-1 text-xs hover:bg-accent",
-                symbol === p.symbol && "bg-accent font-medium",
+                "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+                symbol === p.symbol && "bg-muted font-medium",
               )}
-              onClick={() => {
-                setInput(p.symbol);
-                setSymbol(p.symbol);
-                chartRef.current?.setSymbol({ ticker: p.symbol, pricePrecision: 2, volumePrecision: 0 });
-              }}
+              onClick={() => applySymbol(p.symbol)}
             >
               {p.label}
             </button>
@@ -191,8 +231,8 @@ export function ProChart() {
                 disabled={disabled}
                 title={disabled ? "分钟线仅支持 A股（.SH/.SZ）" : undefined}
                 className={cn(
-                  "rounded-md border px-2 py-1 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40",
-                  interval === i.key && "bg-accent font-medium",
+                  "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+                  interval === i.key && "bg-muted font-medium",
                 )}
                 onClick={() => pickInterval(i.key)}
               >
@@ -207,13 +247,13 @@ export function ProChart() {
           {DRAW_TOOLS.map((t) => (
             <button
               key={t.name}
-              className="rounded-md border px-2 py-1 text-xs hover:bg-accent"
+              className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
               onClick={() => startDraw(t.name)}
             >
               {t.label}
             </button>
           ))}
-          <button className="rounded-md border px-2 py-1 text-xs hover:bg-accent" onClick={clearDraw}>
+          <button className="rounded-md border px-2 py-1 text-xs hover:bg-muted" onClick={clearDraw}>
             清除
           </button>
         </div>
@@ -222,7 +262,10 @@ export function ProChart() {
         </div>
       </div>
 
-      <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
+      <div className="flex min-h-0 flex-1 gap-3">
+        <WatchList symbols={watch} active={symbol} onPick={applySymbol} onChange={setWatch} />
+        <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
+      </div>
       <div className="text-xs text-muted-foreground">
         数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移、左侧工具栏画线，指标 MA/VOL/MACD 内置。
       </div>

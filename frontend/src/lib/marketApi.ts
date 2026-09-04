@@ -24,6 +24,15 @@ export interface KlineResponse {
   error?: string;
 }
 
+export interface QuoteRow {
+  symbol: string;
+  ok: boolean;
+  last?: number;
+  change_pct?: number;
+  timestamp?: number;
+  error?: string;
+}
+
 /** Map a KLineChart Period back to the backend interval string. */
 export function periodToInterval(period: Period): IntervalKey {
   if (period.type === "day" || period.type === "week" || period.type === "month") {
@@ -63,4 +72,17 @@ export async function fetchKline(params: {
     source: body.source ?? "",
     bars: Array.isArray(body.bars) ? body.bars : [],
   };
+}
+
+/** Batch quotes for the watchlist (GET /market/quote). Per-symbol failures
+ *  arrive as in-row ok=false entries, never as a thrown error. */
+export async function fetchQuotes(symbols: string[]): Promise<QuoteRow[]> {
+  const q = new URLSearchParams();
+  q.set("symbols", symbols.join(","));
+  const res = await fetch(`/market/quote?${q.toString()}`, { headers: authHeaders() });
+  const body = (await res.json().catch(() => ({}))) as { quotes?: QuoteRow[]; error?: string; detail?: string };
+  if (!res.ok) {
+    throw new Error(body.error || body.detail || `HTTP ${res.status}`);
+  }
+  return Array.isArray(body.quotes) ? body.quotes : [];
 }
