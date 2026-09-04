@@ -298,6 +298,10 @@ register_alpha_routes(app)
 from src.api.options_routes import register_options_routes  # noqa: E402
 register_options_routes(app)
 
+# --- Market K-line (pro-chart page; local customization) ---
+from src.api.market_routes import register_market_routes  # noqa: E402
+register_market_routes(app)
+
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)

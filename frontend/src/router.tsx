@@ -34,6 +34,12 @@ const AlphaZoo = lazy(() =>
 const OptionsLab = lazy(() =>
   import("@/pages/OptionsLab").then((m) => ({ default: m.OptionsLab })),
 );
+const TVChart = lazy(() =>
+  import("@/pages/TVChart").then((m) => ({ default: m.TVChart })),
+);
+const ProChart = lazy(() =>
+  import("@/pages/ProChart").then((m) => ({ default: m.ProChart })),
+);
 
 function PageLoader() {
   return (
@@ -67,6 +73,8 @@ export const router = createBrowserRouter([
       { path: "/compare", element: wrap(Compare) },
       { path: "/correlation", element: wrap(Correlation) },
       { path: "/options", element: wrap(OptionsLab) },
+      { path: "/tv-chart", element: wrap(TVChart) },
+      { path: "/pro-chart", element: wrap(ProChart) },
       { path: "/alpha-zoo", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/bench", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },
