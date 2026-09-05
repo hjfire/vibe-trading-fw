@@ -11,10 +11,12 @@ import {
   DRAWING_SIZES,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
   drawHint,
   isInProgress,
+  listDrawings,
   loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
@@ -25,6 +27,8 @@ import {
   saveDrawings,
   serializeDrawings,
   toolOf,
+  type DrawingFlags,
+  type DrawingRow,
   type DrawingStyle,
 } from "@/lib/chartDrawings";
 import { chartLocale } from "@/lib/klineLocale";
@@ -196,6 +200,11 @@ export function ProChart() {
   // and rewrites its points when the user drags one (⑮, see chartDrawings.ts).
   const [drawTool, setDrawTool] = useState<string | null>(null);
   const [drawCount, setDrawCount] = useState(0);
+  // The same set, as rows (local custom ⑰). One read of the chart feeds both the
+  // count and the list, so the toolbar number can never disagree with what the
+  // panel shows — the lesson ⑮ had to learn the hard way.
+  const [drawRows, setDrawRows] = useState<DrawingRow[]>([]);
+  const [drawPanelOpen, setDrawPanelOpen] = useState(false);
   // Style of the *next* drawing (local custom ⑯), remembered across symbols.
   const [drawStyle, setDrawStyle] = useState<DrawingStyle>(() => loadDrawingStyle());
   // Mirror of the newest requested style. `pickStyle` composes onto this instead
@@ -221,12 +230,11 @@ export function ProChart() {
   // `excludeId` again covers the `onRemoved` callback, which runs while the
   // deleted overlay is still listed: without it the count says "已画 1 条" on an
   // empty chart until the next event happens to come along.
-  const refreshDrawCount = (chart: Chart, excludeId: string | null = null) =>
-    setDrawCount(
-      chart
-        .getOverlays()
-        .filter((o) => !isInProgress(o) && (!excludeId || (o as { id?: string }).id !== excludeId)).length,
-    );
+  const refreshDrawCount = (chart: Chart, excludeId: string | null = null) => {
+    const rows = listDrawings(chart).filter((r) => r.id !== excludeId);
+    setDrawRows(rows);
+    setDrawCount(rows.length);
+  };
   // Bumps on every workbench notification, so the pane rebudget below re-runs
   // even when the enabled count is unchanged (swapping one custom indicator for
   // another keeps the number but moves the panes around).
@@ -597,6 +605,47 @@ export function ProChart() {
     syncDrawings(chart);
   };
 
+  /**
+   * Open/close the drawing list (⑰). The strip takes height away from the chart,
+   * so the pane budget has to run again; bumping `layoutTick` is what does that,
+   * and by the time its effect fires the new layout is already on screen, so
+   * `applyPaneLayout` measures the shrunk host.
+   */
+  const toggleDrawPanel = () => {
+    setDrawPanelOpen((open) => !open);
+    setLayoutTick((t) => t + 1);
+  };
+
+  /** Lock / hide one line, then bank it — see `applyDrawingFlags` for why the
+   * library's return value is not the thing to trust. */
+  const flagDrawing = (id: string, flags: DrawingFlags) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (applyDrawingFlags(chart, id, flags)) syncDrawings(chart);
+  };
+
+  /**
+   * Delete one line through the chart, so `onRemoved` runs the same way a
+   * right-click delete runs it (⑮): selection and storage are cleaned by that
+   * callback, not by this handler.
+   */
+  const removeDrawing = (id: string) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.removeOverlay({ id });
+    syncDrawings(chart);
+  };
+
+  /**
+   * Aim the style toolbar at a row. There is no public "select this overlay" in
+   * v10 — canvas clicks are the only thing that lights a line up there — so a
+   * list pick deliberately re-targets the next colour/width click rather than
+   * pretending to highlight the chart.
+   */
+  const focusDrawing = (id: string) => {
+    setSelectedDraw((cur) => (cur === id ? null : id));
+  };
+
   const armedTool = toolOf(drawTool ?? "");
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
@@ -711,6 +760,19 @@ export function ProChart() {
           >
             清除
           </button>
+          <button
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+              drawPanelOpen && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            aria-label="画线清单"
+            aria-pressed={drawPanelOpen}
+            title={drawCount === 0 ? "暂无画线可管理" : "列出全部画线：逐条选中、锁定、隐藏、删除"}
+            disabled={drawCount === 0}
+            onClick={toggleDrawPanel}
+          >
+            清单 · {drawCount}
+          </button>
         </div>
         {/* Style of the next drawing; with a line selected it restyles that one too (⑯). */}
         <div className="flex items-center gap-1">
@@ -779,6 +841,73 @@ export function ProChart() {
         </div>
       </div>
 
+      {drawPanelOpen && (
+        <div className="max-h-[132px] shrink-0 overflow-y-auto rounded-lg border bg-background">
+          {drawRows.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted-foreground">当前标的与周期上还没有画线</div>
+          ) : (
+            drawRows.map((row) => (
+              <div
+                key={row.id}
+                className={cn(
+                  "flex items-center gap-2 border-b px-2 py-1 text-xs last:border-b-0",
+                  row.hidden && "opacity-60",
+                )}
+              >
+                <button
+                  type="button"
+                  aria-label={`选中画线 ${row.id}`}
+                  title={selectedDraw === row.id ? "已选中 — 再点一次取消" : "选中这条，点颜色/线宽就改它"}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-muted",
+                    selectedDraw === row.id && "bg-muted ring-1 ring-primary",
+                  )}
+                  onClick={() => focusDrawing(row.id)}
+                >
+                  <span
+                    aria-hidden
+                    className="h-3 w-3 shrink-0 rounded-full border border-black/10 dark:border-white/25"
+                    style={{ backgroundColor: row.style.color }}
+                  />
+                  <span className="shrink-0 font-medium">{row.label}</span>
+                  <span className="truncate text-muted-foreground">{row.detail}</span>
+                  {row.pointCount > 2 && <span className="shrink-0 text-muted-foreground">{row.pointCount} 点</span>}
+                  {row.locked && <span className="shrink-0 text-muted-foreground">已锁定</span>}
+                  {row.hidden && <span className="shrink-0 text-muted-foreground">已隐藏</span>}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`锁定画线 ${row.id}`}
+                  title={row.locked ? "解锁后可拖动改位" : "锁定后拖不动这条线（右键仍可删）"}
+                  className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
+                  onClick={() => flagDrawing(row.id, { lock: !row.locked })}
+                >
+                  {row.locked ? "解锁" : "锁定"}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`隐藏画线 ${row.id}`}
+                  title={row.hidden ? "重新画上这条线" : "隐藏后图上不画、也点不到，只能从这里找回"}
+                  className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
+                  onClick={() => flagDrawing(row.id, { hidden: !row.hidden })}
+                >
+                  {row.hidden ? "显示" : "隐藏"}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`删除画线 ${row.id}`}
+                  title="删除这条线"
+                  className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
+                  onClick={() => removeDrawing(row.id)}
+                >
+                  删除
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {formulaError && (
         <div className="text-xs text-red-500">
           已保存的指标公式未能加载：{formulaError}
@@ -797,7 +926,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

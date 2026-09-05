@@ -22,13 +22,17 @@ import { planPaneHeights } from "@/lib/paneLayout";
  *   3. drawings are banked per `symbol|interval` instead of being lost (or
  *      leaking from one chart onto another),
  *   4. the per-drawing style the toolbar picks is what the library is told to
- *      paint (⑯) — on the overlay instance, not through the global stylesheet.
+ *      paint (⑯) — on the overlay instance, not through the global stylesheet,
+ *   5. the drawing list is a read of the chart, not a parallel bookkeeping: the
+ *      rows, the "已画 N 条" number and the stored bucket always agree (⑰).
  *
  * jsdom cannot paint a canvas, so the fake chart below reproduces the library's
  * observable contract: pane options, overlay lifecycle (`isDrawing()` ->
  * `onDrawEnd`), the post-hoc edits (drag = `onPressedMoveEnd`, right-click =
  * `onRemoved` fired *before* the splice), the click-selection pair
  * (`onDeselected` then `onSelected`) and `setSymbol` re-running the DataLoader.
+ * The id filter and the repaint answer of `overrideOverlay` are mirrored too,
+ * because both are load-bearing for ⑯/⑰ (see the fake below).
  */
 
 interface Bar {
@@ -50,6 +54,10 @@ interface FakeOverlay {
   isDrawing: () => boolean;
   // `overlay.styles`, the per-drawing fragment the toolbar writes (⑯).
   styles?: Record<string, unknown>;
+  // The two list-panel flags (⑰): `OverlayImp` starts both at the library
+  // default (dist 8240-8242) before merging what the caller passed.
+  lock?: boolean;
+  visible?: boolean;
   // Event callbacks the component handed to `createOverlay`; the library keeps
   // them on the instance and calls them for the rest of the overlay's life.
   onDrawEnd?: () => void;
@@ -128,6 +136,8 @@ function makeOverlay(patch: Partial<FakeOverlay>): FakeOverlay {
     points: [],
     currentStep: 1,
     drawing: true,
+    lock: false,
+    visible: true,
     ...patch,
     isDrawing: () => o.drawing,
   };
@@ -245,13 +255,19 @@ vi.mock("klinecharts", () => ({
           pane.height = Math.max(pane.minHeight, options.height);
         }
       }),
-      getOverlays: vi.fn(() => h.overlays.slice()),
+      getOverlays: vi.fn((filter?: { id?: string | null }) =>
+        filter === undefined || filter.id === undefined || filter.id === null
+          ? h.overlays.slice()
+          : h.overlays.filter((o) => o.id === filter.id),
+      ),
       createOverlay: vi.fn((value: unknown) => {
         const v = (typeof value === "string" ? { name: value } : (value ?? {})) as {
           name?: string;
           paneId?: string;
           points?: Array<Record<string, number>>;
           styles?: Record<string, unknown>;
+          lock?: boolean;
+          visible?: boolean;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
@@ -261,6 +277,8 @@ vi.mock("klinecharts", () => ({
           currentStep: placed ? -1 : 1,
           drawing: !placed,
           styles: v.styles,
+          ...(typeof v.lock === "boolean" ? { lock: v.lock } : {}),
+          ...(typeof v.visible === "boolean" ? { visible: v.visible } : {}),
           onDrawEnd: v.onDrawEnd,
           onRemoved: v.onRemoved,
           onPressedMoveEnd: v.onPressedMoveEnd,
@@ -275,14 +293,30 @@ vi.mock("klinecharts", () => ({
       // rejects null/undefined, so a filter without an id restyles **every**
       // overlay on the chart. That is the footgun `applyDrawingStyle` refuses.
       overrideOverlay: vi.fn((override: unknown) => {
-        const v = override as { id?: string; styles?: Record<string, unknown> };
+        const v = override as {
+          id?: string;
+          styles?: Record<string, unknown>;
+          lock?: boolean;
+          visible?: boolean;
+        };
         const targets =
           v.id === undefined || v.id === null ? h.overlays.slice() : h.overlays.filter((o) => o.id === v.id);
         if (targets.length === 0) return false;
+        let draw = false;
         for (const target of targets) {
-          target.styles = { ...(target.styles ?? {}), ...(v.styles ?? {}) };
+          const prevStyles = target.styles;
+          const prevVisible = target.visible;
+          // `override()` merges every key except id/name/currentStep/points/
+          // styles (dist 8280-8281), which is how `lock`/`visible` get set.
+          if ("lock" in v) target.lock = v.lock;
+          if ("visible" in v) target.visible = v.visible;
+          if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
+          // `shouldUpdate()` repaints for styles/visible/points/zLevel but never
+          // for `lock` alone (dist 8314-8318) — hence the read-back in
+          // `applyDrawingFlags`.
+          draw = draw || prevVisible !== target.visible || prevStyles !== target.styles;
         }
-        return true;
+        return draw;
       }),
       removeOverlay: vi.fn((filter?: { id?: string }) => {
         // Mirrors StoreImp.removeOverlay: callback first, splice after — which
@@ -875,5 +909,191 @@ describe("/pro-chart 面板预算的边界", () => {
     });
     expect(h.chart?.setPaneOptions).toHaveBeenCalledWith({ id: "pane_FOO", height: plan.subPaneHeight });
     expect(paneHeights().pane_FOO).toBe(plan.subPaneHeight);
+  });
+});
+
+describe("/pro-chart 画线清单", () => {
+  /** Draw one price line the same way a user does; returns its overlay id. */
+  async function drawOne(value = 1302.5, day = 6): Promise<string> {
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + day * DAY, value });
+    await flush();
+    return h.overlays[h.overlays.length - 1].id;
+  }
+
+  const stored = (): Array<Record<string, unknown>> =>
+    (readBuckets()["600519.SH|1D"] ?? []) as Array<Record<string, unknown>>;
+  const isDisabled = (name: string): boolean =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+  it("没有画线时清单按钮不开", async () => {
+    await mountChart();
+    expect(isDisabled("画线清单")).toBe(true);
+    expect(screen.queryByText(/当前标的与周期上还没有画线/)).toBeNull();
+  });
+
+  it("清单里每一条都叫得出工具、位置和价格", async () => {
+    await mountChart();
+    const id = await drawOne(1302.5);
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+
+    const row = screen.getByRole("button", { name: `选中画线 ${id}` });
+    expect(row.textContent).toContain("价格线");
+    expect(row.textContent).toContain("1302.5");
+    // The toolbar number and the hint come off the same read of the chart, so
+    // one cannot lie while the other tells the truth (the ⑮ lesson).
+    expect(row.textContent).not.toContain("已锁定");
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 1");
+    expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+  });
+
+  it("从清单选中一条，点颜色改的是这条", async () => {
+    await mountChart();
+    const id = await drawOne();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    h.chart?.overrideOverlay.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: `选中画线 ${id}` }));
+    await flush();
+    expect(screen.getByText(/已选中一条线/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 红" }));
+    await flush();
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledTimes(1);
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledWith(expect.objectContaining({ id }));
+    expect(stored()[0].style).toEqual({ color: "#F23645", size: 1, dashed: false });
+
+    // Clicking the same row again is the "clicked blank canvas" of this panel.
+    fireEvent.click(screen.getByRole("button", { name: `选中画线 ${id}` }));
+    await flush();
+    expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+  });
+
+  it("锁定只作用这一条，并且写进存储", async () => {
+    await mountChart();
+    const a = await drawOne(1300, 3);
+    const b = await drawOne(1310, 4);
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${a}` }));
+    await flush();
+    expect(h.overlays.find((o) => o.id === a)?.lock).toBe(true);
+    expect(h.overlays.find((o) => o.id === b)?.lock).toBe(false);
+    expect(stored()[0]).toMatchObject({ lock: true });
+    expect(stored()[1]).not.toHaveProperty("lock");
+    // The control says what it will do next, so the state is readable twice over.
+    expect(screen.getByRole("button", { name: `锁定画线 ${a}` }).textContent).toBe("解锁");
+    expect(screen.getByText("已锁定")).toBeTruthy();
+  });
+
+  it("隐藏只是图上不画，线仍在清单与存储里", async () => {
+    await mountChart();
+    const id = await drawOne();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: `隐藏画线 ${id}` }));
+    await flush();
+    expect(h.overlays.find((o) => o.id === id)?.visible).toBe(false);
+    expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+    expect(stored()[0]).toMatchObject({ hidden: true });
+    expect(screen.getByRole("button", { name: `隐藏画线 ${id}` }).textContent).toBe("显示");
+
+    fireEvent.click(screen.getByRole("button", { name: `隐藏画线 ${id}` }));
+    await flush();
+    expect(h.overlays.find((o) => o.id === id)?.visible).toBe(true);
+    expect(stored()[0]).not.toHaveProperty("hidden");
+  });
+
+  it("清单里删除走 onRemoved：存储、条数、选中一起干净", async () => {
+    await mountChart();
+    const a = await drawOne(1300, 3);
+    const b = await drawOne(1310, 4);
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `选中画线 ${b}` }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: `删除画线 ${a}` }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([b]);
+    // The button counts what is left; the hint line is busy reporting the
+    // selection that survived, which is the other half of the same read.
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 1");
+    expect(stored()).toHaveLength(1);
+    // Deleting another line must not throw away the selection.
+    expect(screen.getByText(/已选中一条线/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: `删除画线 ${b}` }));
+    await flush();
+    expect(screen.getByText("画线随标的与周期保存")).toBeTruthy();
+    // The bucket for this symbol is gone (the map keeps the key, empty).
+    expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
+    expect(isDisabled("画线清单")).toBe(true);
+  });
+
+  it("锁定与隐藏的线刷新后仍是锁定与隐藏", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          {
+            name: "priceLine",
+            paneId: "candle_pane",
+            points: [{ timestamp: START, value: 1300 }],
+            lock: true,
+          },
+          {
+            name: "segment",
+            paneId: "candle_pane",
+            points: [{ timestamp: START, value: 1300 }, { timestamp: START + DAY, value: 1320 }],
+            hidden: true,
+          },
+        ],
+      }),
+    );
+    await mountChart();
+    await flush();
+
+    // Restored through `createOverlay`, not patched afterwards: a line that
+    // comes back unlocked can be dragged away before the first click lands.
+    const calls = h.chart?.createOverlay.mock.calls ?? [];
+    expect(calls[0]?.[0]).toMatchObject({ lock: true });
+    expect(calls[1]?.[0]).toMatchObject({ visible: false });
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    expect(screen.getByText("已锁定")).toBeTruthy();
+    expect(screen.getByText("已隐藏")).toBeTruthy();
+    // Touching a line re-banks the whole set, so a flag that came out of storage
+    // has to survive the trip back into it.
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${h.overlays[1].id}` }));
+    await flush();
+    expect(stored().map((d) => ({ lock: d.lock === true, hidden: d.hidden === true }))).toEqual([
+      { lock: true, hidden: false },
+      { lock: true, hidden: true },
+    ]);
+  });
+
+  it("换标的时清单跟着换，不会把上一个标的的线留在屏幕上", async () => {
+    await mountChart();
+    await drawOne();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    expect(screen.getAllByRole("button", { name: /^选中画线/ })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /^选中画线/ })).toBeNull();
+    // The panel stays open but has nothing to show, and the button locks itself.
+    expect(screen.getByText("当前标的与周期上还没有画线")).toBeTruthy();
+    expect(isDisabled("画线清单")).toBe(true);
+    expect(screen.queryByText(/已画/)).toBeNull();
+    // The bucket of the symbol we left is untouched.
+    expect(readBuckets()["600519.SH|1D"]).toHaveLength(1);
   });
 });

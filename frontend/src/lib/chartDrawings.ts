@@ -42,6 +42,20 @@ import type { Chart } from "klinecharts";
  *    `isValid` only rejects null/undefined — a filter **without** an id matches
  *    every drawing on the chart, so the id is not optional. Same family of
  *    footgun as `removeIndicator`.
+ *
+ * 5. Two per-drawing flags make the list usable, and both are read straight off
+ *    the overlay instance (d.ts 1073 / 1077): `lock` is honoured by
+ *    `_figureMouseDownEvent` (dist 8731-8734) so the line stops following the
+ *    mouse — but *only* there: clicking to select (8746) and right-click delete
+ *    (8774) ignore it — and `visible: false` is honoured by `OverlayView.drawImp`
+ *    (dist 8895-8899), which skips the overlay *before* its figures are handed
+ *    to the event tree, so a hidden line is neither painted nor clickable.
+ *    Neither flag is a style, so `overrideOverlay` accepts them as top-level keys
+ *    (`override()` merges everything except id/name/currentStep/points/styles,
+ *    dist 8280-8281) — but `shouldUpdate()` (dist 8314-8318) watches
+ *    zLevel/points/visible/extendData/styles and **not `lock`**, so a lock-only
+ *    change repaints nothing and `overrideOverlay` answers `false` even though it
+ *    worked. Trust the instance, not the return value.
  */
 
 /** The pane every draw tool is pinned to. */
@@ -199,6 +213,10 @@ export interface StoredDrawing {
   points: StoredPoint[];
   /** Absent means "whatever the library defaults to". */
   style?: DrawingStyle;
+  /** Absent means the line is still draggable (see header note 5). */
+  lock?: true;
+  /** Absent means the line is visible. */
+  hidden?: true;
 }
 
 /** Minimal surface these helpers need, so tests can hand in a fake chart. */
@@ -214,6 +232,8 @@ interface OverlayLike {
   points?: StoredPoint[];
   currentStep?: number;
   isDrawing?: () => boolean;
+  lock?: boolean;
+  visible?: boolean;
 }
 
 /** True while the user is still placing points. */
@@ -255,6 +275,10 @@ export function serializeDrawings(overlays: readonly unknown[], excludeId?: stri
       paneId: o.paneId ?? MAIN_PANE_ID,
       points,
       ...(style ? { style } : {}),
+      // Flags are only written when they deviate from the library default, so a
+      // plain line keeps costing exactly what it costed before ⑰.
+      ...(o.lock === true ? { lock: true as const } : {}),
+      ...(o.visible === false ? { hidden: true as const } : {}),
     });
   }
   return out;
@@ -340,6 +364,8 @@ export function restoreDrawings(
       paneId: d.paneId || MAIN_PANE_ID,
       points,
       ...(d.style ? { styles: overlayStylesOf(d.style) } : {}),
+      ...(d.lock ? { lock: true } : {}),
+      ...(d.hidden ? { visible: false } : {}),
       ...events,
     });
     if (id) applied += 1;
@@ -360,6 +386,123 @@ export function restoreDrawings(
 export function applyDrawingStyle(chart: OverlayHost, id: string, style: DrawingStyle): boolean {
   if (!id) return false;
   return chart.overrideOverlay({ id, styles: overlayStylesOf(style) });
+}
+
+/** What the list panel can flip on a line, without touching its look. */
+export interface DrawingFlags {
+  lock?: boolean;
+  hidden?: boolean;
+}
+
+/**
+ * Lock or hide one drawing (local custom ⑰).
+ *
+ * `id` is mandatory for the same reason as `applyDrawingStyle`: without it
+ * `getOverlaysByFilter` matches every overlay and one click would grey out the
+ * whole chart. The library's own answer is not usable as a verdict here — see
+ * header note 5 — so the instance is read back and compared.
+ */
+export function applyDrawingFlags(chart: OverlayHost, id: string, flags: DrawingFlags): boolean {
+  if (!id) return false;
+  const override: Record<string, unknown> = { id };
+  if (typeof flags.lock === "boolean") override.lock = flags.lock;
+  if (typeof flags.hidden === "boolean") override.visible = !flags.hidden;
+  if (Object.keys(override).length < 2) return false; // nothing asked for
+  chart.overrideOverlay(override);
+  const current = chart.getOverlays({ id })[0] as OverlayLike | undefined;
+  if (!current) return false;
+  if (typeof flags.lock === "boolean" && (current.lock === true) !== flags.lock) return false;
+  if (typeof flags.hidden === "boolean" && (current.visible === false) !== flags.hidden) return false;
+  return true;
+}
+
+/** One row of the drawing list: everything needed to name, aim at and clean up a line. */
+export interface DrawingRow {
+  id: string;
+  /** The KLineChart overlay name, e.g. `priceLine`. */
+  name: string;
+  /** Toolbar label, or the raw name for a tool we do not ship. */
+  label: string;
+  style: DrawingStyle;
+  locked: boolean;
+  hidden: boolean;
+  /** Where the line sits: bar time(s) and/or price. Empty when unknown. */
+  detail: string;
+  /** How many points the line is made of (brush can be in the hundreds). */
+  pointCount: number;
+}
+
+function numbers(points: readonly StoredPoint[], key: keyof StoredPoint): number[] {
+  const out: number[] = [];
+  for (const p of points) {
+    const v = p?.[key];
+    if (typeof v === "number" && Number.isFinite(v)) out.push(v);
+  }
+  return out;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * `MM-DD`, plus `HH:mm` when the bar is not a session open. Daily bars arrive
+ * at local midnight (the chart runs on Asia/Shanghai), and printing `00:00`
+ * next to them reads like a bug in a list meant to be scanned at a glance.
+ */
+export function formatBarTime(ms: number): string {
+  const t = ms < 1e12 ? ms * 1000 : ms;
+  const d = new Date(t);
+  const day = `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return d.getHours() === 0 && d.getMinutes() === 0 ? day : `${day} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function formatPrice(v: number): string {
+  return String(Number(v.toFixed(2)));
+}
+
+/** A one-line description of where a drawing is; null when it is not a drawing. */
+export function describeDrawing(overlay: unknown): DrawingRow | null {
+  const o = overlay as OverlayLike | null | undefined;
+  if (!o || typeof o.id !== "string" || !o.id) return null;
+  if (isInProgress(o)) return null;
+  const name = typeof o.name === "string" ? o.name : "";
+  if (!name) return null;
+  const points = Array.isArray(o.points) ? o.points : [];
+  const stamps = numbers(points, "timestamp");
+  const values = numbers(points, "value");
+  const bits: string[] = [];
+  if (stamps.length > 0) {
+    const first = formatBarTime(stamps[0]);
+    const last = formatBarTime(stamps[stamps.length - 1]);
+    bits.push(first === last ? first : `${first} → ${last}`);
+  }
+  if (values.length > 0) {
+    const first = formatPrice(values[0]);
+    bits.push(values.length === 1 ? `价位 ${first}` : `${first} → ${formatPrice(values[values.length - 1])}`);
+  }
+  return {
+    id: o.id,
+    name,
+    label: toolOf(name)?.label ?? name,
+    style: styleOfOverlay(o) ?? { ...DEFAULT_DRAWING_STYLE },
+    locked: o.lock === true,
+    hidden: o.visible === false,
+    detail: bits.join(" · "),
+    pointCount: points.length,
+  };
+}
+
+/**
+ * Every finished drawing, in chart order (the order the library hit-tests, so
+ * the newest line is listed last and is also the one 撤销 takes). Half-drawn
+ * overlays are left out: they have no coordinates yet and cannot be restored.
+ */
+export function listDrawings(chart: OverlayHost): DrawingRow[] {
+  const rows: DrawingRow[] = [];
+  for (const raw of chart.getOverlays()) {
+    const row = describeDrawing(raw);
+    if (row) rows.push(row);
+  }
+  return rows;
 }
 
 /** Abandon every half-drawn overlay. Returns how many were dropped. */

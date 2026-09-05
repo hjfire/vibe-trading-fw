@@ -4,12 +4,16 @@ import {
   DEFAULT_DRAWING_STYLE,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
+  describeDrawing,
   drawingsBucket,
   drawHint,
+  formatBarTime,
   isInProgress,
   isDefaultStyle,
+  listDrawings,
   loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
@@ -48,6 +52,8 @@ interface FakeOverlay {
   drawing?: boolean;
   isDrawing?: () => boolean;
   styles?: Record<string, unknown>;
+  lock?: boolean;
+  visible?: boolean;
   onDrawEnd?: (e: unknown) => void;
   onRemoved?: (e: unknown) => void;
   onPressedMoveEnd?: (e: unknown) => void;
@@ -61,6 +67,10 @@ function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
     paneId: MAIN_PANE_ID,
     points: [{ timestamp: 1_700_000_000_000, value: 1300 }],
     currentStep: -1,
+    // `OverlayImp`'s constructor sets both before merging what the caller
+    // passed (dist 8240-8275), so a live instance always has them.
+    lock: false,
+    visible: true,
     ...patch,
   };
   // The runtime instance has `isDrawing()`; the typed `Overlay` does not, so
@@ -72,13 +82,21 @@ function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
 function fakeChart(overlays: FakeOverlay[] = []) {
   return {
     overlays,
-    getOverlays: vi.fn(() => overlays),
+    // Same filter semantics as `StoreImp.getOverlaysByFilter`: only `id` is ever
+    // used here, and a missing one means "no constraint".
+    getOverlays: vi.fn((filter?: { id?: string | null }) =>
+      filter === undefined || filter.id === undefined || filter.id === null
+        ? overlays
+        : overlays.filter((o) => o.id === filter.id),
+    ),
     createOverlay: vi.fn((value: unknown) => {
       const v = value as {
         name?: string;
         paneId?: string;
         points?: FakeOverlay["points"];
         styles?: Record<string, unknown>;
+        lock?: boolean;
+        visible?: boolean;
         onDrawEnd?: (e: unknown) => void;
         onRemoved?: (e: unknown) => void;
         onPressedMoveEnd?: (e: unknown) => void;
@@ -92,6 +110,8 @@ function fakeChart(overlays: FakeOverlay[] = []) {
           paneId: v.paneId ?? "",
           points: v.points ?? [],
           styles: v.styles,
+          ...(typeof v.lock === "boolean" ? { lock: v.lock } : {}),
+          ...(typeof v.visible === "boolean" ? { visible: v.visible } : {}),
           onDrawEnd: v.onDrawEnd,
           onRemoved: v.onRemoved,
           onPressedMoveEnd: v.onPressedMoveEnd,
@@ -115,16 +135,39 @@ function fakeChart(overlays: FakeOverlay[] = []) {
     // rejects null/undefined, so a *missing* id matches every overlay on the
     // chart, while an empty string matches none. Both are wrong answers here.
     overrideOverlay: vi.fn((override: unknown) => {
-      const v = override as { id?: string; styles?: Record<string, unknown> };
+      const v = override as {
+        id?: string;
+        styles?: Record<string, unknown>;
+        points?: FakeOverlay["points"];
+        lock?: boolean;
+        visible?: boolean;
+      };
       const targets =
         v.id === undefined || v.id === null
           ? overlays.slice()
           : overlays.filter((o) => o.id === v.id);
       if (targets.length === 0) return false;
+      let draw = false;
       for (const target of targets) {
-        target.styles = { ...(target.styles ?? {}), ...(v.styles ?? {}) };
+        const prevStyles = target.styles;
+        const prevVisible = target.visible;
+        const prevPoints = JSON.stringify(target.points);
+        // `OverlayImp.override` merges everything except id/name/currentStep,
+        // and handles styles/points on their own branches (dist 8277-8306).
+        if ("lock" in v) target.lock = v.lock;
+        if ("visible" in v) target.visible = v.visible;
+        if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
+        if (v.points) target.points = v.points.slice();
+        // `shouldUpdate()` repaints for a visible/points/styles change and for
+        // zLevel sorts — never for `lock` alone (dist 8314-8318). That is why
+        // `applyDrawingFlags` verifies by reading the instance back.
+        draw =
+          draw ||
+          prevVisible !== target.visible ||
+          prevStyles !== target.styles ||
+          prevPoints !== JSON.stringify(target.points);
       }
-      return true;
+      return draw;
     }),
   };
 }
@@ -486,5 +529,117 @@ describe("drawing styles", () => {
     expect(loadDrawingStyle()).toEqual(DEFAULT_DRAWING_STYLE);
     // And it does not leak into the per-symbol drawing buckets.
     expect(localStorage.getItem(KEY)).toBeNull();
+  });
+});
+
+describe("drawing list and per-line flags (local custom ⑰)", () => {
+  const red: DrawingStyle = { color: "#F23645", size: 2, dashed: false };
+  // Built from local time so the expected strings hold in any timezone.
+  const day = new Date(2026, 8, 2).getTime();
+  const bar = new Date(2026, 8, 2, 10, 30).getTime();
+  const later = new Date(2026, 8, 5, 14, 5).getTime();
+
+  it("lists finished drawings in chart order", () => {
+    const chart = fakeChart([
+      overlay({ id: "a" }),
+      overlay({ id: "b", name: "segment", drawing: true }),
+      overlay({ id: "c", name: "brush", points: [{ timestamp: bar, value: 1 }] }),
+    ]);
+    expect(listDrawings(chart as never).map((r) => r.id)).toEqual(["a", "c"]);
+  });
+
+  it("names a row by its tool, its bars and its price", () => {
+    const chart = fakeChart([
+      overlay({ id: "a", points: [{ timestamp: bar, value: 1327.816 }] }),
+      overlay({ id: "b", name: "segment", points: [{ timestamp: day, value: 1300 }, { timestamp: later, value: 1290.5 }] }),
+      overlay({ id: "c", points: [{ value: 52874.25 }] }),
+    ]);
+    const rows = listDrawings(chart as never);
+    expect(rows[0].label).toBe("价格线");
+    expect(rows[0].detail).toBe("09-02 10:30 · 价位 1327.82");
+    expect(rows[0].style).toEqual(DEFAULT_DRAWING_STYLE);
+    expect(rows[1].label).toBe("趋势线");
+    expect(rows[1].detail).toBe("09-02 → 09-05 14:05 · 1300 → 1290.5");
+    expect(rows[1].pointCount).toBe(2);
+    // A point with no timestamp (the one on the price axis) still gets named.
+    expect(rows[2].detail).toBe("价位 52874.25");
+  });
+
+  it("a row carries the colour it was restyled to", () => {
+    const chart = fakeChart([overlay({ id: "a" })]);
+    applyDrawingStyle(chart as never, "a", red);
+    const [row] = listDrawings(chart as never);
+    expect(row.style).toEqual(red);
+    expect(row.locked).toBe(false);
+    expect(row.hidden).toBe(false);
+  });
+
+  it("lock lands even though the library says it repainted nothing", () => {
+    const chart = fakeChart([overlay({ id: "a" }), overlay({ id: "b", name: "segment" })]);
+    expect(applyDrawingFlags(chart as never, "a", { lock: true })).toBe(true);
+    // `shouldUpdate()` does not watch `lock` (dist 8314-8318), so the library
+    // answered "no redraw". Trusting that answer would drop the flag on the
+    // floor — and never bank it.
+    expect(chart.overrideOverlay.mock.results[0].value).toBe(false);
+    expect(chart.overlays.find((o) => o.id === "a")?.lock).toBe(true);
+    expect(chart.overlays.find((o) => o.id === "b")?.lock).toBe(false);
+  });
+
+  it("hiding flips `visible` and can be undone", () => {
+    const chart = fakeChart([overlay({ id: "a" })]);
+    expect(applyDrawingFlags(chart as never, "a", { hidden: true })).toBe(true);
+    expect(chart.overrideOverlay).toHaveBeenLastCalledWith({ id: "a", visible: false });
+    expect(chart.overlays[0].visible).toBe(false);
+    // Hidden lines stay in the list — that is the only way back.
+    expect(listDrawings(chart as never).map((r) => r.hidden)).toEqual([true]);
+    expect(applyDrawingFlags(chart as never, "a", { hidden: false })).toBe(true);
+    expect(chart.overlays[0].visible).toBe(true);
+  });
+
+  it("refuses to flag the whole chart", () => {
+    const chart = fakeChart([overlay({ id: "a" }), overlay({ id: "b", name: "segment" })]);
+    expect(applyDrawingFlags(chart as never, "", { lock: true })).toBe(false);
+    expect(applyDrawingFlags(chart as never, "a", {})).toBe(false);
+    expect(chart.overrideOverlay).not.toHaveBeenCalled();
+    expect(chart.overlays.every((o) => o.lock === false)).toBe(true);
+    // An id that is not on the chart is a no-op, not a success.
+    expect(applyDrawingFlags(chart as never, "nope", { lock: true })).toBe(false);
+    expect(chart.overlays.every((o) => o.lock === false)).toBe(true);
+  });
+
+  it("only a deviating flag costs storage, and both come back on reload", () => {
+    const chart = fakeChart([overlay({ id: "a" }), overlay({ id: "b", name: "segment" })]);
+    applyDrawingFlags(chart as never, "b", { lock: true, hidden: true });
+    const stored = serializeDrawings(chart.overlays);
+    expect(stored[0]).not.toHaveProperty("lock");
+    expect(stored[0]).not.toHaveProperty("hidden");
+    expect(stored[1]).toMatchObject({ name: "segment", lock: true, hidden: true });
+
+    const fresh = fakeChart([]);
+    expect(restoreDrawings(fresh as never, stored)).toBe(2);
+    expect(fresh.overlays[0]).toMatchObject({ lock: false, visible: true });
+    expect(fresh.overlays[1]).toMatchObject({ lock: true, visible: false });
+    expect(serializeDrawings(fresh.overlays)).toEqual(stored);
+  });
+
+  it("a half-drawn overlay is neither a row nor storage", () => {
+    const stuck = overlay({ id: "a", drawing: true, lock: true });
+    expect(describeDrawing(stuck)).toBeNull();
+    expect(serializeDrawings([stuck])).toEqual([]);
+  });
+
+  it("describeDrawing needs an id and a name to be listable", () => {
+    expect(describeDrawing(null)).toBeNull();
+    expect(describeDrawing({ name: "priceLine" })).toBeNull();
+    expect(describeDrawing({ id: "a" })).toBeNull();
+    // A tool the toolbar does not ship still gets a row, under its raw name.
+    expect(describeDrawing({ id: "a", name: "mysteryTool" })?.label).toBe("mysteryTool");
+  });
+
+  it("formatBarTime keeps the clock only when the bar is not a session open", () => {
+    expect(formatBarTime(day)).toBe("09-02");
+    expect(formatBarTime(bar)).toBe("09-02 10:30");
+    // Epoch seconds are understood too; the loader only ever hands back ms.
+    expect(formatBarTime(Math.floor(day / 1000))).toBe("09-02");
   });
 });
