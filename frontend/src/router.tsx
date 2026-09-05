@@ -19,6 +19,8 @@ const Runtime = lazy(() =>
 const Scheduled = lazy(() =>
   import("@/pages/Scheduled").then((m) => ({ default: m.Scheduled })),
 );
+// Local custom ㉑: alerting page (rules, webhook bridge, notification history).
+const Alerts = lazy(() => import("@/pages/Alerts").then((m) => ({ default: m.Alerts })));
 const Reports = lazy(() =>
   import("@/pages/Reports").then((m) => ({ default: m.Reports })),
 );
@@ -66,6 +68,7 @@ export const router = createBrowserRouter([
       { path: "/agent", element: wrap(Agent) },
       { path: "/runtime", element: wrap(Runtime) },
       { path: "/scheduled", element: wrap(Scheduled) },
+      { path: "/alerts", element: wrap(Alerts) },
       { path: "/reports", element: wrap(Reports) },
       { path: "/portfolio", element: wrap(Portfolio) },
       { path: "/settings", element: wrap(Settings) },

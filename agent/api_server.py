@@ -122,6 +122,7 @@ from src.api.scheduled_routes import (  # noqa: E402
     _start_scheduled_research_executor,
     _stop_scheduled_research_executor,
 )
+from src.api.alerts_routes import _start_alert_poller, _stop_alert_poller  # noqa: E402
 
 
 async def _run_startup_preflight() -> None:
@@ -140,10 +141,12 @@ async def _run_startup_preflight() -> None:
 
     if get_env_config().agent_tuning.vibe_trading_channels_auto_start:
         await _start_channel_runtime()
+    _start_alert_poller()
 
 
 async def _stop_scheduled_research_on_shutdown() -> None:
-    """Stop the scheduled research executor on server shutdown."""
+    """Stop the background executors; the alert loop goes first so it cannot queue a send."""
+    await _stop_alert_poller()
     try:
         await _stop_channel_runtime()
     finally:
@@ -325,6 +328,10 @@ from src.api.scheduled_routes import (  # noqa: E402, F401
     _get_scheduled_research_store,
     _scheduled_research_scheduler_enabled,
 )
+
+# --- Alert rules (IM push; local customization) ---
+from src.api.alerts_routes import register_alerts_routes  # noqa: E402
+register_alerts_routes(app)
 
 
 # ============================================================================
