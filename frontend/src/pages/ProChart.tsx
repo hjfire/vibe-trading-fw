@@ -7,18 +7,25 @@ import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import { planPaneHeights, subPaneIdsOf } from "@/lib/paneLayout";
 import {
+  DRAWING_COLORS,
+  DRAWING_SIZES,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  applyDrawingStyle,
   cancelInProgress,
   drawHint,
   isInProgress,
+  loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
+  overlayStylesOf,
   removeLatestDrawing,
   restoreDrawings,
+  saveDrawingStyle,
   saveDrawings,
   serializeDrawings,
   toolOf,
+  type DrawingStyle,
 } from "@/lib/chartDrawings";
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
@@ -189,6 +196,19 @@ export function ProChart() {
   // and rewrites its points when the user drags one (⑮, see chartDrawings.ts).
   const [drawTool, setDrawTool] = useState<string | null>(null);
   const [drawCount, setDrawCount] = useState(0);
+  // Style of the *next* drawing (local custom ⑯), remembered across symbols.
+  const [drawStyle, setDrawStyle] = useState<DrawingStyle>(() => loadDrawingStyle());
+  // Mirror of the newest requested style. `pickStyle` composes onto this instead
+  // of onto `drawStyle`, because two style clicks that land before React
+  // re-renders (a scripted pair, or a click racing a re-render) would otherwise
+  // both read the same stale closure and the second would silently undo the
+  // first — measured that way in prod, where 虚线 + 2px in one task kept only
+  // the width.
+  const drawStyleRef = useRef<DrawingStyle>(drawStyle);
+  // Overlay id the user clicked on the canvas: while one is picked, a style
+  // click restyles that line too. The library reports it through
+  // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
+  const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
   // Which `symbol|interval` the on-chart drawings belong to; a change means the
   // set has to be swapped for that chart's own.
   const drawingsKeyRef = useRef<string>("");
@@ -375,6 +395,9 @@ export function ProChart() {
               drawingsMutedRef.current = false;
             }
             drawingsKeyRef.current = key;
+            // The overlay that was selected belongs to the chart we just tore
+            // down; keeping its id would point the next colour click at nothing.
+            setSelectedDraw(null);
             refreshDrawCount(chart);
           }
         } catch (e) {
@@ -505,7 +528,19 @@ export function ProChart() {
       },
       onDrawEnd: () => setDrawTool(null),
       onRemoved: (overlay) => {
+        const id = (overlay as { id?: string } | null | undefined)?.id ?? null;
+        if (id) setSelectedDraw((cur) => (cur === id ? null : cur));
         if (isInProgress(overlay)) setDrawTool(null);
+      },
+      onSelected: (overlay) => {
+        setSelectedDraw((overlay as { id?: string } | null | undefined)?.id ?? null);
+      },
+      onDeselected: (overlay) => {
+        const id = (overlay as { id?: string } | null | undefined)?.id ?? null;
+        // Guarded by id because the library deselects the old line *before*
+        // selecting the new one (dist 14543-14549); an unguarded `null` there
+        // would throw away the selection the user just made.
+        if (id) setSelectedDraw((cur) => (cur === id ? null : cur));
       },
     });
 
@@ -527,8 +562,23 @@ export function ProChart() {
     chart.createOverlay({
       name,
       paneId: MAIN_PANE_ID,
+      styles: overlayStylesOf(drawStyleRef.current),
       ...drawingEvents(),
     });
+  };
+
+  /**
+   * Choose a style. It always sets what the *next* line looks like; if the user
+   * clicked a line first, that one is restyled in place (⑯).
+   */
+  const pickStyle = (patch: Partial<DrawingStyle>) => {
+    const next: DrawingStyle = { ...drawStyleRef.current, ...patch };
+    drawStyleRef.current = next;
+    setDrawStyle(next);
+    saveDrawingStyle(next);
+    const chart = chartRef.current;
+    if (!chart || !selectedDraw) return;
+    if (applyDrawingStyle(chart, selectedDraw, next)) syncDrawings(chart);
   };
 
   const undoDraw = () => {
@@ -662,12 +712,59 @@ export function ProChart() {
             清除
           </button>
         </div>
+        {/* Style of the next drawing; with a line selected it restyles that one too (⑯). */}
+        <div className="flex items-center gap-1">
+          {DRAWING_COLORS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              aria-label={`画线颜色 ${c.label}`}
+              title={`${c.label}色${selectedDraw ? "（同时改掉选中的线）" : "（新画的线）"}`}
+              className={cn(
+                "h-5 w-5 shrink-0 rounded-full border border-black/10 dark:border-white/25",
+                drawStyle.color === c.value && "ring-1 ring-primary",
+              )}
+              style={{ backgroundColor: c.value }}
+              onClick={() => pickStyle({ color: c.value })}
+            />
+          ))}
+          <span className="mx-1 h-4 w-px bg-border" />
+          {DRAWING_SIZES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              aria-label={`画线粗细 ${s}px`}
+              title={`线宽 ${s}px`}
+              className={cn(
+                "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+                drawStyle.size === s && "bg-muted font-medium ring-1 ring-primary",
+              )}
+              onClick={() => pickStyle({ size: s })}
+            >
+              {s}px
+            </button>
+          ))}
+          <button
+            type="button"
+            aria-label="虚线"
+            title={drawStyle.dashed ? "改成实线" : "改成虚线"}
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+              drawStyle.dashed && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            onClick={() => pickStyle({ dashed: !drawStyle.dashed })}
+          >
+            {drawStyle.dashed ? "虚线" : "实线"}
+          </button>
+        </div>
         <span className="text-xs text-muted-foreground">
           {armedTool
             ? drawHint(armedTool)
-            : drawCount > 0
-              ? `已画 ${drawCount} 条 · 随标的与周期保存，拖动可改位，右键点线删除`
-              : "画线随标的与周期保存"}
+            : selectedDraw
+              ? "已选中一条线 — 点颜色/线宽就改这条（点空白处取消）"
+              : drawCount > 0
+                ? `已画 ${drawCount} 条 · 随标的与周期保存，单击选中、拖动可改位，右键点线删除`
+                : "画线随标的与周期保存"}
         </span>
         {paneStarved && (
           <span
@@ -700,7 +797,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线可拖动改位，右键点击删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

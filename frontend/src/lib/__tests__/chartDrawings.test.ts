@@ -1,19 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_DRAWING_STYLE,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  applyDrawingStyle,
   cancelInProgress,
   drawingsBucket,
   drawHint,
   isInProgress,
+  isDefaultStyle,
+  loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
+  normalizeDrawingStyle,
+  overlayStylesOf,
   removeLatestDrawing,
   restoreDrawings,
+  saveDrawingStyle,
   saveDrawings,
   serializeDrawings,
+  styleOfOverlay,
   toolOf,
+  withAlpha,
+  type DrawingStyle,
   type StoredDrawing,
 } from "../chartDrawings";
 
@@ -37,6 +47,12 @@ interface FakeOverlay {
   currentStep: number;
   drawing?: boolean;
   isDrawing?: () => boolean;
+  styles?: Record<string, unknown>;
+  onDrawEnd?: (e: unknown) => void;
+  onRemoved?: (e: unknown) => void;
+  onPressedMoveEnd?: (e: unknown) => void;
+  onSelected?: (e: unknown) => void;
+  onDeselected?: (e: unknown) => void;
 }
 
 function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
@@ -58,9 +74,30 @@ function fakeChart(overlays: FakeOverlay[] = []) {
     overlays,
     getOverlays: vi.fn(() => overlays),
     createOverlay: vi.fn((value: unknown) => {
-      const v = value as { name?: string; paneId?: string; points?: FakeOverlay["points"] };
+      const v = value as {
+        name?: string;
+        paneId?: string;
+        points?: FakeOverlay["points"];
+        styles?: Record<string, unknown>;
+        onDrawEnd?: (e: unknown) => void;
+        onRemoved?: (e: unknown) => void;
+        onPressedMoveEnd?: (e: unknown) => void;
+        onSelected?: (e: unknown) => void;
+        onDeselected?: (e: unknown) => void;
+      };
       overlays.push(
-        overlay({ id: `o${overlays.length}`, name: v.name ?? "", paneId: v.paneId ?? "", points: v.points ?? [] }),
+        overlay({
+          id: `o${overlays.length}`,
+          name: v.name ?? "",
+          paneId: v.paneId ?? "",
+          points: v.points ?? [],
+          styles: v.styles,
+          onDrawEnd: v.onDrawEnd,
+          onRemoved: v.onRemoved,
+          onPressedMoveEnd: v.onPressedMoveEnd,
+          onSelected: v.onSelected,
+          onDeselected: v.onDeselected,
+        }),
       );
       return `o${overlays.length - 1}`;
     }),
@@ -71,6 +108,23 @@ function fakeChart(overlays: FakeOverlay[] = []) {
       }
       const i = overlays.findIndex((o) => o.id === filter.id);
       if (i >= 0) overlays.splice(i, 1);
+    }),
+    // `overrideOverlay` filters through `getOverlaysByFilter` (dist 14285-14298)
+    // and merges into the instance the same way `OverlayImp.override` does
+    // (dist 8288-8291). The filter semantics are the sharp edge: `isValid` only
+    // rejects null/undefined, so a *missing* id matches every overlay on the
+    // chart, while an empty string matches none. Both are wrong answers here.
+    overrideOverlay: vi.fn((override: unknown) => {
+      const v = override as { id?: string; styles?: Record<string, unknown> };
+      const targets =
+        v.id === undefined || v.id === null
+          ? overlays.slice()
+          : overlays.filter((o) => o.id === v.id);
+      if (targets.length === 0) return false;
+      for (const target of targets) {
+        target.styles = { ...(target.styles ?? {}), ...(v.styles ?? {}) };
+      }
+      return true;
     }),
   };
 }
@@ -193,6 +247,21 @@ describe("makeDrawingEvents", () => {
     expect(() => events.onRemoved(undefined as never)).not.toThrow();
     expect(changes).toEqual([null, null]);
   });
+
+  it("forwards selection both ways", () => {
+    // The toolbar needs this to answer "which line does this colour apply to?".
+    const picked: Array<string | null> = [];
+    const idOf = (o: unknown) => (o as { id?: string } | null | undefined)?.id ?? null;
+    const events = makeDrawingEvents({
+      onChanged: () => undefined,
+      onSelected: (o) => picked.push(idOf(o)),
+      onDeselected: (o) => picked.push(idOf(o)),
+    });
+    events.onSelected({ overlay: { id: "a" } });
+    events.onDeselected({ overlay: { id: "a" } });
+    events.onSelected({});
+    expect(picked).toEqual(["a", "a", null]);
+  });
 });
 
 describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
@@ -312,5 +381,110 @@ describe("per-symbol persistence", () => {
     expect(loadDrawings("600519.SH", "1D")).toEqual([{ name: "ok", points: [{ timestamp: 1 }] }]);
     localStorage.setItem(KEY, JSON.stringify({ "AAPL.US|1D": "nope" }));
     expect(loadDrawings("AAPL.US", "1D")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-drawing style (local custom ⑯).
+//
+// The library resolves a figure's styles as
+// `{ ...defaultStyles[type], ...overlay.styles?.[type], ...figure.styles }`
+// (dist 8955), so writing `overlay.styles` is what makes one line red while its
+// neighbour stays blue - and every built-in tool we expose leaves `color` to the
+// overlay fragment.
+// ---------------------------------------------------------------------------
+
+describe("drawing styles", () => {
+  const red: DrawingStyle = { color: "#F23645", size: 2, dashed: true };
+
+  it("colours the line, its handles and its value label together", () => {
+    const frag = overlayStylesOf(red);
+    expect(frag.line).toEqual({ color: "#F23645", size: 2, style: "dashed", dashedValue: [4, 2] });
+    // A red line with a blue price tag reads as a bug: the default label is
+    // white-on-blue (dist 11744-11761), so the background follows the colour.
+    expect(frag.text).toEqual({ color: "#FFFFFF", borderColor: "#F23645", backgroundColor: "#F23645" });
+    expect(frag.point).toMatchObject({ color: "#F23645", activeColor: "#F23645" });
+    expect(overlayStylesOf({ ...red, dashed: false }).line).toMatchObject({ style: "solid" });
+  });
+
+  it("withAlpha turns hex into rgba and leaves other strings alone", () => {
+    expect(withAlpha("#F23645", 0.35)).toBe("rgba(242, 54, 69, 0.35)");
+    expect(withAlpha("#fff", 1)).toBe("rgba(255, 255, 255, 1)");
+    expect(withAlpha("tomato", 0.5)).toBe("tomato");
+  });
+
+  it("reads the style back, and leaves the library default unstored", () => {
+    expect(styleOfOverlay({ styles: overlayStylesOf(red) })).toEqual(red);
+    expect(styleOfOverlay({ styles: overlayStylesOf(DEFAULT_DRAWING_STYLE) })).toBeUndefined();
+    expect(styleOfOverlay(null)).toBeUndefined();
+    expect(styleOfOverlay({})).toBeUndefined();
+    expect(styleOfOverlay({ styles: { line: { color: "not-a-hex" } } })).toBeUndefined();
+    // A width without a colour is still a deviation worth banking.
+    expect(styleOfOverlay({ styles: { line: { size: 3 } } })).toEqual({
+      color: DEFAULT_DRAWING_STYLE.color,
+      size: 3,
+      dashed: false,
+    });
+    expect(isDefaultStyle(DEFAULT_DRAWING_STYLE)).toBe(true);
+    expect(isDefaultStyle(red)).toBe(false);
+  });
+
+  it("survives a save/reload round trip with its colour", () => {
+    const chart = fakeChart([]);
+    expect(
+      restoreDrawings(chart as never, [
+        { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: 1, value: 2 }], style: red },
+      ]),
+    ).toBe(1);
+    // createOverlay got the fragment, so the chart really draws it red...
+    expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({ styles: { line: { color: "#F23645", size: 2 } } });
+    // ...and serializing the instance banks it again instead of the default.
+    expect(serializeDrawings(chart.overlays)[0].style).toEqual(red);
+  });
+
+  it("a default-styled drawing stays free of a style key in storage", () => {
+    const chart = fakeChart([]);
+    restoreDrawings(chart as never, [
+      { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: 1, value: 2 }] },
+    ]);
+    expect(serializeDrawings(chart.overlays)[0]).not.toHaveProperty("style");
+  });
+
+  it("restyles one overlay by id, never the whole chart", () => {
+    const chart = fakeChart([overlay({ id: "a" }), overlay({ id: "b", name: "segment" })]);
+    expect(applyDrawingStyle(chart as never, "b", red)).toBe(true);
+    expect(chart.overrideOverlay).toHaveBeenCalledWith({ id: "b", styles: overlayStylesOf(red) });
+    expect(chart.overlays.find((o) => o.id === "a")?.styles).toBeUndefined();
+    expect(styleOfOverlay(chart.overlays.find((o) => o.id === "b"))).toEqual(red);
+    // An empty id matches nothing (a silent no-op), and a missing one matches
+    // *everything* — the chart would come back single-colour. Neither is an
+    // answer, so the helper refuses both before reaching the library.
+    expect(applyDrawingStyle(chart as never, "", red)).toBe(false);
+    expect(applyDrawingStyle(chart as never, undefined as never, red)).toBe(false);
+    expect(chart.overrideOverlay).not.toHaveBeenCalledWith({ styles: expect.anything() });
+    expect(chart.overlays.find((o) => o.id === "a")?.styles).toBeUndefined();
+  });
+
+  it("normalizeDrawingStyle rejects junk and clamps the width", () => {
+    expect(normalizeDrawingStyle(red)).toEqual(red);
+    expect(normalizeDrawingStyle({ color: "#f23645", size: 99 })).toEqual({ color: "#F23645", size: 6, dashed: false });
+    expect(normalizeDrawingStyle({ color: "red" })).toBeNull();
+    expect(normalizeDrawingStyle({ color: "#F23645", size: "2" })).toEqual({ color: "#F23645", size: 1, dashed: false });
+    expect(normalizeDrawingStyle(null)).toBeNull();
+    expect(normalizeDrawingStyle("x")).toBeNull();
+  });
+
+  it("the last used style is its own preference, not chart data", () => {
+    const STYLE_KEY = "pro-chart.drawStyle.v1";
+    expect(loadDrawingStyle()).toEqual(DEFAULT_DRAWING_STYLE);
+    saveDrawingStyle(red);
+    expect(loadDrawingStyle()).toEqual(red);
+    expect(Object.keys(JSON.parse(localStorage.getItem(STYLE_KEY)!))).toEqual(["color", "size", "dashed"]);
+    localStorage.setItem(STYLE_KEY, "{oops");
+    expect(loadDrawingStyle()).toEqual(DEFAULT_DRAWING_STYLE);
+    localStorage.setItem(STYLE_KEY, JSON.stringify({ color: 7 }));
+    expect(loadDrawingStyle()).toEqual(DEFAULT_DRAWING_STYLE);
+    // And it does not leak into the per-symbol drawing buckets.
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 });

@@ -20,13 +20,15 @@ import { planPaneHeights } from "@/lib/paneLayout";
  *   2. a tool is armed with an explicit `paneId`, plus real activation state,
  *      Esc-out, undo and clear,
  *   3. drawings are banked per `symbol|interval` instead of being lost (or
- *      leaking from one chart onto another).
+ *      leaking from one chart onto another),
+ *   4. the per-drawing style the toolbar picks is what the library is told to
+ *      paint (⑯) — on the overlay instance, not through the global stylesheet.
  *
  * jsdom cannot paint a canvas, so the fake chart below reproduces the library's
  * observable contract: pane options, overlay lifecycle (`isDrawing()` ->
  * `onDrawEnd`), the post-hoc edits (drag = `onPressedMoveEnd`, right-click =
- * `onRemoved` fired *before* the splice) and `setSymbol` re-running the
- * DataLoader.
+ * `onRemoved` fired *before* the splice), the click-selection pair
+ * (`onDeselected` then `onSelected`) and `setSymbol` re-running the DataLoader.
  */
 
 interface Bar {
@@ -46,11 +48,15 @@ interface FakeOverlay {
   currentStep: number;
   drawing: boolean;
   isDrawing: () => boolean;
+  // `overlay.styles`, the per-drawing fragment the toolbar writes (⑯).
+  styles?: Record<string, unknown>;
   // Event callbacks the component handed to `createOverlay`; the library keeps
   // them on the instance and calls them for the rest of the overlay's life.
   onDrawEnd?: () => void;
   onRemoved?: (e: { overlay: FakeOverlay }) => void;
   onPressedMoveEnd?: () => void;
+  onSelected?: (e: { overlay: FakeOverlay }) => void;
+  onDeselected?: (e: { overlay: FakeOverlay }) => void;
 }
 
 interface FakePane {
@@ -70,6 +76,7 @@ interface FakeChart {
   getIndicators: Mock;
   createOverlay: Mock;
   removeOverlay: Mock;
+  overrideOverlay: Mock;
   getOverlays: Mock;
   getPaneOptions: Mock;
   setPaneOptions: Mock;
@@ -79,7 +86,10 @@ interface FakeChart {
 }
 
 /** A drawing overlay's event bundle as the component passes it to the library. */
-type OverlayEvents = Pick<FakeOverlay, "onDrawEnd" | "onRemoved" | "onPressedMoveEnd">;
+type OverlayEvents = Pick<
+  FakeOverlay,
+  "onDrawEnd" | "onRemoved" | "onPressedMoveEnd" | "onSelected" | "onDeselected"
+>;
 
 const DAY = 86_400_000;
 const START = 1_700_000_000_000;
@@ -91,6 +101,9 @@ const h = vi.hoisted(() => ({
   overlays: [] as FakeOverlay[],
   panes: [] as FakePane[],
   chart: null as FakeChart | null,
+  // Which overlay currently owns the click, so a re-click can deselect the old
+  // one before selecting the new one (the library's order, dist 14543-14549).
+  clicked: null as string | null,
   // The workbench is mocked out, but the prop it is handed (`refreshIndCount`)
   // is the only way a pane set changes without a remount — keep it callable.
   indProps: null as null | { onChartIndicatorsChanged?: () => void },
@@ -154,6 +167,33 @@ function dragDrawing(id: string, value: number): void {
   });
 }
 
+/**
+ * Left-click a finished drawing. The library deselects the previous one before
+ * selecting this one, and clicking the same line twice fires nothing at all
+ * (dist 14543-14549) — the toolbar's "which line?" answer depends on that.
+ */
+function clickOverlay(id: string): void {
+  const overlay = h.overlays.find((o) => o.id === id);
+  if (!overlay) throw new Error(`no overlay ${id} to click`);
+  if (h.clicked === id) return;
+  act(() => {
+    const prev = h.clicked ? h.overlays.find((o) => o.id === h.clicked) : null;
+    prev?.onDeselected?.({ overlay: prev });
+    h.clicked = id;
+    overlay.onSelected?.({ overlay });
+  });
+}
+
+/** Clicked off the drawings: the library drops the selection. */
+function clickBlank(): void {
+  const prev = h.clicked ? h.overlays.find((o) => o.id === h.clicked) : null;
+  if (!prev) return;
+  act(() => {
+    prev.onDeselected?.({ overlay: prev });
+    h.clicked = null;
+  });
+}
+
 function paneHeights(): Record<string, number> {
   const out: Record<string, number> = {};
   for (const p of h.panes) out[p.id] = p.height;
@@ -211,6 +251,7 @@ vi.mock("klinecharts", () => ({
           name?: string;
           paneId?: string;
           points?: Array<Record<string, number>>;
+          styles?: Record<string, unknown>;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
@@ -219,12 +260,29 @@ vi.mock("klinecharts", () => ({
           points: placed ? [...(v.points as Array<Record<string, number>>)] : [],
           currentStep: placed ? -1 : 1,
           drawing: !placed,
+          styles: v.styles,
           onDrawEnd: v.onDrawEnd,
           onRemoved: v.onRemoved,
           onPressedMoveEnd: v.onPressedMoveEnd,
+          onSelected: v.onSelected,
+          onDeselected: v.onDeselected,
         });
         h.overlays.push(overlay);
         return overlay.id;
+      }),
+      // Mirrors `StoreImp.overrideOverlay` -> `getOverlaysByFilter` (dist
+      // 14285-14298) plus `OverlayImp.override` (dist 8288-8291): `isValid` only
+      // rejects null/undefined, so a filter without an id restyles **every**
+      // overlay on the chart. That is the footgun `applyDrawingStyle` refuses.
+      overrideOverlay: vi.fn((override: unknown) => {
+        const v = override as { id?: string; styles?: Record<string, unknown> };
+        const targets =
+          v.id === undefined || v.id === null ? h.overlays.slice() : h.overlays.filter((o) => o.id === v.id);
+        if (targets.length === 0) return false;
+        for (const target of targets) {
+          target.styles = { ...(target.styles ?? {}), ...(v.styles ?? {}) };
+        }
+        return true;
       }),
       removeOverlay: vi.fn((filter?: { id?: string }) => {
         // Mirrors StoreImp.removeOverlay: callback first, splice after — which
@@ -298,8 +356,11 @@ async function mountChart(): Promise<void> {
 }
 
 const DRAWING_KEY = "pro-chart.drawings.v1";
+const STYLE_KEY = "pro-chart.drawStyle.v1";
 const readBuckets = (): Record<string, unknown> =>
   JSON.parse(localStorage.getItem(DRAWING_KEY) ?? "{}");
+const readStylePref = (): Record<string, unknown> =>
+  JSON.parse(localStorage.getItem(STYLE_KEY) ?? "{}");
 
 beforeEach(() => {
   localStorage.clear();
@@ -309,6 +370,7 @@ beforeEach(() => {
   h.overlays = [];
   h.loader = null;
   h.chart = null;
+  h.clicked = null;
   h.indProps = null;
   h.panes = [
     { id: "candle_pane", height: 29, minHeight: 30, state: "normal" },
@@ -532,6 +594,232 @@ describe("/pro-chart 画线的拖动与删除", () => {
     await flush();
     expect(h.overlays.length).toBe(0);
     expect(screen.getByRole("button", { name: "射线" }).className).not.toContain("ring-1");
+  });
+});
+
+/**
+ * Drawing styles (local custom ⑯).
+ *
+ * Per-drawing colour lives in `overlay.styles`, a deep partial of the global
+ * `styles.overlay` (d.ts 1122) that is merged *under* the figure template's own
+ * styles (dist 8955) — hence the assertions below look at the instance, not at
+ * `chart.setStyles`. Restyling a line that already exists is `overrideOverlay`,
+ * which filters by id, so the toolbar has to know what the user clicked; that
+ * knowledge only comes from `onSelected`/`onDeselected` (dist 8687-8702).
+ */
+describe("/pro-chart 画线样式", () => {
+  it("点颜色再画，线带上这个颜色", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 红" }));
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+
+    const arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as {
+      name: string;
+      styles: { line: Record<string, unknown>; text: Record<string, unknown> };
+    };
+    expect(arg.name).toBe("priceLine");
+    expect(arg.styles.line).toMatchObject({ color: "#F23645", size: 1, style: "solid" });
+    // A red line with the library's blue price tag reads as a bug, so the
+    // label follows the colour too.
+    expect(arg.styles.text.backgroundColor).toBe("#F23645");
+  });
+
+  it("线宽和虚线同样落到 line 片段上", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线粗细 2px" }));
+    fireEvent.click(screen.getByRole("button", { name: "虚线" }));
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+
+    const arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as {
+      styles: { line: Record<string, unknown> };
+    };
+    expect(arg.styles.line).toMatchObject({ size: 2, style: "dashed" });
+    expect(screen.getByRole("button", { name: "虚线" }).textContent).toBe("虚线");
+  });
+
+  it("同一轮里的两次样式选择都算数", async () => {
+    // Two clicks that land before React re-renders: a `pickStyle` composing onto
+    // the render closure lets the second one drop the first (measured in prod,
+    // where 2px survived and 虚线 did not), so the patches have to chain off the
+    // newest requested style.
+    await mountChart();
+    const raw = (name: string) =>
+      screen.getByRole("button", { name }).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    raw("画线粗细 2px");
+    raw("虚线");
+    await flush();
+
+    expect(readStylePref()).toEqual({ color: "#1677FF", size: 2, dashed: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    const arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as {
+      styles: { line: Record<string, unknown> };
+    };
+    expect(arg.styles.line).toMatchObject({ size: 2, style: "dashed" });
+  });
+
+  it("选中一条线后点颜色，改的是这条线", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
+    await flush();
+    const id = h.overlays[0].id;
+    // Drawn with the library default: nothing of ours was painted over it.
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]).not.toHaveProperty("style");
+
+    clickOverlay(id);
+    await flush();
+    expect(screen.getByText(/已选中一条线/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 绿" }));
+    await flush();
+
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id,
+        styles: expect.objectContaining({ line: expect.objectContaining({ color: "#089981" }) }),
+      }),
+    );
+    // And it is the *stored* look, not a one-frame repaint: the colour rides
+    // along in the bucket, so a reload restores green.
+    expect(readBuckets()["600519.SH|1D"]).toEqual([
+      {
+        name: "priceLine",
+        paneId: "candle_pane",
+        points: [{ timestamp: START + 6 * DAY, value: 1302.5 }],
+        style: { color: "#089981", size: 1, dashed: false },
+      },
+    ]);
+  });
+
+  it("没选中线时点颜色不碰图上任何东西", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 7 * DAY, value: 1300 });
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 橙" }));
+    await flush();
+
+    // `overrideOverlay` with an id-less filter would recolour the whole chart.
+    expect(h.chart?.overrideOverlay).not.toHaveBeenCalled();
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]).not.toHaveProperty("style");
+    // The choice is kept for the next line instead.
+    expect(readStylePref()).toEqual({ color: "#FF9800", size: 1, dashed: false });
+  });
+
+  it("每一次 override 都指名道姓", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1295 });
+    await flush();
+    clickOverlay(h.overlays[0].id);
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 紫" }));
+    fireEvent.click(screen.getByRole("button", { name: "画线粗细 3px" }));
+    await flush();
+
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledTimes(2);
+    for (const call of h.chart?.overrideOverlay.mock.calls ?? []) {
+      expect((call[0] as { id?: string }).id).toBe(h.overlays[0].id);
+    }
+  });
+
+  it("带样式的线从存储恢复时仍是那个样式", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          {
+            name: "segment",
+            paneId: "candle_pane",
+            points: [{ timestamp: START, value: 1300 }, { timestamp: START + DAY, value: 1320 }],
+            style: { color: "#F23645", size: 2, dashed: true },
+          },
+        ],
+      }),
+    );
+    await mountChart();
+    await flush();
+
+    const arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as { styles: { line: unknown } };
+    expect(arg.styles.line).toMatchObject({ color: "#F23645", size: 2, style: "dashed" });
+    // Reload must not lose it a second time: re-serialising reads the same style.
+    expect(h.overlays[0].styles).toBeTruthy();
+    expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+  });
+
+  it("删除或点空白都会取消选中，之后点颜色不再改线", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 4 * DAY, value: 1301 });
+    await flush();
+    const id = h.overlays[0].id;
+    clickOverlay(id);
+    await flush();
+    expect(screen.getByText(/已选中一条线/)).toBeTruthy();
+
+    clickBlank();
+    await flush();
+    expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 红" }));
+    await flush();
+    expect(h.chart?.overrideOverlay).not.toHaveBeenCalled();
+
+    // Deleting the selected line has to drop the marker as well, or the next
+    // colour click would override an overlay that no longer exists.
+    clickOverlay(id);
+    await flush();
+    rightClickDelete(id);
+    await flush();
+    expect(screen.getByText("画线随标的与周期保存")).toBeTruthy();
+  });
+
+  it("默认的蓝不写盘，坏掉的偏好也不崩", async () => {
+    // Hand-edited / stale storage must fall back to the library default rather
+    // than arm an unusable colour.
+    localStorage.setItem(STYLE_KEY, JSON.stringify({ color: "not-a-colour", size: 99, dashed: "yes" }));
+    await mountChart();
+    expect(screen.getByRole("button", { name: "画线颜色 蓝" }).className).toContain("ring-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 9 * DAY, value: 1303 });
+    await flush();
+    // An absent `style` means "whatever the library defaults to", which keeps
+    // old buckets honest if the default ever moves.
+    expect(Object.keys((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0])).toEqual([
+      "name",
+      "paneId",
+      "points",
+    ]);
+  });
+
+  it("上次的选择在重新打开后还在", async () => {
+    localStorage.setItem(STYLE_KEY, JSON.stringify({ color: "#F23645", size: 2, dashed: true }));
+    await mountChart();
+
+    expect(screen.getByRole("button", { name: "画线颜色 红" }).className).toContain("ring-1");
+    expect(screen.getByRole("button", { name: "画线颜色 蓝" }).className).not.toContain("ring-1");
+    expect(screen.getByRole("button", { name: "画线粗细 2px" }).className).toContain("ring-1");
+    expect(screen.getByRole("button", { name: "虚线" }).className).toContain("ring-1");
+  });
+
+  it("换标的不清掉颜色偏好，但各标的的线各是各的", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 红" }));
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 11 * DAY, value: 1306 });
+    await flush();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    });
+    await flush();
+
+    expect(h.overlays.length).toBe(0);
+    expect(readStylePref()).toMatchObject({ color: "#F23645" });
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]).toHaveProperty("style");
+    expect(screen.getByRole("button", { name: "画线颜色 红" }).className).toContain("ring-1");
   });
 });
 
