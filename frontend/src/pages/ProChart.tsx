@@ -4,6 +4,7 @@ import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
+import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
@@ -233,14 +234,22 @@ export function ProChart() {
     const dataLoader: DataLoader = {
       getBars: async ({ type, timestamp, period, callback }) => {
         const iv = periodToInterval(period);
+        // `type` is not a scroll direction, and reading it as one broke panning:
+        // in KLineChart v10 `forward` asks for OLDER bars (the library prepends
+        // them) and `backward` asks for NEWER ones (it appends them *and shifts
+        // the view by the length it got`). Answering a `backward` with older
+        // data therefore re-delivered the same block forever and snapped the
+        // chart back under the mouse. See `klinePaging.ts` for the source lines.
         // Timestamps flow end-to-end in milliseconds (KLineChart's unit); the
         // backend `before` filter is likewise epoch-ms — no unit conversion.
-        const before = type === "backward" && timestamp ? timestamp : null;
-        if (type === "init" || type === "backward") setStatus((s) => ({ ...s, loading: true, error: null }));
+        const bounds = boundsOf(chart.getDataList());
+        const before = pagingBefore(type, timestamp ?? null, bounds);
+        if (type !== "backward") setStatus((s) => ({ ...s, loading: true, error: null }));
         try {
           const res = await fetchKline({ symbol: chart.getSymbol()?.ticker ?? symbol, interval: iv, count: PAGE, before });
-          const bars = res.bars as KLineData[];
-          callback(bars, { backward: bars.length >= PAGE, forward: false });
+          const page = shapeResponse(type, res.bars as KLineData[], bounds, PAGE);
+          const bars = page.bars;
+          callback(bars, page.more);
           setStatus({ loading: false, error: null, source: res.source });
           // Re-mount persisted user indicators once real data exists (their
           // formulas trial-compute against the current bars on apply).
