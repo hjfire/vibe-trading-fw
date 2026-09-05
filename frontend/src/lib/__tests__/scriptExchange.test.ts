@@ -270,6 +270,14 @@ describe("分享链接", () => {
     expect(await reason("q123")).toBe("链接里没有分享码");
     expect(await reason("?s=g!!!!")).toBe("分享码不是合法的 base64");
     expect(await reason(`?s=j${btoa("not json at all")}`)).toBe("分享码内容不是合法 JSON");
+    // The auto-open path hands the decoder the bare query value, so a code some
+    // chat client chopped has to still say which step broke (⑱).
+    expect(await reason("j!!!!notbase64!!!!")).toBe("分享码不是合法的 base64");
+    // ... while pasted prose or a stub too short to be a code is still "no code
+    // in here", not a code that happens to be broken.
+    expect(await reason("good morning everyone")).toBe("链接里没有分享码");
+    expect(await reason("g!!")).toBe("链接里没有分享码");
+    expect(await reason("http://x.test/pro-chart?s=g!!!!")).toBe("分享码不是合法的 base64");
     const emptyObj = plainJson({ v: 1, c: { name: "没有代码" } });
     expect(await reason(`?s=${emptyObj}`)).toBe("分享码里没有可运行的脚本");
   });

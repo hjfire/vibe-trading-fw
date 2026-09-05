@@ -212,7 +212,7 @@ function numberList(text: string | null | undefined): number[] {
 /* ------------------------------------------------------------ share links */
 
 /** Payload marker: `g` = gzip + base64url, `j` = plain JSON + base64url. */
-type Codec = "g" | "j";
+export type Codec = "g" | "j";
 
 /** Query parameter a share link is carried in; the reader must use the same. */
 export const SHARE_QUERY_KEY = "s";
@@ -234,17 +234,80 @@ export async function createShareLink(
   card: ScriptCard,
   base = `${window.location.origin}${window.location.pathname}`,
 ): Promise<ShareLink> {
-  const json = JSON.stringify({ v: 1, c: slim(card) });
+  const payload = await encodeSharePayload({ v: 1, c: slim(card) });
+  const url = shareUrl(base, SHARE_QUERY_KEY, payload);
+  return {
+    url,
+    length: url.length,
+    verbose: url.length > SHARE_LINK_SOFT_LIMIT,
+    codec: payload[0] === "g" ? "g" : "j",
+  };
+}
+
+/**
+ * The compact share-code form, reusable for any JSON payload (drawings use it
+ * too, see `drawingExchange.ts`): `j` + base64url(json), or `g` +
+ * base64url(gzip(json)) when the runtime can gzip.
+ */
+export async function encodeSharePayload(value: unknown): Promise<string> {
+  const json = JSON.stringify(value);
   const compressed = await gzipString(json);
-  let codec: Codec = "j";
-  let bytes: Uint8Array = utf8(json);
-  if (compressed) {
-    codec = "g";
-    bytes = compressed;
+  if (compressed) return `g${base64Url(compressed)}`;
+  return `j${base64Url(utf8(json))}`;
+}
+
+/** Which step of `decodeSharePayload` failed; callers phrase their own reason. */
+export type ShareCodeStage = "prefix" | "base64" | "inflate" | "json";
+
+export class ShareCodeError extends Error {
+  readonly stage: ShareCodeStage;
+  constructor(stage: ShareCodeStage, message: string) {
+    super(message);
+    this.name = "ShareCodeError";
+    this.stage = stage;
   }
-  const payload = `${codec}${base64Url(bytes)}`;
-  const url = `${base.split("#")[0].replace(/\?.*$/, "")}?${SHARE_QUERY_KEY}=${payload}`;
-  return { url, length: url.length, verbose: url.length > SHARE_LINK_SOFT_LIMIT, codec };
+}
+
+function reasonOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Human-readable reason for a `decodeSharePayload` failure; shared by readers. */
+export function shareCodeMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const stage: ShareCodeStage | null = e instanceof ShareCodeError ? e.stage : null;
+  if (stage === "prefix") return msg;
+  if (stage === "base64") return "分享码不是合法的 base64";
+  if (stage === "json") return "分享码内容不是合法 JSON";
+  return `解分享码失败：${msg}`;
+}
+
+/** Undo `encodeSharePayload`; throws `ShareCodeError` when the code is not ours. */
+export async function decodeSharePayload(payload: string): Promise<unknown> {
+  const codec = payload[0];
+  if (codec !== "g" && codec !== "j") throw new ShareCodeError("prefix", "无法识别的分享码前缀");
+  let bytes: Uint8Array;
+  try {
+    bytes = fromBase64Url(payload.slice(1));
+  } catch (e) {
+    throw new ShareCodeError("base64", reasonOf(e));
+  }
+  let json: string;
+  try {
+    json = codec === "g" ? await gunzipString(bytes) : new TextDecoder().decode(bytes);
+  } catch (e) {
+    throw new ShareCodeError("inflate", reasonOf(e));
+  }
+  try {
+    return JSON.parse(json);
+  } catch (e) {
+    throw new ShareCodeError("json", reasonOf(e));
+  }
+}
+
+/** A share URL for `base`, with any previous query and hash dropped. */
+export function shareUrl(base: string, key: string, payload: string): string {
+  return `${base.split("#")[0].replace(/\?.*$/, "")}?${key}=${payload}`;
 }
 
 export interface DecodedShare {
@@ -259,38 +322,39 @@ export interface FailedShare {
 
 /** Read a share URL, a bare query string, or just the payload. */
 export async function readShareLink(input: string): Promise<DecodedShare | FailedShare> {
-  const payload = extractPayload(input);
+  const payload = extractPayload(input, SHARE_QUERY_KEY);
   if (!payload) return { ok: false, error: "链接里没有分享码" };
-  const codec = payload[0];
-  if (codec !== "g" && codec !== "j") return { ok: false, error: "无法识别的分享码前缀" };
-  let bytes: Uint8Array;
-  try {
-    bytes = fromBase64Url(payload.slice(1));
-  } catch {
-    return { ok: false, error: "分享码不是合法的 base64" };
-  }
-  let json = "";
-  try {
-    json = codec === "g" ? await gunzipString(bytes) : new TextDecoder().decode(bytes);
-  } catch (e) {
-    return { ok: false, error: `解分享码失败：${e instanceof Error ? e.message : String(e)}` };
-  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json);
-  } catch {
-    return { ok: false, error: "分享码内容不是合法 JSON" };
+    parsed = await decodeSharePayload(payload);
+  } catch (e) {
+    return { ok: false, error: shareCodeMessage(e) };
   }
   const card = readCard((parsed as { c?: unknown })?.c ?? parsed, 0);
   if (!card) return { ok: false, error: "分享码里没有可运行的脚本" };
   return { card, ok: true };
 }
 
-function extractPayload(input: string): string {
+/**
+ * Pull the payload out of a full URL, a query string, or a bare code.
+ *
+ * The last branch is for a code a chat client mangled: it still starts with its
+ * codec letter and is long enough to have been one, so handing it to the decoder
+ * buys a message that names the step that broke (base64 / gzip / JSON) instead
+ * of the useless "there is no code in here" (⑱).
+ */
+export function extractPayload(input: string, key = SHARE_QUERY_KEY): string {
   const direct = input.trim();
   if (/^[gj][A-Za-z0-9_-]+$/.test(direct)) return direct;
-  const hit = /[?&#]s=([^&#\s]+)/.exec(direct);
-  return hit ? decodeURIComponent(hit[1]) : "";
+  // `key` is a caller-supplied word, so quote it rather than trust it to be
+  // regex-safe; today both readers pass a single letter.
+  const quoted = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hit = new RegExp(`[?&#]${quoted}=([^&#\\s]+)`).exec(direct);
+  if (hit) return decodeURIComponent(hit[1]);
+  // A mangled code: codec letter, long enough to be real, and none of a URL's
+  // punctuation or whitespace (so prose pasted by mistake is not treated as one).
+  if (/^[gj]\S{7,}$/.test(direct) && !/[:?/#=&%]/.test(direct)) return direct;
+  return "";
 }
 
 /** Drop fields the receiving end can recompute, to keep the link short. */

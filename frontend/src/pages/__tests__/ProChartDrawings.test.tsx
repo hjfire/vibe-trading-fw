@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { ProChart } from "../ProChart";
 import { planPaneHeights } from "@/lib/paneLayout";
+import { createDrawingsShareLink, exportDrawingsJson, readDrawingsShareLink } from "@/lib/drawingExchange";
+import { DRAW_TOOLS } from "@/lib/chartDrawings";
 
 /**
  * Drawing + pane-layout wiring of /pro-chart, driven through the real component
@@ -1095,5 +1097,318 @@ describe("/pro-chart 画线清单", () => {
     expect(screen.queryByText(/已画/)).toBeNull();
     // The bucket of the symbol we left is untouched.
     expect(readBuckets()["600519.SH|1D"]).toHaveLength(1);
+  });
+});
+
+/**
+ * Drawings that leave and enter the chart (local custom ⑱).
+ *
+ * The three things this pins: an import lands in the bucket the user is looking
+ * at and *on the chart itself* (not only in storage, which is the mistake a
+ * "just write the file" implementation makes), the same file twice is a no-op,
+ * and everything the list can do — colour, width, lock, hide — travels in the
+ * file and in the link, because a shared drawing that loses its lock is back to
+ * being draggable noise.
+ */
+describe("/pro-chart 画线导出、导入与分享链接", () => {
+  const fileInput = () => screen.getByLabelText("画线文件") as HTMLInputElement;
+  const storedHere = (): Array<Record<string, unknown>> =>
+    (readBuckets()["600519.SH|1D"] ?? []) as Array<Record<string, unknown>>;
+  const disabled = (name: string): boolean =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+  /** A file from *another* chart, to prove the label is carried but ignored. */
+  function sampleFile(): string {
+    return exportDrawingsJson(
+      [
+        {
+          name: "priceLine",
+          paneId: "candle_pane",
+          points: [{ timestamp: START, value: 1300 }],
+          style: { color: "#F23645", size: 2, dashed: true },
+          lock: true,
+        },
+        {
+          name: "segment",
+          paneId: "candle_pane",
+          points: [
+            { timestamp: START, value: 1290 },
+            { timestamp: START + DAY, value: 1320 },
+          ],
+          hidden: true,
+        },
+      ],
+      { symbol: "000001.SZ", interval: "1D" },
+    );
+  }
+
+  async function pickJson(raw: string, name = "drawings.json"): Promise<void> {
+    fireEvent.change(fileInput(), { target: { files: [new File([raw], name, { type: "application/json" })] } });
+    await flush();
+  }
+
+  it("导出不需要选中：当前标的所有画线（含锁定隐藏）写进一个 JSON", async () => {
+    await mountChart();
+    expect(disabled("导出画线文件")).toBe(true);
+    expect(disabled("导入画线文件")).toBe(false); // an empty chart is exactly when you need it
+
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1301.5 });
+    await flush();
+    const id = h.overlays[h.overlays.length - 1].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+
+    let blob: Blob | null = null;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = ((b: Blob) => {
+      blob = b;
+      return "blob:fake";
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "导出画线文件" }));
+      await flush();
+    } finally {
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+    }
+    expect(blob).toBeTruthy();
+    const parsed = JSON.parse(await (blob as unknown as Blob).text()) as {
+      drawings: Array<Record<string, unknown>>;
+      from: Record<string, unknown>;
+      kind: string;
+    };
+    expect(parsed.kind).toBe("vibe-trading.drawings");
+    expect(parsed.drawings).toEqual([
+      {
+        name: "priceLine",
+        paneId: "candle_pane",
+        points: [{ timestamp: START + 3 * DAY, value: 1301.5 }],
+        lock: true,
+      },
+    ]);
+    expect(Object.keys(parsed.from).sort()).toEqual(["count", "exportedAt", "interval", "symbol"]);
+    expect(parsed.from.count).toBe(1);
+    expect(screen.getByText(/已导出 1 条画线到 vt-drawings-600519\.SH-1D-\d{8}\.json/)).toBeTruthy();
+  });
+
+  it("下载能力不可用的环境里改为提示，不崩", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START, value: 1300 });
+    await flush();
+    const real = URL.createObjectURL;
+    URL.createObjectURL = (() => {
+      throw new Error("not implemented");
+    }) as typeof URL.createObjectURL;
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "导出画线文件" }));
+      await flush();
+    } finally {
+      URL.createObjectURL = real;
+    }
+    const note = screen.getByText(/不给直接下载/);
+    expect(note.className).toContain("text-red-500");
+    // The line itself is untouched by the failed export.
+    expect(h.overlays).toHaveLength(1);
+  });
+
+  it("导入：落盘、上图，样式与锁定隐藏跟着文件走", async () => {
+    await mountChart();
+    await pickJson(sampleFile());
+
+    expect(h.overlays).toHaveLength(2);
+    expect(h.overlays[0].lock).toBe(true);
+    expect((h.overlays[0].styles?.line as Record<string, unknown>).color).toBe("#F23645");
+    expect(h.overlays[1].visible).toBe(false);
+    // The imported lines are editable, so they must carry the events too (⑮).
+    expect(typeof h.overlays[0].onPressedMoveEnd).toBe("function");
+    expect(storedHere()).toHaveLength(2);
+    // The file came from another symbol: it lands on the current bucket, and says so.
+    expect(screen.getByText(/导入 2 条画线到 600519\.SH\|1D/)).toBeTruthy();
+    expect(screen.getByText(/文件来自 000001\.SZ\|1D/)).toBeTruthy();
+  });
+
+  it("已有画线时导入是合并，不是覆盖", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 7 * DAY, value: 1288 });
+    await flush();
+    expect(storedHere()).toHaveLength(1);
+
+    await pickJson(sampleFile());
+    expect(h.overlays).toHaveLength(3);
+    const rows = storedHere();
+    expect(rows).toHaveLength(3);
+    // The line that was already there keeps its place and its own look.
+    expect(rows[0].points).toEqual([{ timestamp: START + 7 * DAY, value: 1288 }]);
+    expect(rows[0].lock).toBeUndefined();
+    expect(screen.getByText(/导入 2 条画线到 600519\.SH\|1D/)).toBeTruthy();
+  });
+
+  it("同一份文件再导入一次不叠加", async () => {
+    await mountChart();
+    await pickJson(sampleFile());
+    expect(h.overlays).toHaveLength(2);
+
+    await pickJson(sampleFile());
+    expect(h.overlays).toHaveLength(2);
+    expect(storedHere()).toHaveLength(2);
+    expect(screen.getByText(/2 条画线都已经在 600519\.SH\|1D 上了/)).toBeTruthy();
+  });
+
+  it("导入的线可以接着画、接着改，改完仍落回同一个桶", async () => {
+    await mountChart();
+    await pickJson(sampleFile());
+    const id = h.overlays[1].id;
+    dragDrawing(id, 1400);
+    await flush();
+    const moved = storedHere().find((d) => (d.points as Array<Record<string, number>>)[0]?.value === 1400);
+    expect(moved).toBeTruthy();
+    expect(screen.getByText(/已画 2 条/)).toBeTruthy();
+  });
+
+  it("坏文件整批报错，混合文件逐条跳过", async () => {
+    await mountChart();
+    await pickJson("{oops", "bad.json");
+    expect(h.overlays).toHaveLength(0);
+    const note = screen.getByText(/bad\.json：不是合法的 JSON/);
+    expect(note.className).toContain("text-red-500");
+
+    await pickJson(
+      JSON.stringify({
+        drawings: [
+          { name: "priceLine", points: [{ value: 1200 }] },
+          { name: "priceLine", points: [{ timestamp: START, value: 1300 }] },
+        ],
+      }),
+      "mix.json",
+    );
+    expect(h.overlays).toHaveLength(1);
+    expect(screen.getByText(/导入 1 条画线.*跳过 1 条/)).toBeTruthy();
+    // The reason of each skipped entry is in the tooltip, not in the toolbar.
+    expect(screen.getByText(/导入 1 条画线.*/).getAttribute("title")).toBe("第 1 条：没有落在某根 K 线上的落点");
+  });
+
+  it("提示让位给下一次画线动作", async () => {
+    await mountChart();
+    await pickJson(sampleFile());
+    expect(screen.getByText(/导入 2 条/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+    await flush();
+    expect(screen.queryByText(/导入 2 条/)).toBeNull();
+    expect(screen.getByText(/在主图上点击 2 个落点/)).toBeTruthy();
+  });
+
+  it("剪贴板用不了时把链接摊在界面上，不假装成功", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START, value: 1300 });
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制画线分享链接" }));
+    await flush();
+    expect(screen.getByText(/剪贴板用不了/)).toBeTruthy();
+    const box = screen.getByLabelText("画线分享链接") as HTMLInputElement;
+    expect(box.readOnly).toBe(true);
+    expect(box.value).toContain("?d=");
+  });
+
+  it("链接里带得全样式与锁定，读回来还是那条线", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线颜色 红" }));
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START, value: 1300 });
+    await flush();
+    const id = h.overlays[h.overlays.length - 1].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+
+    let copied = "";
+    const realClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text: string) => ((copied = text), Promise.resolve()) },
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "复制画线分享链接" }));
+      await flush();
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: realClipboard });
+    }
+    expect(screen.getByText(/分享链接已复制/)).toBeTruthy();
+    expect(copied).toContain("?d=");
+
+    const back = await readDrawingsShareLink(copied);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.drawings).toEqual([
+      {
+        name: "priceLine",
+        paneId: "candle_pane",
+        points: [{ timestamp: START, value: 1300 }],
+        style: { color: "#F23645", size: 1, dashed: false },
+        lock: true,
+      },
+    ]);
+    expect(back.from).toBe("600519.SH|1D");
+  });
+
+  it("?d= 链接打开即导入到当前标的与周期", async () => {
+    // The share code is captured at module scope, so this exercises a freshly
+    // imported component with the query in place — the same thing a browser does
+    // when somebody pastes the link into an address bar.
+    const link = await createDrawingsShareLink(
+      [
+        {
+          name: "priceLine",
+          paneId: "candle_pane",
+          points: [{ timestamp: START, value: 1300 }],
+          lock: true,
+        },
+      ],
+      { symbol: "600519.SH", interval: "1D" },
+      "http://localhost:3000/pro-chart",
+    );
+    const search = link.url.slice(link.url.indexOf("?"));
+    const real = window.location;
+    let redefined = true;
+    try {
+      Object.defineProperty(window, "location", { configurable: true, value: new URL(`http://localhost:3000${search}`) });
+    } catch {
+      redefined = false;
+    }
+    expect(redefined, "jsdom 不允许换掉 location：该路径改由 prod 实测覆盖").toBe(true);
+    vi.resetModules();
+    try {
+      const { ProChart: WithLink } = await import("../ProChart");
+      vi.spyOn(window.HTMLElement.prototype, "clientHeight", "get").mockReturnValue(HOST_HEIGHT);
+      render(<WithLink />);
+      await flush();
+      expect(h.overlays).toHaveLength(1);
+      expect(h.overlays[0].lock).toBe(true);
+      expect(storedHere()).toHaveLength(1);
+      expect(screen.getByText(/导入 1 条画线到 600519\.SH\|1D/)).toBeTruthy();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: real });
+    }
+  });
+
+  it("画线工具全在工具栏上，导出导入一个不少", async () => {
+    await mountChart();
+    for (const t of DRAW_TOOLS) {
+      expect(screen.getByRole("button", { name: t.label })).toBeTruthy();
+    }
+    expect(screen.getByLabelText("导入画线文件")).toBeTruthy();
+    // The file picker is a real file input, so a drag-drop-less browser still works.
+    expect(fileInput().type).toBe("file");
+    expect(fileInput().accept).toContain(".json");
   });
 });

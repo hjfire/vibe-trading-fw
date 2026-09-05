@@ -530,7 +530,8 @@ export function removeLatestDrawing(chart: OverlayHost): string | null {
 // ---------------------------------------------------------------------------
 
 const BUCKET_KEY = "pro-chart.drawings.v1";
-const MAX_PER_BUCKET = 200;
+/** What one symbol+interval bucket can hold; importers use the same ceiling. */
+export const MAX_DRAWINGS_PER_BUCKET = 200;
 const MAX_BUCKETS = 60;
 
 export function drawingsBucket(symbol: string, interval: string): string {
@@ -572,7 +573,7 @@ export function saveDrawings(symbol: string, interval: string, drawings: readonl
   try {
     const buckets = readBuckets();
     const key = drawingsBucket(symbol, interval);
-    const list = drawings.slice(-MAX_PER_BUCKET);
+    const list = drawings.slice(-MAX_DRAWINGS_PER_BUCKET);
     if (list.length === 0) delete buckets[key];
     else buckets[key] = list;
     const keys = Object.keys(buckets);

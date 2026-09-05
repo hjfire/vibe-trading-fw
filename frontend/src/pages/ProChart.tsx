@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { init, dispose, type Chart, type KLineData, type DataLoader, type Nullable } from "klinecharts";
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
@@ -14,6 +14,7 @@ import {
   applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
+  drawingsBucket,
   drawHint,
   isInProgress,
   listDrawings,
@@ -30,13 +31,24 @@ import {
   type DrawingFlags,
   type DrawingRow,
   type DrawingStyle,
+  type StoredDrawing,
 } from "@/lib/chartDrawings";
+import {
+  DRAWING_SHARE_QUERY_KEY,
+  createDrawingsShareLink,
+  drawingsFileName,
+  exportDrawingsJson,
+  importDrawingsJson,
+  mergeDrawings,
+  readDrawingsShareLink,
+} from "@/lib/drawingExchange";
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
 import { applyUserIndicator } from "@/lib/indicatorLang";
 import { loadUserIndicators } from "@/lib/indicatorStore";
 import { readShareLink, SHARE_QUERY_KEY } from "@/lib/scriptExchange";
+import { copyText, downloadText } from "@/components/charts/workbench/types";
 import { cardToDraft, type WorkbenchSeed } from "@/components/charts/workbench/types";
 
 /**
@@ -123,12 +135,16 @@ function chartStyles(dark: boolean) {
  * Living outside the component lets whichever mount finish the job, exactly
  * once, and a later remount (back to this page) must not re-import.
  */
-function readShareQuery(): string {
+function readQueryKey(key: string): string {
   try {
-    return new URLSearchParams(window.location.search).get(SHARE_QUERY_KEY) ?? "";
+    return new URLSearchParams(window.location.search).get(key) ?? "";
   } catch {
     return "";
   }
+}
+
+function readShareQuery(): string {
+  return readQueryKey(SHARE_QUERY_KEY);
 }
 
 let pendingShare = readShareQuery();
@@ -149,11 +165,11 @@ function takeShareTask(): ReturnType<typeof readShareLink> | null {
 }
 
 /** The query must not survive the load, or a refresh re-imports the script. */
-function stripShareQuery(): void {
+function stripQueryKey(key: string): void {
   try {
     const query = new URLSearchParams(window.location.search);
-    if (!query.has(SHARE_QUERY_KEY)) return;
-    query.delete(SHARE_QUERY_KEY);
+    if (!query.has(key)) return;
+    query.delete(key);
     const rest = query.toString();
     window.history.replaceState(
       {},
@@ -163,6 +179,28 @@ function stripShareQuery(): void {
   } catch {
     /* no history API (jsdom): the import still lands, only the URL stays dirty */
   }
+}
+
+/**
+ * A `?d=` drawing link is captured at module scope for the same StrictMode
+ * reason as `?s=`, but it lands in *storage* instead of in a panel: the chart's
+ * own restore path reads that bucket as soon as bars exist, so a decode that
+ * resolves before the first load does not have to race the chart.
+ */
+let pendingDrawLink = readQueryKey(DRAWING_SHARE_QUERY_KEY);
+let pendingDrawTask: ReturnType<typeof readDrawingsShareLink> | null = null;
+let drawLinkHandled = false;
+
+function takeDrawLinkTask(): ReturnType<typeof readDrawingsShareLink> | null {
+  if (pendingDrawLink && !pendingDrawTask) {
+    const code = pendingDrawLink;
+    pendingDrawLink = "";
+    pendingDrawTask = readDrawingsShareLink(code).then((out) => {
+      drawLinkHandled = true;
+      return out;
+    });
+  }
+  return drawLinkHandled ? null : pendingDrawTask;
 }
 
 export function ProChart() {
@@ -205,6 +243,13 @@ export function ProChart() {
   // panel shows — the lesson ⑮ had to learn the hard way.
   const [drawRows, setDrawRows] = useState<DrawingRow[]>([]);
   const [drawPanelOpen, setDrawPanelOpen] = useState(false);
+  // Exchange feedback (local custom ⑱): one line, shown in the hint slot, with
+  // the per-entry skip reasons parked in `detail` (the tooltip) so the toolbar
+  // does not turn into a log. `shareFallback` only earns its rows when the
+  // clipboard says no, which is the normal answer inside a sandboxed iframe.
+  const [drawNotice, setDrawNotice] = useState<{ bad?: boolean; detail?: string; text: string } | null>(null);
+  const [shareFallback, setShareFallback] = useState<string | null>(null);
+  const drawFileRef = useRef<HTMLInputElement | null>(null);
   // Style of the *next* drawing (local custom ⑯), remembered across symbols.
   const [drawStyle, setDrawStyle] = useState<DrawingStyle>(() => loadDrawingStyle());
   // Mirror of the newest requested style. `pickStyle` composes onto this instead
@@ -458,7 +503,7 @@ export function ProChart() {
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
   useEffect(() => {
     const task = takeShareTask();
-    stripShareQuery();
+    stripQueryKey(SHARE_QUERY_KEY);
     if (!task) return;
     let alive = true;
     void task.then((out) => {
@@ -478,6 +523,8 @@ export function ProChart() {
   const applySymbol = (s: string) => {
     setInput(s);
     setSymbol(s);
+    setDrawNotice(null);
+    setShareFallback(null);
     const chart = chartRef.current;
     // Minute bars only exist for A-shares: repair the period *before* setSymbol
     // fires its reload, or the first request after the switch is a guaranteed 400.
@@ -501,6 +548,7 @@ export function ProChart() {
 
   const pickInterval = (iv: IntervalKey) => {
     if (iv !== "1D" && !/\.(SH|SZ)$/.test(symbol)) return; // guarded, button also disabled
+    setDrawNotice(null);
     setInterval(iv);
     chartRef.current?.setPeriod(periodFor(iv));
   };
@@ -515,6 +563,8 @@ export function ProChart() {
 
   const syncDrawings = (chart: Chart, excludeId: string | null = null) => {
     if (drawingsMutedRef.current) return;
+    // Any live edit makes the previous import/export note stale (⑱).
+    setDrawNotice(null);
     const key = drawingsKeyRef.current || `${symbol}|${interval}`;
     const [s, i] = key.split("|");
     saveDrawings(s, i, serializeDrawings(chart.getOverlays(), excludeId));
@@ -560,6 +610,7 @@ export function ProChart() {
   const armTool = (name: string) => {
     const chart = chartRef.current;
     if (!chart) return;
+    setDrawNotice(null);
     if (drawTool === name) {
       setDrawTool(null);
       cancelInProgress(chart);
@@ -645,6 +696,117 @@ export function ProChart() {
   const focusDrawing = (id: string) => {
     setSelectedDraw((cur) => (cur === id ? null : id));
   };
+
+  /**
+   * Merge imported drawings into the bucket the user is looking at, then put
+   * them on screen if that bucket is what the chart holds. Restoring through
+   * `restoreDrawings` (not a hand-rolled `createOverlay`) is what keeps an
+   * imported line editable and bankable like a drawn one — the events come with
+   * it (⑮) — and `mergeDrawings` is what makes importing the same file twice a
+   * no-op instead of a doubled chart (⑱).
+   */
+  const ingestDrawings = (incoming: readonly StoredDrawing[], from: string, skipped: readonly string[] = []) => {
+    const key = drawingsBucket(symbol, interval);
+    const merged = mergeDrawings(loadDrawings(symbol, interval), incoming);
+    if (merged.added === 0) {
+      const text = incoming.length === 0 ? "没有可导入的画线" : `${incoming.length} 条画线都已经在 ${key} 上了`;
+      setDrawNotice({ bad: incoming.length === 0, detail: skipped.join("；"), text });
+      return;
+    }
+    saveDrawings(symbol, interval, merged.drawings);
+    const chart = chartRef.current;
+    // A bucket the chart is not showing yet needs no live update: the swap in
+    // `getBars` reads it from storage the moment it becomes current.
+    if (chart && drawingsKeyRef.current === key) {
+      restoreDrawings(chart, merged.fresh, drawingEvents());
+      refreshDrawCount(chart);
+    }
+    const bits = [`导入 ${merged.added} 条画线到 ${key}`];
+    if (merged.duplicates) bits.push(`重复 ${merged.duplicates} 条未加`);
+    if (skipped.length) bits.push(`跳过 ${skipped.length} 条`);
+    if (from && from !== key) bits.push(`文件来自 ${from}`);
+    setDrawNotice({ detail: skipped.join("；"), text: bits.join("；") });
+  };
+
+  const exportDrawingsFile = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const list = serializeDrawings(chart.getOverlays());
+    if (list.length === 0) {
+      setDrawNotice({ bad: true, text: `当前标的与周期（${symbol} · ${interval}）上没有画线` });
+      return;
+    }
+    const name = drawingsFileName(symbol, interval);
+    if (downloadText(name, exportDrawingsJson(list, { symbol, interval }), "application/json")) {
+      setDrawNotice({ text: `已导出 ${list.length} 条画线到 ${name}` });
+    } else {
+      setDrawNotice({ bad: true, text: "这个浏览器不给直接下载，改用「分享链接」或换浏览器" });
+    }
+  };
+
+  const shareDrawingsLink = async () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const list = serializeDrawings(chart.getOverlays());
+    if (list.length === 0) {
+      setDrawNotice({ bad: true, text: `当前标的与周期（${symbol} · ${interval}）上没有画线` });
+      return;
+    }
+    try {
+      const link = await createDrawingsShareLink(list, { symbol, interval });
+      setShareFallback(link.url);
+      const copied = await copyText(link.url);
+      setDrawNotice({
+        bad: !copied,
+        text: copied
+          ? `分享链接已复制（${link.length} 字符，${link.codec === "g" ? "gzip" : "明文"}）`
+          : "剪贴板用不了，请手动选中下方链接复制",
+        detail: link.verbose ? `链接 ${link.length} 字符偏长，部分聊天工具会截断，建议改用文件` : undefined,
+      });
+    } catch (e) {
+      setDrawNotice({ bad: true, text: `生成分享链接失败：${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
+
+  const onDrawingFilePicked = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset first: picking the same file twice has to fire `change` again.
+    e.target.value = "";
+    if (!file) return;
+    let raw = "";
+    try {
+      raw = await file.text();
+    } catch {
+      setDrawNotice({ bad: true, text: `读不动 ${file.name}` });
+      return;
+    }
+    const out = importDrawingsJson(raw);
+    if (!out.ok) {
+      setDrawNotice({ bad: true, text: `${file.name}：${out.error}` });
+      return;
+    }
+    ingestDrawings(out.drawings, out.from, out.skipped);
+  };
+
+  // `?d=` opens the chart with somebody else's markings merged in (⑱).
+  useEffect(() => {
+    const task = takeDrawLinkTask();
+    stripQueryKey(DRAWING_SHARE_QUERY_KEY);
+    if (!task) return;
+    let alive = true;
+    void task.then((out) => {
+      if (!alive) return;
+      if (!out.ok) {
+        setDrawNotice({ bad: true, text: `画线分享链接无效：${out.error}` });
+        return;
+      }
+      ingestDrawings(out.drawings, out.from, out.skipped);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const armedTool = toolOf(drawTool ?? "");
 
@@ -773,6 +935,43 @@ export function ProChart() {
           >
             清单 · {drawCount}
           </button>
+          {/* Exchange (⑱): a file is the archive, the link is the quick hand-off.
+              导入 stays clickable on an empty chart — that is exactly when it is
+              needed, and it merges into the current 标的与周期. */}
+          <button
+            className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+            aria-label="导出画线文件"
+            title={`把当前 ${drawCount} 条画线导出为 .json（含颜色线宽与锁定/隐藏）`}
+            disabled={drawCount === 0}
+            onClick={exportDrawingsFile}
+          >
+            导出
+          </button>
+          <button
+            className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+            aria-label="复制画线分享链接"
+            title="把当前画线压进一条链接（?d=），对方打开即导入到他的标的与周期"
+            disabled={drawCount === 0}
+            onClick={() => void shareDrawingsLink()}
+          >
+            链接
+          </button>
+          <button
+            className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+            aria-label="导入画线文件"
+            title="选择 .json 画线文件，合并进当前标的与周期（重复的线不会叠加）"
+            onClick={() => drawFileRef.current?.click()}
+          >
+            导入
+          </button>
+          <input
+            ref={drawFileRef}
+            type="file"
+            accept=".json,application/json"
+            aria-label="画线文件"
+            className="hidden"
+            onChange={(e) => void onDrawingFilePicked(e)}
+          />
         </div>
         {/* Style of the next drawing; with a line selected it restyles that one too (⑯). */}
         <div className="flex items-center gap-1">
@@ -819,15 +1018,27 @@ export function ProChart() {
             {drawStyle.dashed ? "虚线" : "实线"}
           </button>
         </div>
-        <span className="text-xs text-muted-foreground">
-          {armedTool
-            ? drawHint(armedTool)
-            : selectedDraw
-              ? "已选中一条线 — 点颜色/线宽就改这条（点空白处取消）"
-              : drawCount > 0
-                ? `已画 ${drawCount} 条 · 随标的与周期保存，单击选中、拖动可改位，右键点线删除`
-                : "画线随标的与周期保存"}
+        <span className={cn("text-xs", drawNotice?.bad ? "text-red-500" : "text-muted-foreground")} title={drawNotice?.detail || undefined}>
+          {drawNotice
+            ? drawNotice.text
+            : armedTool
+              ? drawHint(armedTool)
+              : selectedDraw
+                ? "已选中一条线 — 点颜色/线宽就改这条（点空白处取消）"
+                : drawCount > 0
+                  ? `已画 ${drawCount} 条 · 随标的与周期保存，单击选中、拖动可改位，右键点线删除`
+                  : "画线随标的与周期保存"}
         </span>
+        {shareFallback && (
+          <input
+            readOnly
+            value={shareFallback}
+            aria-label="画线分享链接"
+            title="选中后 Ctrl+C 复制；这条链接打开后会把画线导入到当时的标的与周期"
+            onFocus={(e) => e.target.select()}
+            className="w-64 rounded-md border bg-background px-2 py-1 text-[11px] text-muted-foreground"
+          />
+        )}
         {paneStarved && (
           <span
             className="text-xs text-amber-600 dark:text-amber-500"
@@ -926,7 +1137,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除），「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式与锁定隐藏），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}
