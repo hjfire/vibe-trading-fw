@@ -18,6 +18,17 @@ import type { Chart } from "klinecharts";
  *    Serializing those would persist half-finished drawings, and there is no
  *    public "cancel drawing" call — the way out is `removeOverlay({ id })`,
  *    which also drops the tool's waiting state.
+ *
+ * 3. The chart is editable after the fact and none of it reports back on its
+ *    own: dragging a line rewrites `overlay.points` in place
+ *    (`pressedMouseMoveEvent`, dist 8632-8654) and right-clicking one deletes it
+ *    (`_figureMouseRightClickEvent` -> `removeOverlay`, dist 8774-8790). Both
+ *    end in a callback (`onPressedMoveEnd` / `onRemoved`), so a drawing that was
+ *    moved or deleted without those hooks wired keeps its **pre-edit** copy in
+ *    storage — the line jumps back, or comes from the dead on the next reload.
+ *    `removeOverlay` fires `onRemoved` *before* splicing the overlay out of the
+ *    pane (dist 14467 vs 14475-14478), which is why the callback hands the id
+ *    back to the caller instead of trusting `getOverlays()`.
  */
 
 /** The pane every draw tool is pinned to. */
@@ -90,13 +101,17 @@ function hasCoordinates(p: StoredPoint | null | undefined): p is StoredPoint {
  * Drop what cannot be re-created: half-drawn overlays, anonymous names, and
  * points with no timestamp (a raw `dataIndex` would point at a different bar
  * after the next page of history is prepended).
+ *
+ * `excludeId` covers the `onRemoved` case, where the overlay being deleted is
+ * still in `getOverlays()` while the callback runs.
  */
-export function serializeDrawings(overlays: readonly unknown[]): StoredDrawing[] {
+export function serializeDrawings(overlays: readonly unknown[], excludeId?: string | null): StoredDrawing[] {
   const out: StoredDrawing[] = [];
   for (const raw of overlays) {
     if (isInProgress(raw)) continue;
     const o = raw as OverlayLike;
     if (!o || typeof o.name !== "string" || !o.name) continue;
+    if (excludeId && o.id === excludeId) continue;
     const points = (o.points ?? []).filter(hasCoordinates).map((p) => ({
       ...(typeof p.timestamp === "number" ? { timestamp: p.timestamp } : {}),
       ...(typeof p.value === "number" ? { value: p.value } : {}),
@@ -107,14 +122,64 @@ export function serializeDrawings(overlays: readonly unknown[]): StoredDrawing[]
   return out;
 }
 
+/**
+ * The event bundle to hand `createOverlay` so every drawing — freshly armed or
+ * restored from storage — keeps the persisted copy in step with the chart.
+ *
+ * `onChanged` is called with the id to leave out of the snapshot (only the
+ * removal path passes one; see the header note about `onRemoved` firing before
+ * the splice).
+ */
+export interface DrawingEvents {
+  /** Something on the chart changed in a way worth banking; id = just-deleted. */
+  onChanged: (excludeId: string | null) => void;
+  /** A drawing finished: the armed-tool highlight has to go with it. */
+  onDrawEnd?: () => void;
+  /** A drawing vanished; tells the caller so a stuck tool can be released. */
+  onRemoved?: (overlay: unknown) => void;
+}
+
+/** Payload shape the library passes to the overlay event callbacks. */
+interface OverlayEventArg {
+  overlay?: unknown;
+}
+
+export function makeDrawingEvents(
+  hooks: DrawingEvents,
+): Record<"onDrawEnd" | "onRemoved" | "onPressedMoveEnd", (e: OverlayEventArg) => void> {
+  return {
+    onDrawEnd: () => {
+      hooks.onDrawEnd?.();
+      hooks.onChanged(null);
+    },
+    onRemoved: (e) => {
+      const removed = e?.overlay as OverlayLike | undefined;
+      hooks.onRemoved?.(removed);
+      hooks.onChanged(removed?.id ?? null);
+    },
+    // Covers both gestures: grabbing the line body (whole overlay) and grabbing
+    // one of its handles (a single point) both end here.
+    onPressedMoveEnd: () => {
+      hooks.onChanged(null);
+    },
+  };
+}
+
 /** Re-create stored drawings; returns how many landed. */
-export function restoreDrawings(chart: OverlayHost, drawings: readonly StoredDrawing[]): number {
+export function restoreDrawings(
+  chart: OverlayHost,
+  drawings: readonly StoredDrawing[],
+  events?: ReturnType<typeof makeDrawingEvents>,
+): number {
   let applied = 0;
   for (const d of drawings) {
     if (!d || typeof d.name !== "string" || !d.name) continue;
     const points = (d.points ?? []).filter(hasCoordinates);
     if (points.length === 0) continue;
-    const id = chart.createOverlay({ name: d.name, paneId: d.paneId || MAIN_PANE_ID, points });
+    // Restored drawings are editable too, so they carry the same events as a
+    // tool-drawn one — otherwise only the drawings made *this session* stay in
+    // sync, and a restored line that gets deleted comes back on reload.
+    const id = chart.createOverlay({ name: d.name, paneId: d.paneId || MAIN_PANE_ID, points, ...events });
     if (id) applied += 1;
   }
   return applied;

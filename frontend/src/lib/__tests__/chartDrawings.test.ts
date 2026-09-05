@@ -8,6 +8,7 @@ import {
   drawHint,
   isInProgress,
   loadDrawings,
+  makeDrawingEvents,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawings,
@@ -142,6 +143,56 @@ describe("serializeDrawings", () => {
     expect(serializeDrawings([])).toEqual([]);
     expect(serializeDrawings([null, undefined, 3, "x", {}])).toEqual([]);
   });
+
+  it("can leave one overlay out of the snapshot", () => {
+    // `removeOverlay` fires `onRemoved` before the overlay is spliced out of the
+    // pane, so "save what is on the chart right now" would keep saving the line
+    // the user just deleted — and it would come back on the next reload.
+    const list = [
+      overlay({ id: "keep" }),
+      overlay({ id: "gone", points: [{ timestamp: 5, value: 99 }] }),
+    ];
+    expect(serializeDrawings(list, "gone").map((d) => d.points[0].value)).toEqual([1300]);
+    expect(serializeDrawings(list).map((d) => d.points[0].value)).toEqual([1300, 99]);
+    expect(serializeDrawings(list, null)).toHaveLength(2);
+  });
+});
+
+describe("makeDrawingEvents", () => {
+  it("reports every edit, with the removed id to exclude", () => {
+    const changes: Array<string | null> = [];
+    const ended: number[] = [];
+    const removed: unknown[] = [];
+    const events = makeDrawingEvents({
+      onChanged: (id) => {
+        changes.push(id);
+      },
+      onDrawEnd: () => {
+        ended.push(1);
+      },
+      onRemoved: (overlay) => {
+        removed.push(overlay);
+      },
+    });
+
+    events.onDrawEnd({});
+    events.onPressedMoveEnd({});
+    events.onRemoved({ overlay: { id: "gone" } });
+
+    // A finished line and a moved line both bank as-is; a deleted one banks the
+    // set minus itself.
+    expect(changes).toEqual([null, null, "gone"]);
+    expect(ended).toEqual([1]);
+    expect(removed).toEqual([{ id: "gone" }]);
+  });
+
+  it("tolerates an event payload without an overlay", () => {
+    const changes: Array<string | null> = [];
+    const events = makeDrawingEvents({ onChanged: (id) => { changes.push(id); } });
+    expect(() => events.onRemoved({})).not.toThrow();
+    expect(() => events.onRemoved(undefined as never)).not.toThrow();
+    expect(changes).toEqual([null, null]);
+  });
 });
 
 describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
@@ -161,6 +212,20 @@ describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
       name: "priceLine",
       paneId: MAIN_PANE_ID,
       points: [{ timestamp: 3, value: 30 }],
+    });
+  });
+
+  it("restored drawings carry the same events as drawn ones", () => {
+    // Otherwise only the lines made in this session stay in sync with storage:
+    // delete a *restored* line and it is back after a reload.
+    const chart = fakeChart([]);
+    const events = makeDrawingEvents({ onChanged: () => undefined });
+    expect(restoreDrawings(chart as never, [stored[0]], events)).toBe(1);
+    expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({
+      name: "segment",
+      onDrawEnd: expect.any(Function),
+      onRemoved: expect.any(Function),
+      onPressedMoveEnd: expect.any(Function),
     });
   });
 

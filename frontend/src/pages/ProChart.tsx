@@ -11,7 +11,9 @@ import {
   MAIN_PANE_ID,
   cancelInProgress,
   drawHint,
+  isInProgress,
   loadDrawings,
+  makeDrawingEvents,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawings,
@@ -183,18 +185,35 @@ export function ProChart() {
   // Drawing (local custom ⑭): which tool is armed, and how many finished
   // drawings the chart holds. The count drives the undo/clear buttons and the
   // "画线已随标的保存" note, so it must be read back from the chart rather than
-  // trusted from the click handler (the user can also delete a line with the
-  // right-click menu).
+  // trusted from the click handler: the library deletes a line on right-click
+  // and rewrites its points when the user drags one (⑮, see chartDrawings.ts).
   const [drawTool, setDrawTool] = useState<string | null>(null);
   const [drawCount, setDrawCount] = useState(0);
   // Which `symbol|interval` the on-chart drawings belong to; a change means the
   // set has to be swapped for that chart's own.
   const drawingsKeyRef = useRef<string>("");
-  const refreshDrawCount = (chart: Chart) => setDrawCount(chart.getOverlays().filter((o) => !(o as { isDrawing?: () => boolean }).isDrawing?.()).length);
+  // Syncing is muted while the swap block clears one chart's set and puts up
+  // another's: each removal fires `onRemoved`, and banking that mid-swap would
+  // overwrite the bucket that was just carefully saved.
+  const drawingsMutedRef = useRef(false);
+  // Warn-on-starvation (⑮): what the budget ended up giving the main chart.
+  const [paneStarved, setPaneStarved] = useState<{ main: number; sub: number } | null>(null);
+  // `excludeId` again covers the `onRemoved` callback, which runs while the
+  // deleted overlay is still listed: without it the count says "已画 1 条" on an
+  // empty chart until the next event happens to come along.
+  const refreshDrawCount = (chart: Chart, excludeId: string | null = null) =>
+    setDrawCount(
+      chart
+        .getOverlays()
+        .filter((o) => !isInProgress(o) && (!excludeId || (o as { id?: string }).id !== excludeId)).length,
+    );
   // Bumps on every workbench notification, so the pane rebudget below re-runs
   // even when the enabled count is unchanged (swapping one custom indicator for
   // another keeps the number but moves the panes around).
   const [layoutTick, setLayoutTick] = useState(0);
+  // Last `chartHeight|sub pane ids` the budget was applied for; see
+  // `applyPaneLayout` for why anything else must not trigger a rebudget.
+  const layoutSigRef = useRef("");
   const refreshIndCount = () => {
     setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
     setLayoutTick((t) => t + 1);
@@ -260,7 +279,16 @@ export function ProChart() {
     // A pane the user maximized owns the whole chart on purpose; rebudgeting it
     // would fight the gesture (the library only honours `height` for `normal`).
     const normal = list.filter((p) => (p.state ?? "normal") === "normal");
-    const plan = planPaneHeights({ chartHeight, subPaneIds: subPaneIdsOf(normal) });
+    const ids = subPaneIdsOf(normal);
+    // Separator dragging (`pane.dragEnabled`, default on) rewrites a pane's
+    // height with nothing else about the chart changed. Re-running the budget on
+    // every tick would quietly undo that gesture, so only a new pane set or a
+    // new chart height counts as "the numbers no longer add up".
+    const signature = `${chartHeight}|${ids.join(",")}`;
+    if (signature === layoutSigRef.current) return;
+    layoutSigRef.current = signature;
+    const plan = planPaneHeights({ chartHeight, subPaneIds: ids });
+    setPaneStarved(plan.starved ? { main: plan.mainHeight, sub: plan.subPaneHeight } : null);
     for (const pane of normal) {
       const want = plan.assignments[pane.id];
       if (want === undefined) continue;
@@ -337,8 +365,15 @@ export function ProChart() {
               const [ps, pi] = prev.split("|");
               saveDrawings(ps, pi, serializeDrawings(chart.getOverlays()));
             }
-            chart.removeOverlay();
-            restoreDrawings(chart, loadDrawings(ticker, iv));
+            // The teardown below fires `onRemoved` on every old overlay; those
+            // callbacks must not bank against the key that is about to change.
+            drawingsMutedRef.current = true;
+            try {
+              chart.removeOverlay();
+              restoreDrawings(chart, loadDrawings(ticker, iv), drawingEvents());
+            } finally {
+              drawingsMutedRef.current = false;
+            }
             drawingsKeyRef.current = key;
             refreshDrawCount(chart);
           }
@@ -447,12 +482,32 @@ export function ProChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indCount, layoutTick]);
 
-  const syncDrawings = (chart: Chart) => {
+  const syncDrawings = (chart: Chart, excludeId: string | null = null) => {
+    if (drawingsMutedRef.current) return;
     const key = drawingsKeyRef.current || `${symbol}|${interval}`;
     const [s, i] = key.split("|");
-    saveDrawings(s, i, serializeDrawings(chart.getOverlays()));
-    refreshDrawCount(chart);
+    saveDrawings(s, i, serializeDrawings(chart.getOverlays(), excludeId));
+    refreshDrawCount(chart, excludeId);
   };
+
+  /**
+   * Events every drawing carries — the ones armed here and the ones restored
+   * from storage. `onDrawEnd` clears the highlight, `onChanged` banks the set
+   * (minus a just-removed overlay, which the library deletes *after* the
+   * callback), and `onRemoved` of a half-drawn overlay also releases the armed
+   * tool: the right-click delete can empty the chart under a lit button.
+   */
+  const drawingEvents = () =>
+    makeDrawingEvents({
+      onChanged: (excludeId) => {
+        const chart = chartRef.current;
+        if (chart) syncDrawings(chart, excludeId);
+      },
+      onDrawEnd: () => setDrawTool(null),
+      onRemoved: (overlay) => {
+        if (isInProgress(overlay)) setDrawTool(null);
+      },
+    });
 
   /**
    * Arm a draw tool. The button doubles as the exit: clicking the armed tool
@@ -472,12 +527,7 @@ export function ProChart() {
     chart.createOverlay({
       name,
       paneId: MAIN_PANE_ID,
-      // The highlight follows the chart, not the click: it clears when the
-      // drawing is finished, wherever that happens.
-      onDrawEnd: () => {
-        setDrawTool(null);
-        syncDrawings(chart);
-      },
+      ...drawingEvents(),
     });
   };
 
@@ -616,9 +666,17 @@ export function ProChart() {
           {armedTool
             ? drawHint(armedTool)
             : drawCount > 0
-              ? `已画 ${drawCount} 条 · 随标的与周期保存`
+              ? `已画 ${drawCount} 条 · 随标的与周期保存，拖动可改位，右键点线删除`
               : "画线随标的与周期保存"}
         </span>
+        {paneStarved && (
+          <span
+            className="text-xs text-amber-600 dark:text-amber-500"
+            title={`副图各占 ${paneStarved.sub}px 后，主图只剩 ${paneStarved.main}px：关闭部分指标可换回可读性`}
+          >
+            副图过多，主图仅 {paneStarved.main}px — 关闭部分指标可恢复
+          </span>
+        )}
         <div className="ml-auto text-xs text-muted-foreground">
           {status.loading ? "加载中…" : status.error ? <span className="text-red-500">{status.error}</span> : status.source || ""}
         </div>
@@ -642,7 +700,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线可拖动改位，右键点击删除），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

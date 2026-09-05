@@ -24,7 +24,9 @@ import { planPaneHeights } from "@/lib/paneLayout";
  *
  * jsdom cannot paint a canvas, so the fake chart below reproduces the library's
  * observable contract: pane options, overlay lifecycle (`isDrawing()` ->
- * `onDrawEnd`), and `setSymbol` re-running the DataLoader.
+ * `onDrawEnd`), the post-hoc edits (drag = `onPressedMoveEnd`, right-click =
+ * `onRemoved` fired *before* the splice) and `setSymbol` re-running the
+ * DataLoader.
  */
 
 interface Bar {
@@ -44,6 +46,11 @@ interface FakeOverlay {
   currentStep: number;
   drawing: boolean;
   isDrawing: () => boolean;
+  // Event callbacks the component handed to `createOverlay`; the library keeps
+  // them on the instance and calls them for the rest of the overlay's life.
+  onDrawEnd?: () => void;
+  onRemoved?: (e: { overlay: FakeOverlay }) => void;
+  onPressedMoveEnd?: () => void;
 }
 
 interface FakePane {
@@ -71,6 +78,9 @@ interface FakeChart {
   setDataLoader: Mock;
 }
 
+/** A drawing overlay's event bundle as the component passes it to the library. */
+type OverlayEvents = Pick<FakeOverlay, "onDrawEnd" | "onRemoved" | "onPressedMoveEnd">;
+
 const DAY = 86_400_000;
 const START = 1_700_000_000_000;
 const HOST_HEIGHT = 360; // `.min-h-[360px]`, the size that used to leave 29px
@@ -81,6 +91,9 @@ const h = vi.hoisted(() => ({
   overlays: [] as FakeOverlay[],
   panes: [] as FakePane[],
   chart: null as FakeChart | null,
+  // The workbench is mocked out, but the prop it is handed (`refreshIndCount`)
+  // is the only way a pane set changes without a remount — keep it callable.
+  indProps: null as null | { onChartIndicatorsChanged?: () => void },
   loader: null as null | {
     getBars: (p: {
       type: string;
@@ -119,7 +132,25 @@ function finishDrawing(at: { timestamp: number; value: number }) {
     overlay.currentStep = -1;
   }
   act(() => {
-    if (arg && typeof arg !== "string") arg.onDrawEnd?.();
+    if (overlay?.onDrawEnd) overlay.onDrawEnd();
+    else if (arg && typeof arg !== "string") arg.onDrawEnd?.();
+  });
+}
+
+/** Right-click delete: `onRemoved` fires while the overlay is still listed. */
+function rightClickDelete(id: string): void {
+  act(() => {
+    void h.chart?.removeOverlay({ id });
+  });
+}
+
+/** Grab the line body and drop it somewhere else: points change in place. */
+function dragDrawing(id: string, value: number): void {
+  const overlay = h.overlays.find((o) => o.id === id);
+  if (!overlay) throw new Error(`no overlay ${id} to drag`);
+  act(() => {
+    overlay.points = overlay.points.map((p) => ({ ...p, value }));
+    overlay.onPressedMoveEnd?.();
   });
 }
 
@@ -180,7 +211,7 @@ vi.mock("klinecharts", () => ({
           name?: string;
           paneId?: string;
           points?: Array<Record<string, number>>;
-        };
+        } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
           name: v.name ?? "",
@@ -188,18 +219,20 @@ vi.mock("klinecharts", () => ({
           points: placed ? [...(v.points as Array<Record<string, number>>)] : [],
           currentStep: placed ? -1 : 1,
           drawing: !placed,
+          onDrawEnd: v.onDrawEnd,
+          onRemoved: v.onRemoved,
+          onPressedMoveEnd: v.onPressedMoveEnd,
         });
         h.overlays.push(overlay);
         return overlay.id;
       }),
       removeOverlay: vi.fn((filter?: { id?: string }) => {
-        if (!filter?.id) {
-          h.overlays = [];
-          return true;
-        }
-        const before = h.overlays.length;
-        h.overlays = h.overlays.filter((o) => o.id !== filter.id);
-        return h.overlays.length !== before;
+        // Mirrors StoreImp.removeOverlay: callback first, splice after — which
+        // is why a snapshot taken inside onRemoved has to exclude the id.
+        const doomed = filter?.id ? h.overlays.filter((o) => o.id === filter.id) : h.overlays.slice();
+        for (const overlay of doomed) overlay.onRemoved?.({ overlay });
+        h.overlays = filter?.id ? h.overlays.filter((o) => o.id !== filter.id) : [];
+        return doomed.length > 0;
       }),
     } as unknown as FakeChart;
     h.chart = chart;
@@ -240,7 +273,12 @@ vi.mock("@/lib/marketApi", () => ({
 }));
 
 vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
-vi.mock("@/components/charts/IndicatorEditor", () => ({ default: () => null }));
+vi.mock("@/components/charts/IndicatorEditor", () => ({
+  default: (props: { onChartIndicatorsChanged?: () => void }) => {
+    h.indProps = props;
+    return null;
+  },
+}));
 
 /** Lets the async loader (and the state it sets) settle. */
 async function flush(): Promise<void> {
@@ -271,6 +309,7 @@ beforeEach(() => {
   h.overlays = [];
   h.loader = null;
   h.chart = null;
+  h.indProps = null;
   h.panes = [
     { id: "candle_pane", height: 29, minHeight: 30, state: "normal" },
     { id: "x_axis_pane", height: 26, minHeight: 30, state: "normal" },
@@ -422,5 +461,131 @@ describe("/pro-chart 画线交互", () => {
     expect(h.overlays.length).toBe(1);
     expect(h.overlays[0]).toMatchObject({ name: "segment", drawing: false, points: [{ timestamp: START, value: 200 }, { timestamp: START + DAY, value: 210 }] });
     expect(screen.getByText(/已画 1 条/)).toBeTruthy();
+  });
+});
+
+/**
+ * Post-hoc edits (local custom ⑮). KLineChart lets the user drag a finished line
+ * and delete one with a right-click, and neither gesture touches our storage on
+ * its own — the measured symptom being a deleted line coming back on reload, or a
+ * moved one snapping back. Both go through `makeDrawingEvents`.
+ */
+describe("/pro-chart 画线的拖动与删除", () => {
+  it("右键删掉的线不会在刷新后复活", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 8 * DAY, value: 1311.5 });
+    await flush();
+    const id = h.overlays[0].id;
+    expect((readBuckets()["600519.SH|1D"] as Array<{ name: string }>).length).toBe(1);
+
+    rightClickDelete(id);
+    await flush();
+
+    expect(h.overlays.length).toBe(0);
+    expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
+    expect(screen.getByText("画线随标的与周期保存")).toBeTruthy();
+  });
+
+  it("从存储恢复的线同样同步删除", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [{ name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START, value: 1300 }] }],
+      }),
+    );
+    await mountChart();
+    await flush();
+    expect(h.overlays.length).toBe(1);
+
+    // Without the events on the restore path only this session's drawings stay
+    // in sync, and a restored line is back after a reload.
+    rightClickDelete(h.overlays[0].id);
+    await flush();
+    expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
+  });
+
+  it("拖动改位后存的是新位置", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1290 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    dragDrawing(id, 1345.6);
+    await flush();
+
+    const bucket = readBuckets()["600519.SH|1D"] as Array<{ points: Array<{ value?: number }> }>;
+    expect(bucket[0].points[0].value).toBe(1345.6);
+  });
+
+  it("画到一半被删掉时工具不卡在激活态", async () => {
+    await mountChart();
+    const button = screen.getByRole("button", { name: "射线" });
+    fireEvent.click(button);
+    const stuck = h.overlays[h.overlays.length - 1];
+    expect(button.className).toContain("ring-1");
+
+    // The library deletes the overlay a right-click lands on, in-progress or
+    // not; a lit button with no overlay behind it eats every later click.
+    rightClickDelete(stuck.id);
+    await flush();
+    expect(h.overlays.length).toBe(0);
+    expect(screen.getByRole("button", { name: "射线" }).className).not.toContain("ring-1");
+  });
+});
+
+describe("/pro-chart 面板预算的边界", () => {
+  it("副图多到主图不可读时给出提示", async () => {
+    localStorage.setItem(
+      "pro-chart.userIndicators.v2",
+      JSON.stringify([
+        { id: "t1", label: "一", kind: "pane", params: [5], code: "return { M: ma(close, P[0]) };", enabled: true },
+        { id: "t2", label: "二", kind: "pane", params: [5], code: "return { M: ma(close, P[0]) };", enabled: true },
+      ]),
+    );
+    await mountChart();
+
+    const plan = planPaneHeights({
+      chartHeight: HOST_HEIGHT,
+      subPaneIds: ["pane_VOL", "pane_MACD", "pane_UCI_t1", "pane_UCI_t2"],
+    });
+    expect(plan.starved).toBe(true);
+    expect(screen.getByText(`副图过多，主图仅 ${plan.mainHeight}px — 关闭部分指标可恢复`)).toBeTruthy();
+  });
+
+  it("主图够用就不报警", async () => {
+    await mountChart();
+    expect(screen.queryByText(/副图过多/)).toBeNull();
+  });
+
+  it("手拖副图高度不被无关的重排抹掉", async () => {
+    await mountChart();
+    const vol = h.panes.find((p) => p.id === "pane_VOL");
+    if (!vol) throw new Error("VOL pane missing");
+    // Separator dragging rewrites the height inside the library; nothing else
+    // about the chart changed.
+    vol.height = 130;
+    h.chart?.setPaneOptions.mockClear();
+
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.chart?.setPaneOptions).not.toHaveBeenCalled();
+    expect(paneHeights().pane_VOL).toBe(130);
+
+    // A pane actually appearing is a different story: the budget has to re-run.
+    h.chart?.createIndicator({ name: "FOO" });
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    const plan = planPaneHeights({
+      chartHeight: HOST_HEIGHT,
+      subPaneIds: ["pane_VOL", "pane_MACD", "pane_FOO"],
+    });
+    expect(h.chart?.setPaneOptions).toHaveBeenCalledWith({ id: "pane_FOO", height: plan.subPaneHeight });
+    expect(paneHeights().pane_FOO).toBe(plan.subPaneHeight);
   });
 });
