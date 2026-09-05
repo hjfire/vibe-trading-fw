@@ -27,6 +27,8 @@ import { gzipSupported, readShareLink } from "../scriptExchange";
  * equivalent on another, an unusable entry must be *reported* rather than vanish,
  * and nothing an importer builds may reach the overlay template untouched —
  * a wrong `paneId` alone is enough to put a price line on the volume axis (⑭).
+ * Since ⑲ a `sub:` paneId is a real address, so it is the one thing an importer
+ * is allowed to keep verbatim.
  */
 
 const T0 = 1_700_000_000_000;
@@ -166,14 +168,27 @@ describe("画线文件导入", () => {
     expect(out.drawings).toEqual([{ name: "segment", paneId: MAIN_PANE_ID, points: [{ timestamp: T0, value: 10 }] }]);
   });
 
-  it("副图 paneId 被改写回主图（价位不能落在成交量轴上）", () => {
+  // ⑲ lifted the blanket rewrite, not the reason for it: an address this app
+  // issued (`sub:<indicator>`) names a pane that exists on the next mount too,
+  // so it is kept. Everything else still lands on the main chart, because
+  // handing an unknown paneId to `createOverlay` makes the library fall back to
+  // the candle pane on its own (dist 15364-15367) while keeping the imported
+  // value — i.e. a price line sitting on the volume scale, from a file.
+  it("只认自发的副图 paneId，其余一律改写回主图", () => {
     const out = okImport(
       JSON.stringify([
+        { name: "priceLine", paneId: "sub:MACD", points: [{ timestamp: T0, value: -0.42 }] },
         { name: "priceLine", paneId: "indicator_pane_volume_1", points: [{ timestamp: T0, value: 52874 }] },
+        { name: "priceLine", paneId: "candle_pane/../evil", points: [{ timestamp: T0, value: 1 }] },
         { name: "priceLine", points: [{ timestamp: T0, value: 1300 }] },
       ]),
     );
-    expect(out.drawings.map((d) => d.paneId)).toEqual([MAIN_PANE_ID, MAIN_PANE_ID]);
+    expect(out.drawings.map((d) => d.paneId)).toEqual([
+      "sub:MACD",
+      MAIN_PANE_ID,
+      MAIN_PANE_ID,
+      MAIN_PANE_ID,
+    ]);
   });
 
   it("样式归一：十六进制大写、线宽夹进 1..6、非法颜色整条丢弃", () => {
@@ -288,6 +303,20 @@ describe("导入合并", () => {
     expect(drawingKey(a)).not.toBe(drawingKey(b));
     expect(drawingKey(a)).not.toBe(drawingKey(c));
     expect(mergeDrawings([a], [b, c]).added).toBe(2);
+  });
+
+  it("同一几何不同一面板不是重复（主图与 MACD 上的两条线各自保留）", () => {
+    // Same timestamps and same numbers, different panes: on the main chart -0.42
+    // is a price, on MACD it is an oscillator value. Folding them into one line
+    // would silently delete one of the two.
+    const onMain = drawing({ points: [{ timestamp: T0, value: -0.42 }] });
+    const onMacd = drawing({ paneId: "sub:MACD", points: [{ timestamp: T0, value: -0.42 }] });
+    expect(drawingKey(onMain)).not.toBe(drawingKey(onMacd));
+    const merged = mergeDrawings([onMain], [onMacd]);
+    expect(merged.added).toBe(1);
+    expect(merged.drawings.map((d) => d.paneId)).toEqual([MAIN_PANE_ID, "sub:MACD"]);
+    // And a blank paneId signs as the main chart, which is where it will draw.
+    expect(drawingKey(onMain)).toBe(drawingKey({ ...onMain, paneId: "" }));
   });
 
   it("列表里已有的重复条目会被压掉", () => {

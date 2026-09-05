@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ALL_PANES_PRESENT,
   DEFAULT_DRAWING_STYLE,
   DRAW_TOOLS,
   MAIN_PANE_ID,
@@ -13,12 +14,14 @@ import {
   formatBarTime,
   isInProgress,
   isDefaultStyle,
+  isRestorablePaneId,
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
   normalizeDrawingStyle,
   overlayStylesOf,
+  paneIndicator,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawingStyle,
@@ -317,7 +320,7 @@ describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
 
   it("re-creates the usable drawings and pins the pane", () => {
     const chart = fakeChart([]);
-    expect(restoreDrawings(chart as never, stored)).toBe(2);
+    expect(restoreDrawings(chart as never, stored).applied.length).toBe(2);
     expect(chart.createOverlay).toHaveBeenCalledTimes(2);
     // The blank paneId must not become "draw it wherever the mouse lands".
     expect(chart.createOverlay.mock.calls[1][0]).toEqual({
@@ -332,7 +335,7 @@ describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
     // delete a *restored* line and it is back after a reload.
     const chart = fakeChart([]);
     const events = makeDrawingEvents({ onChanged: () => undefined });
-    expect(restoreDrawings(chart as never, [stored[0]], events)).toBe(1);
+    expect(restoreDrawings(chart as never, [stored[0]], events).applied.length).toBe(1);
     expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({
       name: "segment",
       onDrawEnd: expect.any(Function),
@@ -477,7 +480,7 @@ describe("drawing styles", () => {
     expect(
       restoreDrawings(chart as never, [
         { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: 1, value: 2 }], style: red },
-      ]),
+      ]).applied.length,
     ).toBe(1);
     // createOverlay got the fragment, so the chart really draws it red...
     expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({ styles: { line: { color: "#F23645", size: 2 } } });
@@ -616,7 +619,7 @@ describe("drawing list and per-line flags (local custom ⑰)", () => {
     expect(stored[1]).toMatchObject({ name: "segment", lock: true, hidden: true });
 
     const fresh = fakeChart([]);
-    expect(restoreDrawings(fresh as never, stored)).toBe(2);
+    expect(restoreDrawings(fresh as never, stored).applied.length).toBe(2);
     expect(fresh.overlays[0]).toMatchObject({ lock: false, visible: true });
     expect(fresh.overlays[1]).toMatchObject({ lock: true, visible: false });
     expect(serializeDrawings(fresh.overlays)).toEqual(stored);
@@ -641,5 +644,93 @@ describe("drawing list and per-line flags (local custom ⑰)", () => {
     expect(formatBarTime(bar)).toBe("09-02 10:30");
     // Epoch seconds are understood too; the loader only ever hands back ms.
     expect(formatBarTime(Math.floor(day / 1000))).toBe("09-02");
+  });
+});
+
+describe("sub-pane drawings (local custom ⑲)", () => {
+  /** A drawing that lives on the MACD pane, not on the price chart. */
+  const macdLine: StoredDrawing = {
+    name: "priceLine",
+    paneId: "sub:MACD",
+    points: [{ timestamp: 1_700_000_000_000, value: -0.42 }],
+  };
+  /** Every `sub:` pane is closed; only the main chart is on screen. */
+  const mainOnly = (id: string) => id === MAIN_PANE_ID;
+
+  it("an address survives a reload only if this module issued it", () => {
+    expect(isRestorablePaneId(MAIN_PANE_ID)).toBe(true);
+    expect(isRestorablePaneId("sub:MACD")).toBe(true);
+    // The library's own pane ids are random per mount (dist 15271 counting up
+    // from Date.now(), dist 450-460), so a drawing stored against one has no
+    // address to come back to — and `createOverlay` would quietly move it onto
+    // the candle pane (dist 15364-15367) while keeping its MACD-scale value:
+    // the invisible line ⑭ was filed for, reborn out of a saved file.
+    expect(isRestorablePaneId("indicator_pane_1725507123456_4")).toBe(false);
+    expect(isRestorablePaneId("")).toBe(false);
+    expect(isRestorablePaneId("x_axis_pane")).toBe(false);
+    expect(paneIndicator("sub:UCI_t2")).toBe("UCI_t2");
+    expect(paneIndicator(MAIN_PANE_ID)).toBe("");
+  });
+
+  it("draws on the sub pane it was stored against while that pane is open", () => {
+    const chart = fakeChart([]);
+    const report = restoreDrawings(chart as never, [macdLine], undefined, (id) => id !== "x_axis_pane");
+    expect(report.parked).toEqual([]);
+    expect(report.applied).toEqual([macdLine]);
+    expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({ name: "priceLine", paneId: "sub:MACD" });
+    expect(chart.overlays[0].paneId).toBe("sub:MACD");
+  });
+
+  it("parks a drawing whose pane is closed instead of letting the library re-home it", () => {
+    const chart = fakeChart([]);
+    const report = restoreDrawings(
+      chart as never,
+      [macdLine, { name: "segment", paneId: MAIN_PANE_ID, points: [{ timestamp: 1, value: 2 }] }],
+      undefined,
+      mainOnly,
+    );
+    // The refused line never reaches `createOverlay`: once the library has
+    // re-homed it there is no trace left of where it used to live.
+    expect(chart.createOverlay).toHaveBeenCalledTimes(1);
+    expect(chart.overlays.map((o) => o.paneId)).toEqual([MAIN_PANE_ID]);
+    expect(report.applied.map((d) => d.name)).toEqual(["segment"]);
+    expect(report.parked).toEqual([macdLine]);
+  });
+
+  it("parks a dead id under its own name, and the default lookup parks nothing", () => {
+    const chart = fakeChart([]);
+    const legacy = { ...macdLine, paneId: "indicator_pane_1_2" };
+    const report = restoreDrawings(chart as never, [legacy]);
+    expect(chart.createOverlay).not.toHaveBeenCalled();
+    expect(report.applied).toEqual([]);
+    // Rewriting it to the main chart is the silent corruption being prevented,
+    // so the parked copy keeps the unusable id and the UI can say "已关闭的副图".
+    expect(report.parked).toEqual([legacy]);
+    expect(ALL_PANES_PRESENT("anything-at-all")).toBe(true);
+  });
+
+  it("an overlay the library refused to create is parked, not lost", () => {
+    // `createOverlay` answers "" for an unknown tool name (dist 15361). A caller
+    // that only counted its input would then bank a smaller bucket over the top
+    // of the real one, and the line would be gone after the next reload.
+    const chart = fakeChart([]);
+    chart.createOverlay.mockReturnValue("");
+    const report = restoreDrawings(chart as never, [macdLine]);
+    expect(report.applied).toEqual([]);
+    expect(report.parked).toEqual([macdLine]);
+  });
+
+  it("a sub-pane row reports its number as a value, not a price", () => {
+    const chart = fakeChart([
+      overlay({ id: "a", paneId: "sub:MACD", points: [{ value: -0.42 }] }),
+      overlay({ id: "b", points: [{ value: 52874.25 }] }),
+    ]);
+    const rows = listDrawings(chart as never);
+    expect(rows[0].paneId).toBe("sub:MACD");
+    expect(rows[0].detail).toBe("值 -0.42");
+    expect(rows[1].paneId).toBe(MAIN_PANE_ID);
+    expect(rows[1].detail).toBe("价位 52874.25");
+    // A stored row with no pane (pre-⑲ data, or the axis strip) is the main chart.
+    expect(describeDrawing({ id: "z", name: "priceLine", points: [] })?.paneId).toBe(MAIN_PANE_ID);
   });
 });

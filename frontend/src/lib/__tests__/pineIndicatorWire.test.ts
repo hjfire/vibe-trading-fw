@@ -150,7 +150,11 @@ describe("dialect dispatch", () => {
     );
     expect(err).toBeNull();
     expect(notes.join(" ")).toContain("bgcolor");
-    expect(chart.createIndicator).toHaveBeenCalledWith({ name: indicatorName("w4") });
+    // ⑲: pane mounts carry the stable `sub:<name>` pane id, not a fresh random one.
+    expect(chart.createIndicator).toHaveBeenCalledWith({
+      name: indicatorName("w4"),
+      paneId: `sub:${indicatorName("w4")}`,
+    });
   });
 });
 

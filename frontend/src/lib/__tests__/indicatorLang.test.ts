@@ -393,7 +393,11 @@ describe("applyUserIndicator", () => {
     );
   });
 
-  it("mounts a sub-chart pane without a paneId", () => {
+  // ⑲: a pane-mounted formula must get the *stable* pane id too. Without it the
+  // library invents `indicator_pane_<Date.now()>_<n>` on every mount, so any
+  // drawing stored against that pane has a dead address after a reload — and
+  // `createOverlay` would silently move it onto the candle pane instead.
+  it("mounts a sub-chart pane on a stable paneId", () => {
     const chart = fakeChart();
     expect(
       applyUserIndicator(chart as never, {
@@ -404,7 +408,7 @@ describe("applyUserIndicator", () => {
         kind: "pane",
       }),
     ).toBeNull();
-    expect(chart.createIndicator).toHaveBeenCalledWith({ name: "UCI_t2" });
+    expect(chart.createIndicator).toHaveBeenCalledWith({ name: "UCI_t2", paneId: "sub:UCI_t2" });
   });
 
   it("surfaces syntax, runtime and empty-output errors without mounting", () => {

@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { init, dispose, type Chart, type KLineData, type DataLoader, type Nullable } from "klinecharts";
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
-import { planPaneHeights, subPaneIdsOf } from "@/lib/paneLayout";
+import { isSubPaneId, planPaneHeights, subPaneIdOf, subPaneIdsOf } from "@/lib/paneLayout";
 import {
   DRAWING_COLORS,
   DRAWING_SIZES,
@@ -17,11 +17,13 @@ import {
   drawingsBucket,
   drawHint,
   isInProgress,
+  isRestorablePaneId,
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
   overlayStylesOf,
+  paneIndicator,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawingStyle,
@@ -31,6 +33,7 @@ import {
   type DrawingFlags,
   type DrawingRow,
   type DrawingStyle,
+  type PaneLookup,
   type StoredDrawing,
 } from "@/lib/chartDrawings";
 import {
@@ -45,7 +48,7 @@ import {
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
-import { applyUserIndicator } from "@/lib/indicatorLang";
+import { applyUserIndicator, indicatorName } from "@/lib/indicatorLang";
 import { loadUserIndicators } from "@/lib/indicatorStore";
 import { readShareLink, SHARE_QUERY_KEY } from "@/lib/scriptExchange";
 import { copyText, downloadText } from "@/components/charts/workbench/types";
@@ -203,6 +206,36 @@ function takeDrawLinkTask(): ReturnType<typeof readDrawingsShareLink> | null {
   return drawLinkHandled ? null : pendingDrawTask;
 }
 
+/**
+ * Sub panes are worth naming (⑲): the library's own id is random per mount, so
+ * a drawing stored against it has nowhere to live on the next load. The two
+ * built-ins below are the sub panes mounted at startup; user formulas get a
+ * pane id from the same helper inside `indicatorLang.applyUserIndicator`. (MA
+ * is not here: it is an overlay and shares the main pane.)
+ */
+const SUB_PANE_LABELS: Record<string, string> = {
+  VOL: "成交量",
+  MACD: "MACD",
+};
+
+/** What a pane id should read like next to a drawing (⑲). */
+function paneDisplayName(paneId: string, userLabels: ReadonlyMap<string, string>): string {
+  if (paneId === MAIN_PANE_ID) return "主图";
+  if (!isRestorablePaneId(paneId)) return "已关闭的副图";
+  const name = paneIndicator(paneId);
+  return SUB_PANE_LABELS[name] ?? userLabels.get(name) ?? name;
+}
+
+/** Distinct panes a parked set is waiting for, in first-seen order. */
+function parkedPanesOf(
+  list: readonly StoredDrawing[],
+  userLabels: ReadonlyMap<string, string>,
+): string[] {
+  const seen = new Set<string>();
+  for (const d of list) seen.add(paneDisplayName(d.paneId, userLabels));
+  return [...seen];
+}
+
 export function ProChart() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Nullable<Chart>>(null);
@@ -270,6 +303,16 @@ export function ProChart() {
   // another's: each removal fires `onRemoved`, and banking that mid-swap would
   // overwrite the bucket that was just carefully saved.
   const drawingsMutedRef = useRef(false);
+  // Parked drawings (⑲): lines whose pane is not on the chart — the indicator
+  // behind `sub:MACD` is switched off, or the id predates stable panes entirely.
+  // They are in storage but have no overlay, so every write of the bucket has to
+  // carry them along or the next edit silently deletes them.
+  const parkedRef = useRef<StoredDrawing[]>([]);
+  const [parked, setParked] = useState<StoredDrawing[]>([]);
+  const replaceParked = (list: readonly StoredDrawing[]) => {
+    parkedRef.current = list.slice();
+    setParked(list.slice());
+  };
   // Warn-on-starvation (⑮): what the budget ended up giving the main chart.
   const [paneStarved, setPaneStarved] = useState<{ main: number; sub: number } | null>(null);
   // `excludeId` again covers the `onRemoved` callback, which runs while the
@@ -284,6 +327,15 @@ export function ProChart() {
   // even when the enabled count is unchanged (swapping one custom indicator for
   // another keeps the number but moves the panes around).
   const [layoutTick, setLayoutTick] = useState(0);
+  // Indicator name → workbench label, so a parked drawing can say which sub pane
+  // it is waiting for. Re-read when the workbench reports a change
+  // (`layoutTick`), the only thing that can rename or add a formula on this page.
+  const userLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const u of loadUserIndicators()) if (u.label) map.set(indicatorName(u.id), u.label);
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indCount, layoutTick]);
   // Last `chartHeight|sub pane ids` the budget was applied for; see
   // `applyPaneLayout` for why anything else must not trigger a rebudget.
   const layoutSigRef = useRef("");
@@ -372,6 +424,31 @@ export function ProChart() {
     }
   };
 
+  /**
+   * Is this pane on the chart right now? `getPaneOptions(id)` answers `null` for
+   * a pane the chart does not hold, which is the only way to tell "the MACD pane
+   * is closed" apart from "draw it wherever" (⑲) — and guessing wrong is exactly
+   * the invisible-line bug `chartDrawings.restoreDrawings` parks against.
+   */
+  const paneLookup = (chart: Chart): PaneLookup => (paneId: string) => {
+    try {
+      return chart.getPaneOptions(paneId) != null;
+    } catch {
+      // A host that cannot answer gets the one safe answer: the main chart.
+      return paneId === MAIN_PANE_ID;
+    }
+  };
+
+  /**
+   * Write the bucket: the lines on the chart plus the ones parked off it (⑲).
+   * Parked first, because `saveDrawings` keeps the tail when a bucket overflows
+   * and a line nobody can see is the one worth sacrificing — and because every
+   * other write path would otherwise delete them by omission.
+   */
+  const bankDrawings = (chart: Chart, s: string, i: string, excludeId: string | null = null) => {
+    saveDrawings(s, i, [...parkedRef.current, ...serializeDrawings(chart.getOverlays(), excludeId)]);
+  };
+
   // Create/destroy the chart once per mount.
   useEffect(() => {
     if (!hostRef.current) return;
@@ -436,14 +513,22 @@ export function ProChart() {
             const prev = drawingsKeyRef.current;
             if (prev) {
               const [ps, pi] = prev.split("|");
-              saveDrawings(ps, pi, serializeDrawings(chart.getOverlays()));
+              // `parkedRef` still holds the *outgoing* bucket's waiting lines at
+              // this point, which is exactly the set this call must preserve.
+              bankDrawings(chart, ps, pi);
             }
             // The teardown below fires `onRemoved` on every old overlay; those
             // callbacks must not bank against the key that is about to change.
             drawingsMutedRef.current = true;
             try {
               chart.removeOverlay();
-              restoreDrawings(chart, loadDrawings(ticker, iv), drawingEvents());
+              const report = restoreDrawings(
+                chart,
+                loadDrawings(ticker, iv),
+                drawingEvents(),
+                paneLookup(chart),
+              );
+              replaceParked(report.parked);
             } finally {
               drawingsMutedRef.current = false;
             }
@@ -463,8 +548,10 @@ export function ProChart() {
     chart.setSymbol({ ticker: symbol, pricePrecision: 2, volumePrecision: 0 });
     chart.setPeriod(periodFor(interval));
     chart.createIndicator({ name: "MA", paneId: "candle_pane" }, true);
-    chart.createIndicator({ name: "VOL" });
-    chart.createIndicator({ name: "MACD" });
+    // Named panes, so a drawing on the volume strip can find it again after a
+    // reload (⑲); the library's own ids are random per mount.
+    chart.createIndicator({ name: "VOL", paneId: subPaneIdOf("VOL") });
+    chart.createIndicator({ name: "MACD", paneId: subPaneIdOf("MACD") });
     applyPaneLayout(chart);
 
     const onResize = () => {
@@ -486,7 +573,7 @@ export function ProChart() {
       const key = drawingsKeyRef.current;
       if (key) {
         const [ps, pi] = key.split("|");
-        saveDrawings(ps, pi, serializeDrawings(chart.getOverlays()));
+        bankDrawings(chart, ps, pi);
       }
       dispose(chart);
       chartRef.current = null;
@@ -554,10 +641,15 @@ export function ProChart() {
   };
 
   // Panes come and go from the workbench without any chart event to hook, so
-  // rebudget the layout whenever the enabled-indicator set changes.
+  // rebudget the layout whenever the enabled-indicator set changes — and hand
+  // back the drawings a newly opened sub pane has waiting for it (⑲).
   useEffect(() => {
     const chart = chartRef.current;
-    if (chart) applyPaneLayout(chart);
+    if (chart) {
+      applyPaneLayout(chart);
+      parkOrphans(chart);
+      flushParked(chart);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indCount, layoutTick]);
 
@@ -567,7 +659,7 @@ export function ProChart() {
     setDrawNotice(null);
     const key = drawingsKeyRef.current || `${symbol}|${interval}`;
     const [s, i] = key.split("|");
-    saveDrawings(s, i, serializeDrawings(chart.getOverlays(), excludeId));
+    bankDrawings(chart, s, i, excludeId);
     refreshDrawCount(chart, excludeId);
   };
 
@@ -603,6 +695,67 @@ export function ProChart() {
     });
 
   /**
+   * Everything this bucket holds, on the chart or not (⑲). Exporting the live
+   * lines only would hand over half a drawing set and then watch the parked half
+   * vanish on the next edit.
+   */
+  const allDrawings = (chart: Chart): StoredDrawing[] => [
+    ...parkedRef.current,
+    ...serializeDrawings(chart.getOverlays()),
+  ];
+
+  /**
+   * A sub pane just disappeared under its drawings (⑲). The library leaves those
+   * overlay instances on the chart pointing at a pane that is gone — invisible,
+   * still counted, and not even parked, so `清单 · N` would stop matching the
+   * lines the user can see (the ⑰ contract). Take them off the chart and hand
+   * them to the same parking lot `restoreDrawings` uses, so re-enabling the
+   * formula puts them back on their own pane.
+   */
+  const parkOrphans = (chart: Chart) => {
+    const paneExists = paneLookup(chart);
+    const overlays = (chart.getOverlays() ?? []) as { id?: string; paneId?: string }[];
+    const dead = overlays.filter((o) => isSubPaneId(o.paneId ?? "") && !paneExists(o.paneId!));
+    if (dead.length === 0) return;
+    // A half-drawn line has nothing worth keeping; removing it unmuted lets the
+    // library's own `onRemoved` put out the armed-tool highlight.
+    const salvage = dead.filter((o) => !isInProgress(o));
+    const unfinished = dead.filter((o) => isInProgress(o));
+    const waiting = serializeDrawings(salvage);
+    drawingsMutedRef.current = true;
+    try {
+      for (const o of salvage) if (o.id) chart.removeOverlay({ id: o.id });
+    } finally {
+      drawingsMutedRef.current = false;
+    }
+    replaceParked([...parkedRef.current, ...waiting]);
+    for (const o of unfinished) if (o.id) chart.removeOverlay({ id: o.id });
+    syncDrawings(chart);
+  };
+
+  /**
+   * A sub pane just appeared — put back what was waiting for it (⑲). Parked
+   * drawings are re-run through `restoreDrawings` rather than created here, so a
+   * pane that shows up and vanishes again in the same tick parks them straight
+   * back instead of losing them.
+   */
+  const flushParked = (chart: Chart) => {
+    const waiting = parkedRef.current;
+    if (waiting.length === 0) return;
+    const report = restoreDrawings(chart, waiting, drawingEvents(), paneLookup(chart));
+    if (report.applied.length === 0) return;
+    replaceParked(report.parked);
+    syncDrawings(chart);
+  };
+
+  /** Throw away the waiting lines — the only way out of a pane that is gone. */
+  const discardParked = () => {
+    replaceParked([]);
+    const chart = chartRef.current;
+    if (chart) syncDrawings(chart);
+  };
+
+  /**
    * Arm a draw tool. The button doubles as the exit: clicking the armed tool
    * again (or Esc) drops the half-drawn overlay instead of leaving the chart
    * swallowing clicks waiting for a second point.
@@ -618,6 +771,10 @@ export function ProChart() {
     }
     cancelInProgress(chart);
     setDrawTool(name);
+    // The starting pane, not the final one: `updateProgressOverlayInfo` re-homes
+    // the overlay to whichever pane takes the first click (dist 8508-8510), and
+    // that is the sub-pane gesture ⑲ is built on — arming a tool does not have
+    // to know yet where the user means to draw.
     chart.createOverlay({
       name,
       paneId: MAIN_PANE_ID,
@@ -652,6 +809,9 @@ export function ProChart() {
     const chart = chartRef.current;
     if (!chart) return;
     chart.removeOverlay();
+    // "全部画线" means the parked ones too (⑲) — they belong to this bucket, and
+    // leaving them behind would resurrect lines the user just asked to clear.
+    replaceParked([]);
     setDrawTool(null);
     syncDrawings(chart);
   };
@@ -715,15 +875,21 @@ export function ProChart() {
     }
     saveDrawings(symbol, interval, merged.drawings);
     const chart = chartRef.current;
+    let waiting = 0;
     // A bucket the chart is not showing yet needs no live update: the swap in
     // `getBars` reads it from storage the moment it becomes current.
     if (chart && drawingsKeyRef.current === key) {
-      restoreDrawings(chart, merged.fresh, drawingEvents());
+      const report = restoreDrawings(chart, merged.fresh, drawingEvents(), paneLookup(chart));
+      if (report.parked.length > 0) replaceParked([...parkedRef.current, ...report.parked]);
+      waiting = report.parked.length;
       refreshDrawCount(chart);
     }
     const bits = [`导入 ${merged.added} 条画线到 ${key}`];
     if (merged.duplicates) bits.push(`重复 ${merged.duplicates} 条未加`);
     if (skipped.length) bits.push(`跳过 ${skipped.length} 条`);
+    // ⑲: a file from a MACD study is useless on a chart that closed MACD, but it
+    // is not *lost* — say where it is instead of letting it silently not appear.
+    if (waiting) bits.push(`${waiting} 条在等副图开启`);
     if (from && from !== key) bits.push(`文件来自 ${from}`);
     setDrawNotice({ detail: skipped.join("；"), text: bits.join("；") });
   };
@@ -731,7 +897,7 @@ export function ProChart() {
   const exportDrawingsFile = () => {
     const chart = chartRef.current;
     if (!chart) return;
-    const list = serializeDrawings(chart.getOverlays());
+    const list = allDrawings(chart);
     if (list.length === 0) {
       setDrawNotice({ bad: true, text: `当前标的与周期（${symbol} · ${interval}）上没有画线` });
       return;
@@ -747,7 +913,7 @@ export function ProChart() {
   const shareDrawingsLink = async () => {
     const chart = chartRef.current;
     if (!chart) return;
-    const list = serializeDrawings(chart.getOverlays());
+    const list = allDrawings(chart);
     if (list.length === 0) {
       setDrawNotice({ bad: true, text: `当前标的与周期（${symbol} · ${interval}）上没有画线` });
       return;
@@ -809,6 +975,8 @@ export function ProChart() {
   }, []);
 
   const armedTool = toolOf(drawTool ?? "");
+  const parkedCount = parked.length;
+  const parkedBits = parkedCount > 0 ? parkedPanesOf(parked, userLabels).join("、") : "";
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
   // highlight, or the chart keeps eating clicks waiting for the next point.
@@ -916,8 +1084,8 @@ export function ProChart() {
           </button>
           <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            title="清除当前标的与周期上的全部画线"
-            disabled={drawCount === 0 && drawTool === null}
+            title="清除当前标的与周期上的全部画线（含在等副图开启的）"
+            disabled={drawCount === 0 && parkedCount === 0 && drawTool === null}
             onClick={clearDraw}
           >
             清除
@@ -929,11 +1097,16 @@ export function ProChart() {
             )}
             aria-label="画线清单"
             aria-pressed={drawPanelOpen}
-            title={drawCount === 0 ? "暂无画线可管理" : "列出全部画线：逐条选中、锁定、隐藏、删除"}
-            disabled={drawCount === 0}
+            title={
+              drawCount === 0 && parkedCount === 0
+                ? "暂无画线可管理"
+                : `列出全部画线：逐条选中、锁定、隐藏、删除${parkedCount ? `（另 ${parkedCount} 条在等副图）` : ""}`
+            }
+            disabled={drawCount === 0 && parkedCount === 0}
             onClick={toggleDrawPanel}
           >
             清单 · {drawCount}
+            {parkedCount > 0 ? `+${parkedCount}` : ""}
           </button>
           {/* Exchange (⑱): a file is the archive, the link is the quick hand-off.
               导入 stays clickable on an empty chart — that is exactly when it is
@@ -941,8 +1114,8 @@ export function ProChart() {
           <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
             aria-label="导出画线文件"
-            title={`把当前 ${drawCount} 条画线导出为 .json（含颜色线宽与锁定/隐藏）`}
-            disabled={drawCount === 0}
+            title={`把当前 ${drawCount + parkedCount} 条画线导出为 .json（含颜色线宽、锁定/隐藏与归属面板）`}
+            disabled={drawCount === 0 && parkedCount === 0}
             onClick={exportDrawingsFile}
           >
             导出
@@ -951,7 +1124,7 @@ export function ProChart() {
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
             aria-label="复制画线分享链接"
             title="把当前画线压进一条链接（?d=），对方打开即导入到他的标的与周期"
-            disabled={drawCount === 0}
+            disabled={drawCount === 0 && parkedCount === 0}
             onClick={() => void shareDrawingsLink()}
           >
             链接
@@ -1018,7 +1191,10 @@ export function ProChart() {
             {drawStyle.dashed ? "虚线" : "实线"}
           </button>
         </div>
-        <span className={cn("text-xs", drawNotice?.bad ? "text-red-500" : "text-muted-foreground")} title={drawNotice?.detail || undefined}>
+        <span
+          className={cn("text-xs", drawNotice?.bad ? "text-red-500" : "text-muted-foreground")}
+          title={drawNotice?.detail || (parkedCount > 0 ? `在等副图：${parkedBits}` : undefined)}
+        >
           {drawNotice
             ? drawNotice.text
             : armedTool
@@ -1026,8 +1202,10 @@ export function ProChart() {
               : selectedDraw
                 ? "已选中一条线 — 点颜色/线宽就改这条（点空白处取消）"
                 : drawCount > 0
-                  ? `已画 ${drawCount} 条 · 随标的与周期保存，单击选中、拖动可改位，右键点线删除`
-                  : "画线随标的与周期保存"}
+                  ? `已画 ${drawCount} 条 · 随标的与周期保存，单击选中、拖动可改位，右键点线删除${parkedCount > 0 ? ` · 另 ${parkedCount} 条在等 ${parkedBits}` : ""}`
+                  : parkedCount > 0
+                    ? `${parkedCount} 条画线在等 ${parkedBits} — 开启对应指标即回到图上`
+                    : "画线随标的与周期保存"}
         </span>
         {shareFallback && (
           <input
@@ -1055,7 +1233,9 @@ export function ProChart() {
       {drawPanelOpen && (
         <div className="max-h-[132px] shrink-0 overflow-y-auto rounded-lg border bg-background">
           {drawRows.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">当前标的与周期上还没有画线</div>
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              {parkedCount > 0 ? "图上暂无画线 — 下面这些在等副图开启" : "当前标的与周期上还没有画线"}
+            </div>
           ) : (
             drawRows.map((row) => (
               <div
@@ -1081,6 +1261,14 @@ export function ProChart() {
                     style={{ backgroundColor: row.style.color }}
                   />
                   <span className="shrink-0 font-medium">{row.label}</span>
+                  {row.paneId !== MAIN_PANE_ID && (
+                    <span
+                      className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground"
+                      title={`这条线落在「${paneDisplayName(row.paneId, userLabels)}」副图上；关闭该指标会把它暂存，重开即放回同一面板`}
+                    >
+                      {paneDisplayName(row.paneId, userLabels)}
+                    </span>
+                  )}
                   <span className="truncate text-muted-foreground">{row.detail}</span>
                   {row.pointCount > 2 && <span className="shrink-0 text-muted-foreground">{row.pointCount} 点</span>}
                   {row.locked && <span className="shrink-0 text-muted-foreground">已锁定</span>}
@@ -1116,6 +1304,25 @@ export function ProChart() {
               </div>
             ))
           )}
+          {parkedCount > 0 && (
+            <div className="flex items-center gap-2 border-t bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+              <span
+                className="min-w-0 flex-1 truncate"
+                title={`这些线画在 ${parkedBits} 上，而该副图当前是关闭的；开启对应指标会自动放回原面板（不会回到主图）`}
+              >
+                {parkedCount} 条在等副图 · {parkedBits} — 开启对应指标即回到图上
+              </span>
+              <button
+                type="button"
+                aria-label="删除待恢复的画线"
+                title="删除这些在等副图的线（它们不在图上，只能从这里删）"
+                className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
+                onClick={discardParked}
+              >
+                删除
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1137,7 +1344,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点（画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除），「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式与锁定隐藏），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏可在主图或任一副图上落点（第一个落点在哪条面板，这条线就归谁；画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除并标注归属副图），副图被关闭时它的线会暂存在清单尾部、重开指标即回到原面板，「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式、锁定隐藏与归属面板），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

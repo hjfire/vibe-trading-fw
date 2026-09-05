@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { ProChart } from "../ProChart";
-import { planPaneHeights } from "@/lib/paneLayout";
+import { planPaneHeights, subPaneIdOf } from "@/lib/paneLayout";
 import { createDrawingsShareLink, exportDrawingsJson, readDrawingsShareLink } from "@/lib/drawingExchange";
 import { DRAW_TOOLS } from "@/lib/chartDrawings";
 
@@ -104,6 +104,11 @@ type OverlayEvents = Pick<
 const DAY = 86_400_000;
 const START = 1_700_000_000_000;
 const HOST_HEIGHT = 360; // `.min-h-[360px]`, the size that used to leave 29px
+// The sub-pane addresses ⑲ hands the built-ins. They are the whole point of
+// that change: a drawing stored against one of these is findable again after a
+// reload, which a library-generated `indicator_pane_…` id never is.
+const SUB_VOL = subPaneIdOf("VOL");
+const SUB_MACD = subPaneIdOf("MACD");
 
 const h = vi.hoisted(() => ({
   ticker: "600519.SH",
@@ -231,26 +236,33 @@ vi.mock("klinecharts", () => ({
       setPeriod: vi.fn(() => undefined),
       setStyles: vi.fn(),
       resize: vi.fn(),
-      // A pane-less createIndicator creates a sub pane; a paneId stacks instead.
+      // A `createIndicator` for a pane that is not on screen adds it under the
+      // id it was handed (dist 15271: `indicator.paneId ?? createId(...)`); an id
+      // that already exists stacks onto that pane instead of adding a second one.
       createIndicator: vi.fn((value: unknown) => {
         const v = (typeof value === "string" ? { name: value } : value) as {
           name?: string;
           paneId?: string;
         };
-        if (!v?.paneId && v?.name) {
-          const id = `pane_${v.name}`;
-          if (!h.panes.some((p) => p.id === id)) {
-            // The library default: `height: 100`, which is the whole problem.
-            h.panes.push({ id, height: 100, minHeight: 30, state: "normal" });
-          }
-          return id;
+        const id = v?.paneId || (v?.name ? `pane_${v.name}` : "");
+        if (!id) return null;
+        if (!h.panes.some((p) => p.id === id)) {
+          // The library default: `height: 100`, which is the whole problem.
+          h.panes.push({ id, height: 100, minHeight: 30, state: "normal" });
         }
-        return v?.name ?? null;
+        return id;
       }),
       // v10 footgun: a *string* filter is read as an empty filter and removes
       // every indicator on the chart. The assertions below keep us honest.
       removeIndicator: vi.fn(),
-      getPaneOptions: vi.fn(() => h.panes.map((p) => ({ ...p }))),
+      // v10 has both shapes: no argument lists every pane, an id answers that one
+      // pane or `null` (dist 15587-15594). The second form is the existence probe
+      // ⑲ reads before it will put a drawing back on a pane.
+      getPaneOptions: vi.fn((id?: string) => {
+        if (id === undefined || id === null) return h.panes.map((p) => ({ ...p }));
+        const pane = h.panes.find((p) => p.id === id);
+        return pane ? { ...pane } : null;
+      }),
       setPaneOptions: vi.fn((options: { id?: string; height?: number }) => {
         const pane = h.panes.find((p) => p.id === options.id);
         if (pane && typeof options.height === "number") {
@@ -418,10 +430,10 @@ describe("/pro-chart 面板高度（画线可用性前提）", () => {
   it("mount 后副图不再按 100px 吃掉主图", async () => {
     await mountChart();
 
-    const plan = planPaneHeights({ chartHeight: HOST_HEIGHT, subPaneIds: ["pane_VOL", "pane_MACD"] });
+    const plan = planPaneHeights({ chartHeight: HOST_HEIGHT, subPaneIds: [SUB_VOL, SUB_MACD] });
     const heights = paneHeights();
-    expect(heights.pane_VOL).toBe(plan.subPaneHeight);
-    expect(heights.pane_MACD).toBe(plan.subPaneHeight);
+    expect(heights[SUB_VOL]).toBe(plan.subPaneHeight);
+    expect(heights[SUB_MACD]).toBe(plan.subPaneHeight);
     expect(plan.subPaneHeight).toBeLessThan(100);
     // The main chart is the flexible pane: it is never handed a fixed height,
     // it simply stops being squeezed.
@@ -438,14 +450,17 @@ describe("/pro-chart 面板高度（画线可用性前提）", () => {
     );
     await mountChart();
 
-    expect(h.chart?.createIndicator).toHaveBeenCalledWith({ name: "UCI_t9" });
+    expect(h.chart?.createIndicator).toHaveBeenCalledWith({
+      name: "UCI_t9",
+      paneId: subPaneIdOf("UCI_t9"),
+    });
     const plan = planPaneHeights({
       chartHeight: HOST_HEIGHT,
-      subPaneIds: ["pane_VOL", "pane_MACD", "pane_UCI_t9"],
+      subPaneIds: [SUB_VOL, SUB_MACD, subPaneIdOf("UCI_t9")],
     });
     const heights = paneHeights();
-    expect(heights.pane_UCI_t9).toBe(plan.subPaneHeight);
-    expect(heights.pane_VOL).toBe(plan.subPaneHeight); // the old panes shrank too
+    expect(heights[subPaneIdOf("UCI_t9")]).toBe(plan.subPaneHeight);
+    expect(heights[SUB_VOL]).toBe(plan.subPaneHeight); // the old panes shrank too
     expect(plan.mainHeight).toBeGreaterThan(HOST_HEIGHT * 0.45);
   });
 
@@ -458,7 +473,7 @@ describe("/pro-chart 面板高度（画线可用性前提）", () => {
 });
 
 describe("/pro-chart 画线交互", () => {
-  it("按钮点亮工具，并钉住主图 pane", async () => {
+  it("按钮点亮工具，并从主图起步", async () => {
     await mountChart();
     const button = screen.getByRole("button", { name: "价格线" });
     fireEvent.click(button);
@@ -471,7 +486,9 @@ describe("/pro-chart 画线交互", () => {
       paneId: "candle_pane",
     });
     expect(button.className).toContain("ring-1");
-    expect(screen.getByText(/在主图上点击 1 个落点/)).toBeTruthy();
+    // Arming starts on the main chart, but the first click re-homes the overlay
+    // (dist 8508-8510), so the hint must not promise the main chart (⑲).
+    expect(screen.getByText(/第一个落点在主图还是副图/)).toBeTruthy();
   });
 
   it("再点一次退出，半成品不会留着吃点击", async () => {
@@ -872,7 +889,7 @@ describe("/pro-chart 面板预算的边界", () => {
 
     const plan = planPaneHeights({
       chartHeight: HOST_HEIGHT,
-      subPaneIds: ["pane_VOL", "pane_MACD", "pane_UCI_t1", "pane_UCI_t2"],
+      subPaneIds: [SUB_VOL, SUB_MACD, subPaneIdOf("UCI_t1"), subPaneIdOf("UCI_t2")],
     });
     expect(plan.starved).toBe(true);
     expect(screen.getByText(`副图过多，主图仅 ${plan.mainHeight}px — 关闭部分指标可恢复`)).toBeTruthy();
@@ -885,7 +902,7 @@ describe("/pro-chart 面板预算的边界", () => {
 
   it("手拖副图高度不被无关的重排抹掉", async () => {
     await mountChart();
-    const vol = h.panes.find((p) => p.id === "pane_VOL");
+    const vol = h.panes.find((p) => p.id === SUB_VOL);
     if (!vol) throw new Error("VOL pane missing");
     // Separator dragging rewrites the height inside the library; nothing else
     // about the chart changed.
@@ -897,7 +914,7 @@ describe("/pro-chart 面板预算的边界", () => {
     });
     await flush();
     expect(h.chart?.setPaneOptions).not.toHaveBeenCalled();
-    expect(paneHeights().pane_VOL).toBe(130);
+    expect(paneHeights()[SUB_VOL]).toBe(130);
 
     // A pane actually appearing is a different story: the budget has to re-run.
     h.chart?.createIndicator({ name: "FOO" });
@@ -907,7 +924,7 @@ describe("/pro-chart 面板预算的边界", () => {
     await flush();
     const plan = planPaneHeights({
       chartHeight: HOST_HEIGHT,
-      subPaneIds: ["pane_VOL", "pane_MACD", "pane_FOO"],
+      subPaneIds: [SUB_VOL, SUB_MACD, "pane_FOO"],
     });
     expect(h.chart?.setPaneOptions).toHaveBeenCalledWith({ id: "pane_FOO", height: plan.subPaneHeight });
     expect(paneHeights().pane_FOO).toBe(plan.subPaneHeight);
@@ -1302,7 +1319,7 @@ describe("/pro-chart 画线导出、导入与分享链接", () => {
     fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
     await flush();
     expect(screen.queryByText(/导入 2 条/)).toBeNull();
-    expect(screen.getByText(/在主图上点击 2 个落点/)).toBeTruthy();
+    expect(screen.getByText(/第一个落点在主图还是副图/)).toBeTruthy();
   });
 
   it("剪贴板用不了时把链接摊在界面上，不假装成功", async () => {
@@ -1410,5 +1427,205 @@ describe("/pro-chart 画线导出、导入与分享链接", () => {
     // The file picker is a real file input, so a drag-drop-less browser still works.
     expect(fileInput().type).toBe("file");
     expect(fileInput().accept).toContain(".json");
+  });
+});
+
+/**
+ * Drawings that live on a sub pane (local custom ⑲).
+ *
+ * Drawing on MACD was always possible — the library re-homes an overlay to
+ * whichever pane takes the first click (dist 8508-8510). What was missing is an
+ * address that survives a reload: `createIndicator` without a paneId invents
+ * `indicator_pane_<Date.now()>_<n>` (dist 15271), so a line stored against a sub
+ * pane comes back looking for an id that no longer exists, and `createOverlay`
+ * answers that by quietly moving it onto the candle pane (dist 15364-15367)
+ * while keeping its MACD-scale value — the invisible line ⑭ was filed for,
+ * arriving out of storage. Hence two things are pinned below: the panes are
+ * named by us, and a line whose pane is not on the chart is *parked* (listed,
+ * exported, still in storage) instead of being handed to the library to guess
+ * with.
+ */
+describe("/pro-chart 副图上的画线", () => {
+  const MAIN = "candle_pane";
+  const bucketOf = (key = "600519.SH|1D"): Array<Record<string, unknown>> =>
+    (readBuckets()[key] ?? []) as Array<Record<string, unknown>>;
+  const seed = (drawings: Array<Record<string, unknown>>) =>
+    localStorage.setItem(DRAWING_KEY, JSON.stringify({ "600519.SH|1D": drawings }));
+  const disabled = (name: string): boolean =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+  /** Turns a pane off the way the workbench does: it stops existing (dist 15323-15358). */
+  const closePane = (id: string) => {
+    const i = h.panes.findIndex((p) => p.id === id);
+    if (i >= 0) h.panes.splice(i, 1);
+  };
+
+  /** Leave the symbol and come back: the path that re-runs the restore. */
+  async function reload(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    });
+    await flush();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "贵州茅台" }));
+    });
+    await flush();
+  }
+
+  /** The blob `导出` builds, without a real download. */
+  async function captureExport(): Promise<{ drawings: Array<Record<string, unknown>> }> {
+    let blob: Blob | null = null;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = ((b: Blob) => {
+      blob = b;
+      return "blob:fake";
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "导出画线文件" }));
+      await flush();
+    } finally {
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+    }
+    expect(blob).toBeTruthy();
+    return JSON.parse(await (blob as unknown as Blob).text()) as {
+      drawings: Array<Record<string, unknown>>;
+    };
+  }
+
+  it("存在 sub:MACD 上的线，开机画回 sub:MACD，清单说得出它归哪个面板", async () => {
+    seed([{ name: "priceLine", paneId: SUB_MACD, points: [{ timestamp: START, value: -0.42 }] }]);
+    await mountChart();
+
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].paneId).toBe(SUB_MACD);
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    // -0.42 is an oscillator value; calling it 价位 is the same lie in reporting
+    // form, and the row has to say which pane it belongs to.
+    expect(screen.getByText(/值 -0\.42/)).toBeTruthy();
+    expect(screen.queryByText(/价位/)).toBeNull();
+    expect(screen.getByText("MACD")).toBeTruthy();
+  });
+
+  it("在副图上画一条线，存的是副图地址，刷新后仍在同一个副图", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    const drawn = h.overlays[h.overlays.length - 1];
+    // The armed tool starts on the main chart; the first click re-homes it.
+    drawn.paneId = SUB_MACD;
+    finishDrawing({ timestamp: START + DAY, value: -0.42 });
+    await flush();
+    expect(bucketOf()[0].paneId).toBe(SUB_MACD);
+
+    await reload();
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].paneId).toBe(SUB_MACD);
+    expect(h.overlays[0].points).toEqual([{ timestamp: START + DAY, value: -0.42 }]);
+  });
+
+  it("副图关了就不上图：暂存、可导出、改其它线也不丢，重开回到原面板", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    h.overlays[h.overlays.length - 1].paneId = SUB_MACD;
+    finishDrawing({ timestamp: START + DAY, value: -0.42 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1290 });
+    await flush();
+    expect(h.overlays).toHaveLength(2);
+
+    closePane(SUB_MACD);
+    await reload();
+
+    // Exactly one line on the chart, and it is the main-chart one: the MACD line
+    // is not quietly re-homed, which is the bug this whole block exists for.
+    expect(h.overlays.map((o) => o.paneId)).toEqual([MAIN]);
+    expect(screen.getByText(/在等 MACD/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 1+1");
+    expect(bucketOf().map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+
+    // An edit on the live line re-banks the whole bucket, so the parked line has
+    // to ride along — otherwise touching one line deletes another one's storage.
+    dragDrawing(h.overlays[0].id, 1299);
+    await flush();
+    expect(bucketOf().map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+    expect(screen.getByText(/另 1 条在等 MACD/)).toBeTruthy();
+    // And the export is the full set, not the half that happens to be visible.
+    expect((await captureExport()).drawings.map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+
+    // MACD comes back: the waiting line goes home, and it is still one line.
+    h.chart?.createIndicator({ name: "MACD", paneId: SUB_MACD });
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.overlays.map((o) => o.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 2");
+    expect(bucketOf()).toHaveLength(2);
+  });
+
+  it("关掉副图指标（不刷新）：线当场进暂存，不会留下看不见的第三条", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    h.overlays[h.overlays.length - 1].paneId = SUB_MACD;
+    finishDrawing({ timestamp: START + DAY, value: -0.42 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1290 });
+    await flush();
+    expect(h.overlays).toHaveLength(2);
+
+    // The workbench switches the indicator off: the pane stops existing, and the
+    // library leaves the overlay instance on the chart with nothing under it.
+    // Un-handled, `清单 · 2` would then describe one line nobody can see or
+    // reach — the ⑰ contract (list length == lines on screen) breaks.
+    closePane(SUB_MACD);
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+
+    expect(h.overlays.map((o) => o.paneId)).toEqual([MAIN]);
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 1+1");
+    expect(screen.getByText(/在等 MACD/)).toBeTruthy();
+    expect(bucketOf().map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+
+    // Re-opening the formula puts that line back on its own pane.
+    h.chart?.createIndicator({ name: "MACD", paneId: SUB_MACD });
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.overlays.map((o) => o.paneId).sort()).toEqual([MAIN, SUB_MACD]);
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 2");
+  });
+
+  it("旧随机面板地址上的线：说清它回不来，并给一个删除入口", async () => {
+    seed([
+      {
+        name: "priceLine",
+        paneId: "indicator_pane_1725507123456_4",
+        points: [{ timestamp: START, value: 52_874 }],
+      },
+    ]);
+    await mountChart();
+
+    // Not drawn: a pane id this app did not issue is unreachable, and painting it
+    // on the main chart at a volume-scale value is precisely ⑭.
+    expect(h.overlays).toHaveLength(0);
+    expect(screen.getByText(/1 条画线在等 已关闭的副图/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    expect(screen.getByText("1 条在等副图 · 已关闭的副图 — 开启对应指标即回到图上")).toBeTruthy();
+    expect(disabled("导出画线文件")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "删除待恢复的画线" }));
+    await flush();
+    expect(bucketOf()).toHaveLength(0);
+    expect(screen.getByText("画线随标的与周期保存")).toBeTruthy();
+    expect(disabled("画线清单")).toBe(true);
   });
 });

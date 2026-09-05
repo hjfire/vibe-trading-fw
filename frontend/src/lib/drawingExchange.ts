@@ -9,9 +9,11 @@
  *
  * - a point without a `timestamp` is dropped: a bare `dataIndex` lands on a
  *   different bar once the next page of history is prepended (see ⑭);
- * - `paneId` is forced to the main pane. Drawings are armed against
- *   `candle_pane`, and an imported id pointing at an indicator pane would put
- *   price values on a volume axis — the exact bug ⑭ fixed;
+ * - `paneId` is kept only when it names a pane the receiving chart can rebuild
+ *   — the main chart or one of this app's `sub:` panes (⑲). Anything else, the
+ *   library's random `indicator_pane_…` included, is sent to the main pane:
+ *   price values on a volume axis is the exact bug ⑭ fixed, and a line saved
+ *   against a pane id that will never exist again is worse than a plain one;
  * - tool names outside `DRAW_TOOLS` are refused, because `createOverlay` takes
  *   any string and a typo would bank a drawing that can never be restored;
  * - objects are rebuilt key by key, so a hostile file cannot smuggle
@@ -27,6 +29,7 @@ import {
   MAIN_PANE_ID,
   MAX_DRAWINGS_PER_BUCKET,
   drawingsBucket,
+  isRestorablePaneId,
   normalizeDrawingStyle,
   toolOf,
   type StoredDrawing,
@@ -102,11 +105,12 @@ function readDrawing(raw: unknown, index: number): ReadOutcome {
   }
   if (points.length === 0) return { reason: `${at}：没有落在某根 K 线上的落点` };
   const style = normalizeDrawingStyle(o.style);
+  const wanted = typeof o.paneId === "string" ? o.paneId.trim() : "";
+  const paneId = isRestorablePaneId(wanted) ? wanted : MAIN_PANE_ID;
   return {
     drawing: {
       name,
-      // Always the main pane; see the header note about the volume axis.
-      paneId: MAIN_PANE_ID,
+      paneId,
       points,
       ...(style ? { style } : {}),
       ...(o.lock === true ? { lock: true } : {}),
@@ -226,11 +230,13 @@ export function drawingsFileName(symbol: string, interval: string, now = new Dat
 /* ------------------------------------------------------------------- merge */
 
 /**
- * Identity of a line: tool + geometry. Colour, width and the lock/hide flags
- * are **not** part of it — restyling and re-importing must not double up.
+ * Identity of a line: pane + tool + geometry. Colour, width and the lock/hide
+ * flags are **not** part of it — restyling and re-importing must not double up.
+ * The pane *is* (⑲): the same two points on the price chart and on MACD are two
+ * different lines, and collapsing them would drop one of them on import.
  */
 export function drawingKey(d: StoredDrawing): string {
-  return `${d.name}|${d.points.map((p) => `${p.timestamp}:${p.value ?? ""}`).join(",")}`;
+  return `${d.paneId || MAIN_PANE_ID}|${d.name}|${d.points.map((p) => `${p.timestamp}:${p.value ?? ""}`).join(",")}`;
 }
 
 export interface DrawingMerge {

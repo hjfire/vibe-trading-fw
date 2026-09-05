@@ -1,4 +1,5 @@
 import type { Chart } from "klinecharts";
+import { isSubPaneId, subPaneNameOf } from "./paneLayout";
 
 /**
  * Drawing tools: what the toolbar offers, and how to make it survive a reload
@@ -56,10 +57,40 @@ import type { Chart } from "klinecharts";
  *    zLevel/points/visible/extendData/styles and **not `lock`**, so a lock-only
  *    change repaints nothing and `overrideOverlay` answers `false` even though it
  *    worked. Trust the instance, not the return value.
+ *
+ * 6. A drawing belongs to a **pane**, and ⑲ made that address worth storing.
+ *    The first click re-homes the overlay (`updateProgressOverlayInfo`,
+ *    dist 8508-8510, which also overrides the instance's `paneId`), so a tool
+ *    armed against `candle_pane` still ends up on whichever pane the user hit
+ *    first — which is the TradingView gesture and costs nothing to support. What
+ *    it used to cost was the reload: sub panes were named by
+ *    `createId('indicator_pane_')` (dist 15271), i.e. random per mount, so the
+ *    stored id named a pane that no longer existed and `createOverlay` quietly
+ *    redirected the line to the main chart at the old pane's scale. Stable pane
+ *    ids (`paneLayout.subPaneIdOf`) plus `isRestorablePaneId` below are the fix;
+ *    a line whose pane is genuinely absent is *parked* rather than redirected.
  */
 
-/** The pane every draw tool is pinned to. */
+/** The pane every draw tool starts on; a first click can move it (see ⑲). */
 export const MAIN_PANE_ID = "candle_pane";
+
+/**
+ * A `paneId` a stored drawing can be given back to.
+ *
+ * `createOverlay` does not complain about an unknown pane — it rewrites the
+ * overlay onto the candle pane and keeps the value the file carried
+ * (`paneLayout.ts` quotes the lines), so accepting a stale or invented id is
+ * how a saved volume-scale line ends up on the price axis. Only the main chart
+ * and this app's own `sub:` panes pass.
+ */
+export function isRestorablePaneId(paneId: string): boolean {
+  return paneId === MAIN_PANE_ID || isSubPaneId(paneId);
+}
+
+/** Which indicator a sub-pane id names, or "" for the main chart. */
+export function paneIndicator(paneId: string): string {
+  return paneId === MAIN_PANE_ID ? "" : subPaneNameOf(paneId);
+}
 
 export interface DrawTool {
   label: string;
@@ -84,8 +115,10 @@ export function toolOf(name: string): DrawTool | undefined {
 
 /** Hint text for an armed tool; `-1` means freehand. */
 export function drawHint(tool: DrawTool): string {
-  if (tool.clicks < 0) return `「${tool.label}」：在主图上按住拖动，松开即完成（Esc 取消）`;
-  return `「${tool.label}」：在主图上点击 ${tool.clicks} 个落点（Esc 取消，点同一按钮可退出）`;
+  // ⑲: the first click decides the pane, so "main chart" would be a lie — and
+  // saying nothing would leave the sub-pane gesture undiscoverable.
+  if (tool.clicks < 0) return `「${tool.label}」：在主图或任一副图上按住拖动，松开即完成（Esc 取消）`;
+  return `「${tool.label}」：点击 ${tool.clicks} 个落点，第一个落点在主图还是副图，这条线就归谁（Esc 取消，点同一按钮可退出）`;
 }
 
 /** What a drawing looks like: only the three things the toolbar exposes. */
@@ -345,32 +378,65 @@ export function makeDrawingEvents(
   };
 }
 
-/** Re-create stored drawings; returns how many landed. */
+/** Asks whether a pane is on the chart right now (`chart.getPaneOptions(id)`). */
+export type PaneLookup = (paneId: string) => boolean;
+
+/**
+ * Assume every pane exists. Used when the caller has no way to look — a chart
+ * stub in a test, or a host that predates `getPaneOptions`.
+ */
+export const ALL_PANES_PRESENT: PaneLookup = () => true;
+
+export interface RestoreReport {
+  /** Drawings that got an overlay, in the order they were handed over. */
+  applied: StoredDrawing[];
+  /**
+   * Drawings kept off the chart because their pane is not on it (⑲).
+   *
+   * The alternative is what the library does for you: `createOverlay` rewrites
+   * an unknown `paneId` onto the candle pane (dist 15364-15367) and leaves the
+   * value alone, so a MACD line at 0.35 becomes a price line at ¥0.35 — glued to
+   * the bottom of a ¥1300 chart, i.e. the invisible drawing ⑭ was reported for.
+   * Parking keeps the line in storage and out of the picture until the indicator
+   * comes back.
+   */
+  parked: StoredDrawing[];
+}
+
+/** Re-create stored drawings; reports what landed and what is waiting for a pane. */
 export function restoreDrawings(
   chart: OverlayHost,
   drawings: readonly StoredDrawing[],
   events?: ReturnType<typeof makeDrawingEvents>,
-): number {
-  let applied = 0;
+  paneExists: PaneLookup = ALL_PANES_PRESENT,
+): RestoreReport {
+  const applied: StoredDrawing[] = [];
+  const parked: StoredDrawing[] = [];
   for (const d of drawings) {
     if (!d || typeof d.name !== "string" || !d.name) continue;
     const points = (d.points ?? []).filter(hasCoordinates);
     if (points.length === 0) continue;
+    const paneId = d.paneId || MAIN_PANE_ID;
+    if (!isRestorablePaneId(paneId) || !paneExists(paneId)) {
+      parked.push({ ...d, paneId });
+      continue;
+    }
     // Restored drawings are editable too, so they carry the same events as a
     // tool-drawn one — otherwise only the drawings made *this session* stay in
     // sync, and a restored line that gets deleted comes back on reload.
     const id = chart.createOverlay({
       name: d.name,
-      paneId: d.paneId || MAIN_PANE_ID,
+      paneId,
       points,
       ...(d.style ? { styles: overlayStylesOf(d.style) } : {}),
       ...(d.lock ? { lock: true } : {}),
       ...(d.hidden ? { visible: false } : {}),
       ...events,
     });
-    if (id) applied += 1;
+    if (id) applied.push({ ...d, paneId });
+    else parked.push({ ...d, paneId });
   }
-  return applied;
+  return { applied, parked };
 }
 
 /**
@@ -426,7 +492,9 @@ export interface DrawingRow {
   style: DrawingStyle;
   locked: boolean;
   hidden: boolean;
-  /** Where the line sits: bar time(s) and/or price. Empty when unknown. */
+  /** Where the line lives; its scale is what `detail` reports (⑲). */
+  paneId: string;
+  /** Where the line sits: bar time(s) and/or the pane's own value. Empty when unknown. */
   detail: string;
   /** How many points the line is made of (brush can be in the hundreds). */
   pointCount: number;
@@ -467,6 +535,7 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
   const name = typeof o.name === "string" ? o.name : "";
   if (!name) return null;
   const points = Array.isArray(o.points) ? o.points : [];
+  const paneId = typeof o.paneId === "string" && o.paneId ? o.paneId : MAIN_PANE_ID;
   const stamps = numbers(points, "timestamp");
   const values = numbers(points, "value");
   const bits: string[] = [];
@@ -476,8 +545,11 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
     bits.push(first === last ? first : `${first} → ${last}`);
   }
   if (values.length > 0) {
+    // "价位" on a MACD pane is the same lie as the invisible line: the number is
+    // real and the reader's unit is wrong (⑭, again, in the reporting half).
+    const unit = paneId === MAIN_PANE_ID ? "价位" : "值";
     const first = formatPrice(values[0]);
-    bits.push(values.length === 1 ? `价位 ${first}` : `${first} → ${formatPrice(values[values.length - 1])}`);
+    bits.push(values.length === 1 ? `${unit} ${first}` : `${first} → ${formatPrice(values[values.length - 1])}`);
   }
   return {
     id: o.id,
@@ -486,6 +558,7 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
     style: styleOfOverlay(o) ?? { ...DEFAULT_DRAWING_STYLE },
     locked: o.lock === true,
     hidden: o.visible === false,
+    paneId,
     detail: bits.join(" · "),
     pointCount: points.length,
   };

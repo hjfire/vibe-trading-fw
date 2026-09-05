@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SEPARATOR_SIZE,
   DEFAULT_X_AXIS_HEIGHT,
+  isSubPaneId,
   planPaneHeights,
+  subPaneIdOf,
   subPaneIdsOf,
+  subPaneNameOf,
 } from "../paneLayout";
 
 /**
- * The pane budget behind “画线无法使用” (local custom ⑭).
+ * The pane budget behind “画线无法使用” (local custom ⑭) and the stable pane
+ * addresses behind “副图也能画线” (local custom ⑲).
  *
  * These numbers are not invented: they are the measurements taken on
  * /pro-chart on 2026-09-05 (see `paneLayout.ts` for the library source lines),
@@ -126,5 +130,52 @@ describe("planPaneHeights", () => {
     const usable = 400 - 40 - 2 * 6;
     expect(plan.mainHeight + 2 * plan.subPaneHeight).toBe(usable);
     expect(plan.subPaneHeight).toBe(60);
+  });
+});
+
+describe("sub-pane identity (local custom ⑲)", () => {
+  it("re-issues the same address for the same indicator", () => {
+    // The library would answer `indicator_pane_<Date.now()>_<n>` instead (dist
+    // 15271 over dist 450-460), i.e. a different string on every mount, so a
+    // drawing stored against it has no address to come back to. Pinning the
+    // name → id map is what makes a sub-pane drawing survive a reload.
+    expect(subPaneIdOf("VOL")).toBe("sub:VOL");
+    expect(subPaneIdOf("MACD")).toBe("sub:MACD");
+    expect(subPaneIdOf("UCI_t9")).toBe(subPaneIdOf("UCI_t9"));
+  });
+
+  it("flattens an awkward name instead of rejecting it", () => {
+    expect(subPaneIdOf("rsi.d1/h4")).toBe("sub:rsi_d1_h4");
+    expect(subPaneIdOf("__x__")).toBe("sub:x");
+    // An empty name still has to produce a usable id, never the bare prefix:
+    // `isSubPaneId("sub:")` is false, and a pane nobody can name cannot be
+    // found again either.
+    expect(subPaneIdOf("")).toBe("sub:pane");
+    expect(subPaneIdOf("中文")).toBe("sub:pane");
+    expect(isSubPaneId(subPaneIdOf(""))).toBe(true);
+  });
+
+  it("reads its own ids back, and nothing else", () => {
+    expect(isSubPaneId("sub:MACD")).toBe(true);
+    expect(isSubPaneId("sub:")).toBe(false);
+    expect(isSubPaneId("candle_pane")).toBe(false);
+    // The library's shape is deliberately not one of ours: a pane stored under
+    // it is unreachable, and `createOverlay` would move such a drawing onto the
+    // candle pane in silence (dist 15364-15367).
+    expect(isSubPaneId("indicator_pane_1725507123456_4")).toBe(false);
+    expect(subPaneNameOf("sub:UCI_t9")).toBe("UCI_t9");
+    expect(subPaneNameOf("candle_pane")).toBe("candle_pane");
+    for (const name of ["VOL", "MACD", "UCI_t9", "rsi.d1"]) {
+      expect(subPaneNameOf(subPaneIdOf(name))).toBe(subPaneIdOf(name).slice("sub:".length));
+    }
+  });
+
+  it("is a namespace the built-in ids cannot collide with", () => {
+    for (const id of ["candle_pane", "x_axis_pane"]) {
+      expect(isSubPaneId(id)).toBe(false);
+      // `subPaneIdsOf` keeps them out of the height budget, and the prefix keeps
+      // them out of the drawing addresses — two different questions, same answer.
+      expect(subPaneIdsOf([{ id }])).toEqual([]);
+    }
   });
 });

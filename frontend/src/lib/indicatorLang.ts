@@ -1,5 +1,6 @@
 import { registerIndicator, type Chart, type IndicatorFigureStyle, type KLineData } from "klinecharts";
 import { compilePine, isPineSource, type PineArtifact, type PineFigure } from "./pineScript";
+import { subPaneIdOf } from "./paneLayout";
 
 /**
  * Mini formula language for user-written indicators (local custom ⑩), plus the
@@ -1030,7 +1031,9 @@ function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) 
   if (overlay) {
     chart.createIndicator({ name, paneId: "candle_pane" }, true);
   } else {
-    chart.createIndicator({ name });
+    // A named pane, not the library's random one: a drawing banked against
+    // `sub:UCI_x` is still there after a reload (⑲, see paneLayout.ts).
+    chart.createIndicator({ name, paneId: subPaneIdOf(name) });
   }
   publishArtifact(id, first);
   if (note) for (const w of first.result.warnings.slice(0, 6)) note(w);
@@ -1108,7 +1111,7 @@ function applyVectorIndicator(chart: Chart, spec: ApplySpec): string | null {
   if (spec.kind === "overlay") {
     chart.createIndicator({ name, paneId: "candle_pane" }, true);
   } else {
-    chart.createIndicator({ name });
+    chart.createIndicator({ name, paneId: subPaneIdOf(name) });
   }
   return null;
 }
