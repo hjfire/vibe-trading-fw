@@ -5,6 +5,19 @@ import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
+import { planPaneHeights, subPaneIdsOf } from "@/lib/paneLayout";
+import {
+  DRAW_TOOLS,
+  MAIN_PANE_ID,
+  cancelInProgress,
+  drawHint,
+  loadDrawings,
+  removeLatestDrawing,
+  restoreDrawings,
+  saveDrawings,
+  serializeDrawings,
+  toolOf,
+} from "@/lib/chartDrawings";
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
@@ -35,15 +48,8 @@ const PRESETS = [
   { label: "BTC/USDT", symbol: "BTC-USDT" },
 ];
 
-// KLineChart v10 built-in overlay names exposed as one-click draw tools.
-const DRAW_TOOLS: { label: string; name: string }[] = [
-  { label: "趋势线", name: "segment" },
-  { label: "射线", name: "rayLine" },
-  { label: "水平线", name: "horizontalStraightLine" },
-  { label: "斐波那契", name: "fibonacciLine" },
-  { label: "价格线", name: "priceLine" },
-  { label: "画笔", name: "brush" },
-];
+// Drawing tools live in `chartDrawings.ts` next to the rules they depend on
+// (which pane they belong to, how many clicks they need, what gets persisted).
 
 function periodFor(interval: IntervalKey): { type: "day" | "minute"; span: number } {
   if (interval === "1D") return { type: "day", span: 1 };
@@ -174,8 +180,25 @@ export function ProChart() {
   // A script handed over by a share link (local custom ⑪); the workbench
   // opens with it loaded into the editor, never mounted unseen.
   const [scriptSeed, setScriptSeed] = useState<WorkbenchSeed | null>(null);
-  const refreshIndCount = () =>
+  // Drawing (local custom ⑭): which tool is armed, and how many finished
+  // drawings the chart holds. The count drives the undo/clear buttons and the
+  // "画线已随标的保存" note, so it must be read back from the chart rather than
+  // trusted from the click handler (the user can also delete a line with the
+  // right-click menu).
+  const [drawTool, setDrawTool] = useState<string | null>(null);
+  const [drawCount, setDrawCount] = useState(0);
+  // Which `symbol|interval` the on-chart drawings belong to; a change means the
+  // set has to be swapped for that chart's own.
+  const drawingsKeyRef = useRef<string>("");
+  const refreshDrawCount = (chart: Chart) => setDrawCount(chart.getOverlays().filter((o) => !(o as { isDrawing?: () => boolean }).isDrawing?.()).length);
+  // Bumps on every workbench notification, so the pane rebudget below re-runs
+  // even when the enabled count is unchanged (swapping one custom indicator for
+  // another keeps the number but moves the panes around).
+  const [layoutTick, setLayoutTick] = useState(0);
+  const refreshIndCount = () => {
     setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
+    setLayoutTick((t) => t + 1);
+  };
   // Both entry points behave the same: the banner is a restore-time notice,
   // and once the workbench is open each row reports its own state there.
   const openFormulaPanel = () => {
@@ -217,6 +240,36 @@ export function ProChart() {
       /* quota errors are non-fatal for a convenience feature */
     }
   }, [symbol, interval]);
+
+  /**
+   * Size the sub panes so the main chart keeps a usable height (⑬→⑭).
+   *
+   * The library gives every non-main pane its fixed `height` (default 100) and
+   * hands the *remainder* to candle_pane, so each indicator added used to cost
+   * the price chart a flat 100px — with VOL + MACD + two saved custom
+   * indicators on a 360px chart the main chart measured **29px**, and a click
+   * aimed at a candle landed on the volume pane (the drawing was then stored at
+   * a volume-axis value and became invisible). `planPaneHeights` mirrors the
+   * library's own arithmetic; see `paneLayout.ts` for the source lines.
+   */
+  const applyPaneLayout = (chart: Chart) => {
+    const chartHeight = hostRef.current?.clientHeight ?? 0;
+    if (chartHeight <= 0) return; // jsdom / detached host: nothing to budget
+    const options = chart.getPaneOptions();
+    const list = Array.isArray(options) ? options : [];
+    // A pane the user maximized owns the whole chart on purpose; rebudgeting it
+    // would fight the gesture (the library only honours `height` for `normal`).
+    const normal = list.filter((p) => (p.state ?? "normal") === "normal");
+    const plan = planPaneHeights({ chartHeight, subPaneIds: subPaneIdsOf(normal) });
+    for (const pane of normal) {
+      const want = plan.assignments[pane.id];
+      if (want === undefined) continue;
+      // Skip near-equal values: `setPaneOptions` relayouts, the relayout is what
+      // the ResizeObserver reports, and without this guard the two ping-pong.
+      if (Math.abs((pane.height ?? 0) - want) < 2) continue;
+      chart.setPaneOptions({ id: pane.id, height: want });
+    }
+  };
 
   // Create/destroy the chart once per mount.
   useEffect(() => {
@@ -271,6 +324,23 @@ export function ProChart() {
             }
             // A saved formula that no longer computes must not fail silently.
             setFormulaError(problems.length > 0 ? problems.join("；") : null);
+            // New panes just appeared; re-budget before they eat the main chart.
+            applyPaneLayout(chart);
+          }
+          // Drawings belong to a chart, not to a page view (⑭): when the loaded
+          // symbol/period changes, bank the old set and put the new one up.
+          const ticker = chart.getSymbol()?.ticker ?? symbol;
+          const key = `${ticker}|${iv}`;
+          if (bars.length > 0 && drawingsKeyRef.current !== key) {
+            const prev = drawingsKeyRef.current;
+            if (prev) {
+              const [ps, pi] = prev.split("|");
+              saveDrawings(ps, pi, serializeDrawings(chart.getOverlays()));
+            }
+            chart.removeOverlay();
+            restoreDrawings(chart, loadDrawings(ticker, iv));
+            drawingsKeyRef.current = key;
+            refreshDrawCount(chart);
           }
         } catch (e) {
           callback([], false);
@@ -284,11 +354,29 @@ export function ProChart() {
     chart.createIndicator({ name: "MA", paneId: "candle_pane" }, true);
     chart.createIndicator({ name: "VOL" });
     chart.createIndicator({ name: "MACD" });
+    applyPaneLayout(chart);
 
-    const onResize = () => chart.resize();
+    const onResize = () => {
+      chart.resize();
+      applyPaneLayout(chart);
+    };
     window.addEventListener("resize", onResize);
+    // The host is a `flex-1` box, so its height changes without a window resize
+    // (side panel opening, workbench toggling) — watch the element itself.
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && hostRef.current) {
+      observer = new ResizeObserver(onResize);
+      observer.observe(hostRef.current);
+    }
     return () => {
       window.removeEventListener("resize", onResize);
+      observer?.disconnect();
+      // Bank the drawings made since the last swap, then let the chart go.
+      const key = drawingsKeyRef.current;
+      if (key) {
+        const [ps, pi] = key.split("|");
+        saveDrawings(ps, pi, serializeDrawings(chart.getOverlays()));
+      }
       dispose(chart);
       chartRef.current = null;
     };
@@ -351,8 +439,78 @@ export function ProChart() {
     chartRef.current?.setPeriod(periodFor(iv));
   };
 
-  const startDraw = (name: string) => chartRef.current?.createOverlay(name);
-  const clearDraw = () => chartRef.current?.removeOverlay();
+  // Panes come and go from the workbench without any chart event to hook, so
+  // rebudget the layout whenever the enabled-indicator set changes.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (chart) applyPaneLayout(chart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indCount, layoutTick]);
+
+  const syncDrawings = (chart: Chart) => {
+    const key = drawingsKeyRef.current || `${symbol}|${interval}`;
+    const [s, i] = key.split("|");
+    saveDrawings(s, i, serializeDrawings(chart.getOverlays()));
+    refreshDrawCount(chart);
+  };
+
+  /**
+   * Arm a draw tool. The button doubles as the exit: clicking the armed tool
+   * again (or Esc) drops the half-drawn overlay instead of leaving the chart
+   * swallowing clicks waiting for a second point.
+   */
+  const armTool = (name: string) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (drawTool === name) {
+      setDrawTool(null);
+      cancelInProgress(chart);
+      return;
+    }
+    cancelInProgress(chart);
+    setDrawTool(name);
+    chart.createOverlay({
+      name,
+      paneId: MAIN_PANE_ID,
+      // The highlight follows the chart, not the click: it clears when the
+      // drawing is finished, wherever that happens.
+      onDrawEnd: () => {
+        setDrawTool(null);
+        syncDrawings(chart);
+      },
+    });
+  };
+
+  const undoDraw = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    cancelInProgress(chart);
+    if (removeLatestDrawing(chart)) syncDrawings(chart);
+    setDrawTool(null);
+  };
+
+  const clearDraw = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.removeOverlay();
+    setDrawTool(null);
+    syncDrawings(chart);
+  };
+
+  const armedTool = toolOf(drawTool ?? "");
+
+  // Esc abandons the tool in hand. The half-drawn overlay has to go with the
+  // highlight, or the chart keeps eating clicks waiting for the next point.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const chart = chartRef.current;
+      if (chart) cancelInProgress(chart);
+      setDrawTool(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <div className="flex h-[calc(100vh-0px)] flex-col gap-3 p-4">
@@ -427,16 +585,40 @@ export function ProChart() {
           {DRAW_TOOLS.map((t) => (
             <button
               key={t.name}
-              className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
-              onClick={() => startDraw(t.name)}
+              className={cn(
+                "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+                drawTool === t.name && "bg-muted font-medium ring-1 ring-primary",
+              )}
+              title={drawHint(t)}
+              onClick={() => armTool(t.name)}
             >
               {t.label}
             </button>
           ))}
-          <button className="rounded-md border px-2 py-1 text-xs hover:bg-muted" onClick={clearDraw}>
+          <button
+            className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            title="撤销最近一条画线"
+            disabled={drawCount === 0 && drawTool === null}
+            onClick={undoDraw}
+          >
+            撤销
+          </button>
+          <button
+            className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+            title="清除当前标的与周期上的全部画线"
+            disabled={drawCount === 0 && drawTool === null}
+            onClick={clearDraw}
+          >
             清除
           </button>
         </div>
+        <span className="text-xs text-muted-foreground">
+          {armedTool
+            ? drawHint(armedTool)
+            : drawCount > 0
+              ? `已画 ${drawCount} 条 · 随标的与周期保存`
+              : "画线随标的与周期保存"}
+        </span>
         <div className="ml-auto text-xs text-muted-foreground">
           {status.loading ? "加载中…" : status.error ? <span className="text-red-500">{status.error}</span> : status.source || ""}
         </div>
@@ -460,7 +642,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移、左侧工具栏画线，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏在主图上落点，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

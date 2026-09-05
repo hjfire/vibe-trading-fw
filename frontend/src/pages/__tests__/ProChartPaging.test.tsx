@@ -134,6 +134,11 @@ vi.mock("klinecharts", () => ({
     removeOverlay: vi.fn(),
     removeIndicator: vi.fn(),
     getIndicators: () => [],
+    // The drawings swap (⑭) reads the overlay list and the pane options on
+    // every load, so the paging harness has to answer both.
+    getOverlays: () => [],
+    getPaneOptions: () => [],
+    setPaneOptions: vi.fn(),
     getOffsetRightDistance: () => 0,
     getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
   }),
