@@ -79,8 +79,15 @@ describe("formula helpers", () => {
     expect(last(rma([2, 2, 2, 2, 2, 2], 3))).toBeCloseTo(2, 10);
   });
 
-  it("stdev is the sample standard deviation", () => {
-    expect(last(stdev([2, 4, 4, 4, 5, 5, 7, 9], 8))).toBeCloseTo(2.13809, 4);
+  it("stdev is the population (biased) standard deviation, as TradingView defaults to", () => {
+    // Textbook set: mean 5, Σ(x-µ)² = 32 → σ = √(32/8) = 2 exactly.
+    // Pine's `ta.stdev(source, length, biased)` documents biased = true by
+    // default, and TA-Lib / KLineChart's built-in BOLL divide by n too, so the
+    // bands in this app only line up when we do the same (÷ n-1 inflated every
+    // band by √(n/(n-1)) ≈ 2.6% at n = 20).
+    expect(last(stdev([2, 4, 4, 4, 5, 5, 7, 9], 8))).toBeCloseTo(2, 10);
+    // The sample estimate stays reachable as σ·√(n/(n-1)).
+    expect(2 * Math.sqrt(8 / 7)).toBeCloseTo(2.13809, 4);
   });
 
   it("ref / change / roc shift correctly", () => {

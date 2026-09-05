@@ -8,13 +8,18 @@ vi.mock("klinecharts", () => ({
 
 import {
   applyUserIndicator,
+  compileFormula,
   detectDialect,
   getPineArtifact,
   indicatorName,
+  normalizeRows,
   removeUserIndicator,
   subscribePineArtifact,
 } from "../indicatorLang";
 import type { ApplySpec } from "../indicatorLang";
+import { compilePine } from "../pineScript";
+import { FORMULA_TEMPLATES } from "../indicatorTemplates";
+import { SCRIPT_LIBRARY } from "../scriptLibrary";
 import type { KLineData } from "klinecharts";
 
 /** Oscillating prices, so `ta.crossover` genuinely fires on this data. */
@@ -146,5 +151,137 @@ describe("dialect dispatch", () => {
     expect(err).toBeNull();
     expect(notes.join(" ")).toContain("bgcolor");
     expect(chart.createIndicator).toHaveBeenCalledWith({ name: indicatorName("w4") });
+  });
+});
+
+/**
+ * A registered figure without a drawable `type` is silently dropped by
+ * KLineChart (`prepareIndicatorFigures` keeps only `isValid(figure.type)`),
+ * which loses the lines, the pane legend values and the last-value marks at
+ * once — the formula computes correctly while the chart shows nothing. The
+ * Bollinger overlay hit exactly that, so every template in both dialects is
+ * checked for it here rather than eyeballed in a browser.
+ */
+const DRAWABLE = new Set(["line", "bar", "circle", "text", "area"]);
+
+function registeredFigures(id: string): Array<{ key: string; title: string; type?: string }> {
+  const reg = registered[registered.length - 1] as {
+    name: string;
+    figures: Array<{ key: string; title: string; type?: string }>;
+  };
+  expect(reg.name).toBe(indicatorName(id));
+  return reg.figures;
+}
+
+describe("每个输出序列都必须可画", () => {
+  it("向量语言的 figure 带上 KLineChart 认得的 type", () => {
+    const chart = fakeChart();
+    expect(
+      applyUserIndicator(chart as never, {
+        id: "vt1",
+        label: "布林带",
+        code: "mid = ma(close, P[0]);\nsd = stdev(close, P[0]);\nreturn { MID: mid, UP: mid + P[1] * sd, LOW: mid - P[1] * sd };",
+        params: [20, 2],
+        kind: "overlay",
+      }),
+    ).toBeNull();
+    const figs = registeredFigures("vt1");
+    expect(figs.map((f) => f.key)).toEqual(["MID", "UP", "LOW"]);
+    expect(figs.every((f) => DRAWABLE.has(String(f.type)))).toBe(true);
+    // Titles reach the legend, so they need the same `NAME:` shape as the
+    // built-ins instead of a bare key.
+    expect(figs.map((f) => f.title)).toEqual(["MID:", "UP:", "LOW:"]);
+    expect(chart.createIndicator).toHaveBeenCalledWith(
+      { name: indicatorName("vt1"), paneId: "candle_pane" },
+      true,
+    );
+  });
+
+  it("12 个公式模板逐个挂载，没有一个 figure 会被丢掉", () => {
+    for (const tpl of FORMULA_TEMPLATES) {
+      const chart = fakeChart();
+      const err = applyUserIndicator(chart as never, {
+        id: `tpl-${tpl.key}`,
+        label: tpl.label,
+        code: tpl.code,
+        params: tpl.params,
+        kind: tpl.kind,
+      });
+      expect(err, `${tpl.key}: ${err}`).toBeNull();
+      const figs = registeredFigures(`tpl-${tpl.key}`);
+      expect(figs.length, `${tpl.key} 没有输出序列`).toBeGreaterThan(0);
+      for (const f of figs) expect(DRAWABLE.has(String(f.type)), `${tpl.key}/${f.key}`).toBe(true);
+      expect(chart.createIndicator).toHaveBeenCalled();
+    }
+  });
+
+  it("脚本库条目的 figure 同样全部可画", () => {
+    for (const entry of SCRIPT_LIBRARY) {
+      const chart = fakeChart();
+      const err = applyUserIndicator(chart as never, {
+        id: `lib-${entry.id}`,
+        label: entry.name,
+        code: entry.code,
+        params: entry.params,
+        kind: entry.display,
+      });
+      if (err) continue; // a strategy without trades is reported, not mounted blind
+      const figs = registeredFigures(`lib-${entry.id}`);
+      for (const f of figs) expect(DRAWABLE.has(String(f.type)), `${entry.id}/${f.key}`).toBe(true);
+    }
+  });
+});
+
+/**
+ * The app ships the same study twice: 布林带 as a vector template and as a
+ * Pine library entry. They are rendered on the same pane, so a convention that
+ * only differs between the two engines shows up as two sets of bands over one
+ * chart. Both are pinned against a hand-computed population σ here, which
+ * catches a shared drift as well as a disagreement.
+ */
+describe("两套引擎口径一致", () => {
+  it("同一个布林带用两种语言写出来逐根重合", () => {
+    const tpl = FORMULA_TEMPLATES.find((t) => t.key === "boll");
+    const lib = SCRIPT_LIBRARY.find((e) => e.id === "lib-bb");
+    expect(tpl?.key).toBe("boll");
+    expect(lib?.id).toBe("lib-bb");
+
+    const compiled = compileFormula(tpl!.code);
+    if (!("run" in compiled)) throw new Error(compiled.error);
+    const vec = normalizeRows(compiled.run(BARS, tpl!.params), BARS.length).rows;
+
+    const pine = compilePine(lib!.code, BARS, { params: tpl!.params });
+    if ("error" in pine) throw new Error(pine.error);
+    const byTitle = (title: string) => {
+      const fig = pine.figures.find((f) => f.title === title);
+      if (!fig) throw new Error(`Pine 脚本没有输出 ${title}`);
+      return pine.rows.map((r) => r[fig.key]);
+    };
+    const mid = byTitle("中轨");
+    const up = byTitle("上轨");
+    const low = byTitle("下轨");
+
+    const near = (a: number | undefined, b: number | undefined, where: string) => {
+      if (a === undefined || b === undefined) expect(b, where).toBe(a);
+      else expect(b, where).toBeCloseTo(a, 10);
+    };
+
+    // 20-bar window on 80 bars: 19 warm-up gaps, then identical numbers.
+    expect(vec.filter((r) => r.MID === undefined).length).toBe(19);
+    for (let i = 0; i < BARS.length; i++) {
+      near(vec[i].MID, mid[i], `bar ${i} 中轨`);
+      near(vec[i].UP, up[i], `bar ${i} 上轨`);
+      near(vec[i].LOW, low[i], `bar ${i} 下轨`);
+    }
+
+    // Absolute anchor, so both engines moving to ÷ n-1 together still fails.
+    const window = BARS.slice(60, 80).map((b) => b.close);
+    const mean = window.reduce((a, b) => a + b, 0) / window.length;
+    const sigma = Math.sqrt(window.reduce((s, v) => s + (v - mean) ** 2, 0) / window.length);
+    expect(vec[79].MID).toBeCloseTo(mean, 10);
+    expect(vec[79].UP).toBeCloseTo(mean + 2 * sigma, 10);
+    expect(vec[79].LOW).toBeCloseTo(mean - 2 * sigma, 10);
+    expect(up[79]).toBeCloseTo(mean + 2 * sigma, 10);
+    expect(low[79]).toBeCloseTo(mean - 2 * sigma, 10);
   });
 });

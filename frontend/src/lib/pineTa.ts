@@ -125,9 +125,21 @@ export function devStep(src: number, n: number, st: Win): number {
   return acc / n;
 }
 
-export function stdStep(src: number, n: number, st: Win): number {
+/**
+ * Rolling standard deviation.
+ *
+ * `biased` follows Pine: the reference documents `ta.stdev(source, length,
+ * biased)` with **biased defaulting to true**, i.e. the population estimate
+ * (÷ n). Passing false asks for the unbiased sample estimate (÷ n-1). Getting
+ * this wrong is invisible in isolation but shifts every band by √(n/(n-1))
+ * (~2.6% at n=20), so 布林带 stopped matching TradingView *and* the KLineChart
+ * built-in BOLL that shares the same pane.
+ */
+export function stdStep(src: number, n: number, st: Win, biased = true): number {
   push(st, src, n);
-  if (!full(st, n) || n < 2) return NA;
+  if (!full(st, n) || n < 1) return NA;
+  const denom = biased ? n : n - 1;
+  if (denom < 1) return NA;
   let mean = 0;
   for (const v of st.win) {
     if (Number.isNaN(v)) return NA;
@@ -136,7 +148,7 @@ export function stdStep(src: number, n: number, st: Win): number {
   mean /= n;
   let sq = 0;
   for (const v of st.win) sq += (v - mean) ** 2;
-  return Math.sqrt(sq / (n - 1));
+  return Math.sqrt(sq / denom);
 }
 
 export function highestStep(src: number, n: number, st: Win): number {
@@ -322,7 +334,14 @@ export const TA: Record<string, Builtin> = {
   highestbars: (args, c) => barOffset(args, c, "max"),
   lowestbars: (args, c) => barOffset(args, c, "min"),
 
-  stdev: (args, c) => stdStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.stdev"), c.state(() => ({ win: [] }) as Win)),
+  // 3rd argument is Pine's `biased` flag (true = population, the default).
+  stdev: (args, c) =>
+    stdStep(
+      srcOf(args, c),
+      lenOf(args, c, 1, 14, "ta.stdev"),
+      c.state(() => ({ win: [] }) as Win),
+      numArg(args, c, 2, 1, "biased") !== 0,
+    ),
   std: (args, c) => TA.stdev(args, c),
   deviation: (args, c) => devStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.deviation"), c.state(() => ({ win: [] }) as Win)),
   dev: (args, c) => devStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.dev"), c.state(() => ({ win: [] }) as Win)),

@@ -106,17 +106,24 @@ export function rma(x: NumArray, n: number): NumArray {
   return out;
 }
 
-/** Sample standard deviation over window n. */
+/**
+ * Standard deviation over window n, using the population (biased) estimate —
+ * ÷ n, not ÷ n-1. That is the convention every Bollinger source agrees on:
+ * Pine's `ta.stdev` documents `biased` as defaulting to true, TA-Lib's BBANDS
+ * and KLineChart's built-in BOLL divide by n, and the two engines in this app
+ * must not disagree about it or the same 布林带 drawn twice lands on two sets
+ * of bands.
+ */
 export function stdev(x: NumArray, n: number): NumArray {
   const out = new Array<NumArray[number]>(x.length).fill(NAN);
-  if (n < 2) return out;
+  if (n < 1) return out;
   for (let i = n - 1; i < x.length; i++) {
     let mean = 0;
     for (let j = i - n + 1; j <= i; j++) mean += x[j];
     mean /= n;
     let sq = 0;
     for (let j = i - n + 1; j <= i; j++) sq += (x[j] - mean) ** 2;
-    out[i] = Math.sqrt(sq / (n - 1));
+    out[i] = Math.sqrt(sq / n);
   }
   return out;
 }
@@ -1079,7 +1086,12 @@ function applyVectorIndicator(chart: Chart, spec: ApplySpec): string | null {
     precision: 4,
     series: spec.kind === "overlay" ? "price" : "normal",
     calcParams: spec.params,
-    figures: keys.map((k) => ({ key: k, title: k })),
+    // `type` is not optional in practice: KLineChart's prepareIndicatorFigures()
+    // keeps a figure only when `isValid(figure.type)`, so a figure without one is
+    // dropped from the line drawing, the pane legend *and* the last-value marks —
+    // the formula computes fine and the chart stays blank (布林带 主图 就是这么
+    // “显示错误”的). The Pine wire passes it through; the vector wire must too.
+    figures: keys.map((k) => ({ key: k, title: `${k}:`, type: "line" as const })),
     calc: (dataList, indicator) => {
       try {
         const c = compileFormula(code);

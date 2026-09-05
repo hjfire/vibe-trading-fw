@@ -88,6 +88,50 @@ describe("pine runtime semantics", () => {
     expect(last(seriesOf(a, "sma"))).toBeCloseTo(want, 8);
   });
 
+  // Deviation helpers over the trailing window the plots land on (bar 119).
+  const moments = (w: number[]) => {
+    const mean = w.reduce((x, y) => x + y, 0) / w.length;
+    const sq = w.reduce((s, v) => s + (v - mean) ** 2, 0);
+    return { mean, pop: Math.sqrt(sq / w.length), sample: Math.sqrt(sq / (w.length - 1)) };
+  };
+
+  it("ta.stdev divides by n unless biased=false asks for the sample estimate", () => {
+    // `ta.stdev(source, length, biased)` documents biased = true by default,
+    // i.e. the population estimate. That is also what TA-Lib's BBANDS and
+    // KLineChart's built-in BOLL use, so the ÷ n-1 version used to push every
+    // band ~2.6% too wide at n = 20 while looking perfectly plausible.
+    const a = run(
+      [
+        '//@version=5',
+        'indicator("stdev")',
+        'plot(ta.stdev(close, 5), "pop")',
+        'plot(ta.stdev(close, 5, false), "sample")',
+      ].join("\n"),
+    );
+    const m = moments(CLOSES.slice(115, 120));
+    expect(last(seriesOf(a, "pop"))).toBeCloseTo(m.pop, 8);
+    expect(last(seriesOf(a, "sample"))).toBeCloseTo(m.sample, 8);
+  });
+
+  it("ta.bb returns [basis, upper, lower] on that same estimate", () => {
+    const a = run(
+      [
+        '//@version=5',
+        'indicator("BB", overlay=true)',
+        'len = input.int(20, "周期")',
+        'mult = input.float(2, "倍数")',
+        '[basis, upper, lower] = ta.bb(close, len, mult)',
+        'plot(basis, "basis")',
+        'plot(upper, "upper")',
+        'plot(lower, "lower")',
+      ].join("\n"),
+    );
+    const m = moments(CLOSES.slice(100, 120));
+    expect(last(seriesOf(a, "basis"))).toBeCloseTo(m.mean, 8);
+    expect(last(seriesOf(a, "upper"))).toBeCloseTo(m.mean + 2 * m.pop, 8);
+    expect(last(seriesOf(a, "lower"))).toBeCloseTo(m.mean - 2 * m.pop, 8);
+  });
+
   it("pads the warm-up bars with gaps rather than zeros", () => {
     const a = run('//@version=5\nindicator("SMA")\nplot(ta.sma(close, 5), "sma")');
     const got = seriesOf(a, "sma");
