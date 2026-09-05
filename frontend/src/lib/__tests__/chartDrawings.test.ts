@@ -8,6 +8,8 @@ import {
   applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
+  clampDrawingsToLastBar,
+  clampPointsToLastBar,
   describeDrawing,
   drawingsBucket,
   drawHint,
@@ -15,6 +17,7 @@ import {
   isInProgress,
   isDefaultStyle,
   isRestorablePaneId,
+  lastBarTimestamp,
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
@@ -22,6 +25,7 @@ import {
   normalizeDrawingStyle,
   overlayStylesOf,
   paneIndicator,
+  reanchorOverlay,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawingStyle,
@@ -732,5 +736,171 @@ describe("sub-pane drawings (local custom ⑲)", () => {
     expect(rows[1].detail).toBe("价位 52874.25");
     // A stored row with no pane (pre-⑲ data, or the axis strip) is the main chart.
     expect(describeDrawing({ id: "z", name: "priceLine", points: [] })?.paneId).toBe(MAIN_PANE_ID);
+  });
+});
+
+/**
+ * Anchors in the blank gap right of the newest bar (local custom ⑳).
+ *
+ * The library never refuses one: `StoreImp.timestampToDataIndex` takes a
+ * timestamp past the last bar and extrapolates a data index from it (dist
+ * 13839-13841), so the click that looked like "the right edge" is stored as a
+ * trading time the series does not contain. The line hangs out past the last
+ * candle, its x-axis label names a date nobody traded, and the next real bar
+ * moves it left. These are the three answers the UI needs from the pure layer:
+ * where the edge is, what to do with a point past it, and when the repair leaves
+ * nothing worth keeping.
+ */
+describe("落点必须在真实存在的 K 线上", () => {
+  const DAY = 86_400_000;
+  const LAST = 1_700_000_000_000 + 100 * DAY;
+
+  it("lastBarTimestamp 从尾部往前找，不猜", () => {
+    expect(lastBarTimestamp([])).toBeUndefined();
+    expect(lastBarTimestamp(null)).toBeUndefined();
+    expect(lastBarTimestamp(undefined)).toBeUndefined();
+    expect(lastBarTimestamp([{ timestamp: LAST - DAY }, { timestamp: LAST }])).toBe(LAST);
+    expect(lastBarTimestamp([{ timestamp: LAST }, { timestamp: undefined }, {}])).toBe(LAST);
+    expect(lastBarTimestamp([{ timestamp: Number.NaN }])).toBeUndefined();
+  });
+
+  it("越界的落点吸回最后一根，纵值一个都不改", () => {
+    const r = clampPointsToLastBar(
+      [
+        { timestamp: LAST - DAY, value: 1300 },
+        { timestamp: LAST, value: 1305 },
+        { timestamp: LAST + 3 * DAY, value: 1310 },
+      ],
+      LAST,
+    );
+    expect(r.moved).toBe(1);
+    expect(r.degenerate).toBe(false);
+    expect(r.points).toEqual([
+      { timestamp: LAST - DAY, value: 1300 },
+      { timestamp: LAST, value: 1305 },
+      { timestamp: LAST, value: 1310 },
+    ]);
+  });
+
+  it("两点全越界：吸回来重合成一个点，判定为退化", () => {
+    const r = clampPointsToLastBar(
+      [
+        { timestamp: LAST + DAY, value: 1300 },
+        { timestamp: LAST + 5 * DAY, value: 1320 },
+      ],
+      LAST,
+    );
+    expect(r.moved).toBe(2);
+    expect(r.degenerate).toBe(true);
+  });
+
+  it("单点工具永不退化：它活在纵值上，不靠宽度", () => {
+    expect(clampPointsToLastBar([{ timestamp: LAST + 9 * DAY, value: 1290 }], LAST).degenerate).toBe(false);
+  });
+
+  it("没有时间戳的点不归它管", () => {
+    const r = clampPointsToLastBar(
+      [
+        { value: 1300 },
+        { timestamp: LAST + DAY, value: 1310 },
+      ],
+      LAST,
+    );
+    expect(r.points[0]).toEqual({ value: 1300 });
+    expect(r.moved).toBe(1);
+    expect(r.degenerate).toBe(false);
+  });
+
+  it("整桶汇总：越界的吸回，退化的丢下", () => {
+    const out = clampDrawingsToLastBar(
+      [
+        { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: LAST + 2 * DAY, value: 1290 }] },
+        {
+          name: "segment",
+          paneId: MAIN_PANE_ID,
+          points: [
+            { timestamp: LAST + DAY, value: 1300 },
+            { timestamp: LAST + 4 * DAY, value: 1320 },
+          ],
+        },
+      ],
+      LAST,
+    );
+    expect(out.moved).toBe(3);
+    expect(out.dropped).toBe(1);
+    expect(out.drawings).toEqual([
+      { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: LAST, value: 1290 }] },
+    ]);
+  });
+
+  it("reanchorOverlay 原地改 points，不删不建", () => {
+    const line = overlay({ id: "a", name: "segment", points: [{ timestamp: LAST + DAY, value: 1300 }] });
+    const chart = fakeChart([line]);
+    expect(reanchorOverlay(chart as never, line, LAST)).toEqual({ moved: 1, dropped: [] });
+    expect(line.points).toEqual([{ timestamp: LAST, value: 1300 }]);
+    expect(chart.overrideOverlay).toHaveBeenCalledWith({ id: "a", points: [{ timestamp: LAST, value: 1300 }] });
+    expect(chart.removeOverlay).not.toHaveBeenCalled();
+    expect(chart.createOverlay).not.toHaveBeenCalled();
+  });
+
+  it("没越界就一次覆盖都不发", () => {
+    const line = overlay({ id: "a", points: [{ timestamp: LAST, value: 1300 }] });
+    const chart = fakeChart([line]);
+    expect(reanchorOverlay(chart as never, line, LAST)).toEqual({ moved: 0, dropped: [] });
+    expect(chart.overrideOverlay).not.toHaveBeenCalled();
+  });
+
+  it("画到一半的线不动：最后一个落点由下一次点击决定", () => {
+    const line = overlay({
+      id: "a",
+      drawing: true,
+      currentStep: 1,
+      points: [{ timestamp: LAST + 3 * DAY, value: 1300 }],
+    });
+    const chart = fakeChart([line]);
+    expect(reanchorOverlay(chart as never, line, LAST)).toEqual({ moved: 0, dropped: [] });
+    expect(chart.overrideOverlay).not.toHaveBeenCalled();
+    expect(chart.removeOverlay).not.toHaveBeenCalled();
+  });
+
+  it("退化的线会被删掉并报名，没_id 的孤儿直接略过", () => {
+    const bad = overlay({
+      id: "bad",
+      points: [
+        { timestamp: LAST + DAY, value: 1300 },
+        { timestamp: LAST + 2 * DAY, value: 1310 },
+      ],
+    });
+    const chart = fakeChart([bad, overlay({ id: "", points: [{ timestamp: LAST + DAY, value: 1290 }] })]);
+    expect(reanchorOverlay(chart as never, chart.overlays[1], LAST)).toEqual({ moved: 0, dropped: [] });
+    expect(reanchorOverlay(chart as never, null, LAST)).toEqual({ moved: 0, dropped: [] });
+    expect(reanchorOverlay(chart as never, bad, LAST)).toEqual({ moved: 0, dropped: ["bad"] });
+    expect(chart.overlays.map((o) => o.id)).toEqual([""]);
+  });
+
+  it("事件顺序：先吸附，再落盘，最后才能报本次的提示", () => {
+    const order: string[] = [];
+    const events = makeDrawingEvents({
+      onChanged: () => order.push("bank"),
+      onDrawEnd: () => order.push("drawEnd"),
+      onAnchor: () => order.push("anchor"),
+      onSettled: () => order.push("settle"),
+    });
+    events.onDrawEnd({ overlay: { id: "a" } });
+    expect(order).toEqual(["drawEnd", "anchor", "bank", "settle"]);
+
+    order.length = 0;
+    events.onPressedMoveEnd({ overlay: { id: "a" } });
+    expect(order).toEqual(["anchor", "bank", "settle"]);
+  });
+
+  it("事件不带参数也不能炸（⑮ 起的裸调用）", () => {
+    const anchor = vi.fn();
+    const events = makeDrawingEvents({ onChanged: () => undefined, onAnchor: anchor });
+    expect(() => events.onDrawEnd({})).not.toThrow();
+    expect(() => events.onPressedMoveEnd({})).not.toThrow();
+    // Called with `undefined`, not with a fake overlay: the handler has to cope.
+    expect(anchor).toHaveBeenCalledTimes(2);
+    expect(anchor).toHaveBeenCalledWith(undefined);
   });
 });

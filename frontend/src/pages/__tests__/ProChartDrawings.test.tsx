@@ -62,9 +62,11 @@ interface FakeOverlay {
   visible?: boolean;
   // Event callbacks the component handed to `createOverlay`; the library keeps
   // them on the instance and calls them for the rest of the overlay's life.
-  onDrawEnd?: () => void;
+  // `onDrawEnd`/`onPressedMoveEnd` take the same `{ chart, overlay }` payload the
+  // real event tree hands out (dist 8599 / 8606) — ⑳ reads the overlay from it.
+  onDrawEnd?: (e?: unknown) => void;
   onRemoved?: (e: { overlay: FakeOverlay }) => void;
-  onPressedMoveEnd?: () => void;
+  onPressedMoveEnd?: (e?: unknown) => void;
   onSelected?: (e: { overlay: FakeOverlay }) => void;
   onDeselected?: (e: { overlay: FakeOverlay }) => void;
 }
@@ -154,7 +156,7 @@ function makeOverlay(patch: Partial<FakeOverlay>): FakeOverlay {
 /** The library calls `onDrawEnd` when the last point lands; tests do the same. */
 function finishDrawing(at: { timestamp: number; value: number }) {
   const calls = h.chart?.createOverlay.mock.calls ?? [];
-  const arg = calls[calls.length - 1]?.[0] as { onDrawEnd?: () => void } | string | undefined;
+  const arg = calls[calls.length - 1]?.[0] as { onDrawEnd?: (e?: unknown) => void } | string | undefined;
   const overlay = h.overlays[h.overlays.length - 1];
   if (overlay) {
     overlay.points = [at];
@@ -162,8 +164,9 @@ function finishDrawing(at: { timestamp: number; value: number }) {
     overlay.currentStep = -1;
   }
   act(() => {
-    if (overlay?.onDrawEnd) overlay.onDrawEnd();
-    else if (arg && typeof arg !== "string") arg.onDrawEnd?.();
+    const event = { overlay };
+    if (overlay?.onDrawEnd) overlay.onDrawEnd(event);
+    else if (arg && typeof arg !== "string") arg.onDrawEnd?.(event);
   });
 }
 
@@ -180,7 +183,7 @@ function dragDrawing(id: string, value: number): void {
   if (!overlay) throw new Error(`no overlay ${id} to drag`);
   act(() => {
     overlay.points = overlay.points.map((p) => ({ ...p, value }));
-    overlay.onPressedMoveEnd?.();
+    overlay.onPressedMoveEnd?.({ overlay });
   });
 }
 
@@ -309,6 +312,7 @@ vi.mock("klinecharts", () => ({
       overrideOverlay: vi.fn((override: unknown) => {
         const v = override as {
           id?: string;
+          points?: Array<Record<string, number>>;
           styles?: Record<string, unknown>;
           lock?: boolean;
           visible?: boolean;
@@ -320,15 +324,29 @@ vi.mock("klinecharts", () => ({
         for (const target of targets) {
           const prevStyles = target.styles;
           const prevVisible = target.visible;
+          const prevPoints = JSON.stringify(target.points);
           // `override()` merges every key except id/name/currentStep/points/
           // styles (dist 8280-8281), which is how `lock`/`visible` get set.
           if ("lock" in v) target.lock = v.lock;
           if ("visible" in v) target.visible = v.visible;
           if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
+          // `points` is the one key `override()` does NOT blind-merge: it has its
+          // own branch that replaces them wholesale and marks the drawing
+          // finished (dist 8292-8306) — the seam ⑳ uses to move a line without
+          // removing and re-creating it.
+          if (Array.isArray(v.points) && v.points.length > 0) {
+            target.points = v.points.map((p) => ({ ...p }));
+            target.currentStep = -1;
+            target.drawing = false;
+          }
           // `shouldUpdate()` repaints for styles/visible/points/zLevel but never
           // for `lock` alone (dist 8314-8318) — hence the read-back in
           // `applyDrawingFlags`.
-          draw = draw || prevVisible !== target.visible || prevStyles !== target.styles;
+          draw =
+            draw ||
+            prevVisible !== target.visible ||
+            prevStyles !== target.styles ||
+            prevPoints !== JSON.stringify(target.points);
         }
         return draw;
       }),
@@ -1627,5 +1645,186 @@ describe("/pro-chart 副图上的画线", () => {
     expect(bucketOf()).toHaveLength(0);
     expect(screen.getByText("画线随标的与周期保存")).toBeTruthy();
     expect(disabled("画线清单")).toBe(true);
+  });
+});
+
+/**
+ * The gap right of the newest candle is clickable, and the library does not say
+ * no: `timestampToDataIndex` extrapolates a timestamp past the last bar (dist
+ * 13839-13841), so a click out there invents a trading time the data never had.
+ * The line then hangs past the last candle, its axis label names a date that does
+ * not exist, and the next real bar slides it left — the "显示完全不对" ⑳ was filed
+ * for. What is pinned below is that every anchor ends up on a bar that exists,
+ * in the storage copy as well as on the chart, whichever door the line came in
+ * through: drawn, dragged, loaded, or imported.
+ */
+describe("/pro-chart 落点必须在真实存在的 K 线上", () => {
+  // `fetchKline` above returns 200 daily bars from START.
+  const LAST = START + 199 * DAY;
+  const bucketOf = (): Array<Record<string, unknown>> =>
+    (readBuckets()["600519.SH|1D"] ?? []) as Array<Record<string, unknown>>;
+  const pointsOf = (row: Record<string, unknown> | undefined) => row?.points as Array<Record<string, number>>;
+  const pickJson = async (raw: string): Promise<void> => {
+    fireEvent.change(screen.getByLabelText("画线文件"), {
+      target: { files: [new File([raw], "future.json", { type: "application/json" })] },
+    });
+    await flush();
+  };
+
+  /** Land a multi-point tool in one go, the way the library's last click does. */
+  function finishWith(points: Array<Record<string, number>>): FakeOverlay {
+    const line = h.overlays[h.overlays.length - 1];
+    act(() => {
+      line.points = points.map((p) => ({ ...p }));
+      line.drawing = false;
+      line.currentStep = -1;
+      line.onDrawEnd?.({ overlay: line });
+    });
+    return line;
+  }
+
+  it("画在未来区：落点吸回最后一根，存的也是吸回后的", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    // Arming is a `createOverlay` too; count from after it, so the assertion
+    // below is about the repair, not about the tool.
+    const created = h.chart?.createOverlay.mock.calls.length ?? 0;
+    finishDrawing({ timestamp: START + 260 * DAY, value: 1304.02 });
+    await flush();
+
+    const line = h.overlays[h.overlays.length - 1];
+    expect(line.points).toEqual([{ timestamp: LAST, value: 1304.02 }]);
+    // Moved in place, not recycled: the id survives, so the ⑯ selection and the
+    // ⑰ row ids still point at this line.
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledWith({
+      id: line.id,
+      points: [{ timestamp: LAST, value: 1304.02 }],
+    });
+    expect(h.chart?.createOverlay.mock.calls.length).toBe(created);
+    expect(bucketOf()).toEqual([
+      { name: "priceLine", paneId: "candle_pane", points: [{ timestamp: LAST, value: 1304.02 }] },
+    ]);
+    expect(screen.getByText(/已吸回最后一根 K 线/)).toBeTruthy();
+  });
+
+  it("整条两点线都画在未来区：吸回后会重合成一个点，宁可放弃", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+    const line = finishWith([
+      { timestamp: START + 300 * DAY, value: 1300 },
+      { timestamp: START + 305 * DAY, value: 1320 },
+    ]);
+    await flush();
+
+    expect(h.overlays.some((o) => o.id === line.id)).toBe(false);
+    expect(bucketOf()).toHaveLength(0);
+    expect(screen.getByText(/重合成一个点，已放弃/)).toBeTruthy();
+  });
+
+  it("拖线进未来区：松手时被拉回来，另一个落点留在原处", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+    const line = finishWith([
+      { timestamp: START + 10 * DAY, value: 1300 },
+      { timestamp: START + 20 * DAY, value: 1310 },
+    ]);
+    await flush();
+    expect(line.points).toEqual([
+      { timestamp: START + 10 * DAY, value: 1300 },
+      { timestamp: START + 20 * DAY, value: 1310 },
+    ]);
+
+    act(() => {
+      line.points = [
+        { timestamp: START + 10 * DAY, value: 1400 },
+        { timestamp: START + 300 * DAY, value: 1410 },
+      ];
+      line.onPressedMoveEnd?.({ overlay: line });
+    });
+    await flush();
+
+    expect(line.points).toEqual([
+      { timestamp: START + 10 * DAY, value: 1400 },
+      { timestamp: LAST, value: 1410 },
+    ]);
+    expect(pointsOf(bucketOf()[0])).toEqual(line.points);
+    expect(screen.getByText(/已吸回最后一根 K 线/)).toBeTruthy();
+  });
+
+  it("存量数据里的未来区落点：载入时就修好，不等到下次编辑", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          { name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START + 400 * DAY, value: 1290 }] },
+        ],
+      }),
+    );
+    await mountChart();
+
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].points).toEqual([{ timestamp: LAST, value: 1290 }]);
+    expect(pointsOf(bucketOf()[0])).toEqual([{ timestamp: LAST, value: 1290 }]);
+    expect(screen.getByText(/处画线落点在最新 K 线右侧的空白里/)).toBeTruthy();
+  });
+
+  it("存量数据里整条越界的两点线：载入时被删掉，不再占清单", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          {
+            name: "segment",
+            paneId: "candle_pane",
+            points: [
+              { timestamp: START + 300 * DAY, value: 1300 },
+              { timestamp: START + 305 * DAY, value: 1320 },
+            ],
+          },
+          { name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START + 300 * DAY, value: 1290 }] },
+        ],
+      }),
+    );
+    await mountChart();
+
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].name).toBe("priceLine");
+    expect(bucketOf()).toHaveLength(1);
+    expect(screen.getByText(/1 条吸回后重合成了一个点，已删除/)).toBeTruthy();
+  });
+
+  it("导入的文件落在未来区：先吸回最后一根再上图", async () => {
+    await mountChart();
+    await pickJson(
+      exportDrawingsJson(
+        [{ name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START + 500 * DAY, value: 1300 }] }],
+        { symbol: "600519.SH", interval: "1D" },
+      ),
+    );
+
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].points).toEqual([{ timestamp: LAST, value: 1300 }]);
+    expect(pointsOf(bucketOf()[0])).toEqual([{ timestamp: LAST, value: 1300 }]);
+    expect(screen.getByText(/1 处落点不在本图的 K 线上，已吸回最后一根/)).toBeTruthy();
+  });
+
+  it("数据还没到：不去动任何已有落点", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 260 * DAY, value: 1304.02 });
+    await flush();
+    const line = h.overlays[h.overlays.length - 1];
+    expect(line.points).toEqual([{ timestamp: LAST, value: 1304.02 }]);
+
+    // The chart lost its data (a symbol switch mid-flight): an empty list must
+    // not be read as "every anchor is out of bounds", which would flatten the
+    // line onto bar zero.
+    h.list = [];
+    act(() => {
+      line.points = [{ timestamp: START + 260 * DAY, value: 1304.02 }];
+      line.onPressedMoveEnd?.({ overlay: line });
+    });
+    await flush();
+    expect(line.points).toEqual([{ timestamp: START + 260 * DAY, value: 1304.02 }]);
   });
 });

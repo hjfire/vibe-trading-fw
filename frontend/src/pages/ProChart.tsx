@@ -14,16 +14,19 @@ import {
   applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
+  clampDrawingsToLastBar,
   drawingsBucket,
   drawHint,
   isInProgress,
   isRestorablePaneId,
+  lastBarTimestamp,
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
   makeDrawingEvents,
   overlayStylesOf,
   paneIndicator,
+  reanchorOverlay,
   removeLatestDrawing,
   restoreDrawings,
   saveDrawingStyle,
@@ -308,6 +311,11 @@ export function ProChart() {
   // They are in storage but have no overlay, so every write of the bucket has to
   // carry them along or the next edit silently deletes them.
   const parkedRef = useRef<StoredDrawing[]>([]);
+  // A note about the edit that is being banked right now (⑳). It cannot be set
+  // from inside the anchor pass: `syncDrawings` clears every note on its way to
+  // storage, and that runs after. So the pass files it here and `onSettled` puts
+  // it up once the bank is done.
+  const anchorNoteRef = useRef<{ bad?: boolean; text: string } | null>(null);
   const [parked, setParked] = useState<StoredDrawing[]>([]);
   const replaceParked = (list: readonly StoredDrawing[]) => {
     parkedRef.current = list.slice();
@@ -520,17 +528,38 @@ export function ProChart() {
             // The teardown below fires `onRemoved` on every old overlay; those
             // callbacks must not bank against the key that is about to change.
             drawingsMutedRef.current = true;
+            let repaired: { moved: number; dropped: number } | null = null;
             try {
               chart.removeOverlay();
+              const stored = loadDrawings(ticker, iv);
+              // A line drawn before ⑳ can still hold an anchor in the blank gap
+              // right of the newest bar, which the library is only too happy to
+              // extrapolate into a trading time that never existed. Straighten
+              // the bucket out once, before it splits into "on the chart" and
+              // "parked", so all three copies start from the same geometry.
+              const lastTs = lastBarTimestamp(bars);
+              const fixed =
+                lastTs === undefined
+                  ? { drawings: stored, moved: 0, dropped: 0 }
+                  : clampDrawingsToLastBar(stored, lastTs);
+              if (fixed.moved > 0 || fixed.dropped > 0) {
+                saveDrawings(ticker, iv, fixed.drawings);
+                repaired = { moved: fixed.moved, dropped: fixed.dropped };
+              }
               const report = restoreDrawings(
                 chart,
-                loadDrawings(ticker, iv),
+                fixed.drawings,
                 drawingEvents(),
                 paneLookup(chart),
               );
               replaceParked(report.parked);
             } finally {
               drawingsMutedRef.current = false;
+            }
+            if (repaired) {
+              const bits = [`${repaired.moved} 处画线落点在最新 K 线右侧的空白里，已吸回最后一根`];
+              if (repaired.dropped > 0) bits.push(`${repaired.dropped} 条吸回后重合成了一个点，已删除`);
+              setDrawNotice({ bad: repaired.dropped > 0, text: bits.join("；") });
             }
             drawingsKeyRef.current = key;
             // The overlay that was selected belongs to the chart we just tore
@@ -664,6 +693,39 @@ export function ProChart() {
   };
 
   /**
+   * The blank gap right of the newest bar is clickable, and a click there is not
+   * rejected — the library extrapolates the timestamp into a trading time the data
+   * never had, so the line hangs past the last candle, its label names a date that
+   * does not exist, and the next bar slides it left (⑳). Every anchor that landed
+   * out there is pulled back onto the newest bar; a multi-point line that
+   * collapses onto one bar has no honest place left to sit, so it goes.
+   */
+  const anchorDrawing = (overlay: unknown) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const lastTs = lastBarTimestamp(chart.getDataList());
+    // No bars yet means no idea where the edge is; leave the line alone.
+    if (lastTs === undefined) return;
+    const report = reanchorOverlay(chart, overlay, lastTs);
+    if (report.dropped.length > 0) {
+      anchorNoteRef.current = {
+        bad: true,
+        text: "这条线的落点全在最新 K 线右侧的空白里，吸回来会重合成一个点，已放弃",
+      };
+    } else if (report.moved > 0) {
+      anchorNoteRef.current = { text: "落点在最新 K 线右侧的空白里，已吸回最后一根 K 线" };
+    }
+  };
+
+  /** Files the note about this very edit, after the bank has cleared the old one. */
+  const settleAnchorNote = () => {
+    const note = anchorNoteRef.current;
+    if (!note) return;
+    anchorNoteRef.current = null;
+    setDrawNotice(note);
+  };
+
+  /**
    * Events every drawing carries — the ones armed here and the ones restored
    * from storage. `onDrawEnd` clears the highlight, `onChanged` banks the set
    * (minus a just-removed overlay, which the library deletes *after* the
@@ -692,6 +754,8 @@ export function ProChart() {
         // would throw away the selection the user just made.
         if (id) setSelectedDraw((cur) => (cur === id ? null : cur));
       },
+      onAnchor: anchorDrawing,
+      onSettled: settleAnchorNote,
     });
 
   /**
@@ -867,10 +931,23 @@ export function ProChart() {
    */
   const ingestDrawings = (incoming: readonly StoredDrawing[], from: string, skipped: readonly string[] = []) => {
     const key = drawingsBucket(symbol, interval);
-    const merged = mergeDrawings(loadDrawings(symbol, interval), incoming);
+    // A file can anchor its lines on bars this chart does not have — another
+    // symbol, another period, or plain future-zone click coordinates (⑳). Pull
+    // them onto the newest bar *before* the merge, so the dedup comparison and
+    // what ends up on screen agree on the same geometry.
+    const live = chartRef.current;
+    const lastTs = live ? lastBarTimestamp(live.getDataList()) : undefined;
+    const fixed =
+      lastTs === undefined
+        ? { drawings: [...incoming], moved: 0, dropped: 0 }
+        : clampDrawingsToLastBar(incoming, lastTs);
+    const merged = mergeDrawings(loadDrawings(symbol, interval), fixed.drawings);
     if (merged.added === 0) {
-      const text = incoming.length === 0 ? "没有可导入的画线" : `${incoming.length} 条画线都已经在 ${key} 上了`;
-      setDrawNotice({ bad: incoming.length === 0, detail: skipped.join("；"), text });
+      const bits = [
+        incoming.length === 0 ? "没有可导入的画线" : `${incoming.length} 条画线都已经在 ${key} 上了`,
+      ];
+      if (fixed.dropped > 0) bits.push(`${fixed.dropped} 条落点全部越界，吸回后重合成一个点，已放弃`);
+      setDrawNotice({ bad: incoming.length === 0, detail: skipped.join("；"), text: bits.join("；") });
       return;
     }
     saveDrawings(symbol, interval, merged.drawings);
@@ -887,6 +964,8 @@ export function ProChart() {
     const bits = [`导入 ${merged.added} 条画线到 ${key}`];
     if (merged.duplicates) bits.push(`重复 ${merged.duplicates} 条未加`);
     if (skipped.length) bits.push(`跳过 ${skipped.length} 条`);
+    if (fixed.moved > 0) bits.push(`${fixed.moved} 处落点不在本图的 K 线上，已吸回最后一根`);
+    if (fixed.dropped > 0) bits.push(`${fixed.dropped} 条吸回后重合成一个点，未导入`);
     // ⑲: a file from a MACD study is useless on a chart that closed MACD, but it
     // is not *lost* — say where it is instead of letting it silently not appear.
     if (waiting) bits.push(`${waiting} 条在等副图开启`);

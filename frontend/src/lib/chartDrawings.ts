@@ -69,6 +69,18 @@ import { isSubPaneId, subPaneNameOf } from "./paneLayout";
  *    redirected the line to the main chart at the old pane's scale. Stable pane
  *    ids (`paneLayout.subPaneIdOf`) plus `isRestorablePaneId` below are the fix;
  *    a line whose pane is genuinely absent is *parked* rather than redirected.
+ *
+ * 7. A click is never refused for landing past the newest bar. To place a point
+ *    the library turns its timestamp into a data index
+ *    (`timestampToDataIndex`, dist 13829-13843) and when the timestamp is beyond
+ *    the last bar it **extrapolates** from it (`referenceTimestamp = lastTimestamp;
+ *    baseDataIndex = lastIndex`), so the blank gap right of the last candle —
+ *    always there, `getVisibleRange().realTo` sits past `dataList.length` — is
+ *    clickable and invents a trading time the data never had. The line then ends
+ *    past the last candle, its x-axis label reads a date that does not exist, and
+ *    the next real bar slides it left. Nothing in the library object
+ *    (`createOverlay` accepts the points as they come), so ⑳ clamps every anchor
+ *    back onto the newest bar; see `clampPointsToLastBar`.
  */
 
 /** The pane every draw tool starts on; a first click can move it (see ⑲). */
@@ -345,6 +357,18 @@ export interface DrawingEvents {
    */
   onSelected?: (overlay: unknown) => void;
   onDeselected?: (overlay: unknown) => void;
+  /**
+   * The overlay just landed or stopped moving — chance to pull its anchors out of
+   * the future zone (⑳). Runs **before** `onChanged`, so what gets banked is the
+   * repaired geometry, not the click the user aimed at blank space.
+   */
+  onAnchor?: (overlay: unknown) => void;
+  /**
+   * Everything about this edit is over, snapshot banked included. `onChanged`
+   * clears any note the previous import left, so a message *about this edit* can
+   * only go out here (⑳).
+   */
+  onSettled?: () => void;
 }
 
 /** Payload shape the library passes to the overlay event callbacks. */
@@ -359,9 +383,11 @@ export function makeDrawingEvents(
   (e: OverlayEventArg) => void
 > {
   return {
-    onDrawEnd: () => {
+    onDrawEnd: (e) => {
       hooks.onDrawEnd?.();
+      hooks.onAnchor?.(e?.overlay);
       hooks.onChanged(null);
+      hooks.onSettled?.();
     },
     onRemoved: (e) => {
       const removed = e?.overlay as OverlayLike | undefined;
@@ -370,12 +396,94 @@ export function makeDrawingEvents(
     },
     // Covers both gestures: grabbing the line body (whole overlay) and grabbing
     // one of its handles (a single point) both end here.
-    onPressedMoveEnd: () => {
+    onPressedMoveEnd: (e) => {
+      hooks.onAnchor?.(e?.overlay);
       hooks.onChanged(null);
+      hooks.onSettled?.();
     },
     onSelected: (e) => hooks.onSelected?.(e?.overlay),
     onDeselected: (e) => hooks.onDeselected?.(e?.overlay),
   };
+}
+
+/**
+ * The newest bar the chart really has. `undefined` while data is still on its
+ * way, which is the caller's cue to leave anchors alone — guessing a bar from a
+ * stale list would move lines the user never touched.
+ */
+export function lastBarTimestamp(
+  dataList: readonly { timestamp?: number }[] | null | undefined,
+): number | undefined {
+  if (!Array.isArray(dataList)) return undefined;
+  for (let i = dataList.length - 1; i >= 0; i -= 1) {
+    const ts = dataList[i]?.timestamp;
+    if (typeof ts === "number" && Number.isFinite(ts)) return ts;
+  }
+  return undefined;
+}
+
+export interface PointClamp {
+  points: StoredPoint[];
+  /** Anchors pulled back onto the newest bar. */
+  moved: number;
+  /**
+   * A multi-point line whose anchors all ended up on the same bar, i.e. nothing
+   * with a width left to draw. Single-point tools (horizontal line, price line)
+   * are never degenerate — they live on the value, not on the gap.
+   */
+  degenerate: boolean;
+}
+
+/**
+ * Pull anchors that fell into the future zone back onto the newest bar (⑳).
+ * Only the horizontal anchor moves; the value the user aimed at is untouched.
+ */
+export function clampPointsToLastBar(
+  points: readonly StoredPoint[],
+  lastTs: number,
+): PointClamp {
+  let moved = 0;
+  const next = points.map((p) => {
+    if (!p || typeof p.timestamp !== "number" || p.timestamp <= lastTs) return p;
+    moved += 1;
+    return { ...p, timestamp: lastTs };
+  });
+  const stamps = new Set(
+    next.filter((p) => typeof p?.timestamp === "number").map((p) => p.timestamp as number),
+  );
+  // Only a line whose every anchor is timestamped can be called collapsed: a
+  // point carrying a bare `dataIndex` has a position of its own, so the line
+  // still has a width even if all the timestamps landed on one bar.
+  const timed = next.filter((p) => typeof p?.timestamp === "number").length;
+  return { points: next, moved, degenerate: next.length > 1 && timed === next.length && stamps.size === 1 };
+}
+
+export interface DrawingClamp {
+  drawings: StoredDrawing[];
+  /** Anchors pulled onto the newest bar, summed over the whole bucket. */
+  moved: number;
+  /** Lines that collapsed to a single bar and were dropped. */
+  dropped: number;
+}
+
+/** `clampPointsToLastBar` for a stored bucket — imports and reloads (⑳). */
+export function clampDrawingsToLastBar(
+  drawings: readonly StoredDrawing[],
+  lastTs: number,
+): DrawingClamp {
+  const out: StoredDrawing[] = [];
+  let moved = 0;
+  let dropped = 0;
+  for (const d of drawings) {
+    const clamped = clampPointsToLastBar(d.points ?? [], lastTs);
+    moved += clamped.moved;
+    if (clamped.degenerate) {
+      dropped += 1;
+      continue;
+    }
+    out.push({ ...d, points: clamped.points });
+  }
+  return { drawings: out, moved, dropped };
 }
 
 /** Asks whether a pane is on the chart right now (`chart.getPaneOptions(id)`). */
@@ -437,6 +545,43 @@ export function restoreDrawings(
     else parked.push({ ...d, paneId });
   }
   return { applied, parked };
+}
+
+/** What a reanchoring pass changed, in chart terms. */
+export interface ReanchorReport {
+  /** Anchors pulled back onto the newest bar. */
+  moved: number;
+  /** Ids of lines that collapsed to one bar and had to be removed. */
+  dropped: string[];
+}
+
+/**
+ * Move one finished overlay's anchors back onto the newest bar, in place (⑳).
+ *
+ * `overrideOverlay` is the whole trick: `OverlayImp.override` has a dedicated
+ * branch for `points` (dist 8292-8306 — the rest-destructure that keeps points
+ * out of the blind `merge` two lines above is what lets it be handled properly),
+ * and `shouldUpdate()` compares the points JSON (dist 8314-8318), so the line
+ * jumps back and repaints. It is never removed and re-created, which is what lets
+ * the ⑯ selection and the ⑰ row ids survive the repair.
+ */
+export function reanchorOverlay(chart: OverlayHost, overlay: unknown, lastTs: number): ReanchorReport {
+  const report: ReanchorReport = { moved: 0, dropped: [] };
+  const o = overlay as OverlayLike | null | undefined;
+  if (!o || typeof o.id !== "string" || !o.id) return report;
+  // A half-drawn line still has points coming; let the last click win.
+  if (isInProgress(o)) return report;
+  const clamped = clampPointsToLastBar(o.points ?? [], lastTs);
+  if (clamped.degenerate) {
+    chart.removeOverlay({ id: o.id });
+    report.dropped.push(o.id);
+    return report;
+  }
+  if (clamped.moved > 0) {
+    chart.overrideOverlay({ id: o.id, points: clamped.points });
+    report.moved = clamped.moved;
+  }
+  return report;
 }
 
 /**
