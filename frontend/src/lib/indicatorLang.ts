@@ -1,7 +1,10 @@
-import { registerIndicator, type Chart, type KLineData } from "klinecharts";
+import { registerIndicator, type Chart, type IndicatorFigureStyle, type KLineData } from "klinecharts";
+import { compilePine, isPineSource, type PineArtifact, type PineFigure } from "./pineScript";
 
 /**
- * Mini formula language for user-written indicators (local custom ⑩).
+ * Mini formula language for user-written indicators (local custom ⑩), plus the
+ * TradingView Pine Script compatibility layer (local custom ⑪) behind one
+ * mount API — see `applyUserIndicator`, which picks the engine per source text.
  *
  * Written as a tokenizer + recursive-descent parser + tree-walking evaluator,
  * NOT `new Function`/eval: the app ships a hard CSP (`script-src 'self'`, see
@@ -905,16 +908,151 @@ export interface ApplySpec {
   kind: "overlay" | "pane";
 }
 
+/** Which engine a piece of source text belongs to. */
+export type FormulaDialect = "pine" | "vector";
+
+export function detectDialect(code: string): FormulaDialect {
+  return isPineSource(code) ? "pine" : "vector";
+}
+
+/* ------------------------------------------------- last run per user script
+ * A KLineChart indicator recomputes inside `calc`, so the strategy report and
+ * the script's warnings can only reach the UI through this side channel. */
+
+const lastArtifacts = new Map<string, PineArtifact>();
+const listeners = new Map<string, Set<(artifact: PineArtifact | null) => void>>();
+
+/** Newest parsed output of a user script, or undefined before its first run. */
+export function getPineArtifact(id: string): PineArtifact | undefined {
+  return lastArtifacts.get(id);
+}
+
+/** Follow a script's recomputations (data reload, parameter change). */
+export function subscribePineArtifact(
+  id: string,
+  cb: (artifact: PineArtifact | null) => void,
+): () => void {
+  let set = listeners.get(id);
+  if (!set) {
+    set = new Set();
+    listeners.set(id, set);
+  }
+  set.add(cb);
+  return () => {
+    const live = listeners.get(id);
+    live?.delete(cb);
+    if (live && live.size === 0) listeners.delete(id);
+  };
+}
+
+function publishArtifact(id: string, artifact: PineArtifact | null): void {
+  if (artifact) lastArtifacts.set(id, artifact);
+  else lastArtifacts.delete(id);
+  for (const cb of listeners.get(id) ?? []) cb(artifact);
+}
+
+/** KLineChart figure for one Pine output series. */
+function toKcfFigure(f: PineFigure) {
+  return {
+    key: f.key,
+    title: `${f.title}:`,
+    type: f.type,
+    ...(f.baseValue !== undefined ? { baseValue: f.baseValue } : {}),
+    styles: () => {
+      const out: IndicatorFigureStyle = {};
+      if (f.color) out.color = f.color;
+      // Reference lines (`hline`) stay visually behind the script's own plots.
+      if (f.reference) {
+        if (!f.solid) {
+          out.style = "dashed";
+          out.size = 1;
+        }
+        if (!f.color) out.color = "#9e9e9e";
+      }
+      return Object.keys(out).length ? out : null;
+    },
+  };
+}
+
+/**
+ * Mount a TradingView Pine script: run it once against the chart's bars to
+ * learn its plots/inputs/overlay intent, then register a KLineChart indicator
+ * that re-runs the script whenever the data or the parameters change.
+ */
+function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) => void): string | null {
+  const bars = chart.getDataList();
+  const first = compilePine(spec.code, bars, { params: spec.params });
+  if ("error" in first) return `Pine 脚本错误：${first.error}`;
+  // Half a script is worse than none: everything after the abort is missing.
+  if (first.abort) return `Pine 脚本错误：${first.abort}`;
+  const hasNumbers = first.rows.some((r) => Object.values(r).some((v) => v !== undefined));
+  if (!hasNumbers && first.figures.length === 0) {
+    return "脚本没有输出任何绘图序列（检查 plot()/plotshape() 条件）";
+  }
+  const name = indicatorName(spec.id);
+  const code = spec.code;
+  const id = spec.id;
+  const defaultParams = spec.params;
+  // The script's own `overlay=` header wins: a strategy or a price-scale study
+  // belongs on the candles no matter what was stored locally.
+  const overlay = first.result.overlay || spec.kind === "overlay";
+  registerIndicator({
+    name,
+    shortName: spec.label || first.result.title || name,
+    precision: first.result.precision ?? 4,
+    series: overlay ? "price" : "normal",
+    calcParams: spec.params,
+    figures: first.figures.map(toKcfFigure),
+    calc: (dataList, indicator) => {
+      try {
+        const p = (indicator.calcParams ?? defaultParams).map((v) => Number(v));
+        const out = compilePine(code, dataList, { params: p });
+        if ("error" in out) {
+          publishArtifact(id, null);
+          return dataList.map(() => ({}));
+        }
+        publishArtifact(id, out);
+        return out.rows;
+      } catch {
+        publishArtifact(id, null);
+        return dataList.map(() => ({}));
+      }
+    },
+  });
+  chart.removeIndicator({ name });
+  if (overlay) {
+    chart.createIndicator({ name, paneId: "candle_pane" }, true);
+  } else {
+    chart.createIndicator({ name });
+  }
+  publishArtifact(id, first);
+  if (note) for (const w of first.result.warnings.slice(0, 6)) note(w);
+  return null;
+}
+
 /**
  * Compile + register a user formula with KLineChart and mount it on the chart
  * (overlay → candle pane on the price axis; pane → its own sub-chart).
  * Returns null on success, or the human-readable error (nothing is mounted
  * in that case).
  *
+ * `note` receives non-fatal findings (a Pine script that had to downgrade an
+ * unsupported call), so the UI can show them without blocking the indicator.
+ *
  * Trial-computes against the chart's current bars first, so a broken formula
  * surfaces as panel feedback instead of an empty indicator.
  */
-export function applyUserIndicator(chart: Chart, spec: ApplySpec): string | null {
+export function applyUserIndicator(
+  chart: Chart,
+  spec: ApplySpec,
+  note?: (msg: string) => void,
+): string | null {
+  return detectDialect(spec.code) === "pine"
+    ? applyPineIndicator(chart, spec, note)
+    : applyVectorIndicator(chart, spec);
+}
+
+function applyVectorIndicator(chart: Chart, spec: ApplySpec): string | null {
   const compiled = compileFormula(spec.code);
   if ("error" in compiled) return `语法错误：${compiled.error}`;
   const bars = chart.getDataList();
@@ -966,6 +1104,7 @@ export function applyUserIndicator(chart: Chart, spec: ApplySpec): string | null
 /** Remove a user formula from the chart (registration itself stays harmlessly). */
 export function removeUserIndicator(chart: Chart, id: string): void {
   chart.removeIndicator({ name: indicatorName(id) });
+  publishArtifact(id, null);
 }
 
 /** Function names surfaced in the editor cheat sheet. */

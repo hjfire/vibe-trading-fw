@@ -1,20 +1,41 @@
 import { useEffect, useState } from "react";
 import type { Chart, Nullable } from "klinecharts";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { applyUserIndicator, removeUserIndicator } from "@/lib/indicatorLang";
+import { isPineStrategy } from "@/lib/pineScript";
 import {
   loadUserIndicators,
   newIndicatorId,
   saveUserIndicators,
   type UserIndicator,
 } from "@/lib/indicatorStore";
-import { FORMULA_TEMPLATES } from "@/lib/indicatorTemplates";
+import type { ScriptCard } from "@/lib/scriptExchange";
+import type { BarLoader } from "@/lib/screener";
+import EditorTab from "./workbench/EditorTab";
+import LibraryTab from "./workbench/LibraryTab";
+import ExchangeTab from "./workbench/ExchangeTab";
+import ReportTab from "./workbench/ReportTab";
+import ScreenerTab from "./workbench/ScreenerTab";
+import {
+  cardToDraft,
+  draftToCard,
+  EMPTY_DRAFT,
+  type Draft,
+  type TabKey,
+  type WorkbenchSeed,
+} from "./workbench/types";
 
 /**
- * Right-hand drawer: write / import / manage custom indicator formulas
- * (local custom ⑩). Everything runs client-side against the mounted
- * KLineChart instance; formulas persist in localStorage.
+ * Right-hand drawer: the script workbench (local custom ⑩ → ⑪).
+ *
+ * Five tabs share one piece of text: the editor (write), the library (built-in
+ * TradingView-style scripts), the exchange tab (.pine / JSON / share link), the
+ * strategy report and the condition screener. Everything runs client-side
+ * against the mounted KLineChart instance; scripts persist in localStorage.
+ *
+ * The props contract is unchanged from ⑩ so ProChart keeps working verbatim;
+ * `seed` / `symbols` / `onPickSymbol` are the additions, all optional.
  */
 
 interface IndicatorEditorProps {
@@ -23,58 +44,101 @@ interface IndicatorEditorProps {
   getChart: () => Nullable<Chart>;
   /** Notified after any apply/toggle/remove so the host can refresh state. */
   onChartIndicatorsChanged: () => void;
+  /** Pre-load a script and jump to a tab; identity change re-applies. */
+  seed?: WorkbenchSeed | null;
+  /** Host watchlist, the default pool for the screener. */
+  symbols?: string[];
+  /** Show a screened symbol on the chart. */
+  onPickSymbol?: (symbol: string) => void;
+  /** Data seam for the screener (tests run without a network). */
+  loadBars?: BarLoader;
 }
 
-interface Draft {
-  id: string | null; // null = brand new
-  label: string;
-  kind: "overlay" | "pane";
-  paramsText: string;
-  code: string;
-}
-
-const EMPTY_DRAFT: Draft = {
-  id: null,
-  label: "",
-  kind: "pane",
-  paramsText: "14",
-  code: `// 变量：open high low close volume hl2 hlc3，参数数组 P（P[0]、P[1]…）
-// 函数：ma ema rma stdev dev sum cumsum hh ll ref change roc cross nz
-//       where abs max min avg sqrt pow log log10 round floor ceil sign na
-// 算术自动逐根对齐（标量与序列混算会拉伸），NaN 处自动留空
-return { M1: ma(close, P[0]) };`,
-};
-
-function parseParams(text: string): number[] {
-  return text
-    .split(/[,，\s]+/)
-    .map((t) => Number(t))
-    .filter((n) => Number.isFinite(n));
-}
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "editor", label: "编辑器" },
+  { key: "library", label: "脚本库" },
+  { key: "exchange", label: "导入导出" },
+  { key: "report", label: "策略报告" },
+  { key: "screener", label: "条件筛选" },
+];
 
 export default function IndicatorEditor({
   open,
   onClose,
   getChart,
   onChartIndicatorsChanged,
+  seed,
+  symbols = [],
+  onPickSymbol,
+  loadBars,
 }: IndicatorEditorProps) {
   const [items, setItems] = useState<UserIndicator[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ lines: string[]; bad: boolean } | null>(null);
+  const [tab, setTab] = useState<TabKey>("editor");
 
   useEffect(() => {
-    if (open) {
-      setItems(loadUserIndicators());
-      setError(null);
-    }
+    if (!open) return;
+    setItems(loadUserIndicators());
+    setError(null);
+    setNotice(null);
   }, [open]);
 
+  // Deep link (a `?s=` share) arrives from the host: fill the editor with it.
+  useEffect(() => {
+    if (!open || !seed) return;
+    setDraft(seed.draft);
+    setTab(seed.tab);
+    setError(null);
+  }, [open, seed]);
+
   if (!open) return null;
+
+  /** Feedback shown above the tabs: it has to outlive a tab switch. */
+  const say = (lines: string[], bad = false) => setNotice({ lines: lines.filter(Boolean), bad });
+
+  /** Where a mounted script pays off: a strategy has numbers, an indicator has a form. */
+  const landingTab = (card: ScriptCard): TabKey =>
+    card.dialect === "pine" && isPineStrategy(card.code) ? "report" : "editor";
 
   const commit = (next: UserIndicator[]) => {
     setItems(next);
     saveUserIndicators(next);
     onChartIndicatorsChanged();
+  };
+
+  const specOf = (id: string, card: ScriptCard) => ({
+    id,
+    label: card.name,
+    code: card.code,
+    params: card.params,
+    kind: card.display,
+  });
+
+  /** Re-applies a card by name, so clicking 应用 twice updates instead of duplicating. */
+  const install = (card: ScriptCard): string | null => {
+    const chart = getChart();
+    if (!chart) {
+      say(["图表尚未就绪，请稍后再试"], true);
+      return "图表尚未就绪，请稍后再试";
+    }
+    const name = card.name.trim() || "未命名脚本";
+    const prev = items.find((x) => x.label === name);
+    const id = prev?.id ?? newIndicatorId();
+    const warns: string[] = [];
+    const err = applyUserIndicator(chart, specOf(id, { ...card, name }), (m) => warns.push(m));
+    if (err) {
+      // Failures of the library / import paths must reach the strip: the tab
+      // that raised them is often not the one on screen.
+      say([`「${name}」挂载失败：${err}`], true);
+      return err;
+    }
+    setError(null);
+    const row: UserIndicator = { ...specOf(id, { ...card, name }), enabled: true };
+    commit(prev ? items.map((x) => (x.id === id ? row : x)) : [...items, row]);
+    say([`已挂载「${name}」`, ...warns.map((w) => `说明：${w}`)]);
+    return null;
   };
 
   const saveDraft = () => {
@@ -83,31 +147,21 @@ export default function IndicatorEditor({
       setError("图表尚未就绪，请稍后再试");
       return;
     }
-    const label = draft.label.trim() || "我的指标";
+    const card = draftToCard(draft);
     const id = draft.id ?? newIndicatorId();
-    const err = applyUserIndicator(chart, {
-      id,
-      label,
-      code: draft.code,
-      params: parseParams(draft.paramsText),
-      kind: draft.kind,
-    });
+    const warns: string[] = [];
+    const err = applyUserIndicator(chart, specOf(id, card), (m) => warns.push(m));
     if (err) {
       setError(err);
       return;
     }
     setError(null);
-    const row: UserIndicator = {
-      id,
-      label,
-      kind: draft.kind,
-      params: parseParams(draft.paramsText),
-      code: draft.code,
-      enabled: true,
-    };
+    const row: UserIndicator = { ...specOf(id, card), enabled: true };
     const idx = items.findIndex((x) => x.id === id);
     commit(idx >= 0 ? items.map((x, i) => (i === idx ? row : x)) : [...items, row]);
     setDraft({ ...EMPTY_DRAFT });
+    say([`已保存「${card.name}」`, ...warns.map((w) => `说明：${w}`)]);
+    setTab(landingTab(card));
   };
 
   const toggle = (item: UserIndicator) => {
@@ -117,12 +171,15 @@ export default function IndicatorEditor({
       removeUserIndicator(chart, item.id);
       commit(items.map((x) => (x.id === item.id ? { ...x, enabled: false } : x)));
     } else {
-      const err = applyUserIndicator(chart, item);
+      const warns: string[] = [];
+      const err = applyUserIndicator(chart, item, (m) => warns.push(m));
       if (err) {
-        setError(`「${item.label}」启用失败：${err}`);
+        say([`「${item.label}」启用失败：${err}`], true);
         return;
       }
+      setError(null);
       commit(items.map((x) => (x.id === item.id ? { ...x, enabled: true } : x)));
+      say([`已启用「${item.label}」`, ...warns.map((w) => `说明：${w}`)]);
     }
   };
 
@@ -142,29 +199,49 @@ export default function IndicatorEditor({
       code: item.code,
     });
     setError(null);
+    setTab("editor");
   };
 
-  const useTemplate = (key: string) => {
-    const t = FORMULA_TEMPLATES.find((x) => x.key === key);
-    if (!t) return;
-    setDraft({
-      id: null,
-      label: t.label.replace(/（.*）$/, ""),
-      kind: t.kind,
-      paramsText: t.params.join(", "),
-      code: t.code,
-    });
+  /** Send a script to the editor instead of mounting it blind. */
+  const load = (card: ScriptCard) => {
+    setDraft(cardToDraft(card));
+    setTab("editor");
     setError(null);
+    setNotice(null);
+  };
+
+  const apply = (card: ScriptCard) => {
+    if (install(card)) return;
+    setTab(landingTab(card));
+  };
+
+  const importCards = (cards: ScriptCard[]): string | null => {
+    let lastErr: string | null = null;
+    for (const card of cards) lastErr = install(card);
+    return lastErr;
+  };
+
+  const rerun = (item: UserIndicator): string | null => {
+    const chart = getChart();
+    if (!chart) {
+      say(["图表尚未就绪，请稍后再试"], true);
+      return "图表尚未就绪，请稍后再试";
+    }
+    const warns: string[] = [];
+    const err = applyUserIndicator(chart, item, (m) => warns.push(m));
+    if (err) say([`重新回测失败：${err}`], true);
+    else say([`已按当前K线重新回测「${item.label}」`, ...warns.map((w) => `说明：${w}`)]);
+    return err;
   };
 
   return (
     <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose}>
       <div
-        className="absolute right-0 top-0 flex h-full w-[28rem] max-w-full flex-col border-l bg-card shadow-xl"
+        className="absolute right-0 top-0 flex h-full w-[34rem] max-w-full flex-col border-l bg-card shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-sm font-semibold">ƒ 指标公式工作台</span>
+          <span className="text-sm font-semibold">ƒ 脚本工作台</span>
           <button
             type="button"
             onClick={onClose}
@@ -174,167 +251,75 @@ export default function IndicatorEditor({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 text-sm">
-          {/* templates */}
-          <section>
-            <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">内置常用公式（点击载入，可再修改）</h3>
-            <div className="grid grid-cols-2 gap-1.5">
-              {FORMULA_TEMPLATES.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => useTemplate(t.key)}
-                  className="rounded border px-2 py-1 text-left text-xs hover:bg-muted"
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* editor */}
-          <section className="space-y-2 rounded-lg border p-2.5">
-            <h3 className="text-xs font-semibold text-muted-foreground">
-              {draft.id ? "编辑指标" : "新建指标"}
-            </h3>
-            <div className="flex gap-2">
-              <input
-                value={draft.label}
-                onChange={(e) => setDraft({ ...draft, label: e.target.value })}
-                placeholder="指标名称"
-                className="h-7 min-w-0 flex-1 rounded border bg-background px-2 text-xs outline-none focus:border-primary"
-              />
-              <input
-                value={draft.paramsText}
-                onChange={(e) => setDraft({ ...draft, paramsText: e.target.value })}
-                placeholder="参数，如 14, 2"
-                className="h-7 w-28 rounded border bg-background px-2 font-mono text-xs outline-none focus:border-primary"
-              />
-            </div>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-muted-foreground">显示位置:</span>
-              {(["overlay", "pane"] as const).map((k) => (
-                <label key={k} className="flex cursor-pointer items-center gap-1">
-                  <input
-                    type="radio"
-                    name="ind-kind"
-                    checked={draft.kind === k}
-                    onChange={() => setDraft({ ...draft, kind: k })}
-                  />
-                  {k === "overlay" ? "主图叠加" : "副图"}
-                </label>
-              ))}
-            </div>
-            <textarea
-              value={draft.code}
-              onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-              spellCheck={false}
-              rows={10}
-              className="w-full resize-y rounded border bg-background p-2 font-mono text-[11px] leading-4 outline-none focus:border-primary"
-            />
-            {error && <p className="whitespace-pre-wrap text-xs text-red-500">{error}</p>}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={saveDraft}
-                className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
-              >
-                <Plus size={12} /> {draft.id ? "保存并更新" : "保存并应用"}
-              </button>
-              {draft.id && (
-                <button
-                  type="button"
-                  onClick={() => setDraft(EMPTY_DRAFT)}
-                  className="rounded border px-2.5 py-1 text-xs hover:bg-muted"
-                >
-                  取消编辑
-                </button>
+        <div className="flex shrink-0 flex-wrap gap-1 border-b px-2 py-1.5">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "rounded px-2 py-1 text-xs hover:bg-muted",
+                tab === t.key && "bg-primary/10 font-semibold text-primary",
               )}
-            </div>
-          </section>
+            >
+              {t.label}
+            </button>
+          ))}
+          <span className="ml-auto self-center text-[11px] text-muted-foreground">
+            {items.filter((x) => x.enabled).length}/{items.length} 已挂载
+          </span>
+        </div>
 
-          {/* installed list */}
-          <section>
-            <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">我的指标（勾选 = 显示在图上）</h3>
-            {items.length === 0 && (
-              <p className="text-xs text-muted-foreground">还没有自定义指标 — 从上方模板开始，或直接写公式。</p>
-            )}
-            <div className="space-y-1">
-              {items.map((it) => (
-                <div key={it.id} className="flex items-center gap-2 rounded border px-2 py-1.5 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={it.enabled}
-                    onChange={() => toggle(it)}
-                    title="显示/隐藏"
-                    className="accent-[var(--primary)]"
-                  />
-                  <span className={cn("min-w-0 flex-1 truncate", !it.enabled && "text-muted-foreground")}>
-                    {it.label}
-                  </span>
-                  <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
-                    {it.kind === "overlay" ? "主图" : "副图"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => edit(it)}
-                    title="编辑公式"
-                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => remove(it)}
-                    title="删除"
-                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-red-500"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-sm">
+          {notice && (
+            <ul
+              className={cn(
+                "space-y-0.5 rounded border px-2 py-1.5 text-[11px] leading-4",
+                notice.bad ? "border-red-500/40 text-red-500" : "border-primary/30 text-muted-foreground",
+              )}
+            >
+              {notice.lines.map((line) => (
+                <li key={line} className="break-words">
+                  {line}
+                </li>
               ))}
-            </div>
-          </section>
+            </ul>
+          )}
 
-          {/* cheat sheet */}
-          <details className="rounded-lg border p-2.5 text-xs">
-            <summary className="cursor-pointer font-semibold text-muted-foreground">
-              公式语法速查
-            </summary>
-            <div className="mt-2 space-y-1 leading-5 text-muted-foreground">
-              <p>
-                数据变量：<code className="font-mono text-foreground">open high low close volume hl2 hlc3</code>
-                （与K线逐根对齐的序列）
-              </p>
-              <p>
-                参数：<code className="font-mono text-foreground">P</code> 数组，取自上方"参数"输入框，如
-                <code className="font-mono text-foreground"> P[0]</code>
-              </p>
-              <p>
-                逐行写：<code className="font-mono text-foreground">名字 = 表达式;</code>，最后
-                <code className="font-mono text-foreground">{" return { 线名: 序列 };"}</code>（每键一条线）或
-                <code className="font-mono text-foreground"> return 序列;</code>
-              </p>
-              <p>
-                滚动函数：<code className="font-mono text-foreground">ma ema rma stdev dev sum cumsum hh ll ref change roc cross nz</code>
-                ，如 <code className="font-mono text-foreground">ma(close, 20)</code>、
-                <code className="font-mono text-foreground">hh(high, 20)</code>、
-                <code className="font-mono text-foreground">cross(快线, 慢线)</code>（金叉 1 / 死叉 -1）
-              </p>
-              <p>
-                数学与判断：<code className="font-mono text-foreground">abs max min avg sqrt pow log log10 round floor ceil sign</code>
-                、<code className="font-mono text-foreground">+ - * / % &gt; &lt; &gt;= &lt;= == != and or not</code>
-                、三元 <code className="font-mono text-foreground">条件 ? 值A : 值B</code>、
-                <code className="font-mono text-foreground">where(条件, 值A, 值B)</code>
-              </p>
-              <p>
-                广播：标量与序列混算自动拉伸，所以 <code className="font-mono text-foreground">{"return { 轴: 0 };"}</code> 是一条水平参考线；除零/数据不足产生 NaN，图上自动留空
-              </p>
-              <p>
-                注释：<code className="font-mono text-foreground">//</code> 或 <code className="font-mono text-foreground">#</code> 到行末。本语言由页面内置解释器执行（不走 eval，生产环境 CSP 下同样可用）
-              </p>
-            </div>
-          </details>
+          {tab === "editor" && (
+            <EditorTab
+              draft={draft}
+              onDraft={setDraft}
+              items={items}
+              error={error}
+              getChart={getChart}
+              onSave={saveDraft}
+              onToggle={toggle}
+              onRemove={remove}
+              onEdit={edit}
+            />
+          )}
+
+          {tab === "library" && (
+            <LibraryTab onLoad={load} onApply={apply} installed={items.map((x) => x.label)} />
+          )}
+
+          {tab === "exchange" && (
+            <ExchangeTab draft={draft} items={items} onLoad={load} onImport={importCards} say={say} />
+          )}
+
+          {tab === "report" && <ReportTab items={items} onRerun={rerun} />}
+
+          {tab === "screener" && (
+            <ScreenerTab
+              symbols={symbols}
+              items={items}
+              draft={draft}
+              getChart={getChart}
+              loadBars={loadBars}
+              onPickSymbol={onPickSymbol ?? (() => undefined)}
+            />
+          )}
         </div>
       </div>
     </div>

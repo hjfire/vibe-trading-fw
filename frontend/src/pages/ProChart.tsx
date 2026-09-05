@@ -4,10 +4,13 @@ import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
+import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
 import { applyUserIndicator } from "@/lib/indicatorLang";
 import { loadUserIndicators } from "@/lib/indicatorStore";
+import { readShareLink, SHARE_QUERY_KEY } from "@/lib/scriptExchange";
+import { cardToDraft, type WorkbenchSeed } from "@/components/charts/workbench/types";
 
 /**
  * Phase-A pro chart: open-source KLineChart (Apache-2.0) wired to this project's
@@ -20,6 +23,7 @@ import { loadUserIndicators } from "@/lib/indicatorStore";
 const DEFAULT_SYMBOL = "600519.SH";
 const PAGE = 500;
 const WATCH_KEY = "pro-chart.watchlist.v1";
+const SESSION_KEY = "pro-chart.session.v1";
 
 const PRESETS = [
   { label: "贵州茅台", symbol: "600519.SH" },
@@ -43,6 +47,26 @@ const DRAW_TOOLS: { label: string; name: string }[] = [
 function periodFor(interval: IntervalKey): { type: "day" | "minute"; span: number } {
   if (interval === "1D") return { type: "day", span: 1 };
   return { type: "minute", span: parseInt(interval, 10) };
+}
+
+/** Last viewed symbol + interval (local custom ⑪): the chart should reopen
+ * where it was left. A stale pair is repaired, not trusted — minute bars only
+ * exist for A-shares, so restoring "5M" onto AAPL would fail the first request. */
+function readSession(): { symbol: string; interval: IntervalKey } {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return { symbol: DEFAULT_SYMBOL, interval: "1D" };
+    const obj: unknown = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return { symbol: DEFAULT_SYMBOL, interval: "1D" };
+    const { symbol, interval } = obj as { symbol?: unknown; interval?: unknown };
+    const next =
+      typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
+    const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";
+    const aShare = /\.(SH|SZ)$/.test(next);
+    return { symbol: next, interval: span === "1D" || aShare ? span : "1D" };
+  } catch {
+    return { symbol: DEFAULT_SYMBOL, interval: "1D" };
+  }
 }
 
 function chartStyles(dark: boolean) {
@@ -69,12 +93,65 @@ function chartStyles(dark: boolean) {
   };
 }
 
+/**
+ * A `?s=` share payload is captured at module scope on purpose.
+ *
+ * React StrictMode mounts this page twice in development: the first mount used
+ * to read the query, clean the URL and then get unmounted before the decode
+ * resolved, so the second mount found nothing to import and the deep link
+ * failed silently — it worked in production only because there is one mount.
+ * Living outside the component lets whichever mount finish the job, exactly
+ * once, and a later remount (back to this page) must not re-import.
+ */
+function readShareQuery(): string {
+  try {
+    return new URLSearchParams(window.location.search).get(SHARE_QUERY_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+let pendingShare = readShareQuery();
+let pendingShareTask: ReturnType<typeof readShareLink> | null = null;
+let shareHandled = false;
+
+/** Starts the decode on the first call; a second call reuses the same task. */
+function takeShareTask(): ReturnType<typeof readShareLink> | null {
+  if (pendingShare && !pendingShareTask) {
+    const code = pendingShare;
+    pendingShare = "";
+    pendingShareTask = readShareLink(code).then((out) => {
+      shareHandled = true;
+      return out;
+    });
+  }
+  return shareHandled ? null : pendingShareTask;
+}
+
+/** The query must not survive the load, or a refresh re-imports the script. */
+function stripShareQuery(): void {
+  try {
+    const query = new URLSearchParams(window.location.search);
+    if (!query.has(SHARE_QUERY_KEY)) return;
+    query.delete(SHARE_QUERY_KEY);
+    const rest = query.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`,
+    );
+  } catch {
+    /* no history API (jsdom): the import still lands, only the URL stays dirty */
+  }
+}
+
 export function ProChart() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Nullable<Chart>>(null);
-  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
-  const [input, setInput] = useState(DEFAULT_SYMBOL);
-  const [interval, setInterval] = useState<IntervalKey>("1D");
+  const [session] = useState(readSession);
+  const [symbol, setSymbol] = useState(session.symbol);
+  const [input, setInput] = useState(session.symbol);
+  const [interval, setInterval] = useState<IntervalKey>(session.interval);
   const [status, setStatus] = useState<{ loading: boolean; error: string | null; source: string }>({
     loading: false,
     error: null,
@@ -93,6 +170,9 @@ export function ProChart() {
   // load KLineChart fires right after startup resets status.error and would
   // swallow the message within a second (e2e 2026-09-04).
   const [formulaError, setFormulaError] = useState<string | null>(null);
+  // A script handed over by a share link (local custom ⑪); the workbench
+  // opens with it loaded into the editor, never mounted unseen.
+  const [scriptSeed, setScriptSeed] = useState<WorkbenchSeed | null>(null);
   const refreshIndCount = () =>
     setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
   // Both entry points behave the same: the banner is a restore-time notice,
@@ -128,11 +208,22 @@ export function ProChart() {
     }
   }, [watch]);
 
+  // Remember where the chart was left (local custom ⑪).
+  useEffect(() => {
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval }));
+    } catch {
+      /* quota errors are non-fatal for a convenience feature */
+    }
+  }, [symbol, interval]);
+
   // Create/destroy the chart once per mount.
   useEffect(() => {
     if (!hostRef.current) return;
     const chart = init(hostRef.current, {
-      locale: (i18n.language || "en").startsWith("zh") ? "zh_CN" : "en",
+      // Must be a tag KLineChart ships: an unknown one makes its tooltip throw
+      // on every redraw (see `chartLocale`).
+      locale: chartLocale(i18n.language),
       timezone: "Asia/Shanghai",
       styles: chartStyles(dark),
     });
@@ -200,10 +291,39 @@ export function ProChart() {
     chartRef.current?.setStyles(chartStyles(dark));
   }, [dark]);
 
+  // TradingView shares by URL, so `?s=` opens the workbench with the script
+  // decoded into the editor (see `takeShareTask` for the double-mount catch).
+  useEffect(() => {
+    const task = takeShareTask();
+    stripShareQuery();
+    if (!task) return;
+    let alive = true;
+    void task.then((out) => {
+      if (!alive) return;
+      if (!out.ok) {
+        setFormulaError(`分享链接无效：${out.error}`);
+        return;
+      }
+      setScriptSeed({ draft: cardToDraft(out.card), tab: "editor" });
+      setIndPanelOpen(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const applySymbol = (s: string) => {
     setInput(s);
     setSymbol(s);
-    chartRef.current?.setSymbol({ ticker: s, pricePrecision: 2, volumePrecision: 0 });
+    const chart = chartRef.current;
+    // Minute bars only exist for A-shares: repair the period *before* setSymbol
+    // fires its reload, or the first request after the switch is a guaranteed 400.
+    const next = interval !== "1D" && !/\.(SH|SZ)$/.test(s) ? "1D" : interval;
+    if (next !== interval) {
+      setInterval(next);
+      chart?.setPeriod(periodFor(next));
+    }
+    chart?.setSymbol({ ticker: s, pricePrecision: 2, volumePrecision: 0 });
   };
 
   const loadSymbol = () => {
@@ -338,6 +458,9 @@ export function ProChart() {
         onClose={() => setIndPanelOpen(false)}
         getChart={() => chartRef.current}
         onChartIndicatorsChanged={refreshIndCount}
+        seed={scriptSeed}
+        symbols={watch}
+        onPickSymbol={applySymbol}
       />
     </div>
   );
