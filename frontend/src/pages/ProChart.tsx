@@ -92,10 +92,7 @@ function periodFor(interval: IntervalKey): { type: "day" | "minute"; span: numbe
 /** Which symbols can have minute bars at all.
  *
  * FutuOpenD covers .SH/.SZ/.HK/.US; the Sina fall-back behind it reaches
- * A-shares only, so a crypto or LSE code has no intraday source here. One
- * predicate serves both the interval buttons *and* session restore below --
- * written twice, the two copies drift, and the failure is quiet: a shared link
- * renders correctly and then reloads onto the daily chart.
+ * A-shares only, so a crypto or LSE code has no intraday source here.
  *
  * Exported for tests: it mirrors ``_FUTU_MINUTE_SUFFIXES`` in market_routes.py.
  */
@@ -103,6 +100,23 @@ export function canMinuteBars(symbol: string): boolean {
   // Case-insensitive because the route upper-cases the symbol before resolving
   // it, so a lowercase code typed into the box is servable too.
   return /\.(SH|SZ|HK|US)$/i.test(symbol);
+}
+
+/** Can this period be used on this instrument at all? Daily always can.
+ *
+ * This is the *one* question four places ask: the interval buttons' disabled
+ * state, the click handler, the repair on symbol switch, and session restore.
+ * When it was spelled inline in each of them, relaxing one copy produced a
+ * button that looked clickable and did nothing -- the guard in `pickInterval`
+ * kept the old A-share-only rule after the button stopped disabling itself.
+ */
+export function intervalAllowed(symbol: string, interval: IntervalKey): boolean {
+  return interval === "1D" || canMinuteBars(symbol);
+}
+
+/** The period to actually use after `symbol` changes (or is restored). */
+export function repairInterval(symbol: string, interval: IntervalKey): IntervalKey {
+  return intervalAllowed(symbol, interval) ? interval : "1D";
 }
 
 /** Last viewed symbol + interval (local custom ⑪): the chart should reopen
@@ -119,8 +133,7 @@ export function readSession(): { symbol: string; interval: IntervalKey } {
     const next =
       typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
     const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";
-    const intraday = canMinuteBars(next);
-    return { symbol: next, interval: span === "1D" || intraday ? span : "1D" };
+    return { symbol: next, interval: repairInterval(next, span) };
   } catch {
     return { symbol: DEFAULT_SYMBOL, interval: "1D" };
   }
@@ -376,10 +389,6 @@ export function ProChart() {
     setFormulaError(null);
     setIndPanelOpen(true);
   };
-  // Greyed out only where no source can answer at all (see canMinuteBars).
-  // Whether OpenD is actually up is not knowable from here, so HK/US stay
-  // enabled and the route's own error names the cause when the gateway sleeps.
-  const canMinute = canMinuteBars(symbol);
 
   // Watchlist (step ②): persisted in localStorage, defaults to the presets.
   const [watch, setWatch] = useState<string[]>(() => {
@@ -662,9 +671,10 @@ export function ProChart() {
     setDrawNotice(null);
     setShareFallback(null);
     const chart = chartRef.current;
-    // Minute bars only exist for A-shares: repair the period *before* setSymbol
-    // fires its reload, or the first request after the switch is a guaranteed 400.
-    const next = interval !== "1D" && !/\.(SH|SZ)$/.test(s) ? "1D" : interval;
+    // Repair the period *before* setSymbol fires its reload, or the first
+    // request after the switch is a guaranteed 400. Same predicate as the
+    // buttons and the click handler below -- four copies used to disagree.
+    const next = repairInterval(s, interval);
     if (next !== interval) {
       setInterval(next);
       chart?.setPeriod(periodFor(next));
@@ -690,7 +700,7 @@ export function ProChart() {
   );
 
   const pickInterval = (iv: IntervalKey) => {
-    if (iv !== "1D" && !/\.(SH|SZ)$/.test(symbol)) return; // guarded, button also disabled
+    if (!intervalAllowed(symbol, iv)) return; // the button is disabled too
     setDrawNotice(null);
     setInterval(iv);
     chartRef.current?.setPeriod(periodFor(iv));
@@ -1143,7 +1153,10 @@ export function ProChart() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">
           {INTERVALS.map((i) => {
-            const disabled = i.key !== "1D" && !canMinute;
+            // Greyed out only where no source can answer at all. Whether OpenD
+            // is up is not knowable from here, so HK/US stay enabled and the
+            // route's own error names the cause when the gateway sleeps.
+            const disabled = !intervalAllowed(symbol, i.key);
             return (
               <button
                 key={i.key}

@@ -2,35 +2,76 @@
  * Minute-bar availability on the pro chart, now that FutuOpenD serves intraday
  * bars for every market it lists rather than A-shares only.
  *
- * Two things are pinned here, and the second is the one that regresses quietly:
+ * Three things are pinned here, and the third is the one that already
+ * regressed once:
  *
  * 1. which symbols get an enabled minute-interval button at all;
  * 2. that session restore keeps a HK/US intraday interval instead of forcing it
  *    back to daily. Before the routing changed, `readSession` carried its own
  *    copy of the A-share-only rule, so a shared "Tencent, 5-minute" link
  *    rendered and then reloads as a daily chart with nothing on screen to say
- *    why. A single shared predicate is the fix; this test is the tripwire that
- *    keeps the copies from coming back.
+ *    why.
+ * 3. that **the click answers**. The rule is asked in four places (the buttons'
+ *    disabled state, the click handler, the repair on symbol switch, session
+ *    restore). Relaxing only the first produced a button that lit up and did
+ *    nothing: `pickInterval` kept its own `/\.(SH|SZ)$/` guard, so every HK/US
+ *    minute click was swallowed. A test that only reads the predicate cannot
+ *    see that, so the block below mounts the page and clicks the real button.
  */
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { canMinuteBars, readSession } from "../ProChart";
+import {
+  ProChart,
+  canMinuteBars,
+  intervalAllowed,
+  readSession,
+  repairInterval,
+} from "../ProChart";
 
-// klinecharts touches the DOM the moment a chart is built; importing the page
-// must not require a canvas.
+const h = vi.hoisted(() => ({
+  ticker: "600519.SH",
+  periods: [] as Array<{ type: string; span: number }>,
+}));
+
+// klinecharts touches the DOM the moment a chart is built. The fake records the
+// one call that decides what the user sees: which period the chart was handed.
 vi.mock("klinecharts", () => ({
   init: () => ({
+    getSymbol: () => ({ ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 }),
+    getDataList: () => [],
+    getIndicators: () => [],
+    getOverlays: () => [],
+    getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
+    getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
+    getOffsetRightDistance: () => 0,
     applyOptions: () => {},
-    createIndicator: () => true,
-    dispose: () => {},
-    getSymbol: () => null,
     setStyles: () => {},
+    setPaneOptions: () => true,
+    resize: () => {},
+    setDataLoader: () => {},
+    setSymbol: (s: { ticker: string }) => {
+      h.ticker = s.ticker;
+    },
+    setPeriod: (p: { type: string; span: number }) => {
+      h.periods.push(p);
+    },
+    createIndicator: () => true,
+    removeIndicator: () => true,
+    createOverlay: () => null,
+    removeOverlay: () => true,
+    overrideOverlay: () => true,
   }),
   dispose: () => {},
   registerIndicator: () => {},
   registerOverlay: () => {},
+  getSupportedLocales: () => ["en-US", "zh-CN"],
   version: () => "test",
 }));
+
+// Neither side panel is part of this contract, and both reach for the network.
+vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
+vi.mock("@/components/charts/IndicatorEditor", () => ({ default: () => null }));
 
 const SESSION_KEY = "pro-chart.session.v1";
 
@@ -104,5 +145,79 @@ describe("readSession preserves the interval the symbol can actually serve", () 
   it("rejects an interval that is not on the toolbar", () => {
     seedSession("700.HK", "4h");
     expect(readSession().interval).toBe("1D");
+  });
+});
+
+describe("intervalAllowed / repairInterval", () => {
+  it.each(["1m", "5m", "15m", "30m", "60m"])("%s is allowed on each of the four markets", (iv) => {
+    for (const symbol of ["600519.SH", "000001.SZ", "0700.HK", "AAPL.US"]) {
+      expect(intervalAllowed(symbol, iv as "5m")).toBe(true);
+    }
+  });
+
+  it("allows daily everywhere, including symbols with no minute source", () => {
+    for (const symbol of ["BTC-USDT", "SHEL.L", "^SPX", "600519.SH"]) {
+      expect(intervalAllowed(symbol, "1D")).toBe(true);
+    }
+  });
+
+  it("repairs only what the instrument cannot serve", () => {
+    expect(repairInterval("0700.HK", "5m")).toBe("5m");
+    expect(repairInterval("BTC-USDT", "5m")).toBe("1D");
+    expect(repairInterval("BTC-USDT", "1D")).toBe("1D");
+  });
+});
+
+describe("the toolbar answers the click (the rule used to be spelled four times)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    h.periods = [];
+    h.ticker = "0700.HK";
+  });
+
+  async function mountChart(): Promise<void> {
+    // `applyPaneLayout` budgets pane heights from the host's height, which jsdom
+    // reports as 0 for an unstyled div.
+    vi.spyOn(window.HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
+    render(<ProChart />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  const disabledOf = (name: string): boolean =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+  it("clicking 5分 on 腾讯 pushes a 5-minute period onto the chart", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    expect(disabledOf("5分")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "5分" }));
+    expect(h.periods.at(-1)).toEqual({ type: "minute", span: 5 });
+  });
+
+  it("keeps the minute period when switching 腾讯 -> AAPL, both servable", async () => {
+    seedSession("0700.HK", "5m");
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    // The old copy of the rule snapped this to daily, so the user could never
+    // look at a US intraday chart for longer than one click.
+    expect(h.periods.some((p) => p.type === "day")).toBe(false);
+  });
+
+  it("repairs to daily when switching to a symbol with no minute source", async () => {
+    seedSession("0700.HK", "5m");
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "BTC/USDT" }));
+    expect(h.periods.at(-1)).toEqual({ type: "day", span: 1 });
+  });
+
+  it("still greys out every minute button for BTC, so the refusal is visible", async () => {
+    seedSession("BTC-USDT", "1D");
+    await mountChart();
+    for (const label of ["1分", "5分", "15分", "30分", "60分"]) {
+      expect(disabledOf(label)).toBe(true);
+    }
+    expect(disabledOf("日线")).toBe(false);
   });
 });
