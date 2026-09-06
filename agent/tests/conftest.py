@@ -94,6 +94,17 @@ _PRIOR_SOURCE_ORDER_ENV = {
     for key in [k for k in list(os.environ) if k.startswith("MARKET_DATA_ORDER_")]
 }
 
+# The same class of leak, one layer down: ``FUTU_HOST``/``FUTU_PORT`` default to
+# ``127.0.0.1:11111``, so on a machine where the developer happens to have
+# FutuOpenD started the gateway probe answers True and ``src.market_data``
+# promotes ``futu`` to the head of every equity chain. Which loader a test sees
+# would then depend on which desktop apps were left running. Pin the default
+# world to "no gateway configured"; tests that want one set both variables
+# explicitly (see tests/test_futu_gateway.py).
+_PRIOR_FUTU_ENV = {key: os.environ.pop(key, None) for key in ("FUTU_HOST", "FUTU_PORT")}
+os.environ["FUTU_HOST"] = ""
+os.environ["FUTU_PORT"] = "0"
+
 # Tests that spawn a subprocess hand it this environment, HOME included. On a
 # machine whose dependencies live in the per-user site directory -- what
 # ``pip install --user`` does, and the default when no virtualenv is active --
@@ -145,6 +156,11 @@ def _teardown_sandbox() -> None:
         else:
             os.environ[key] = prior
     os.environ.update(_PRIOR_SOURCE_ORDER_ENV)
+    for key, prior in _PRIOR_FUTU_ENV.items():
+        if prior is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prior
 
 
 # Safety net for e.g. `--collect-only` (no fixtures run) and abnormal exits.

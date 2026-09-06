@@ -155,13 +155,25 @@ _NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset(
 # data quality. Eastmoney/Sina/Stooq/Yahoo are unauthenticated public sources
 # that must be politely throttled; Finnhub/AlphaVantage/Tiingo/FMP are key-gated
 # REST fallbacks placed deeper in the chain.
+#
+# ``futu`` is the exception to the ban-risk ordering and leads the three equity
+# chains. It is not a public endpoint: it is a gateway process on the operator's
+# own machine, logged into their own broker account, so it cannot be IP-banned
+# by throttling and it is the only source here with a realtime tape. When
+# FutuOpenD is not running its loader reports unavailable (and latches a
+# short cooldown, see ``backtest.loaders/futu_gateway.py``), so every chain
+# below still degrades to the previous ordering rather than depending on a
+# desktop app being open. Deliberately *not* fronted by ``futu``: ``crypto``
+# and ``forex`` (Futu serves neither for a retail API account), ``index`` (no
+# US index entitlements), and the futures/fund/macro markets.
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "a_share":   ["tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local"],
-    "us_equity": ["yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp", "finnhub", "alphavantage", "longbridge", "akshare", "local"],
-    # HK: tencent leads (no observed IP ban); akshare (Eastmoney-backed)
-    # precedes the Yahoo-SDK family, which is blocked from mainland IPs;
-    # tushare hk_daily is key-gated.
-    "hk_equity": ["tencent", "eastmoney", "yahoo", "futu", "akshare", "yfinance", "tushare", "longbridge", "local"],
+    "a_share":   ["futu", "tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local"],
+    "us_equity": ["futu", "yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp",
+                  "finnhub", "alphavantage", "longbridge", "akshare", "local"],
+    # HK: futu (own-account gateway, LV2) then tencent (no observed IP ban);
+    # akshare (Eastmoney-backed) precedes the Yahoo-SDK family, which is
+    # blocked from mainland IPs; tushare hk_daily is key-gated.
+    "hk_equity": ["futu", "tencent", "eastmoney", "yahoo", "akshare", "yfinance", "tushare", "longbridge", "local"],
     "india_equity": ["yahoo", "yfinance", "india_broker", "local"],
     "kr_equity":   ["pykrx", "yahoo", "yfinance", "local"],
     # TSX (.TO) / TSX Venture (.V): direct Yahoo first, SDK fallback second.
@@ -206,6 +218,7 @@ PRICE_CALIBER_BY_SOURCE: dict[str, str] = {
     "tushare": "split_dividend",  # adj_factor applied via cn_adjust (A-share/fund)
     "tiingo": "split_dividend",  # prefers adjOpen/High/Low/Close, else adjClose/close
     "fmp": "split_dividend",  # Stable historical-price-eod/full, scaled by adjClose/close
+    "futu": "split_dividend",  # request_history_kline autype="qfq" (verified 2026-09-06)
     # Split-adjusted only.
     "pykrx": "split",  # get_market_ohlcv_by_date(adjusted=True), Naver-backed
     # Unadjusted.

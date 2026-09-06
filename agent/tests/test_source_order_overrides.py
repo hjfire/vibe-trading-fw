@@ -188,12 +188,14 @@ def test_invalid_values_keep_default_and_warn(
 def test_empty_string_resets_to_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MARKET_DATA_ORDER_A_SHARE",
-        "tushare,tencent,mootdx,eastmoney,baostock,akshare,local",
-    )
+    # Derived from the default chain rather than spelled out: the value must be
+    # an exact permutation, so a hardcoded list silently turns this into a
+    # test of the invalid-value path the moment anyone adds a loader.
+    rotated = registry.get_default_source_order("a_share")[1:]
+    rotated.append(registry.get_default_source_order("a_share")[0])
+    monkeypatch.setenv("MARKET_DATA_ORDER_A_SHARE", ",".join(rotated))
     refresh_source_order_overrides()
-    assert registry.FALLBACK_CHAINS["a_share"][0] == "tushare"
+    assert registry.FALLBACK_CHAINS["a_share"][0] == rotated[0]
 
     monkeypatch.setenv("MARKET_DATA_ORDER_A_SHARE", "")
     refresh_source_order_overrides()

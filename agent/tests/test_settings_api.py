@@ -673,7 +673,9 @@ def test_get_data_source_settings_lists_default_source_orders(
     assert a_share["override"] is None
     assert a_share["override_invalid"] is False
     assert a_share["effective_order"] == a_share["default_order"]
-    assert a_share["default_order"][0] == "tencent"
+    # The operator's own FutuOpenD gateway leads the equity chains; see
+    # backtest/loaders/registry.py for why it is exempt from the ban-risk order.
+    assert a_share["default_order"][0] == "futu"
     uk_equity = orders["uk_equity"]
     assert uk_equity["env_var"] == "MARKET_DATA_ORDER_UK_EQUITY"
     assert uk_equity["default_order"][0] == "yahoo"
@@ -694,7 +696,7 @@ def test_update_source_orders_persists_and_hot_applies(
                     "market": "a_share",
                     "order": [
                         "tushare", "tencent", "mootdx", "eastmoney",
-                        "baostock", "akshare", "local",
+                        "baostock", "akshare", "futu", "local",
                     ],
                 },
             ],
@@ -733,7 +735,7 @@ def test_update_source_orders_reset_clears_override(
                     "market": "a_share",
                     "order": [
                         "tushare", "tencent", "mootdx", "eastmoney",
-                        "baostock", "akshare", "local",
+                        "baostock", "akshare", "futu", "local",
                     ],
                 },
             ],

@@ -50,12 +50,22 @@ from backtest.loaders.base import NoAvailableSourceError  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def reset_futu_mock():
-    """Ensure the futu stub is clean before and after every test."""
+    """Ensure the futu stub and the gateway cooldown are clean per test.
+
+    The gateway latches a down-state after a connect failure, and every test
+    here shares one (host, port) — without the reset, the deliberate
+    connection-failure test would leave the gateway "known down" and every
+    later test in the file would short-circuit instead of exercising the SDK.
+    """
+    from backtest.loaders import futu_gateway
+
+    futu_gateway.reset_state()
     _futu_stub.OpenQuoteContext.reset_mock()
     _futu_stub.OpenQuoteContext.side_effect = None
     yield
     _futu_stub.OpenQuoteContext.reset_mock()
     _futu_stub.OpenQuoteContext.side_effect = None
+    futu_gateway.reset_state()
 
 
 def _make_kline_df(dates=None) -> pd.DataFrame:
@@ -183,26 +193,48 @@ class TestIsAvailable:
         assert FutuLoader().is_available() is False
         reset_env_config()
 
-    def test_true_when_connection_succeeds(self, monkeypatch):
+    def test_true_when_port_accepts(self, monkeypatch):
+        """Availability is a socket check, not an SDK handshake.
+
+        The chain walk asks once per symbol, and an ``OpenQuoteContext``
+        connect/close per symbol was both slow and the very connection churn the
+        gateway cooldown exists to damp — so the stub asserts the SDK is *not*
+        touched here.
+        """
+        from backtest.loaders import futu_gateway
         from src.config.accessor import reset_env_config
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
 
         monkeypatch.setenv("FUTU_HOST", "127.0.0.1")
         monkeypatch.setenv("FUTU_PORT", "11111")
         reset_env_config()
-        mock_ctx = MagicMock()
-        _futu_stub.OpenQuoteContext.return_value = mock_ctx
+        monkeypatch.setattr(
+            futu_gateway.socket, "create_connection", lambda *a, **k: _Conn()
+        )
         assert FutuLoader().is_available() is True
-        mock_ctx.close.assert_called_once()
+        _futu_stub.OpenQuoteContext.assert_not_called()
         reset_env_config()
 
-    def test_false_when_connection_raises(self, monkeypatch):
+    def test_false_when_port_refuses(self, monkeypatch):
+        """A refused port is evidence the gateway is gone: latch the cooldown."""
+        from backtest.loaders import futu_gateway
         from src.config.accessor import reset_env_config
+
+        def _refused(*_a, **_k):
+            raise ConnectionRefusedError("connection refused")
 
         monkeypatch.setenv("FUTU_HOST", "127.0.0.1")
         monkeypatch.setenv("FUTU_PORT", "11111")
         reset_env_config()
-        _futu_stub.OpenQuoteContext.side_effect = OSError("connection refused")
+        monkeypatch.setattr(futu_gateway.socket, "create_connection", _refused)
         assert FutuLoader().is_available() is False
+        assert futu_gateway.in_cooldown("127.0.0.1", 11111) is True
         reset_env_config()
 
 

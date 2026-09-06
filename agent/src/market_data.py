@@ -13,11 +13,18 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_ROWS = 250
 
+#: How many sources one symbol may ask for before it is recorded unresolved.
+#: Exposed as a name because the FutuOpenD promotion in :func:`_preferred_source`
+#: has to fit inside it.
+DEFAULT_MAX_FALLBACK_ATTEMPTS = 5
+
 # Symbol -> preferred source. The matched source is a member of its market's
 # fallback chain (registry.FALLBACK_CHAINS), so an unavailable preferred source
 # still degrades gracefully to the rest of the chain. US equities route to the
 # throttle-tolerant Yahoo public endpoint first (lower IP-ban risk than the
 # yfinance SDK), A-shares and HK equities to the never-banned Tencent endpoint.
+# ``_preferred_source`` below upgrades that head to the operator's FutuOpenD
+# when the gateway is actually accepting connections.
 _SOURCE_PATTERNS = [
     (re.compile(r"^local:", re.I), "local"),
     (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "tencent"),
@@ -68,6 +75,59 @@ def detect_source(code: str) -> str:
         if pattern.match(code):
             return source
     return "tushare"
+
+
+#: Codes the account's Futu entitlements cover: SH/SZ A-shares, US equities and
+#: HK equities. Beijing Exchange (``.BJ``) is deliberately absent — OpenD does
+#: not list it (verified against a running gateway: ``600119.BJ`` comes back
+#: refused), so upgrading it would burn one of the five fallback attempts on a
+#: code the gateway always rejects. Index (``^SPX``), futures (``=F``), forex
+#: (``=X``) and crypto are absent for the same reason: no entitlement, or not a
+#: Futu instrument at all.
+#:
+#: Two shapes go beyond what ``detect_source`` matches, and both were confirmed
+#: against a live OpenD rather than assumed:
+#: - short HK codes (``5.HK`` = HSBC 166.7, ``12.HK``). ``detect_source`` wants
+#:   3-5 digits, so these fall through to its ``tushare`` default AND to
+#:   ``_detect_market`` reading them as ``a_share`` — a one-digit HK blue chip is
+#:   otherwise asked of China-market loaders.
+#: - US class shares (``BRK.B.US`` → ``US.BRK.B`` 506.03). The static
+#:   ``[A-Z]+\.US`` rule excludes the dot, so these land on ``tushare`` too.
+_FUTU_ROUTABLE_RE = re.compile(
+    r"^(?:\d{6}\.(?:SZ|SH)|[A-Z][A-Z0-9.&\-]*\.US|\d{1,5}\.HK)$", re.I
+)
+
+
+def _futu_gateway_live() -> bool:
+    """Whether the operator's FutuOpenD is worth routing through right now.
+
+    Answers from the gateway's own cooldown/probe cache, so a refused port is
+    reported for the rest of the latch window without another socket call.
+    Never raises: an unreachable answer means "use the public sources".
+    """
+    try:
+        from backtest.loaders import futu_gateway
+
+        return futu_gateway.probe()
+    except Exception as exc:  # noqa: BLE001 — routing must never fail over a probe
+        logger.debug("futu gateway probe raised; treating it as absent: %s", exc)
+        return False
+
+
+def _preferred_source(code: str) -> str:
+    """Return the source to try first for ``code``, honouring a live gateway.
+
+    :func:`detect_source` is a static classifier: it ranks public endpoints by
+    IP-ban risk. FutuOpenD is not a public endpoint — it is a process on the
+    operator's own machine serving a paid entitlement, so the ban-risk ordering
+    says nothing about it, and :func:`fetch_market_data` puts whatever this
+    returns *ahead* of the market's fallback chain. Returning the static answer
+    here would leave ``futu`` second in the walk and never first.
+    """
+    src = detect_source(code)
+    if not _FUTU_ROUTABLE_RE.match(code.strip()):
+        return src
+    return "futu" if _futu_gateway_live() else src
 
 
 
@@ -184,7 +244,7 @@ def fetch_market_data(
     max_rows: int = DEFAULT_MAX_ROWS,
     loader_resolver: Callable[[str], type] = get_loader,
     fallback_chain_provider: Callable[[str], list[str]] | None = None,
-    max_fallback_attempts: int = 5,
+    max_fallback_attempts: int = DEFAULT_MAX_FALLBACK_ATTEMPTS,
     include_provenance: bool = False,
 ) -> dict[str, Any]:
     """Fetch normalized OHLCV data through the repository loader layer.
@@ -228,7 +288,7 @@ def fetch_market_data(
 
     groups: dict[tuple[str, str], list[str]] = {}
     for code in codes:
-        src = detect_source(code) if source == "auto" else source
+        src = _preferred_source(code) if source == "auto" else source
         groups.setdefault((src, _detect_market(code)), []).append(code)
 
     def _chain_for(src: str, market: str) -> list[str]:
@@ -290,6 +350,14 @@ def fetch_market_data(
                 if override is not None and src in override
                 else [src, *chain]
             )
+        # ``futu`` heads the equity chains because the operator's own gateway is
+        # the best source when it is running. When it is not running it must not
+        # sit in the walk at all: the budget below is
+        # :data:`DEFAULT_MAX_FALLBACK_ATTEMPTS` deep, so a slot spent on a source
+        # that cannot answer is a public loader the symbol never gets to try —
+        # which is precisely what the chain-reachability tests assert against.
+        if "futu" in candidates and not _futu_gateway_live():
+            candidates = [c for c in candidates if c != "futu"]
         # Deduplicate (preserving order), then cap the attempt budget.
         attempts: list[str] = []
         for candidate in candidates:

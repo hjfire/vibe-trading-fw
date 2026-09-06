@@ -385,6 +385,11 @@ def test_fetch_auto_hk_walks_hk_chain_not_us_chain() -> None:
         source="auto",
         loader_resolver=resolver,
     )
+    # ``futu`` is the registered head of the hk_equity chain, but conftest pins
+    # the default world to "no gateway", which drops it out of the walk entirely
+    # rather than letting it eat one of the five attempt slots. The invariant
+    # under test is that degradation stays inside the hk_equity chain instead of
+    # paying for US-only sources.
     assert attempts[:2] == ["tencent", "eastmoney"]
     assert "stooq" not in attempts and "sina" not in attempts
     assert "_unresolved" not in out
@@ -637,8 +642,13 @@ def a_share_tushare_first():
     """
     from backtest.loaders import registry
 
-    os.environ["MARKET_DATA_ORDER_A_SHARE"] = (
-        "tushare,tencent,mootdx,eastmoney,baostock,akshare,local"
+    # Derived from the default chain with tushare rotated to the head: an
+    # override must be an exact permutation of the chain, so a hardcoded list
+    # would silently turn this into a test of the invalid-value path the
+    # moment anyone adds a loader to ``a_share``.
+    default = registry.get_default_source_order("a_share")
+    os.environ["MARKET_DATA_ORDER_A_SHARE"] = ",".join(
+        ["tushare"] + [s for s in default if s != "tushare"]
     )
     registry.refresh_source_order_overrides()
     try:
@@ -669,9 +679,146 @@ def test_fetch_auto_respects_source_order_override_head(
         source="auto",
         loader_resolver=resolver,
     )
-    assert attempts[0] == "tushare"  # default head would be tencent
+    assert attempts[0] == "tushare"  # default head would be tencent (no gateway)
     assert "_unresolved" not in out
     assert "600519.SH" in out
+
+
+# --------------------------------------------------------------------------
+# Live FutuOpenD gateway — when the operator's own gateway is accepting
+# connections it becomes the head of the walk, ahead of the public source that
+# ``detect_source`` would otherwise pick. conftest pins the default test world
+# to "no gateway configured", so these tests state the gateway explicitly.
+# --------------------------------------------------------------------------
+
+
+class TestLiveGatewayHead:
+    def _gateway_up(self, monkeypatch) -> None:
+        from backtest.loaders import futu_gateway
+
+        monkeypatch.setattr(futu_gateway, "probe", lambda *a, **k: True)
+
+    @pytest.mark.parametrize(
+        ("code", "static_head"),
+        [
+            ("600519.SH", "tencent"),
+            ("AAPL.US", "yahoo"),
+            ("00700.HK", "tencent"),
+        ],
+    )
+    def test_entitled_equity_moves_to_futu(
+        self, monkeypatch, code: str, static_head: str
+    ) -> None:
+        from src.market_data import _preferred_source
+
+        assert _preferred_source(code) == static_head  # no gateway: public head
+        self._gateway_up(monkeypatch)
+        assert _preferred_source(code) == "futu"
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "600119.BJ",      # Futu does not list the Beijing Exchange
+            "^SPX",           # index: no entitlement
+            "GC=F",           # futures: no entitlement
+            "BTC-USDT",       # crypto: Futu serves none of it
+            "VOD.L",          # LSE is not a Futu code shape
+            "local:my/data",  # explicit local request
+        ],
+    )
+    def test_out_of_scope_codes_are_never_upgraded(
+        self, monkeypatch, code: str
+    ) -> None:
+        """A running gateway must not pull non-Futu symbols into its chain."""
+        from src.market_data import _preferred_source
+
+        self._gateway_up(monkeypatch)
+        assert _preferred_source(code) != "futu"
+
+    def test_short_hk_and_class_share_codes_are_routable(
+        self, monkeypatch
+    ) -> None:
+        """Both shapes are served by OpenD but missed by ``detect_source``."""
+        from src.market_data import _preferred_source
+
+        self._gateway_up(monkeypatch)
+        assert _preferred_source("5.HK") == "futu"       # HK.00005, HSBC
+        assert _preferred_source("BRK.B.US") == "futu"   # US.BRK.B
+
+    def test_walk_starts_at_futu_when_gateway_is_up(
+        self, monkeypatch
+    ) -> None:
+        """End to end through ``fetch_market_data``, not just the classifier."""
+        from backtest.loaders.base import NoAvailableSourceError
+
+        self._gateway_up(monkeypatch)
+        attempts: list[str] = []
+
+        def resolver(src: str):
+            attempts.append(src)
+            if src == "futu":
+                return _StubLoader
+            raise NoAvailableSourceError(f"{src} unavailable in test")
+
+        out = fetch_market_data(
+            codes=["600519.SH"],
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            source="auto",
+            loader_resolver=resolver,
+        )
+        assert attempts == ["futu"]
+        assert "_unresolved" not in out
+
+    def test_dead_gateway_is_dropped_from_the_walk(self, monkeypatch) -> None:
+        """A gateway that is not running must not occupy an attempt slot.
+
+        The budget is five deep and the A-share chain is eight, so leaving
+        ``futu`` in the walk with the gateway down silently removes ``akshare``
+        and ``tushare`` from every A-share symbol's reach — a regression for
+        every operator who does not run OpenD.
+        """
+        from backtest.loaders import futu_gateway, registry
+        from backtest.loaders.base import NoAvailableSourceError
+
+        monkeypatch.setattr(futu_gateway, "probe", lambda *a, **k: False)
+        attempts: list[str] = []
+
+        def resolver(src: str):
+            attempts.append(src)
+            raise NoAvailableSourceError(f"{src} unavailable in test")
+
+        fetch_market_data(
+            codes=["600519.SH"],
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            source="auto",
+            loader_resolver=resolver,
+        )
+        chain = registry.get_default_source_order("a_share")
+        assert "futu" in chain  # the premise: it is registered as the head
+        assert attempts == [s for s in chain if s != "futu"][:5]
+
+    def test_explicit_source_is_never_reordered(self, monkeypatch) -> None:
+        """``source="tushare"`` is an instruction, not a suggestion."""
+        from backtest.loaders.base import NoAvailableSourceError
+
+        self._gateway_up(monkeypatch)
+        attempts: list[str] = []
+
+        def resolver(src: str):
+            attempts.append(src)
+            raise NoAvailableSourceError(f"{src} unavailable in test")
+
+        fetch_market_data(
+            codes=["600519.SH"],
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            source="tushare",
+            loader_resolver=resolver,
+        )
+        assert attempts[0] == "tushare"
+        assert "futu" not in attempts[:1]
 
 
 def test_fetch_explicit_source_stays_src_first_with_override(

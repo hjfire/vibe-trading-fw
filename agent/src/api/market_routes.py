@@ -149,6 +149,90 @@ def _fetch_daily_sina_a_share(
     return bars[-count:]
 
 
+def _futu_daily_bars(
+    symbol: str, count: int, before: int | None
+) -> list[dict[str, Any]] | None:
+    """Daily bars straight from FutuOpenD, or ``None`` to fall through.
+
+    ``None`` is the whole point: an operator who has not opened the desktop
+    gateway must end up on the public chain with the same request, not on an
+    error page. The loader's own cooldown keeps a closed desk from being
+    re-probed once per chart pan.
+    """
+    try:
+        from backtest.loaders.futu import FutuLoader
+
+        buffer_days = int(count * 1.7) + 30
+        if before:
+            end = datetime.fromtimestamp(before / 1000, tz=timezone.utc).date()
+        else:
+            end = datetime.now(timezone.utc).date()
+        start = end - timedelta(days=buffer_days)
+        loader = FutuLoader()
+        if not loader.is_available():
+            return None
+        frames = loader.fetch(
+            codes=[symbol],
+            start_date=start.isoformat(),
+            end_date=(end + timedelta(days=1)).isoformat(),
+            interval="1D",
+        )
+        frame = frames.get(symbol)
+        if frame is None or frame.empty:
+            return None
+        bars = _bars_from_frame(frame)
+    except Exception as exc:  # noqa: BLE001 — gateway absence is normal, not an error
+        logger.debug("futu daily bars unavailable for %s: %s", symbol, exc)
+        return None
+    if before:
+        bars = [b for b in bars if b["timestamp"] < before]
+    return bars[-count:] or None
+
+
+def _live_quote_row(symbol: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Shape one Futu snapshot row into this endpoint's quote contract.
+
+    Returns ``None`` when the row is empty or carries an unparseable
+    ``update_time``: a quote published with a fabricated timestamp would be
+    worse than no quote, because the chart and the alert rules both sort on it.
+    """
+    if not row or row.get("last") is None:
+        return None
+    stamp = row.get("update_time") or ""
+    try:
+        timestamp = int(pd.Timestamp(stamp).tz_localize(None).timestamp() * 1000)
+    except (TypeError, ValueError):
+        logger.debug("futu quote for %s has an unparseable update_time %r", symbol, stamp)
+        return None
+    return {
+        "symbol": symbol,
+        "ok": True,
+        "last": round(float(row["last"]), 4),
+        "change_pct": round(float(row.get("change_pct") or 0.0), 2),
+        "timestamp": timestamp,
+        "realtime": True,
+        "source": "futu",
+    }
+
+
+def _futu_live_quote(symbol: str) -> dict[str, Any] | None:
+    """Realtime quote row from the FutuOpenD snapshot, or ``None``.
+
+    The daily-bar path this replaces reports the last *settled* close; during a
+    live session that is yesterday's number. Single-symbol on purpose: it is the
+    per-rule shape the alert poller needs, while watchlists go through
+    :func:`_quote_batch` so the whole page costs one gateway call.
+    """
+    try:
+        from backtest.loaders.futu import realtime_quotes
+
+        rows = realtime_quotes([symbol])
+    except Exception as exc:  # noqa: BLE001 — absence of a gateway is not an error
+        logger.debug("futu live quote unavailable for %s: %s", symbol, exc)
+        return None
+    return _live_quote_row(symbol, rows.get(symbol))
+
+
 def _fetch_daily(symbol: str, count: int, before: int | None) -> tuple[list[dict[str, Any]], str]:
     """Walk the market's loader fallback chain for up to ``count`` daily bars.
 
@@ -160,9 +244,15 @@ def _fetch_daily(symbol: str, count: int, before: int | None) -> tuple[list[dict
     from backtest.correlation import _fetch_price_series, infer_market
 
     market = infer_market(symbol)
-    # A-share daily: prefer Sina, then fall through to the loader chain if it
-    # ever comes back dry (see _fetch_daily_sina_a_share for the rationale).
+    # A-share daily: FutuOpenD first when the operator's gateway is answering.
+    # It is an own-account source with a realtime tape and, unlike the public
+    # endpoints below, is not subject to this machine's proxy; when it is down
+    # (or in cooldown) the Sina preference documented in
+    # _fetch_daily_sina_a_share takes over unchanged.
     if symbol.rsplit(".", 1)[-1] in {"SH", "SZ"}:
+        futu_bars = _futu_daily_bars(symbol, count, before)
+        if futu_bars is not None:
+            return futu_bars, "futu:opend"
         try:
             return (
                 _fetch_daily_sina_a_share(symbol, count, before),
@@ -228,12 +318,15 @@ def _kline_sync(
 
 
 def _quote_one(symbol: str) -> dict[str, Any]:
-    """Latest daily bar + previous close -> a compact quote row (any market).
+    """Latest price for one symbol: FutuOpenD tape first, daily bars fallback.
 
     Errors are returned in-row (``ok: false``) so one bad symbol never sinks
     a whole watchlist batch.
     """
     s = symbol.strip().upper()
+    live = _futu_live_quote(s)
+    if live is not None:
+        return live
     try:
         # Same canonical form the /market/kline route accepts (e.g. 600519.SH,
         # AAPL.US, BTC-USDT) — the loader chain normalizes internally.
@@ -255,10 +348,30 @@ def _quote_one(symbol: str) -> dict[str, Any]:
 
 
 def _quote_batch(items: list[str]) -> list[dict[str, Any]]:
-    # Sequential on purpose: the loader fallback chain (shared akshare/yfinance
-    # sessions and caches) is not thread-safe — concurrent walks returned data
-    # only for the first symbol (verified 2026-09-04).
-    return [_quote_one(s) for s in items]
+    """Quote a watchlist: one batched FutuOpenD snapshot, then per-symbol gaps.
+
+    Batching is not an optimization here — calling :func:`_quote_one` per symbol
+    would open and close a gateway connection for every row of one refresh, and
+    with the snapshot pacing applied that turns a 30-symbol watchlist into a
+    15-second request. One call covers every Futu-served symbol at once; only
+    the rows it could not fill (crypto, LSE, a closed gateway) fall through to
+    the daily-bar path, which is sequential because the shared loader chain is
+    not thread-safe (concurrent walks returned data only for the first symbol,
+    verified 2026-09-04).
+    """
+    live: dict[str, dict[str, Any]] = {}
+    try:
+        from backtest.loaders.futu import realtime_quotes
+
+        rows = realtime_quotes(items)
+    except Exception as exc:  # noqa: BLE001 — a missing gateway is not an error
+        logger.debug("futu batch quote unavailable: %s", exc)
+        rows = {}
+    for symbol, row in rows.items():
+        shaped = _live_quote_row(symbol, row)
+        if shaped is not None:
+            live[symbol] = shaped
+    return [live.get(s) or _quote_one(s) for s in items]
 
 
 def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) -> None:
@@ -312,10 +425,12 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     ) -> Response:
         """Batch watchlist quotes: last price + day-over-day change per symbol.
 
-        Goes through the same daily loader chain as ``/market/kline``, two bars
-        per symbol, fetched sequentially (the chain is not thread-safe).
-        Per-symbol failures show up in-row (``ok: false``) instead of failing
-        the request.
+        Futu-served symbols come off the FutuOpenD tape in one snapshot call
+        (``realtime: true`` on those rows); everything else — and everything
+        when the gateway is not running — falls back to two bars per symbol
+        through the daily loader chain, sequentially, because the chain is not
+        thread-safe. Per-symbol failures show up in-row (``ok: false``) instead
+        of failing the request.
         """
         items = [s.strip().upper() for s in symbols.split(",") if s.strip()][
             : _MAX_QUOTE_SYMBOLS

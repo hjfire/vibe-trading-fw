@@ -12,6 +12,7 @@ from backtest.loaders.registry import (
     LOADER_REGISTRY,
     VALID_SOURCES,
     get_loader_cls_with_fallback,
+    price_caliber,
     register,
     resolve_loader,
 )
@@ -159,18 +160,46 @@ class TestFallbackChains:
         assert FALLBACK_CHAINS["crypto"][:3] == ["okx", "binance", "ccxt"]
 
     def test_chains_ordered_by_ip_ban_risk(self) -> None:
-        """Equity chains lead with throttle-tolerant public sources and trail
-        with key-gated REST fallbacks, in the exact reviewed order."""
+        """Equity chains lead with the operator's own FutuOpenD gateway, then
+        throttle-tolerant public sources, and trail with key-gated REST
+        fallbacks, in the exact reviewed order.
+
+        ``futu`` is first on the three markets it holds entitlements for; it is
+        a local gateway rather than a shared public endpoint, so the ban-risk
+        reasoning that orders the rest does not apply to it. It must stay absent
+        from ``crypto``/``forex``/``index`` — Futu serves no retail API quotes
+        there — which is why those chains are not reordered the same way.
+        """
         assert FALLBACK_CHAINS["a_share"] == [
-            "tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local",
+            "futu", "tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local",
         ]
         assert FALLBACK_CHAINS["us_equity"] == [
-            "yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp",
+            "futu", "yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp",
             "finnhub", "alphavantage", "longbridge", "akshare", "local",
         ]
         assert FALLBACK_CHAINS["hk_equity"] == [
-            "tencent", "eastmoney", "yahoo", "futu", "akshare", "yfinance", "tushare", "longbridge", "local",
+            "futu", "tencent", "eastmoney", "yahoo", "akshare", "yfinance", "tushare", "longbridge", "local",
         ]
+
+    def test_futu_absent_from_markets_it_has_no_entitlement_for(self) -> None:
+        """Fronting a chain with a source that cannot serve it is a silent bug.
+
+        Crypto/forex/index have no Futu retail API quote coverage, so ``futu``
+        must never be reachable as their first source.
+        """
+        for market in ("crypto", "forex", "index", "futures", "fund", "macro"):
+            assert "futu" not in FALLBACK_CHAINS[market], market
+
+    def test_futu_price_caliber_is_declared(self) -> None:
+        """``futu`` must not resolve to caliber "unknown".
+
+        An unmeasured source is excluded from mixed-caliber comparison, so a
+        basket that mixes Futu's qfq bars with an unadjusted source would be
+        silently biased instead of warned about.
+        """
+        assert price_caliber("futu", "hk_equity") == "split_dividend"
+        assert price_caliber("futu", "a_share") == "split_dividend"
+        assert price_caliber("futu", "crypto") == "na"
 
     def test_us_equity_includes_sina_fallback(self) -> None:
         """'sina' must be reachable for US equities (after yahoo/stooq) so it is
