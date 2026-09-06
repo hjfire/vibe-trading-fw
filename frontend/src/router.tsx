@@ -42,6 +42,8 @@ const TVChart = lazy(() =>
 const ProChart = lazy(() =>
   import("@/pages/ProChart").then((m) => ({ default: m.ProChart })),
 );
+// Local custom ㉔: in-app usage manual (renders public/usage-guide.md).
+const Help = lazy(() => import("@/pages/Help").then((m) => ({ default: m.Help })));
 
 function PageLoader() {
   return (
@@ -78,6 +80,7 @@ export const router = createBrowserRouter([
       { path: "/options", element: wrap(OptionsLab) },
       { path: "/tv-chart", element: wrap(TVChart) },
       { path: "/pro-chart", element: wrap(ProChart) },
+      { path: "/help", element: wrap(Help) },
       { path: "/alpha-zoo", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/bench", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },

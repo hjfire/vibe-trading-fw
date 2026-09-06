@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router";
-import { Activity, BarChart3, BellRing, Bot, CalendarClock, CandlestickChart, Check, ChevronDown, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BellRing, Bot, BookOpen, CalendarClock, CandlestickChart, Check, ChevronDown, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -33,6 +33,10 @@ export function Layout() {
     { to: "/correlation", icon: BarChart3, label: t('layout.correlation') },
     // Local custom ⑧: KLineChart pro page (drawing tools + watchlist).
     { to: "/pro-chart", icon: TrendingUp, label: t('layout.proChart') },
+    // Local custom ㉔: the usage manual. Its own nav slot is deliberate -- the
+    // complaint that closed ⑨ was "找不到新功能", and a manual reachable only by
+    // typing /help is a manual that does not exist.
+    { to: "/help", icon: BookOpen, label: t('layout.help', { defaultValue: '使用说明' }) },
   ];
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
