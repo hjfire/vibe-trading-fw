@@ -89,10 +89,27 @@ function periodFor(interval: IntervalKey): { type: "day" | "minute"; span: numbe
   return { type: "minute", span: parseInt(interval, 10) };
 }
 
+/** Which symbols can have minute bars at all.
+ *
+ * FutuOpenD covers .SH/.SZ/.HK/.US; the Sina fall-back behind it reaches
+ * A-shares only, so a crypto or LSE code has no intraday source here. One
+ * predicate serves both the interval buttons *and* session restore below --
+ * written twice, the two copies drift, and the failure is quiet: a shared link
+ * renders correctly and then reloads onto the daily chart.
+ *
+ * Exported for tests: it mirrors ``_FUTU_MINUTE_SUFFIXES`` in market_routes.py.
+ */
+export function canMinuteBars(symbol: string): boolean {
+  // Case-insensitive because the route upper-cases the symbol before resolving
+  // it, so a lowercase code typed into the box is servable too.
+  return /\.(SH|SZ|HK|US)$/i.test(symbol);
+}
+
 /** Last viewed symbol + interval (local custom ⑪): the chart should reopen
- * where it was left. A stale pair is repaired, not trusted — minute bars only
- * exist for A-shares, so restoring "5M" onto AAPL would fail the first request. */
-function readSession(): { symbol: string; interval: IntervalKey } {
+ * where it was left. A stale pair is repaired, not trusted — minute bars do
+ * not exist for every instrument, so restoring "5M" onto BTC would fail the
+ * first request. */
+export function readSession(): { symbol: string; interval: IntervalKey } {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return { symbol: DEFAULT_SYMBOL, interval: "1D" };
@@ -102,8 +119,8 @@ function readSession(): { symbol: string; interval: IntervalKey } {
     const next =
       typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
     const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";
-    const aShare = /\.(SH|SZ)$/.test(next);
-    return { symbol: next, interval: span === "1D" || aShare ? span : "1D" };
+    const intraday = canMinuteBars(next);
+    return { symbol: next, interval: span === "1D" || intraday ? span : "1D" };
   } catch {
     return { symbol: DEFAULT_SYMBOL, interval: "1D" };
   }
@@ -359,9 +376,10 @@ export function ProChart() {
     setFormulaError(null);
     setIndPanelOpen(true);
   };
-  // Minute bars are served only for .SH/.SZ A-shares (see market_routes.py);
-  // greying out the buttons for other symbols avoids a guaranteed 400.
-  const canMinute = /\.(SH|SZ)$/.test(symbol);
+  // Greyed out only where no source can answer at all (see canMinuteBars).
+  // Whether OpenD is actually up is not knowable from here, so HK/US stay
+  // enabled and the route's own error names the cause when the gateway sleeps.
+  const canMinute = canMinuteBars(symbol);
 
   // Watchlist (step ②): persisted in localStorage, defaults to the presets.
   const [watch, setWatch] = useState<string[]>(() => {
@@ -1130,7 +1148,11 @@ export function ProChart() {
               <button
                 key={i.key}
                 disabled={disabled}
-                title={disabled ? "分钟线仅支持 A股（.SH/.SZ）" : undefined}
+                title={
+                  disabled
+                    ? "分钟线需 FutuOpenD（支持 .SH/.SZ/.HK/.US）"
+                    : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪"
+                }
                 className={cn(
                   "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
                   interval === i.key && "bg-muted font-medium",
@@ -1435,7 +1457,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链，A股分钟线走 akshare 新浪接口）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏可在主图或任一副图上落点（第一个落点在哪条面板，这条线就归谁；画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除并标注归属副图），副图被关闭时它的线会暂存在清单尾部、重开指标即回到原面板，「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式、锁定隐藏与归属面板），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链；分钟线优先走 FutuOpenD、覆盖 .SH/.SZ/.HK/.US，A股在富途未应答时落回新浪）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏可在主图或任一副图上落点（第一个落点在哪条面板，这条线就归谁；画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除并标注归属副图），副图被关闭时它的线会暂存在清单尾部、重开指标即回到原面板，「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式、锁定隐藏与归属面板），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
       </div>
       <IndicatorEditor
         open={indPanelOpen}

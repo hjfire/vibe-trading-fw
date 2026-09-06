@@ -374,7 +374,7 @@ export default function ScreenerTab({ symbols, items, draft, getChart, onPickSym
       {message && <p className="text-[11px] leading-4 text-muted-foreground">{message}</p>}
       <p className="text-[11px] leading-4 text-muted-foreground" title={info.hint}>
         {info.hint}
-        {info.arity === 2 ? "；脚本需要两条输出线。" : "。"} 分钟线只有 A股提供，跨市场请用日线。
+        {info.arity === 2 ? "；脚本需要两条输出线。" : "。"} 分钟线走 FutuOpenD（覆盖 .SH/.SZ/.HK/.US），批量扫描会逐标的请求历史 K 线、消耗其额度，没开 OpenD 时只有 A股能回退到新浪。
       </p>
 
       {rows.length === 0 && !running && (

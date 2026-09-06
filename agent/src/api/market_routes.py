@@ -12,11 +12,20 @@ Daily bars walk the same loader fallback chain ``/correlation`` uses
 (``backtest.correlation._fetch_price_series``), so any instrument the
 backtest layer can serve is chartable without new data plumbing.
 
-Minute bars (1m/5m/15m/30m/60m) cover A-shares only, via Sina's
-``ak.stock_zh_a_minute``: registered a-share loaders reject non-daily
-intervals by design, and the Eastmoney push2 hosts that back the other
-minute APIs are frequently unreachable from residential proxies
-(verified 2026-09-04 — see agent/src/skills/akshare/references/intraday-bars.md).
+Minute bars (1m/5m/15m/30m/60m) come off **FutuOpenD first, for every market it
+lists** (.SH/.SZ/.HK/.US) -- it is the only source here with intraday bars for
+HK and US equities. Two deliberate limits on that:
+
+* ``FutuLoader`` pins ``autype="qfq"``, so a ``none``/``hfq`` request falls
+  through rather than being served the wrong price caliber;
+* when the gateway is not answering, A-shares drop to Sina's
+  ``ak.stock_zh_a_minute`` (the pre-Futu path, and still the reason Eastmoney's
+  push2 hosts are avoided -- they are unreachable from this machine's proxy, see
+  agent/src/skills/akshare/references/intraday-bars.md). A non-A-share with no
+  answering gateway is told which of those two cases it is.
+
+The routing lives in ``_kline_sync``; ``_futu_minute_bars`` returns ``None`` to
+mean "fall through", never "error".
 
 Error surface: bad/unsupported params → 400 ``{"status":"error","error":...}``;
 an upstream data failure → 502 with the same envelope. All network I/O runs
@@ -43,6 +52,27 @@ _MAX_BARS = 2000
 _MAX_QUOTE_SYMBOLS = 30
 _MINUTE_PERIODS = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
 _ADJUSTS = {"none": "", "qfq": "qfq", "hfq": "hfq"}
+
+#: This endpoint's minute spellings -> the interval token ``FutuLoader`` accepts.
+#: The loader's own table keys 60-minute bars as ``1H``, *not* ``60m``, so
+#: passing ``interval`` straight through would fail its lookup and every 60m
+#: request would fall through to Sina -- the one interval the Futu tape serves
+#: best would quietly become the one nobody ever gets.
+_FUTU_MINUTE_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "1H"}
+
+#: Market suffixes the gateway lists, mirroring ``backtest.loaders.futu
+#: ._SERVED_PREFIXES``. A cheap pre-filter so a crypto or LSE code never opens
+#: a socket to a desktop app that cannot know it.
+_FUTU_MINUTE_SUFFIXES = {"SH", "SZ", "HK", "US"}
+
+#: Bars per trading day, sized by the widest session (US regular hours is 390
+#: one-minute bars), used only to pick how far back to ask.
+_MINUTE_BARS_PER_DAY = {"1m": 390, "5m": 78, "15m": 26, "30m": 13, "60m": 7}
+
+#: How far back minute bars are requested at all. A retail OpenD login is
+#: entitled to roughly a week of intraday history; asking for a month buys no
+#: extra bars, it just risks the whole call.
+_MINUTE_WINDOW_CAP_DAYS = 12
 
 # akshare decrypts Sina responses through py_mini_racer, whose bundled Chromium
 # hard-crashes the whole process when first used off the main thread on Windows
@@ -73,12 +103,40 @@ def _run_sina(fn, *args, **kwargs):
         return box.get("value")
 
 
-def _bars_from_frame(df: pd.DataFrame) -> list[dict[str, Any]]:
+#: Which wall clock a naive minute timestamp is written in, per market suffix.
+#:
+#: Every minute source here (FutuOpenD's ``time_key``, Sina's ``day`` column)
+#: yields exchange-local clock times with no zone attached. ``pandas`` then
+#: reads that naive value as **UTC** when taking ``.timestamp()`` -- unlike
+#: ``datetime``, which uses the machine's zone -- so an A-share 14:35 bar lands
+#: on the wire as 14:35 UTC and a UTC+8 browser draws it at 22:35. Daily bars
+#: never showed this: a trading-day label survives an 8-hour nudge, a clock time
+#: does not.
+#: ``Asia/Shanghai`` is a flat +8 with no DST, so it serves HKT as exactly as it
+#: serves CST. ``America/New_York`` carries the DST rule, which is what keeps a
+#: US session honest across the March and November switches.
+_MINUTE_WALL_CLOCK_ZONE = {
+    "SH": "Asia/Shanghai",
+    "SZ": "Asia/Shanghai",
+    "HK": "Asia/Shanghai",
+    "US": "America/New_York",
+}
+
+
+def _bars_from_frame(
+    df: pd.DataFrame, wall_clock_zone: str | None = None
+) -> list[dict[str, Any]]:
     """Convert a loader frame (trade_date index or column + OHLCV) to bar dicts.
 
     Timestamps are epoch **milliseconds** (naive, tz-stripped) because that is
     the unit KLineChart v10 expects on the wire; keeping one unit end-to-end
     avoids the 1970-axis / failed-paging bugs a seconds-vs-ms mismatch causes.
+
+    Pass ``wall_clock_zone`` for intraday bars to say which zone the naive index
+    is the wall clock of, so the epoch on the wire is a real instant. Leave it
+    ``None`` for daily bars: their timestamp is a trading-day label, and
+    localizing a US session's midnight would move that label to the previous
+    calendar day.
     """
     frame = df.copy()
     if "trade_date" in frame.columns:
@@ -99,9 +157,20 @@ def _bars_from_frame(df: pd.DataFrame) -> list[dict[str, Any]]:
             continue
         if pd.isna(close):
             continue
+        stamp = pd.Timestamp(ts)
+        if wall_clock_zone is None:
+            stamp = stamp.tz_localize(None)
+        elif stamp.tzinfo is None:
+            # An already-aware index has told us its own zone; localizing it
+            # again would shift it a second time. ambiguous/nonexistent cover
+            # the New York fall-back and spring-forward hours, which regular
+            # sessions never trade in but a paging request can still reach.
+            stamp = stamp.tz_localize(
+                wall_clock_zone, ambiguous=True, nonexistent="shift_forward"
+            )
         bars.append(
             {
-                "timestamp": int(pd.Timestamp(ts).tz_localize(None).timestamp() * 1000),
+                "timestamp": int(stamp.timestamp() * 1000),
                 "open": float(row["open"]),
                 "high": float(row["high"]),
                 "low": float(row["low"]),
@@ -188,6 +257,90 @@ def _futu_daily_bars(
     if before:
         bars = [b for b in bars if b["timestamp"] < before]
     return bars[-count:] or None
+
+
+def _futu_minute_bars(
+    symbol: str, interval: str, count: int, adjust: str, before: int | None
+) -> list[dict[str, Any]] | None:
+    """Minute bars straight from FutuOpenD, or ``None`` to fall through.
+
+    ``None`` and not an error, in three situations -- and the third is the one
+    worth reading twice:
+
+    * the gateway is not answering, so an operator who never opens the desktop
+      app keeps exactly what they had before (Sina A-share minutes);
+    * the symbol is outside the four markets Futu lists;
+    * ``adjust`` is not ``qfq``. ``FutuLoader`` pins ``autype="qfq"``, so
+      serving a ``none``/``hfq`` request from it would return a **different
+      price caliber than the caller asked for** with nothing on the wire to say
+      so -- the exact failure ``PRICE_CALIBER_BY_SOURCE`` exists to make
+      impossible. Falling through keeps the caliber honest instead.
+    """
+    if adjust != "qfq":
+        return None
+    futu_interval = _FUTU_MINUTE_INTERVAL.get(interval)
+    if futu_interval is None or symbol.rsplit(".", 1)[-1] not in _FUTU_MINUTE_SUFFIXES:
+        return None
+    try:
+        from backtest.loaders.futu import FutuLoader
+
+        # Ceiling-division of bars into days, then x2 for the trading-day to
+        # calendar-day gap, capped because the entitlement does not reach far.
+        per_day = _MINUTE_BARS_PER_DAY[interval]
+        span_days = min(-(-count // per_day) * 2 + 2, _MINUTE_WINDOW_CAP_DAYS)
+        if before:
+            end = datetime.fromtimestamp(before / 1000, tz=timezone.utc).date()
+        else:
+            end = datetime.now(timezone.utc).date()
+        start = end - timedelta(days=span_days)
+        loader = FutuLoader()
+        if not loader.is_available():
+            return None
+        frames = loader.fetch(
+            codes=[symbol],
+            start_date=start.isoformat(),
+            end_date=(end + timedelta(days=1)).isoformat(),
+            interval=futu_interval,
+        )
+        frame = frames.get(symbol)
+        if frame is None or frame.empty:
+            return None
+        # ``time_key`` is the exchange's own wall clock, naive; see the table.
+        suffix = symbol.rsplit(".", 1)[-1]
+        bars = _bars_from_frame(frame, _MINUTE_WALL_CLOCK_ZONE[suffix])
+    except Exception as exc:  # noqa: BLE001 — gateway absence is normal, not an error
+        logger.debug("futu minute bars unavailable for %s/%s: %s", symbol, interval, exc)
+        return None
+    if before:
+        bars = [b for b in bars if b["timestamp"] < before]
+    return bars[-count:] or None
+
+
+def _minute_no_source_reason(symbol: str, adjust: str) -> str:
+    """Why a non-A-share got no minute bars, stated as the actual cause.
+
+    The old text claimed minutes were "only supported for .SH/.SZ", which after
+    this routing is true only of the *public fallback*. Left standing there it
+    would tell a user with a sleeping OpenD window that their symbol is
+    unsupported, and they would never go check the one thing that fixes it.
+    """
+    if adjust != "qfq":
+        return (
+            f"minute bars for {symbol} are served by FutuOpenD, which only offers "
+            f"the forward-adjusted (qfq) caliber; adjust={adjust!r} has no source here"
+        )
+    if symbol.rsplit(".", 1)[-1] not in _FUTU_MINUTE_SUFFIXES:
+        # Never sent to the gateway at all. Telling this user to go start OpenD
+        # would send them fixing something that was never the problem.
+        return (
+            f"no source here serves minute bars for {symbol}: FutuOpenD covers "
+            f"{'/'.join(sorted(_FUTU_MINUTE_SUFFIXES))}-suffixed equities and the "
+            f"public fall-back is an A-share API"
+        )
+    return (
+        f"minute bars for {symbol} have only one source, FutuOpenD, and it did not "
+        f"answer -- check that OpenD is running and logged in"
+    )
 
 
 def _live_quote_row(symbol: str, row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -285,7 +438,7 @@ def _fetch_minute_a_share(
     """A-share minute bars via Sina (``stock_zh_a_minute``), e.g. sh600519."""
     code, _, suffix = symbol.partition(".")
     if suffix not in {"SH", "SZ"}:
-        raise ValueError("minute bars are only supported for .SH/.SZ A-share symbols")
+        raise ValueError(f"sina minute bars have no path for {symbol} (A-share suffix required)")
     import akshare as ak
 
     raw = _run_sina(
@@ -301,7 +454,9 @@ def _fetch_minute_a_share(
     frame = frame.set_index("day")
     for col in ("open", "high", "low", "close", "volume"):
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
-    bars = _bars_from_frame(frame)
+    # Sina's ``day`` column is Beijing wall clock, which is also what the
+    # suffix table says for SH/SZ.
+    bars = _bars_from_frame(frame, _MINUTE_WALL_CLOCK_ZONE[suffix])
     if before:
         bars = [b for b in bars if b["timestamp"] < before]
     return bars[-count:]
@@ -311,8 +466,15 @@ def _kline_sync(
     symbol: str, interval: str, count: int, adjust: str, before: int | None = None
 ) -> dict[str, Any]:
     if interval in _MINUTE_PERIODS:
-        bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
-        source = "akshare:sina_stock_zh_a_minute"
+        bars = _futu_minute_bars(symbol, interval, count, adjust, before)
+        source = "futu:opend"
+        if bars is None:
+            # Fall through to the public path, which reaches A-shares only.
+            # Everything else has no source left and is told so *by cause*.
+            if symbol.rsplit(".", 1)[-1] not in {"SH", "SZ"}:
+                raise ValueError(_minute_no_source_reason(symbol, adjust))
+            bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
+            source = "akshare:sina_stock_zh_a_minute"
     else:
         bars, source = _fetch_daily(symbol, count, before)
     return {"status": "ok", "symbol": symbol, "interval": interval, "source": source, "bars": bars}
@@ -391,7 +553,7 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     @app.get("/market/kline", dependencies=[Depends(require_auth)])
     async def market_kline(
         symbol: str = Query(..., min_length=1, max_length=32, description="e.g. 600519.SH / AAPL / BTC-USDT"),
-        interval: str = Query("1D", description="1m/5m/15m/30m/60m (A-share only) or 1D"),
+        interval: str = Query("1D", description="1m/5m/15m/30m/60m or 1D"),
         count: int = Query(500, ge=10, le=_MAX_BARS),
         adjust: str = Query("qfq", description="none/qfq/hfq — minute bars only"),
         before: int | None = Query(None, ge=0, description="epoch milliseconds — load bars strictly older than this (scroll-back paging)"),
