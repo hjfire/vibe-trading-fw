@@ -6,6 +6,7 @@ Routes (auth via the caller-supplied ``require_auth`` dependency):
 
 - ``GET /market/kline``  — single-instrument OHLCV bars for interactive charts.
 - ``GET /market/quote``  — batch last-price + change-pct quotes for the watchlist.
+- ``GET /market/symbols`` — type-ahead symbol lookup over the local roster.
 
 Daily bars walk the same loader fallback chain ``/correlation`` uses
 (``backtest.correlation._fetch_price_series``), so any instrument the
@@ -448,3 +449,39 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
                 status_code=502, content={"status": "error", "error": "quote fetch failed"}
             )
         return {"status": "ok", "quotes": quotes}
+
+    @app.get("/market/symbols", dependencies=[Depends(require_auth)])
+    async def market_symbols(
+        q: str = Query(
+            "",
+            max_length=32,
+            description="Code prefix (600), symbol (600519.SH), ticker (aapl) or Chinese name (茅台)",
+        ),
+        limit: int = Query(10, ge=1, le=50),
+        refresh: bool = Query(False, description="Force a background roster rebuild"),
+    ) -> Response:
+        """Type-ahead candidates for a symbol box, answered from the local roster.
+
+        Never builds the roster inline: a cold build costs 17-20 s of gateway
+        round-trips, so an empty index answers immediately with
+        ``status: "warming"`` while the work happens on a daemon thread. The
+        client keeps this usable as a plain text input either way — see
+        :mod:`src.symbol_roster` for why the remote suggest endpoints are not
+        the fallback here.
+        """
+        from src import symbol_roster
+
+        rows, stale = await asyncio.to_thread(symbol_roster.peek_roster)
+        if not rows or stale or refresh:
+            started = await asyncio.to_thread(symbol_roster.start_warmup, force=refresh)
+            if not rows:
+                return {
+                    "status": "warming",
+                    "ready": False,
+                    "results": [],
+                    "count": 0,
+                    "building": started or symbol_roster.is_building(),
+                }
+
+        results = await asyncio.to_thread(symbol_roster.search, q, limit=limit, load=False)
+        return {"status": "ok", "ready": True, "results": results, "count": len(results)}

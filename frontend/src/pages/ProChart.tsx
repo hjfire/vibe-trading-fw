@@ -50,6 +50,8 @@ import {
 } from "@/lib/drawingExchange";
 import { chartLocale } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
+import SymbolCombobox from "@/components/common/SymbolCombobox";
+import { candidateFromSymbol } from "@/lib/symbolSearch";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
 import { applyUserIndicator, indicatorName } from "@/lib/indicatorLang";
 import { loadUserIndicators } from "@/lib/indicatorStore";
@@ -662,6 +664,13 @@ export function ProChart() {
     if (!watch.includes(symbol)) setWatch([...watch, symbol]);
   };
 
+  // The empty type-ahead box offers the user's own list, so the field is useful
+  // before a single keystroke (local custom ㉓).
+  const hotSymbols = useMemo(
+    () => [symbol, ...watch.filter((s) => s !== symbol)].map(candidateFromSymbol),
+    [symbol, watch],
+  );
+
   const pickInterval = (iv: IntervalKey) => {
     if (iv !== "1D" && !/\.(SH|SZ)$/.test(symbol)) return; // guarded, button also disabled
     setDrawNotice(null);
@@ -1074,12 +1083,15 @@ export function ProChart() {
     <div className="flex h-[calc(100vh-0px)] flex-col gap-3 p-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="text-lg font-semibold">专业图表 · KLineChart</div>
-        <input
-          className="w-48 rounded-md border bg-background px-2 py-1 text-sm"
+        <SymbolCombobox
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && loadSymbol()}
-          placeholder="600519.SH / AAPL.US / BTC-USDT"
+          onChange={setInput}
+          onPick={(picked) => applySymbol(picked)}
+          ariaLabel="图表标的代码"
+          wrapperClassName="w-48"
+          className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+          hot={hotSymbols}
+          placeholder="600519.SH / 茅台 / AAPL.US / BTC-USDT"
         />
         <button className="rounded-md border px-3 py-1 text-sm hover:bg-muted" onClick={loadSymbol}>
           加载

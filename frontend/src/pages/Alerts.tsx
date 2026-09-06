@@ -15,6 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import SymbolCombobox from "@/components/common/SymbolCombobox";
 import { formatIntervalMs } from "@/lib/cadence";
 import {
   ALERT_ADJUSTS,
@@ -456,11 +457,13 @@ export function Alerts() {
             error={errors.symbol ? text(`alerts.errors.${errors.symbol}`, ERROR_MESSAGES[errors.symbol] ?? errors.symbol) : undefined}
             hint={text("alerts.symbolHint", "Canonical form: 600519.SH, AAPL.US, BTC-USDT")}
           >
-            <input
+            <SymbolCombobox
               id="alert-symbol"
+              ariaLabel={text("alerts.symbolLabel", "Symbol")}
               value={form.symbol}
-              onChange={(e) => update("symbol", e.target.value)}
-              placeholder="600519.SH"
+              onChange={(e) => update("symbol", e)}
+              onPick={(symbol) => update("symbol", symbol)}
+              placeholder="600519.SH / 茅台"
               className={cn(fieldClass, "font-mono")}
             />
           </Field>

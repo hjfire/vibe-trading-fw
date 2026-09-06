@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Star, X } from "lucide-react";
 import { fetchQuotes, type QuoteRow } from "@/lib/marketApi";
+import { candidateFromSymbol } from "@/lib/symbolSearch";
+import SymbolCombobox from "@/components/common/SymbolCombobox";
 
 /** Persisted watchlist sidebar for the pro-chart page (local custom ⑧, step ②).
  *  Quotes come from GET /market/quote (daily last price + day-over-day change);
  *  rows refresh on mount, on list change, and via the manual button — no
- *  polling, to keep upstream data sources gentle. */
+ *  polling, to keep upstream data sources gentle.
+ *
+ *  The add-field is a type-ahead over the local symbol roster (local custom
+ *  ㉓): typing `600` or `茅台` suggests codes instead of requiring the exact
+ *  `600519.SH`. Its own watchlist doubles as the empty-input suggestion list. */
 
 interface WatchListProps {
   symbols: string[];
@@ -50,12 +56,15 @@ export default function WatchList({ symbols, active, onPick, onChange }: WatchLi
     void refresh();
   }, [refresh]);
 
-  const add = () => {
-    const v = draft.trim().toUpperCase();
+  const add = (raw?: string) => {
+    const v = (raw ?? draft).trim().toUpperCase();
     setDraft("");
     if (!v || symbols.includes(v) || symbols.length >= MAX_ROWS) return;
     onChange([...symbols, v]);
   };
+
+  // Suggest what is already watched before anything is typed.
+  const hot = useMemo(() => symbols.map(candidateFromSymbol), [symbols]);
 
   const remove = (symbol: string) => onChange(symbols.filter((s) => s !== symbol));
 
@@ -137,19 +146,21 @@ export default function WatchList({ symbols, active, onPick, onChange }: WatchLi
       </div>
 
       <div className="flex items-center gap-1 border-t px-2 py-1.5">
-        <input
+        <SymbolCombobox
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") add();
-          }}
-          placeholder="600519.SH / AAPL"
-          spellCheck={false}
-          className="h-6 min-w-0 flex-1 rounded border bg-background px-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+          onChange={setDraft}
+          onPick={(symbol) => add(symbol)}
+          ariaLabel="添加自选代码"
+          placeholder="600519.SH / 茅台 / AAPL"
+          hot={hot}
+          drop="up"
+          limit={8}
+          wrapperClassName="flex-1"
+          className="h-6 w-full rounded border bg-background px-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
         />
         <button
           type="button"
-          onClick={add}
+          onClick={() => add()}
           disabled={!draft.trim() || symbols.length >= MAX_ROWS}
           className="rounded border px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted disabled:opacity-40"
         >

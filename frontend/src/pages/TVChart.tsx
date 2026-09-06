@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { LineChart } from "lucide-react";
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
+import SymbolCombobox from "@/components/common/SymbolCombobox";
 
 /**
  * Phase-C trial page: embed TradingView's free Advanced Chart widget.
@@ -111,12 +112,14 @@ export function TVChart() {
           <LineChart className="h-5 w-5" />
           TradingView 图表试水 / Phase-C Trial
         </div>
-        <input
-          className="w-52 rounded-md border bg-background px-2 py-1 text-sm"
+        <SymbolCombobox
+          ariaLabel="图表标的代码"
+          wrapperClassName="w-52"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && applySymbol(input)}
-          placeholder="600519.SH / AAPL.US / NASDAQ:AAPL"
+          onChange={setInput}
+          onPick={(picked) => applySymbol(picked)}
+          className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+          placeholder="600519.SH / 茅台 / NASDAQ:AAPL"
         />
         <button
           className="rounded-md border px-3 py-1 text-sm hover:bg-accent"
