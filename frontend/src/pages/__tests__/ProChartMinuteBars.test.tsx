@@ -17,6 +17,10 @@
  *    nothing: `pickInterval` kept its own `/\.(SH|SZ)$/` guard, so every HK/US
  *    minute click was swallowed. A test that only reads the predicate cannot
  *    see that, so the block below mounts the page and clicks the real button.
+ * 4. that 分时 (㉖) is the *same* rule, not a copy of it: the line is 1-minute
+ *    data, so anything that cannot serve minute bars cannot show it either. The
+ *    wiring of the view itself lives in `ProChartTimeShare.test.tsx`; what lives
+ *    here is the gate, so a fourth caller cannot drift from the first three.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +31,8 @@ import {
   intervalAllowed,
   readSession,
   repairInterval,
+  viewForSymbol,
+  viewPeriod,
 } from "../ProChart";
 
 const h = vi.hoisted(() => ({
@@ -111,7 +117,7 @@ describe("readSession preserves the interval the symbol can actually serve", () 
 
   it("keeps 5m for an A-share", () => {
     seedSession("600519.SH", "5m");
-    expect(readSession()).toEqual({ symbol: "600519.SH", interval: "5m" });
+    expect(readSession()).toEqual({ symbol: "600519.SH", interval: "5m", timeShare: false });
   });
 
   it("keeps 5m for HK, which the old A-share-only rule forced onto 1D", () => {
@@ -145,6 +151,50 @@ describe("readSession preserves the interval the symbol can actually serve", () 
   it("rejects an interval that is not on the toolbar", () => {
     seedSession("700.HK", "4h");
     expect(readSession().interval).toBe("1D");
+  });
+
+  // 分时 (㉖) is stored beside the interval but is not one: `interval` stays the
+  // user's K-line choice across a line view, so a reload does not silently
+  // drop them onto 1-minute candles.
+  it("restores 分时, and keeps the K-line choice underneath it", () => {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol: "700.HK", interval: "15m", timeShare: true }));
+    expect(readSession()).toEqual({ symbol: "700.HK", interval: "15m", timeShare: true });
+  });
+
+  it("drops 分时 for a symbol with no minute source, same as the button does", () => {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol: "BTC-USDT", interval: "1D", timeShare: true }));
+    expect(readSession()).toEqual({ symbol: "BTC-USDT", interval: "1D", timeShare: false });
+  });
+
+  it("treats anything but a true flag as off", () => {
+    for (const value of [1, "true", null, {}]) {
+      localStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({ symbol: "700.HK", interval: "1D", timeShare: value }),
+      );
+      expect(readSession().timeShare).toBe(false);
+    }
+  });
+});
+
+describe("viewForSymbol / viewPeriod", () => {
+  it("moves the bars to 1-minute while the line is on, whatever the buttons say", () => {
+    expect(viewPeriod({ interval: "1D", timeShare: true })).toBe("1m");
+    expect(viewPeriod({ interval: "1D", timeShare: false })).toBe("1D");
+  });
+
+  it("drops 分时 but not the interval when the symbol cannot serve minutes", () => {
+    expect(viewForSymbol("BTC-USDT", "5m", true)).toEqual({ interval: "1D", timeShare: false });
+  });
+
+  it("carries both across a symbol switch where minute bars do exist", () => {
+    expect(viewForSymbol("AAPL.US", "5m", true)).toEqual({ interval: "5m", timeShare: true });
+  });
+
+  it("uses one gate for the line and the 1分 button, because they are one rule", () => {
+    for (const symbol of ["600519.SH", "000001.SZ", "0700.HK", "AAPL.US", "BTC-USDT", "SHEL.L"]) {
+      expect(viewForSymbol(symbol, "1D", true).timeShare).toBe(intervalAllowed(symbol, "1m"));
+    }
   });
 });
 

@@ -39,6 +39,7 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from fastapi import Depends, FastAPI, Query
@@ -462,9 +463,47 @@ def _fetch_minute_a_share(
     return bars[-count:]
 
 
+def _split_latest_session(
+    bars: list[dict[str, Any]], zone: str
+) -> tuple[list[dict[str, Any]], str, float | None]:
+    """Keep the most recent trading session only, plus what preceded it.
+
+    ``bars`` ascend in epoch milliseconds, every one of them stamped against
+    ``zone`` by the minute path that produced it (see
+    :data:`_MINUTE_WALL_CLOCK_ZONE`). Grouping on that same zone is therefore
+    exact -- and it is *why* this runs here rather than in the browser: taking a
+    plain ``date`` of the epoch splits a US session in half for any viewer east
+    of Greenwich, and teaching the chart the exchange calendar would put a
+    second copy of that zone table in the codebase to drift.
+
+    Returns ``(session_bars, session_date, prev_close)``. ``prev_close`` is the
+    last bar of the session before it, or ``None`` when the window only ever
+    held one session. The 分时 view needs that number to draw 涨跌幅, and
+    defaulting it to the day's first bar would report every session as opening
+    flat -- which is exactly the kind of wrong-but-quiet answer this route
+    refuses to give.
+    """
+    if not bars:
+        return [], "", None
+    dates = [
+        datetime.fromtimestamp(bar["timestamp"] / 1000, tz=ZoneInfo(zone)).date()
+        for bar in bars
+    ]
+    last = dates[-1]
+    start = len(bars)
+    while start > 0 and dates[start - 1] == last:
+        start -= 1
+    prev_close = float(bars[start - 1]["close"]) if start > 0 else None
+    return bars[start:], last.isoformat(), prev_close
+
+
 def _kline_sync(
-    symbol: str, interval: str, count: int, adjust: str, before: int | None = None
+    symbol: str, interval: str, count: int, adjust: str, before: int | None = None,
+    session: str = "",
 ) -> dict[str, Any]:
+    if session not in {"", "latest"}:
+        raise ValueError(f"unsupported session {session!r} (only 'latest' is defined)")
+    bars: list[dict[str, Any]]
     if interval in _MINUTE_PERIODS:
         bars = _futu_minute_bars(symbol, interval, count, adjust, before)
         source = "futu:opend"
@@ -476,8 +515,32 @@ def _kline_sync(
             bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
             source = "akshare:sina_stock_zh_a_minute"
     else:
+        if session == "latest":
+            raise ValueError(
+                "session=latest narrows one trading day out of minute bars; "
+                "daily bars already are one day each"
+            )
         bars, source = _fetch_daily(symbol, count, before)
-    return {"status": "ok", "symbol": symbol, "interval": interval, "source": source, "bars": bars}
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "symbol": symbol,
+        "interval": interval,
+        "source": source,
+        "bars": bars,
+    }
+    if session == "latest":
+        suffix = symbol.rsplit(".", 1)[-1]
+        zone = _MINUTE_WALL_CLOCK_ZONE.get(suffix)
+        if zone is None:
+            # Reached only by a suffix that has a minute path but no clock
+            # table entry; a 502 from a KeyError would send the user hunting
+            # the gateway instead of the routing.
+            raise ValueError(f"session=latest cannot place {symbol}'s bars on a trading day")
+        bars, session_date, prev_close = _split_latest_session(bars, zone)
+        payload["bars"] = bars
+        payload["session_date"] = session_date
+        payload["prev_close"] = prev_close
+    return payload
 
 
 def _quote_one(symbol: str) -> dict[str, Any]:
@@ -557,6 +620,7 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
         count: int = Query(500, ge=10, le=_MAX_BARS),
         adjust: str = Query("qfq", description="none/qfq/hfq — minute bars only"),
         before: int | None = Query(None, ge=0, description="epoch milliseconds — load bars strictly older than this (scroll-back paging)"),
+        session: str = Query("", description="'latest' — return only the newest trading session of a minute interval, plus prev_close (the 分时 view)"),
     ) -> Response:
         """OHLCV bars for the pro-chart page; envelope mirrors the other routes."""
         key = symbol.strip().upper()
@@ -571,7 +635,7 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
             )
         try:
             # Loader/akshare calls are blocking — keep the event loop free.
-            return await asyncio.to_thread(_kline_sync, key, interval, count, adjust, before)
+            return await asyncio.to_thread(_kline_sync, key, interval, count, adjust, before, session)
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"status": "error", "error": str(exc)})
         except LookupError as exc:

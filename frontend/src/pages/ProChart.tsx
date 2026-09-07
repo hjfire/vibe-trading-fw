@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { init, dispose, type Chart, type KLineData, type DataLoader, type Nullable } from "klinecharts";
+import {
+  init,
+  dispose,
+  type CandleType,
+  type Chart,
+  type KLineData,
+  type DataLoader,
+  type Nullable,
+} from "klinecharts";
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
 import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
+import {
+  AVG_PRICE_NAME,
+  TIME_SHARE_COUNT,
+  TIME_SHARE_INTERVAL,
+  ensureTimeShareIndicator,
+  timeShareBadge,
+  type SessionInfo,
+} from "@/lib/timeShare";
 import { isSubPaneId, planPaneHeights, subPaneIdOf, subPaneIdsOf } from "@/lib/paneLayout";
 import {
   DRAWING_COLORS,
@@ -71,6 +87,10 @@ const DEFAULT_SYMBOL = "600519.SH";
 const PAGE = 500;
 const WATCH_KEY = "pro-chart.watchlist.v1";
 const SESSION_KEY = "pro-chart.session.v1";
+// The 分时 price line. Deliberately neither of the up/down colors: those are
+// already spent on the candles and the change badge, and a line that happens to
+// be red reads as "it went up" even while it is falling.
+const TIME_SHARE_LINE = "#2b7de9";
 
 const PRESETS = [
   { label: "贵州茅台", symbol: "600519.SH" },
@@ -119,33 +139,79 @@ export function repairInterval(symbol: string, interval: IntervalKey): IntervalK
   return intervalAllowed(symbol, interval) ? interval : "1D";
 }
 
-/** Last viewed symbol + interval (local custom ⑪): the chart should reopen
- * where it was left. A stale pair is repaired, not trusted — minute bars do
- * not exist for every instrument, so restoring "5M" onto BTC would fail the
- * first request. */
-export function readSession(): { symbol: string; interval: IntervalKey } {
+/**
+ * What the chart is showing, as one value (local custom ㉖).
+ *
+ * `interval` stays the user's K-line choice even while 分时 is on, so turning
+ * the line off returns to whatever period they had instead of to 1-minute
+ * candles. Only `viewPeriod` knows which of the two the chart draws.
+ */
+export interface ChartView {
+  interval: IntervalKey;
+  timeShare: boolean;
+}
+
+/** The interval whose bars are on screen: 分时 is always a 1-minute view. */
+export function viewPeriod(view: ChartView): IntervalKey {
+  return view.timeShare ? TIME_SHARE_INTERVAL : view.interval;
+}
+
+/**
+ * The view a symbol can serve. One function for both buttons and both entry
+ * points (symbol switch, session restore), because the minute-interval rule and
+ * the 分时 rule are the same rule — 分时 is 1-minute data wearing a line — and
+ * entry 46 in 项目档案.md is about what happens when that gets spelled twice.
+ */
+export function viewForSymbol(
+  symbol: string,
+  interval: IntervalKey,
+  timeShare: boolean,
+): ChartView {
+  return {
+    interval: repairInterval(symbol, interval),
+    timeShare: timeShare && intervalAllowed(symbol, TIME_SHARE_INTERVAL),
+  };
+}
+
+/** Last viewed symbol, interval and view (local custom ⑪→㉖): the chart should
+ * reopen where it was left. A stale triple is repaired, not trusted — minute
+ * bars do not exist for every instrument, and 分时 is made of minute bars. */
+export function readSession(): ChartView & { symbol: string } {
+  const fallback = { symbol: DEFAULT_SYMBOL, interval: "1D" as IntervalKey, timeShare: false };
   try {
     const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return { symbol: DEFAULT_SYMBOL, interval: "1D" };
+    if (!raw) return fallback;
     const obj: unknown = JSON.parse(raw);
-    if (!obj || typeof obj !== "object") return { symbol: DEFAULT_SYMBOL, interval: "1D" };
-    const { symbol, interval } = obj as { symbol?: unknown; interval?: unknown };
+    if (!obj || typeof obj !== "object") return fallback;
+    const { symbol, interval, timeShare } = obj as {
+      symbol?: unknown;
+      interval?: unknown;
+      timeShare?: unknown;
+    };
     const next =
       typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
     const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";
-    return { symbol: next, interval: repairInterval(next, span) };
+    // Strict `=== true`, so a corrupted or hand-edited bucket cannot turn the
+    // chart into a line nobody asked for.
+    return { symbol: next, ...viewForSymbol(next, span, timeShare === true) };
   } catch {
-    return { symbol: DEFAULT_SYMBOL, interval: "1D" };
+    return fallback;
   }
 }
 
-function chartStyles(dark: boolean) {
+function chartStyles(dark: boolean, timeShare = false) {
   // A-share convention: red = up, green = down. Candle colors live under
   // `candle.bar` in v10 (`.area` is for area/line charts).
+  //
+  // The type lives *here*, not at the toggle, because the theme effect below
+  // pushes this whole object through `setStyles` on every theme change: while
+  // the choice was made anywhere else, switching themes painted the candles back
+  // over a 分时 line and the toggle looked like it had stopped working.
+  const type: CandleType = timeShare ? "area" : "candle_solid";
   return {
     grid: { horizontal: { color: dark ? "#1f2733" : "#f0f0f0" }, vertical: { color: dark ? "#1f2733" : "#f0f0f0" } },
     candle: {
-      type: "candle_solid" as const,
+      type,
       bar: {
         upColor: "#ef5350",
         downColor: "#26a69a",
@@ -156,6 +222,20 @@ function chartStyles(dark: boolean) {
         upWickColor: "#ef5350",
         downWickColor: "#26a69a",
         noChangeWickColor: "#888888",
+      },
+      area: {
+        lineSize: 1.5,
+        lineColor: TIME_SHARE_LINE,
+        // The minute *closes*, joined up — which is what a broker's 分时 line
+        // is. Naming it here rather than trusting the library default keeps the
+        // claim checkable: `high`/`low` would draw a plausible, wrong shape.
+        value: "close",
+        smooth: false,
+        // Faint, so the 均价 line stays readable on top of the fill.
+        backgroundColor: [
+          { offset: 0, color: `${TIME_SHARE_LINE}33` },
+          { offset: 1, color: `${TIME_SHARE_LINE}05` },
+        ],
       },
     },
     xAxis: { axisLine: { color: dark ? "#4a4a4a" : "#ccc" }, tickText: { color: dark ? "#aaa" : "#666" } },
@@ -278,6 +358,17 @@ export function ProChart() {
   const [symbol, setSymbol] = useState(session.symbol);
   const [input, setInput] = useState(session.symbol);
   const [interval, setInterval] = useState<IntervalKey>(session.interval);
+  // 分时 on top of the candles (local custom ㉖): the same 1-minute bars, drawn
+  // as one line for the newest trading session only.
+  const [timeShare, setTimeShare] = useState(session.timeShare);
+  // The view as it stands on the chart right now. `getBars` runs in a closure
+  // the library holds, so it cannot read React state; this is what tells it
+  // whether to ask for a page of bars or for one session.
+  const viewRef = useRef<ChartView>({
+    interval: session.interval,
+    timeShare: session.timeShare,
+  });
+  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [status, setStatus] = useState<{ loading: boolean; error: string | null; source: string }>({
     loading: false,
     error: null,
@@ -413,14 +504,14 @@ export function ProChart() {
     }
   }, [watch]);
 
-  // Remember where the chart was left (local custom ⑪).
+  // Remember where the chart was left (local custom ⑪, extended by ㉖).
   useEffect(() => {
     try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval }));
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval, timeShare }));
     } catch {
       /* quota errors are non-fatal for a convenience feature */
     }
-  }, [symbol, interval]);
+  }, [symbol, interval, timeShare]);
 
   /**
    * Size the sub panes so the main chart keeps a usable height (⑬→⑭).
@@ -462,6 +553,25 @@ export function ProChart() {
   };
 
   /**
+   * The price pane carries exactly one of these two, because the one thing is
+   * decided here and nowhere else (㉖): moving averages for candles, 均价 for
+   * 分时. MA over a single session of 1-minute bars is noise, and a broker's
+   * 分时 never shows it; the 均价 is the line that gives the price line its
+   * meaning. Sub panes (VOL/MACD and the user's own formulas) are left alone.
+   */
+  const syncPriceOverlay = (chart: Nullable<Chart>, timeShare: boolean) => {
+    if (!chart) return;
+    if (timeShare) {
+      ensureTimeShareIndicator();
+      chart.removeIndicator({ name: "MA" });
+      chart.createIndicator({ name: AVG_PRICE_NAME, paneId: MAIN_PANE_ID }, true);
+    } else {
+      chart.removeIndicator({ name: AVG_PRICE_NAME });
+      chart.createIndicator({ name: "MA", paneId: MAIN_PANE_ID }, true);
+    }
+  };
+
+  /**
    * Is this pane on the chart right now? `getPaneOptions(id)` answers `null` for
    * a pane the chart does not hold, which is the only way to tell "the MACD pane
    * is closed" apart from "draw it wherever" (⑲) — and guessing wrong is exactly
@@ -494,7 +604,7 @@ export function ProChart() {
       // on every redraw (see `chartLocale`).
       locale: chartLocale(i18n.language),
       timezone: "Asia/Shanghai",
-      styles: chartStyles(dark),
+      styles: chartStyles(dark, session.timeShare),
     });
     if (!chart) return;
     chartRef.current = chart;
@@ -502,6 +612,7 @@ export function ProChart() {
     const dataLoader: DataLoader = {
       getBars: async ({ type, timestamp, period, callback }) => {
         const iv = periodToInterval(period);
+        const line = viewRef.current.timeShare;
         // `type` is not a scroll direction, and reading it as one broke panning:
         // in KLineChart v10 `forward` asks for OLDER bars (the library prepends
         // them) and `backward` asks for NEWER ones (it appends them *and shifts
@@ -512,13 +623,42 @@ export function ProChart() {
         // backend `before` filter is likewise epoch-ms — no unit conversion.
         const bounds = boundsOf(chart.getDataList());
         const before = pagingBefore(type, timestamp ?? null, bounds);
+        if (line && type === "forward") {
+          // 分时 has no history to page into, and that is a cost decision, not
+          // an oversight: the Futu allowance is counted per symbol per seven
+          // days and charges minute bars the same as daily ones, so answering
+          // a drag with another ~800 bars would burn a fresh quota each time.
+          callback([], { forward: false, backward: false });
+          return;
+        }
         if (type !== "backward") setStatus((s) => ({ ...s, loading: true, error: null }));
         try {
-          const res = await fetchKline({ symbol: chart.getSymbol()?.ticker ?? symbol, interval: iv, count: PAGE, before });
-          const page = shapeResponse(type, res.bars as KLineData[], bounds, PAGE);
+          const res = await fetchKline({
+            symbol: chart.getSymbol()?.ticker ?? symbol,
+            interval: iv,
+            count: line ? TIME_SHARE_COUNT : PAGE,
+            before: line ? null : before,
+            session: line ? "latest" : undefined,
+          });
+          // 分时 replaces the list with one session and pages nowhere; candles
+          // keep the scroll-back contract (see `klinePaging.ts`).
+          const page = line
+            ? { bars: res.bars as KLineData[], more: { forward: false, backward: false } }
+            : shapeResponse(type, res.bars as KLineData[], bounds, PAGE);
           const bars = page.bars;
           callback(bars, page.more);
           setStatus({ loading: false, error: null, source: res.source });
+          // A failed refresh leaves the previous answer on screen, so the badge
+          // is rewritten only by a response that actually arrived: blanking it
+          // on a network hiccup would throw away the one number the user is
+          // reading the line against.
+          if (line) {
+            setSessionInfo({
+              date: res.session_date ?? "",
+              prevClose: typeof res.prev_close === "number" ? res.prev_close : null,
+              last: bars.length ? Number(bars[bars.length - 1].close) : null,
+            });
+          }
           // Re-mount persisted user indicators once real data exists (their
           // formulas trial-compute against the current bars on apply).
           if (
@@ -604,8 +744,11 @@ export function ProChart() {
     };
     chart.setDataLoader(dataLoader);
     chart.setSymbol({ ticker: symbol, pricePrecision: 2, volumePrecision: 0 });
-    chart.setPeriod(periodFor(interval));
-    chart.createIndicator({ name: "MA", paneId: "candle_pane" }, true);
+    // The restored *view*, not just the restored interval: a session that was
+    // left on 分时 has to come back as a line over one day, or the reload
+    // silently hands the user candles and the toggle looks like it was lost.
+    chart.setPeriod(periodFor(viewPeriod(viewRef.current)));
+    syncPriceOverlay(chart, viewRef.current.timeShare);
     // Named panes, so a drawing on the volume strip can find it again after a
     // reload (⑲); the library's own ids are random per mount.
     chart.createIndicator({ name: "VOL", paneId: subPaneIdOf("VOL") });
@@ -639,10 +782,12 @@ export function ProChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Theme switch → restyle in place.
+  // Theme switch → restyle in place. Also the only writer of the candle/line
+  // choice, so `timeShare` is a dependency: leaving it out let a theme change
+  // repaint a 分时 line as candles.
   useEffect(() => {
-    chartRef.current?.setStyles(chartStyles(dark));
-  }, [dark]);
+    chartRef.current?.setStyles(chartStyles(dark, timeShare));
+  }, [dark, timeShare]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
@@ -665,20 +810,48 @@ export function ProChart() {
     };
   }, []);
 
+  /**
+   * Move the chart to a view (local custom ㉖). One writer for the mode flag,
+   * the period and the price overlay, because the three have to agree — entry 46
+   * in 项目档案.md is what happens when they are set side by side at each call
+   * site instead.
+   *
+   * `reload` says whether the caller already expects a fetch of its own: a
+   * button click needs one, `applySymbol` does not, because the `setSymbol` it
+   * is about to make re-reads the data by itself.
+   */
+  const setView = (view: ChartView, reload: boolean) => {
+    const chart = chartRef.current;
+    const target = viewPeriod(view);
+    const periodChanged = target !== viewPeriod(viewRef.current);
+    viewRef.current = view;
+    setInterval(view.interval);
+    setTimeShare(view.timeShare);
+    // Candles have no session to describe, and a 昨收 carried over from the line
+    // would put a number about a chart nobody is looking at beside the prices
+    // they are reading.
+    if (!view.timeShare) setSessionInfo(null);
+    syncPriceOverlay(chart, view.timeShare);
+    if (!chart) return;
+    // `setPeriod` *is* the reload: StoreImp.setPeriod (dist 13421) calls
+    // `resetData()` without comparing the incoming period to the live one, so
+    // re-applying 1-minute still re-requests. That is what a 分时 <-> K线 toggle
+    // needs — the *window* changed even though the period did not — and it is
+    // why this file never calls `resetData()`.
+    if (reload || periodChanged) chart.setPeriod(periodFor(target));
+  };
+
   const applySymbol = (s: string) => {
     setInput(s);
     setSymbol(s);
     setDrawNotice(null);
     setShareFallback(null);
     const chart = chartRef.current;
-    // Repair the period *before* setSymbol fires its reload, or the first
-    // request after the switch is a guaranteed 400. Same predicate as the
-    // buttons and the click handler below -- four copies used to disagree.
-    const next = repairInterval(s, interval);
-    if (next !== interval) {
-      setInterval(next);
-      chart?.setPeriod(periodFor(next));
-    }
+    // Repair the view *before* setSymbol fires its reload, or the first request
+    // after the switch is a guaranteed 400. 分时 is repaired by the same call,
+    // not a second copy of the rule: it *is* a 1-minute view, so a symbol with
+    // no minute source cannot show the line either.
+    setView(viewForSymbol(s, interval, viewRef.current.timeShare), false);
     chart?.setSymbol({ ticker: s, pricePrecision: 2, volumePrecision: 0 });
   };
 
@@ -702,8 +875,18 @@ export function ProChart() {
   const pickInterval = (iv: IntervalKey) => {
     if (!intervalAllowed(symbol, iv)) return; // the button is disabled too
     setDrawNotice(null);
-    setInterval(iv);
-    chartRef.current?.setPeriod(periodFor(iv));
+    // Any period button also ends 分时: the two are alternative readings of the
+    // same bars, and a lit 分时 button over a candle chart is a lie.
+    setView({ interval: iv, timeShare: false }, true);
+  };
+
+  const pickTimeShare = () => {
+    if (!intervalAllowed(symbol, TIME_SHARE_INTERVAL)) return; // the button is disabled too
+    setDrawNotice(null);
+    // Toggling back off restores the user's own K-line period rather than
+    // dropping them on 1-minute candles, because `interval` was never
+    // overwritten on the way in.
+    setView({ interval, timeShare: !viewRef.current.timeShare }, true);
   };
 
   // Panes come and go from the workbench without any chart event to hook, so
@@ -1093,6 +1276,13 @@ export function ProChart() {
   const armedTool = toolOf(drawTool ?? "");
   const parkedCount = parked.length;
   const parkedBits = parkedCount > 0 ? parkedPanesOf(parked, userLabels).join("、") : "";
+  // The 分时 badge, in the strip at the bottom. `null` is a real state (mode on,
+  // first answer not in yet), which is why the badge takes the nullable type
+  // instead of the JSX checking for it.
+  const lineBadge = timeShareBadge(sessionInfo);
+  // Which period button is lit. `viewPeriod` would answer "1分" while the line
+  // is up, and that is the wrong claim: the bars differ, not only their shape.
+  const periodActive = (key: IntervalKey) => !timeShare && interval === key;
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
   // highlight, or the chart keeps eating clicks waiting for the next point.
@@ -1152,6 +1342,25 @@ export function ProChart() {
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">
+          {/* 分时 is a view, not a period (local custom ㉖): it takes the same
+              1-minute bars the minute buttons fetch and shows one trading
+              session of them as a line, so it sits with them and shares their
+              gate — see `intervalAllowed`, which both buttons ask. */}
+          <button
+            disabled={!intervalAllowed(symbol, TIME_SHARE_INTERVAL)}
+            title={
+              timeShare
+                ? "回到 K 线（分时不自动推送，重新进入即取最新）"
+                : "分时：最近一个交易日的分钟线 + 均价（需 FutuOpenD，支持 .SH/.SZ/.HK/.US）"
+            }
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+              timeShare && "bg-muted font-medium",
+            )}
+            onClick={pickTimeShare}
+          >
+            分时
+          </button>
           {INTERVALS.map((i) => {
             // Greyed out only where no source can answer at all. Whether OpenD
             // is up is not knowable from here, so HK/US stay enabled and the
@@ -1168,7 +1377,7 @@ export function ProChart() {
                 }
                 className={cn(
                   "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
-                  interval === i.key && "bg-muted font-medium",
+                  periodActive(i.key) && "bg-muted font-medium",
                 )}
                 onClick={() => pickInterval(i.key)}
               >
@@ -1349,6 +1558,24 @@ export function ProChart() {
             title={`副图各占 ${paneStarved.sub}px 后，主图只剩 ${paneStarved.main}px：关闭部分指标可换回可读性`}
           >
             副图过多，主图仅 {paneStarved.main}px — 关闭部分指标可恢复
+          </span>
+        )}
+        {timeShare && (
+          <span
+            data-testid="time-share-badge"
+            className={cn(
+              "text-xs",
+              lineBadge.tone === "up" && "text-red-500",
+              lineBadge.tone === "down" && "text-teal-600 dark:text-teal-400",
+              lineBadge.tone === "flat" && "text-muted-foreground",
+            )}
+            title={
+              sessionInfo?.prevClose == null
+                ? "取回的时间窗口里没有上一个交易日的最后一根，所以涨跌幅算不出来"
+                : "分时只取最近一个交易日的分钟线；均价为成交量加权估算（该数据源不供成交额）"
+            }
+          >
+            {lineBadge.text}
           </span>
         )}
         <div className="ml-auto text-xs text-muted-foreground">

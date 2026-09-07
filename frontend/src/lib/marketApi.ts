@@ -21,6 +21,11 @@ export interface KlineResponse {
   interval: string;
   source: string;
   bars: KLineData[];
+  /** ISO day of the newest bar, exchange calendar. Only with `session=latest`. */
+  session_date?: string;
+  /** Close of the session before the one returned, or null when the fetch
+   *  window did not reach back that far. Only with `session=latest`. */
+  prev_close?: number | null;
   error?: string;
 }
 
@@ -49,6 +54,9 @@ export async function fetchKline(params: {
   count?: number;
   adjust?: "none" | "qfq" | "hfq";
   before?: number | null;
+  /** "latest" narrows a minute interval to its newest trading session and
+   *  answers `session_date` + `prev_close` (the 分时 view). */
+  session?: "" | "latest";
   signal?: AbortSignal;
 }): Promise<KlineResponse> {
   const q = new URLSearchParams();
@@ -57,6 +65,7 @@ export async function fetchKline(params: {
   q.set("count", String(params.count ?? 500));
   q.set("adjust", params.adjust ?? "qfq");
   if (params.before) q.set("before", String(params.before));
+  if (params.session) q.set("session", params.session);
   const res = await fetch(`/market/kline?${q.toString()}`, {
     headers: authHeaders(),
     signal: params.signal,
@@ -71,6 +80,11 @@ export async function fetchKline(params: {
     interval: body.interval ?? params.interval,
     source: body.source ?? "",
     bars: Array.isArray(body.bars) ? body.bars : [],
+    // Both keys are only ever present on a `session=latest` answer, and
+    // `prev_close: null` is that case's honest "I could not see yesterday" —
+    // normalising a missing number to 0 here would print +0.00%.
+    session_date: typeof body.session_date === "string" && body.session_date ? body.session_date : undefined,
+    prev_close: typeof body.prev_close === "number" && Number.isFinite(body.prev_close) ? body.prev_close : null,
   };
 }
 

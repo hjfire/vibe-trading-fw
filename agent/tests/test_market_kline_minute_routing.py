@@ -12,12 +12,17 @@ more importantly, the three ways it must *not* silently misbehave:
   "minutes are A-share only" message that would send the user hunting the wrong
   fix.
 
+``session=latest`` (the 分时 view's one-trading-day slice) is pinned at the end
+of the file, including the case that decides where the code has to live: a
+session cut on the *viewer's* calendar splits New York afternoons in half.
+
 No test here opens a socket or calls akshare.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -402,3 +407,178 @@ class TestDailyPathIsUntouched:
         assert asked == ["AAPL.US"]
         assert futu_seen["seen"]["intervals"] == []
         assert sina_spy == []
+
+
+def _two_session_frame(day1: str = "2026-09-03", day2: str = "2026-09-04") -> pd.DataFrame:
+    """Two adjacent sessions, deliberately of *different* lengths.
+
+    Equal-length days let an off-by-one-day slice pass by coincidence: the
+    assertion on ``prev_close`` is only meaningful when the two sessions end on
+    different closes.
+    """
+    return pd.concat([_minute_frame(n=390, day=day1), _minute_frame(n=400, day=day2)])
+
+
+def _http_client():
+    """A one-route app, so the query string itself is under test.
+
+    ``register_market_routes`` takes the auth dependency explicitly, which is
+    what makes an HTTP round trip cheap here — no socket, no api_server import.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    market_routes.register_market_routes(app, require_auth=lambda: None)
+    return TestClient(app)
+
+
+class TestLatestSessionSlice:
+    """``session=latest`` — one trading day, cut on the *exchange's* calendar.
+
+    This exists for the 分时 view (the intraday line chart brokers show),
+    which must render exactly the newest session. The slicing is done here
+    rather than in the browser on purpose: the minute paths already stamped
+    every bar against ``_MINUTE_WALL_CLOCK_ZONE``, so a second copy of that
+    table in the frontend would be free to drift — and a viewer east of
+    Greenwich grouping by their own clock cuts a US session in half. See
+    ``test_us_session_is_not_cut_on_the_viewers_clock``.
+    """
+
+    def test_only_the_newest_exchange_day_comes_back(self, futu_seen):
+        futu_seen["install"](frame=_two_session_frame())
+        out = market_routes._kline_sync("700.HK", "1m", 2000, "qfq", session="latest")
+        assert out["session_date"] == "2026-09-04"
+        assert len(out["bars"]) == 400
+
+    def test_prev_close_is_the_last_bar_of_the_previous_session(self, futu_seen):
+        futu_seen["install"](frame=_two_session_frame())
+        out = market_routes._kline_sync("700.HK", "1m", 2000, "qfq", session="latest")
+        assert out["prev_close"] == 440.5 + 389  # day1's last bar, not day2's
+
+    def test_a_one_session_window_says_none_rather_than_reusing_today(self, futu_seen):
+        """Defaulting ``prev_close`` to the first bar would draw every 分时 flat.
+
+        A fresh Monday on a free-tier gateway really can hold one session, and
+        that is a fact the view has to be able to show.
+        """
+        futu_seen["install"](frame=_minute_frame(n=5))
+        out = market_routes._kline_sync("700.HK", "1m", 2000, "qfq", session="latest")
+        assert out["prev_close"] is None
+        assert len(out["bars"]) == 5
+
+    def test_us_session_is_not_cut_on_the_viewers_clock(self, futu_seen):
+        """The load-bearing case for doing this server-side.
+
+        New York in September is UTC+8 plus twelve hours on the wall clock, so
+        09:30-16:10 ET reads 21:30-04:10 *next day* in Beijing. Grouping the
+        same bars on a UTC+8 calendar leaves only the post-midnight tail — 250
+        of 400 bars — standing in as "today".
+        """
+        futu_seen["install"](frame=_two_session_frame())
+        out = market_routes._kline_sync("AAPL.US", "1m", 2000, "qfq", session="latest")
+        assert out["session_date"] == "2026-09-04"
+        assert len(out["bars"]) == 400
+
+    def test_a_trading_day_is_the_exchanges_midnight_not_utcs(self):
+        """New York evenings are already *tomorrow* on a UTC calendar.
+
+        No minute source in this route ever hands over such a bar (the live tape
+        ends at 16:00 ET), which is why every data-driven case above agrees with
+        a hard-coded UTC — a mutation probe measured `ZoneInfo("UTC")` inside the
+        slicer as surviving this whole file. That makes the property untestable
+        end-to-end rather than absent, so it gets pinned here, directly, where an
+        evening bar can be staged.
+        """
+        tz = ZoneInfo("America/New_York")
+        bars = [
+            {
+                "timestamp": int(datetime(2026, 9, 3, hour, tzinfo=tz).timestamp() * 1000),
+                "close": 330.0 + i,
+            }
+            for i, hour in enumerate((20, 21))
+        ]
+        session, day, prev_close = market_routes._split_latest_session(bars, "America/New_York")
+        assert day == "2026-09-03"  # UTC would already be calling it 09-04
+        assert len(session) == 2
+        assert prev_close is None
+
+    @pytest.mark.parametrize(
+        "symbol,zone",
+        [
+            ("600519.SH", "Asia/Shanghai"),
+            ("000001.SZ", "Asia/Shanghai"),
+            ("700.HK", "Asia/Shanghai"),
+            ("AAPL.US", "America/New_York"),
+        ],
+    )
+    def test_the_slice_is_asked_in_the_exchanges_own_clock(self, futu_seen, monkeypatch, symbol, zone):
+        """Which zone the slicer is *handed* is a wiring fact, not a data fact.
+
+        The two calendars cannot be told apart from the four sessions served
+        today (see the case above), so the per-suffix table lookup is asserted
+        on its argument instead of on output that happens to agree either way.
+        """
+        asked: list[str] = []
+        real = market_routes._split_latest_session
+
+        def spy(bars, zone_arg):
+            asked.append(zone_arg)
+            return real(bars, zone_arg)
+
+        monkeypatch.setattr(market_routes, "_split_latest_session", spy)
+        market_routes._kline_sync(symbol, "1m", 100, "qfq", session="latest")
+        assert asked == [zone]
+
+    def test_before_cursor_browses_back_to_an_earlier_session(self, futu_seen):
+        """``before`` + ``latest`` = 分时 of a chosen past day, for free."""
+        futu_seen["install"](frame=_two_session_frame())
+        everything = market_routes._kline_sync("700.HK", "1m", 2000, "qfq")["bars"]
+        day2_open = everything[390]["timestamp"]  # the fixture's own construction
+        out = market_routes._kline_sync(
+            "700.HK", "1m", 2000, "qfq", before=day2_open, session="latest"
+        )
+        assert out["session_date"] == "2026-09-03"
+        assert len(out["bars"]) == 390
+        assert out["prev_close"] is None
+
+    def test_the_payload_is_untouched_without_the_param(self, futu_seen):
+        """Every existing client of this route reads a fixed key set."""
+        futu_seen["install"](frame=_two_session_frame())
+        out = market_routes._kline_sync("700.HK", "1m", 2000, "qfq")
+        assert set(out) == {"status", "symbol", "interval", "source", "bars"}
+
+    def test_daily_bars_refuse_the_slice_and_say_why(self, monkeypatch):
+        monkeypatch.setattr(
+            market_routes,
+            "_fetch_daily",
+            lambda symbol, count, before: ([{"timestamp": 1, "close": 1.0}], "x"),
+        )
+        with pytest.raises(ValueError) as exc:
+            market_routes._kline_sync("700.HK", "1D", 100, "qfq", session="latest")
+        assert "already are one day" in str(exc.value)
+
+    def test_an_unknown_session_value_is_not_silently_ignored(self, futu_seen):
+        with pytest.raises(ValueError) as exc:
+            market_routes._kline_sync("700.HK", "1m", 100, "qfq", session="yesterday")
+        assert "latest" in str(exc.value)
+
+    def test_the_query_parameter_reaches_the_router(self, futu_seen):
+        """Wiring ``session`` into ``_kline_sync`` but not off the request would
+        leave the 分时 view showing several sessions at once, with nothing in
+        the UI to say so."""
+        futu_seen["install"](frame=_two_session_frame())
+        body = _http_client().get(
+            "/market/kline",
+            params={
+                "symbol": "700.hk",
+                "interval": "1m",
+                "count": 2000,
+                "session": "latest",
+            },
+        ).json()
+        assert body["session_date"] == "2026-09-04"
+        assert len(body["bars"]) == 400
+
+    def test_an_empty_window_slices_to_nothing_instead_of_raising(self):
+        assert market_routes._split_latest_session([], "Asia/Shanghai") == ([], "", None)
