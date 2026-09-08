@@ -109,23 +109,41 @@ _COMMISSION: dict[str, tuple[str, float]] = {
 _DEFAULT_COMMISSION: tuple[str, float] = ("fixed", 5.0)
 
 
+#: Upper-cased product code -> the spelling the tables above actually use.
+#: CFFEX/ZCE products are keyed uppercase (IF, CF) and SHFE/DCE/INE/GFEX
+#: lowercase (au, rb), but a real ts_code is uppercase on every exchange
+#: (CU2406.SHFE) and ``_is_china_futures`` already routes either casing here.
+#: Folding once at extraction keeps every table lookup below case-blind; no
+#: two products collide when upper-cased (asserted in the tests).
+_CANONICAL_PRODUCT: dict[str, str] = {
+    key.upper(): key
+    for table in (_MULTIPLIER, _MARGIN_RATE, _PRICE_LIMIT, _COMMISSION)
+    for key in table
+}
+
+
 def _extract_product(symbol: str) -> str:
     """Extract product code from futures symbol.
+
+    The returned code is the one the product tables are keyed by, whatever
+    casing the caller used: 'AU2412.SHFE' and 'au2412' both yield 'au'.
 
     Examples:
         'IF2406.CFFEX' -> 'IF'
         'rb2410.SHFE'  -> 'rb'
-        'au2412'       -> 'au'
+        'AU2412.SHFE'  -> 'au'
 
     Args:
         symbol: Futures symbol string.
 
     Returns:
-        Product code (e.g. 'IF', 'rb', 'au').
+        Product code as spelled in the tables (e.g. 'IF', 'rb', 'au'), or
+        the raw letters when the product is not listed.
     """
     code = symbol.split(".")[0]
     m = re.match(r"([A-Za-z]+)", code)
-    return m.group(1) if m else code
+    product = m.group(1) if m else code
+    return _CANONICAL_PRODUCT.get(product.upper(), product)
 
 
 class ChinaFuturesEngine(FuturesBaseEngine):
