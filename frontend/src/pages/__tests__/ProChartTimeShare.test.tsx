@@ -37,6 +37,15 @@ const h = vi.hoisted(() => ({
   periods: [] as Array<{ type: string; span: number }>,
   styles: [] as Array<{ candle?: { type?: string } }>,
   indicators: [] as Array<{ op: "create" | "remove"; name: string; paneId?: string }>,
+  /**
+   * What is mounted on the fake chart right now. The legend the user sees is one
+   * row per entry here (klinecharts dist 7485 iterates the pane's indicators), so
+   * this is the observable behind the 2026-09-09 report of twenty stacked
+   * `MA(5,10,30,60)` rows. Kept in sync by the create/remove fakes below, which
+   * copy the library's filter semantics rather than the convenient one.
+   */
+  mounted: [] as Array<{ id: string; name: string; paneId: string }>,
+  nextId: 0,
   requests: [] as Array<Record<string, unknown>>,
   loader: null as DataLoader | null,
   inFlight: 0,
@@ -91,7 +100,8 @@ vi.mock("klinecharts", () => ({
   init: () => ({
     getSymbol: () => ({ ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 }),
     getDataList: () => h.list,
-    getIndicators: () => [],
+    getIndicators: (filter?: { id?: string; name?: string; paneId?: string }) =>
+      h.mounted.filter((ind) => matchesFilter(ind, filter)).map((ind) => ({ ...ind })),
     getOverlays: () => [],
     getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
     getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
@@ -116,11 +126,20 @@ vi.mock("klinecharts", () => ({
     },
     createIndicator: (value: { name: string; paneId?: string }) => {
       h.indicators.push({ op: "create", name: value.name, paneId: value.paneId });
+      // Deliberately *not* idempotent, because the library is not: `ChartImp.createIndicator`
+      // mints a fresh id (dist 15270) and `StoreImp.addIndicator` then de-dups by
+      // that id (dist 14152), so `isStack: true` always appends a second copy to
+      // the pane. A fake that quietly refused the duplicate would have hidden the
+      // stacking this file now pins.
+      h.nextId += 1;
+      h.mounted.push({ id: `${value.name}_${h.nextId}`, name: value.name, paneId: value.paneId ?? "" });
       return value.name;
     },
-    removeIndicator: (filter: { name?: string } | undefined) => {
+    removeIndicator: (filter: { id?: string; name?: string; paneId?: string } | undefined) => {
+      const before = h.mounted.length;
+      h.mounted = h.mounted.filter((ind) => !matchesFilter(ind, filter));
       if (filter?.name) h.indicators.push({ op: "remove", name: filter.name });
-      return true;
+      return h.mounted.length !== before;
     },
     createOverlay: () => null,
     removeOverlay: () => true,
@@ -157,6 +176,26 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
 
 vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
 vi.mock("@/components/charts/IndicatorEditor", () => ({ default: () => null }));
+
+/**
+ * `StoreImp.getIndicatorsByFilter` (dist 14176): an id in the filter matches on
+ * id *alone*, otherwise a name matches by name, and an empty filter matches
+ * everything. Reproduced rather than approximated because the whole bug turns
+ * on the first clause.
+ */
+function matchesFilter(
+  ind: { id: string; name: string; paneId: string },
+  filter?: { id?: string; name?: string; paneId?: string },
+): boolean {
+  if (!filter) return true;
+  if (filter.id !== undefined) return ind.id === filter.id;
+  if (filter.name !== undefined) return ind.name === filter.name;
+  return true;
+}
+
+function mountedCount(name: string): number {
+  return h.mounted.filter((ind) => ind.name === name).length;
+}
 
 function seedSession(symbol: string, interval: string, timeShare = false): void {
   localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval, timeShare }));
@@ -205,6 +244,8 @@ beforeEach(() => {
   h.periods = [];
   h.styles = [];
   h.indicators = [];
+  h.mounted = [];
+  h.nextId = 0;
   h.requests = [];
   h.loader = null;
   h.inFlight = 0;
@@ -427,5 +468,61 @@ describe("a session restored on 分时 comes back as a line", () => {
     await mountChart();
     expect(h.periods[0]).toEqual({ type: "day", span: 1 });
     expect(screen.queryByTestId("time-share-badge")).toBeNull();
+  });
+});
+
+describe("the price pane carries one overlay, not one per click", () => {
+  /**
+   * Reported 2026-09-09: a wall of ~20 `MA(5,10,30,60)` rows down the main pane.
+   * `syncPriceOverlay` runs on every period click, and klinecharts' `createIndicator
+   * (value, true)` appends without noticing the copy already on the pane — its own
+   * de-dup is keyed on the id it just minted (see the note on the fake above).
+   *
+   * This could not have been caught by the file it shipped in, because the fake
+   * answered `getIndicators: () => []`: a page that asks "is it already mounted?"
+   * only misbehaves against a store that can answer. So the assertion is on what
+   * is mounted, which is exactly what the canvas turns into legend rows.
+   */
+  it("mounts MA once and leaves it there across five period changes", async () => {
+    seedSession("09988.HK", "1D");
+    await mountChart();
+    expect(mountedCount("MA")).toBe(1);
+
+    for (const label of ["5分", "15分", "30分", "60分", "日线"]) {
+      fireEvent.click(buttonOf(label));
+      await settle();
+    }
+
+    expect(mountedCount("MA")).toBe(1);
+    expect(mountedCount("AVG_PRICE")).toBe(0);
+  });
+
+  it("collapses the copies an already-stacked pane comes in with", async () => {
+    seedSession("09988.HK", "1D");
+    await mountChart();
+    // Stage the state the pre-fix page leaves behind: a second MA on the pane.
+    h.mounted.push({ id: "MA_stacked", name: "MA", paneId: "candle_pane" });
+    expect(mountedCount("MA")).toBe(2);
+
+    fireEvent.click(buttonOf("5分"));
+    await settle();
+    expect(mountedCount("MA")).toBe(1);
+  });
+
+  it("keeps one 均价 line when 分时 is entered three times", async () => {
+    seedSession("09988.HK", "1D");
+    await mountChart();
+
+    for (let round = 0; round < 3; round++) {
+      fireEvent.click(buttonOf("分时"));
+      await settle();
+      expect(mountedCount("AVG_PRICE")).toBe(1);
+      expect(mountedCount("MA")).toBe(0);
+
+      fireEvent.click(buttonOf("15分"));
+      await settle();
+      expect(mountedCount("MA")).toBe(1);
+      expect(mountedCount("AVG_PRICE")).toBe(0);
+    }
   });
 });

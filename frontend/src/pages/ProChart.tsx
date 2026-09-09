@@ -558,16 +558,30 @@ export function ProChart() {
    * 分时. MA over a single session of 1-minute bars is noise, and a broker's
    * 分时 never shows it; the 均价 is the line that gives the price line its
    * meaning. Sub panes (VOL/MACD and the user's own formulas) are left alone.
+   *
+   * "Exactly one" has to be enforced *here*, because the library does not:
+   * `createIndicator(value, true)` always appends. `StoreImp.addIndicator`
+   * (klinecharts 10.0.3, dist 14150) does de-dup with
+   * `getIndicatorsByFilter(create)`, but `ChartImp.createIndicator` (dist 15270)
+   * has just minted a fresh `create.id`, and a filter carrying an id matches on
+   * id alone (dist 14179) — so the check can never notice the copy already on
+   * the pane. This runs on every period click, and the price pane draws one
+   * legend row per mounted instance (dist 7485): stacking was measured live at
+   * one MA per click, which is the wall of `MA(5,10,30,60)` rows reported on
+   * 2026-09-09. Re-using the mounted copy is also the cheaper answer — a line
+   * whose data has not changed does not need to be recalculated.
    */
   const syncPriceOverlay = (chart: Nullable<Chart>, timeShare: boolean) => {
     if (!chart) return;
-    if (timeShare) {
-      ensureTimeShareIndicator();
-      chart.removeIndicator({ name: "MA" });
-      chart.createIndicator({ name: AVG_PRICE_NAME, paneId: MAIN_PANE_ID }, true);
-    } else {
-      chart.removeIndicator({ name: AVG_PRICE_NAME });
-      chart.createIndicator({ name: "MA", paneId: MAIN_PANE_ID }, true);
+    if (timeShare) ensureTimeShareIndicator();
+    const wanted = timeShare ? AVG_PRICE_NAME : "MA";
+    chart.removeIndicator({ name: timeShare ? "MA" : AVG_PRICE_NAME });
+    const live = chart.getIndicators({ name: wanted });
+    // Defensive against a pane that is already carrying copies: keep the first,
+    // drop the rest, so the invariant holds from any starting state.
+    live.slice(1).forEach((extra) => chart.removeIndicator({ id: extra.id }));
+    if (live.length === 0) {
+      chart.createIndicator({ name: wanted, paneId: MAIN_PANE_ID }, true);
     }
   };
 
