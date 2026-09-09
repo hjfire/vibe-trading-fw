@@ -12,12 +12,18 @@ Market rules (exchange-level, CFFEX / SHFE / DCE / ZCE / INE / GFEX):
 
 from __future__ import annotations
 
+import logging
 import re
+from typing import Any, Dict, Hashable, Mapping, TypeVar
 
 import pandas as pd
 
 from backtest.engines.china_a import _blocked_by_limit
 from backtest.engines.futures_base import FuturesBaseEngine
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 # ── Contract multiplier lookup ──
@@ -107,6 +113,8 @@ _COMMISSION: dict[str, tuple[str, float]] = {
     "v": ("fixed", 1.0), "SA": ("fixed", 3.5), "FG": ("fixed", 3.0),
 }
 _DEFAULT_COMMISSION: tuple[str, float] = ("fixed", 5.0)
+_DEFAULT_MULTIPLIER = 10
+_DEFAULT_MARGIN_RATE = 0.10
 
 
 #: Upper-cased product code -> the spelling the tables above actually use.
@@ -155,7 +163,14 @@ class ChinaFuturesEngine(FuturesBaseEngine):
       - commission_override: override commission for all products
     """
 
+    #: (product, field) -> the generic constant this run was priced on. A
+    #: product missing from a table does not fail, it silently takes a default
+    #: (#1393), so the run has to say which numbers were assumed rather than
+    #: looked up. Recording, not changing: every number stays what it was.
+    _pricing_defaults: Dict[tuple[str, str], Any]
+
     def __init__(self, config: dict):
+        self._pricing_defaults = {}
         # Derive leverage from margin rate of first code, or use config override
         margin_override = config.get("margin_rate_override")
         if margin_override:
@@ -164,7 +179,7 @@ class ChinaFuturesEngine(FuturesBaseEngine):
             codes = config.get("codes", [])
             if codes:
                 product = _extract_product(codes[0])
-                mr = _MARGIN_RATE.get(product, 0.10)
+                mr = self._priced(_MARGIN_RATE, product, _DEFAULT_MARGIN_RATE, "margin_rate")
                 leverage = 1.0 / mr
             else:
                 leverage = 10.0  # ~10% margin default
@@ -175,6 +190,56 @@ class ChinaFuturesEngine(FuturesBaseEngine):
         self.slippage_rate: float = config.get("slippage", 0.0005)
         self._margin_rate_override = margin_override if margin_override else None
         self._commission_override = config.get("commission_override")
+
+    def _priced(
+        self,
+        table: Mapping[str, _T],
+        product: str,
+        default: _T,
+        field: str,
+    ) -> _T:
+        """Look a product up, recording the miss when it falls back.
+
+        A product absent from one of the tables is priced on a generic
+        constant that looks exactly like data in the output. This returns the
+        same value the plain ``table.get(product, default)`` returned before
+        and additionally remembers the miss, so the run can state which of its
+        numbers were assumed.
+
+        Args:
+            table: One of the product tables in this module.
+            product: Product code as ``_extract_product`` spells it.
+            default: The generic constant used when the product is absent.
+            field: Name of the field, as reported in ``pricing_assumptions``.
+
+        Returns:
+            The table entry, or ``default`` when the product is not listed.
+        """
+        if product in table:
+            return table[product]
+        key = (product, field)
+        if key not in self._pricing_defaults:
+            self._pricing_defaults[key] = default
+            logger.warning(
+                "China futures product %r has no %s entry; pricing it on the "
+                "generic default %r. The backtest reports this under "
+                "pricing_assumptions.",
+                product,
+                field,
+                default,
+            )
+        return default
+
+    def _engine_diagnostics(self) -> Dict[str, Any]:
+        """Report every table lookup this run priced on a generic default."""
+        if not self._pricing_defaults:
+            return {}
+        return {
+            "pricing_assumptions": [
+                {"product": product, "field": field, "value": value}
+                for (product, field), value in sorted(self._pricing_defaults.items())
+            ]
+        }
 
     def can_execute(self, symbol: str, direction: int, bar: pd.Series) -> bool:
         """China futures: T+0, both directions, price-limit enforced.
@@ -192,7 +257,7 @@ class ChinaFuturesEngine(FuturesBaseEngine):
 
         # Price limit, tested at execution time (see _blocked_by_limit).
         product = _extract_product(symbol)
-        limit = _PRICE_LIMIT.get(product, _DEFAULT_PRICE_LIMIT)
+        limit = self._priced(_PRICE_LIMIT, product, _DEFAULT_PRICE_LIMIT, "price_limit")
         pos = self.positions.get(symbol) if direction == 0 else None
         if pos is None and direction == 0:
             return True
@@ -234,8 +299,12 @@ class ChinaFuturesEngine(FuturesBaseEngine):
             Commission in RMB.
         """
         product = _extract_product(symbol)
-        mode, value = _COMMISSION.get(product, _DEFAULT_COMMISSION)
-        cm = _MULTIPLIER.get(product, 10)
+        mode, value = self._priced(
+            _COMMISSION, product, _DEFAULT_COMMISSION, "commission"
+        )
+        cm = self._priced(
+            _MULTIPLIER, product, _DEFAULT_MULTIPLIER, "contract_multiplier"
+        )
         if mode == "rate":
             return size * price * cm * value
         return size * value
@@ -247,7 +316,9 @@ class ChinaFuturesEngine(FuturesBaseEngine):
     def get_contract_multiplier(self, symbol: str) -> float:
         """Look up contract multiplier from product code."""
         product = _extract_product(symbol)
-        return float(_MULTIPLIER.get(product, 10))
+        return float(
+            self._priced(_MULTIPLIER, product, _DEFAULT_MULTIPLIER, "contract_multiplier")
+        )
 
     def get_margin_rate(self, symbol: str) -> float:
         """Look up exchange margin rate for a product.
@@ -259,7 +330,7 @@ class ChinaFuturesEngine(FuturesBaseEngine):
             Margin rate (e.g. 0.10 for 10%).
         """
         product = _extract_product(symbol)
-        return _MARGIN_RATE.get(product, 0.10)
+        return self._priced(_MARGIN_RATE, product, _DEFAULT_MARGIN_RATE, "margin_rate")
 
     def _leverage_for_symbol(self, symbol: str) -> float:
         """Derive leverage from this contract's own margin requirement."""
