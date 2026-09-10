@@ -548,7 +548,7 @@ describe("分时 and the period buttons are mutually exclusive", () => {
     // every button's `hover:bg-muted`.
     fireEvent.click(buttonOf("分时"));
     await settle();
-    for (const label of ["1分", "5分", "15分", "30分", "60分", "日线"]) {
+    for (const label of ["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"]) {
       expect(buttonOf(label).className).not.toContain("bg-muted font-medium");
     }
     expect(buttonOf("分时").className).toContain("bg-muted font-medium");
@@ -608,6 +608,83 @@ describe("分时 and the period buttons are mutually exclusive", () => {
     seedSession("BTC-USDT", "1D");
     await mountChart();
     expect(buttonOf("分时").disabled).toBe(true);
+  });
+});
+
+/**
+ * The candle page size (`PAGE` in ProChart.tsx, 500). Spelled out rather than
+ * imported because the point of the assertions below is the *shape on the wire*,
+ * and a number read back from the same constant the sender uses proves nothing.
+ */
+const CANDLE_PAGE = 500;
+
+describe("周线 / 月线 ask the route for the interval they draw (㉜)", () => {
+  /**
+   * The toolbar used to stop at 日线. Adding 周线/月线 is two rows of buttons plus
+   * one entry in a period table, which is exactly the shape of change that ships
+   * drawn-but-not-fetched: the chart repaints with weekly candles while the
+   * loader keeps asking for `1D`, so the picture is a daily series with a weekly
+   * axis. Only the outbound parameters can tell those two apart, and this file is
+   * the one whose klinecharts double keeps a real data loader and logs each
+   * request (`ProChartMinuteBars.test.tsx`'s drops `setDataLoader` on the floor,
+   * so a URL assertion there would pass without any request ever being made).
+   */
+  it.each([
+    ["周线", "1W", { type: "week", span: 1 }],
+    ["月线", "1M", { type: "month", span: 1 }],
+  ] as const)("a %s click pushes %s and asks for it once", async (label, interval, period) => {
+    seedSession("600519.SH", "1D");
+    await mountChart();
+    const daily = candleRequests("1D").length;
+
+    fireEvent.click(buttonOf(label));
+    await settle();
+
+    expect(h.periods.at(-1)).toEqual(period);
+    expect(h.requests.at(-1)).toEqual({
+      symbol: "600519.SH",
+      interval,
+      count: CANDLE_PAGE,
+      before: null,
+      session: undefined,
+    });
+    // One read, at the new interval. A second request for `1D` here would mean
+    // the click re-loaded through the old period before the new one landed.
+    expect(candleRequests("1D").length).toBe(daily);
+  });
+
+  it("comes back to the coarse period after a 分时 round trip, still without session", async () => {
+    // Both directions of the shared table, at once: 分时 must override the period
+    // with 1-minute bars, and releasing it must restore `1M` rather than falling
+    // back to the daily default it was layered on top of.
+    seedSession("600519.SH", "1M");
+    await mountChart();
+    expect(candleRequests("1M").length).toBe(1);
+    // Mounting reads the chart's own `setSymbol` reload, which still carries the
+    // default daily period; that one is not the toggle's doing, so the claim
+    // below is "no *further* 1D", not "never 1D".
+    const daily = candleRequests("1D").length;
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(askedFor("latest").at(-1)).toMatchObject({ interval: "1m", session: "latest" });
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(h.periods.at(-1)).toEqual({ type: "month", span: 1 });
+    expect(candleRequests("1M").length).toBe(2);
+    expect(candleRequests("1D").length).toBe(daily);
+    expect(askedFor("latest").length).toBe(1);
+  });
+
+  it("does not page a coarse chart out of the daily chain's depth budget", async () => {
+    // The merged bars are cut out of a window of daily ones, so the page has to
+    // ask for the same `count` it would for any other period and let the server
+    // decide how many dailies that costs. A client-side multiplier here would be
+    // a second, drifting copy of `_AGG_DAILY_PER_BAR`.
+    seedSession("AAPL.US", "1W");
+    await mountChart();
+    expect(h.requests.at(-1)).toMatchObject({ interval: "1W", count: CANDLE_PAGE });
   });
 });
 

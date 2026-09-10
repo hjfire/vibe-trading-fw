@@ -21,6 +21,10 @@
  *    data, so anything that cannot serve minute bars cannot show it either. The
  *    wiring of the view itself lives in `ProChartTimeShare.test.tsx`; what lives
  *    here is the gate, so a fourth caller cannot drift from the first three.
+ * 5. that 周线 / 月线 (㉜) are gated like 日线 and *not* like the minute buttons,
+ *    because the server folds them out of the same daily answer — and that
+ *    clicking one really asks the route for `interval=1W`, so the candles on
+ *    screen and the bars on the wire cannot be two different periods.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -212,10 +216,39 @@ describe("intervalAllowed / repairInterval", () => {
     }
   });
 
+  // Weekly and monthly are folded out of the daily answer server-side, so the
+  // symbols that can never show a minute chart can still show them — the
+  // alternative was a per-source table of who serves "weekly", which is how
+  // buttons that 400 get made.
+  it.each(["1W", "1M"])("%s is allowed wherever daily is", (iv) => {
+    for (const symbol of ["600519.SH", "0700.HK", "AAPL.US", "BTC-USDT", "SHEL.L", "^SPX"]) {
+      expect(intervalAllowed(symbol, iv as "1W")).toBe(true);
+    }
+  });
+
   it("repairs only what the instrument cannot serve", () => {
     expect(repairInterval("0700.HK", "5m")).toBe("5m");
     expect(repairInterval("BTC-USDT", "5m")).toBe("1D");
     expect(repairInterval("BTC-USDT", "1D")).toBe("1D");
+  });
+
+  it("leaves a coarse period alone on a symbol with no minute source", () => {
+    expect(repairInterval("BTC-USDT", "1W")).toBe("1W");
+    expect(repairInterval("SHEL.L", "1M")).toBe("1M");
+  });
+
+  it("keeps a stored 月线 for BTC instead of snapping it back to 日线", () => {
+    seedSession("BTC-USDT", "1M");
+    expect(readSession().interval).toBe("1M");
+  });
+
+  it("keeps the weekly period underneath 分时, which is a view over minute bars", () => {
+    // 分时 shows 1-minute bars, so the line needs the minute gate; the weekly
+    // choice under it does not, and must survive the line being switched off.
+    expect(viewForSymbol("BTC-USDT", "1W", true)).toEqual({ interval: "1W", timeShare: false });
+    expect(viewForSymbol("600519.SH", "1W", true)).toEqual({ interval: "1W", timeShare: true });
+    expect(viewPeriod({ interval: "1W", timeShare: true })).toBe("1m");
+    expect(viewPeriod({ interval: "1W", timeShare: false })).toBe("1W");
   });
 });
 
@@ -270,5 +303,22 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
       expect(disabledOf(label)).toBe(true);
     }
     expect(disabledOf("日线")).toBe(false);
+    // ...while the two periods that need no intraday source stay clickable.
+    expect(disabledOf("周线")).toBe(false);
+    expect(disabledOf("月线")).toBe(false);
+  });
+
+  it("clicking 周线 pushes a weekly period onto the chart, not a daily one", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    expect(h.periods.at(-1)).toEqual({ type: "week", span: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "月线" }));
+    expect(h.periods.at(-1)).toEqual({ type: "month", span: 1 });
   });
 });
+
+// What the same click *asks the route for* is pinned in
+// `ProChartTimeShare.test.tsx`: that file's klinecharts double keeps a real data
+// loader and logs each request, while the fake above only records `setPeriod`,
+// so asserting a URL here would pass without any request ever being made.

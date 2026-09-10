@@ -54,6 +54,31 @@ _MAX_QUOTE_SYMBOLS = 30
 _MINUTE_PERIODS = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
 _ADJUSTS = {"none": "", "qfq": "qfq", "hfq": "hfq"}
 
+#: Weekly / monthly bars, and how many daily ones a single merged bar can eat
+#: (local custom ㉜). They are *built* from the daily chain instead of being
+#: asked of a source by name — see :func:`_fetch_calendar_bars` for why.
+#: The bound is **calendar days per group**, not trading days: a week holds at
+#: most 7 daily bars and a month at most 31, and crypto tapes really have one
+#: bar every day. Measured live 2026-09-10 with the trading-day figures (6/24):
+#: `BTC-USDT interval=1W count=200` answered 176 bars, so the page came up short
+#: and the chart's `more.forward` went false while four more years of daily bars
+#: were still sitting in the chain — a wrong unit reads as "history ran out".
+#: 8 and 32 are those maxima plus a day, which makes the sizing provable instead
+#: of empirical: no market's calendar can overflow it.
+_AGG_DAILY_PER_BAR = {"1W": 8, "1M": 32}
+#: Extra daily bars on top of `count * per_bar`, so the request still answers
+#: `count` merged bars after the half-group at the window's left edge is dropped
+#: (that drop costs at most 31 daily bars, which is what this pays for).
+_AGG_DAILY_MARGIN = 30
+#: Ceiling on the daily walk-in behind one coarse request. The route caps
+#: `count` at 2000, and 2000 monthly bars would otherwise ask for 64000 daily
+#: ones — which makes `_fetch_daily`'s calendar buffer reach into 1803, a range
+#: the public endpoints answer with an error rather than with nothing. 16500 sits
+#: one page above what the chart itself ever sends (500 * 32 + 30 = 16030), so
+#: the ceiling only bites a hand-made request: ~540 months (~45 years) of daily
+#: bars, which is more history than the sources behind this page hold.
+_AGG_DAILY_CAP = 16500
+
 #: This endpoint's minute spellings -> the interval token ``FutuLoader`` accepts.
 #: The loader's own table keys 60-minute bars as ``1H``, *not* ``60m``, so
 #: passing ``interval`` straight through would fail its lookup and every 60m
@@ -433,6 +458,102 @@ def _fetch_daily(symbol: str, count: int, before: int | None) -> tuple[list[dict
     return bars[-count:], "backtest:loader_fallback_chain"
 
 
+def _calendar_group_key(ts_ms: int, unit: str) -> tuple[int, int]:
+    """Which natural week / month one daily bar belongs to.
+
+    Daily bars arrive stamped with the epoch of **midnight UTC of their
+    trading-day label** (`_bars_from_frame` leaves ``wall_clock_zone`` as
+    ``None`` precisely so that a US session's date does not walk back a day), so
+    the calendar date is read straight off the number with no zone table — and
+    it stays the same however far from Greenwich the server sits. Grouping on
+    the *viewer's* calendar instead is what splits a US week in half, the same
+    failure `timeShare.ts` records for the 分时 cut.
+
+    ISO week numbering rather than ``strftime("%W")``: the trading week that
+    straddles New Year (Mon 29 Dec – Fri 2 Jan) is one bar on every broker's
+    chart, and an (iso-year, iso-week) pair keeps it that way across the year
+    boundary, where a bare week number would collide with week 1 of next year.
+    """
+    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    if unit == "week":
+        iso = day.isocalendar()
+        return (int(iso[0]), int(iso[1]))
+    return (day.year, day.month)
+
+
+def _merge_to_calendar(bars: list[dict[str, Any]], unit: str) -> list[dict[str, Any]]:
+    """Collapse ascending daily bars into natural-week / natural-month bars.
+
+    OHLC follows what every broker does: open from the group's first day, close
+    from its last, the high/low across the whole group, volume summed. The
+    merged bar keeps the **first** day's timestamp, which is what makes paging
+    exact — `before` is then always a group boundary, so a page can never split
+    one week into two stubs (see :func:`_fetch_calendar_bars`).
+    """
+    merged: list[dict[str, Any]] = []
+    group: tuple[int, int] | None = None
+    for bar in sorted(bars, key=lambda b: int(b["timestamp"])):
+        key = _calendar_group_key(int(bar["timestamp"]), unit)
+        if key != group:
+            group = key
+            merged.append(dict(bar))
+            continue
+        held = merged[-1]
+        held["high"] = max(float(held["high"]), float(bar["high"]))
+        held["low"] = min(float(held["low"]), float(bar["low"]))
+        held["close"] = float(bar["close"])
+        held["volume"] = float(held["volume"] or 0.0) + float(bar["volume"] or 0.0)
+    return merged
+
+
+def _fetch_calendar_bars(
+    symbol: str, interval: str, count: int, before: int | None
+) -> tuple[list[dict[str, Any]], str]:
+    """Weekly / monthly bars for one symbol, merged out of the daily chain.
+
+    Not asking the source for weekly bars is a decision with three reasons:
+
+    * **coverage** — anything this page can draw daily can draw weekly and
+      monthly, with no second routing table of per-source spellings (akshare
+      says ``weekly``, Futu says ``K_WEEK``, the Yahoo chain has no weekly at
+      all and would fall through to a different market's loader);
+    * **one price caliber** — the daily answer already settled the 复权 question,
+      while a source's own weekly series is computed on its own adjusted base,
+      so the toolbar's 前复权 selector would silently mean two different things
+      on two buttons;
+    * **paging** — a merged bar is timestamped by its first day, so the
+      `before` cursor is a group boundary and the daily contract in
+      :func:`_fetch_daily` needs no coarse variant.
+
+    The daily walk is sized to actually fill the request; ``count`` itself is
+    capped by the route, and :data:`_AGG_DAILY_CAP` keeps that bounded.
+    """
+    dailies = min(
+        count * _AGG_DAILY_PER_BAR[interval] + _AGG_DAILY_MARGIN, _AGG_DAILY_CAP
+    )
+    bars, source = _fetch_daily(symbol, dailies, before)
+    merged = _merge_to_calendar(bars, "week" if interval == "1W" else "month")
+    if len(bars) >= dailies and len(merged) > 1:
+        # The window came back full, so its left edge landed somewhere inside a
+        # group whose earlier days are outside the fetch. Keeping that stub would
+        # draw a week nobody draws on the source's own chart, and it costs
+        # nothing to drop: the next page is asked with before = the oldest merged
+        # timestamp, which lands those days at that page's newest end, complete.
+        #
+        # With :data:`_AGG_DAILY_PER_BAR` at calendar maxima a full window always
+        # merges more groups than `count`, so the tail trim below already discards
+        # the stub and this line is a no-op — it earns its place on the case where
+        # it is not: a page short enough to still hold the stub would otherwise
+        # strand that group's earlier days between the two pages. Pinned by
+        # ``test_the_guard_still_fires_when_the_page_itself_is_short``, which
+        # reaches it by lowering the table.
+        merged = merged[1:]
+    # Label the merge on the source the chart shows in its status line: these
+    # bars did not come from a source that speaks "weekly", and "this is daily
+    # data, folded" is information rather than noise.
+    return merged[-count:], f"{source}+{interval}"
+
+
 def _fetch_minute_a_share(
     symbol: str, period: str, count: int, adjust: str, before: int | None
 ) -> list[dict[str, Any]]:
@@ -514,6 +635,13 @@ def _kline_sync(
                 raise ValueError(_minute_no_source_reason(symbol, adjust))
             bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
             source = "akshare:sina_stock_zh_a_minute"
+    elif interval in _AGG_DAILY_PER_BAR:
+        if session == "latest":
+            raise ValueError(
+                "session=latest narrows one trading day out of minute bars; "
+                f"{interval} bars are merged from daily ones, which are one day each already"
+            )
+        bars, source = _fetch_calendar_bars(symbol, interval, count, before)
     else:
         if session == "latest":
             raise ValueError(
@@ -616,7 +744,7 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     @app.get("/market/kline", dependencies=[Depends(require_auth)])
     async def market_kline(
         symbol: str = Query(..., min_length=1, max_length=32, description="e.g. 600519.SH / AAPL / BTC-USDT"),
-        interval: str = Query("1D", description="1m/5m/15m/30m/60m or 1D"),
+        interval: str = Query("1D", description="1m/5m/15m/30m/60m, 1D, or 1W/1M (merged from daily bars)"),
         count: int = Query(500, ge=10, le=_MAX_BARS),
         adjust: str = Query("qfq", description="none/qfq/hfq — minute bars only"),
         before: int | None = Query(None, ge=0, description="epoch milliseconds — load bars strictly older than this (scroll-back paging)"),
@@ -624,10 +752,14 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     ) -> Response:
         """OHLCV bars for the pro-chart page; envelope mirrors the other routes."""
         key = symbol.strip().upper()
-        if interval not in _MINUTE_PERIODS and interval != "1D":
+        if interval not in _MINUTE_PERIODS and interval not in _AGG_DAILY_PER_BAR and interval != "1D":
             return JSONResponse(
                 status_code=400,
-                content={"status": "error", "error": f"unsupported interval {interval!r}"},
+                content={
+                    "status": "error",
+                    "error": f"unsupported interval {interval!r} "
+                    f"(known: {'/'.join(_MINUTE_PERIODS)}/1D/{'/'.join(_AGG_DAILY_PER_BAR)})",
+                },
             )
         if adjust not in _ADJUSTS:
             return JSONResponse(

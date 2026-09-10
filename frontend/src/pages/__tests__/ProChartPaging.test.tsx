@@ -145,21 +145,27 @@ vi.mock("klinecharts", () => ({
   }),
 }));
 
-vi.mock("@/lib/marketApi", () => ({
-  INTERVALS: [{ key: "1D", label: "日K" }],
-  periodToInterval: () => "1D",
-  fetchKline: async (params: { before?: number | null; count?: number }) => {
-    const before = params.before ?? null;
-    const pool = before === null ? ALL_BARS : ALL_BARS.filter((b) => b.timestamp < before);
-    const bars = pool.slice(-(params.count ?? PAGE));
-    h.requests.push({
-      type: h.askedType,
-      before: before === null ? null : new Date(before).toISOString().slice(0, 10),
-      bars: bars.length,
-    });
-    return { bars, source: "fake", symbol: "600519.SH", interval: "1D", ok: true };
-  },
-}));
+// Only the transport is faked. `INTERVALS` / `periodToInterval` /
+// `intervalToPeriod` come from the real module, so a new period button cannot
+// be added to the toolbar without this file seeing it (a hand-copied one-entry
+// INTERVALS list is how a page-level test stops testing the page).
+vi.mock("@/lib/marketApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/marketApi")>();
+  return {
+    ...actual,
+    fetchKline: async (params: { before?: number | null; count?: number }) => {
+      const before = params.before ?? null;
+      const pool = before === null ? ALL_BARS : ALL_BARS.filter((b) => b.timestamp < before);
+      const bars = pool.slice(-(params.count ?? PAGE));
+      h.requests.push({
+        type: h.askedType,
+        before: before === null ? null : new Date(before).toISOString().slice(0, 10),
+        bars: bars.length,
+      });
+      return { bars, source: "fake", symbol: "600519.SH", interval: "1D", ok: true };
+    },
+  };
+});
 
 vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
 vi.mock("@/components/charts/IndicatorEditor", () => ({ default: () => null }));

@@ -11,7 +11,7 @@ import {
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
-import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
+import { fetchKline, intervalToPeriod, isCalendarInterval, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
   AVG_PRICE_NAME,
@@ -128,11 +128,6 @@ const PRESETS = [
 // Drawing tools live in `chartDrawings.ts` next to the rules they depend on
 // (which pane they belong to, how many clicks they need, what gets persisted).
 
-function periodFor(interval: IntervalKey): { type: "day" | "minute"; span: number } {
-  if (interval === "1D") return { type: "day", span: 1 };
-  return { type: "minute", span: parseInt(interval, 10) };
-}
-
 /** Which symbols can have minute bars at all.
  *
  * FutuOpenD covers .SH/.SZ/.HK/.US; the Sina fall-back behind it reaches
@@ -146,16 +141,22 @@ export function canMinuteBars(symbol: string): boolean {
   return /\.(SH|SZ|HK|US)$/i.test(symbol);
 }
 
-/** Can this period be used on this instrument at all? Daily always can.
+/** Can this period be used on this instrument at all? Daily and coarser always can.
  *
  * This is the *one* question four places ask: the interval buttons' disabled
  * state, the click handler, the repair on symbol switch, and session restore.
  * When it was spelled inline in each of them, relaxing one copy produced a
  * button that looked clickable and did nothing -- the guard in `pickInterval`
  * kept the old A-share-only rule after the button stopped disabling itself.
+ *
+ * Weekly and monthly sit in daily's lane because the server folds them out of
+ * the very same daily answer (local custom ㉜, `_AGG_DAILY_PER_BAR` in
+ * market_routes.py): no second source is involved, so there is nothing second to
+ * gate. Inventing a per-symbol rule for them here would be a fourth copy of a
+ * rule the route already owns.
  */
 export function intervalAllowed(symbol: string, interval: IntervalKey): boolean {
-  return interval === "1D" || canMinuteBars(symbol);
+  return isCalendarInterval(interval) || canMinuteBars(symbol);
 }
 
 /** The period to actually use after `symbol` changes (or is restored). */
@@ -1037,7 +1038,7 @@ export function ProChart() {
     // The restored *view*, not just the restored interval: a session that was
     // left on 分时 has to come back as a line over one day, or the reload
     // silently hands the user candles and the toggle looks like it was lost.
-    chart.setPeriod(periodFor(viewPeriod(viewRef.current)));
+    chart.setPeriod(intervalToPeriod(viewPeriod(viewRef.current)));
     syncPriceOverlay(chart, viewRef.current.timeShare);
     // Named panes, so a drawing on the volume strip can find it again after a
     // reload (⑲); the library's own ids are random per mount. Which strips to
@@ -1159,7 +1160,7 @@ export function ProChart() {
     // re-applying 1-minute still re-requests. That is what a 分时 <-> K线 toggle
     // needs — the *window* changed even though the period did not — and it is
     // why this file never calls `resetData()`.
-    if (reload || periodChanged) chart.setPeriod(periodFor(target));
+    if (reload || periodChanged) chart.setPeriod(intervalToPeriod(target));
   };
 
   const applySymbol = (s: string) => {
@@ -1694,7 +1695,9 @@ export function ProChart() {
                 title={
                   disabled
                     ? "分钟线需 FutuOpenD（支持 .SH/.SZ/.HK/.US）"
-                    : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪"
+                    : isCalendarInterval(i.key)
+                      ? "日线链：周线/月线把日线按自然周/自然月合并，复权口径与日线一致"
+                      : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪"
                 }
                 className={cn(
                   "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",

@@ -381,21 +381,26 @@ function runLoad(): void {
   });
 }
 
-vi.mock("@/lib/marketApi", () => ({
-  INTERVALS: [{ key: "1D", label: "日K" }],
-  periodToInterval: () => "1D",
-  fetchKline: async () => {
-    const bars = Array.from({ length: 200 }, (_, i): Bar => ({
-      timestamp: START + i * DAY,
-      open: 1300,
-      high: 1310,
-      low: 1290,
-      close: 1305,
-      volume: 52_874,
-    }));
-    return { bars, source: "fake", symbol: h.ticker, interval: "1D", ok: true };
-  },
-}));
+// Only the transport is faked; the period table comes from the real module (see
+// the same choice in ProChartPaging.test.tsx) so a new toolbar period cannot
+// slip past this file unseen.
+vi.mock("@/lib/marketApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/marketApi")>();
+  return {
+    ...actual,
+    fetchKline: async () => {
+      const bars = Array.from({ length: 200 }, (_, i): Bar => ({
+        timestamp: START + i * DAY,
+        open: 1300,
+        high: 1310,
+        low: 1290,
+        close: 1305,
+        volume: 52_874,
+      }));
+      return { bars, source: "fake", symbol: h.ticker, interval: "1D", ok: true };
+    },
+  };
+});
 
 vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
 vi.mock("@/components/charts/IndicatorEditor", () => ({
