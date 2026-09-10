@@ -9,13 +9,19 @@ vi.mock("klinecharts", () => ({
 
 import {
   AVG_PRICE_NAME,
+  BAR_SPACE_LIMIT,
+  PREV_CLOSE_NAME,
   TIME_SHARE_COUNT,
   TIME_SHARE_INTERVAL,
   averagePriceSeries,
   changeRatio,
   changeTone,
   ensureTimeShareIndicator,
+  fitBarSpace,
   formatChangePct,
+  getChangeBase,
+  prevCloseSeries,
+  setChangeBase,
 } from "../timeShare";
 import type { KLineData } from "klinecharts";
 
@@ -180,5 +186,106 @@ describe("ensureTimeShareIndicator", () => {
     await freshEnsure();
     const calc = registered[0].calc as (bars: KLineData[]) => Array<{ avg?: number }>;
     expect(calc([bar(10, 1), bar(20, 3)])[1].avg).toBeCloseTo(17.5, 10);
+  });
+});
+
+/**
+ * The zoom a session needs (㉘). The report this came out of: "分时 显示不正常" —
+ * a 331-bar HK day drawn at the library's default 10px a bar, which leaves 37
+ * minutes on screen and makes the rest a drag gesture. See klinecharts#790.
+ */
+describe("fitBarSpace", () => {
+  it("spends the whole width on the session", () => {
+    // 376px / 331 bars, rounded down to 2dp: 1.13, which keeps all 331 inside.
+    expect(fitBarSpace(376, 331)).toBe(1.13);
+    expect(fitBarSpace(376, 331)! * 331).toBeLessThanOrEqual(376);
+  });
+
+  it("rounds down, not to nearest, so no bar hangs off the right edge", () => {
+    // 200 / 176 = 1.136…: the nearest 2dp value is 1.14, and 176 bars of that is
+    // 200.6px — the last bar off the pane, which is the edge case worth naming
+    // because floor and round only disagree on some widths.
+    expect(fitBarSpace(200, 176)).toBe(1.13);
+    expect(1.13 * 176).toBeLessThanOrEqual(200);
+    expect(1.14 * 176).toBeGreaterThan(200);
+  });
+
+  it("clamps into the range the library accepts, because outside it the call is dropped", () => {
+    // StoreImp.setBarSpace (dist 13666) returns early on an out-of-range value;
+    // handing it 0.4 would have looked applied and changed nothing.
+    expect(fitBarSpace(100, 331)).toBe(BAR_SPACE_LIMIT.min);
+    expect(fitBarSpace(5000, 10)).toBe(BAR_SPACE_LIMIT.max);
+  });
+
+  it("leaves the zoom alone when the host cannot answer", () => {
+    // jsdom reports 0 for an unstyled element, and 0 bars is a failed fetch.
+    expect(fitBarSpace(0, 331)).toBeNull();
+    expect(fitBarSpace(376, 0)).toBeNull();
+    expect(fitBarSpace(Number.NaN, 331)).toBeNull();
+    expect(fitBarSpace(-5, 331)).toBeNull();
+  });
+});
+
+describe("the 昨收 reference line", () => {
+  beforeEach(() => {
+    setChangeBase(null);
+    registered.length = 0;
+    vi.resetModules();
+  });
+
+  it("prints the same level on every bar", () => {
+    setChangeBase(440);
+    expect(prevCloseSeries([bar(441), bar(442), bar(443)])).toEqual([{ prev: 440 }, { prev: 440 }, { prev: 440 }]);
+  });
+
+  it("draws nothing when yesterday is unknown, instead of inventing a zero", () => {
+    // `prev: 0` would pin a line to the bottom of the axis and read as "it
+    // opened at nothing"; a row without the key is the honest blank.
+    setChangeBase(null);
+    expect(getChangeBase()).toBeNull();
+    expect(prevCloseSeries([bar(441), bar(442)])).toEqual([{}, {}]);
+    setChangeBase(0);
+    expect(getChangeBase()).toBeNull();
+    setChangeBase(Number.NaN);
+    expect(getChangeBase()).toBeNull();
+  });
+
+  it("keeps a usable base out of the junk", () => {
+    setChangeBase(435.4);
+    expect(getChangeBase()).toBe(435.4);
+    // An explicit base argument is what the pure helper takes; the module one is
+    // only there for the registered `calc`, which gets no such parameter.
+    expect(prevCloseSeries([bar(441)], 430)).toEqual([{ prev: 430 }]);
+    expect(prevCloseSeries([bar(441)], null)).toEqual([{}]);
+  });
+
+  /** Re-import so the guard *and* the base start clean; both are module state. */
+  async function freshModule() {
+    const mod = await import("../timeShare");
+    mod.ensurePrevCloseIndicator();
+    mod.ensurePrevCloseIndicator();
+    return mod;
+  }
+
+  it("registers once, on the price scale, with a typed figure", async () => {
+    await freshModule();
+    expect(registered).toHaveLength(1);
+    const spec = registered[0];
+    expect(spec.name).toBe(PREV_CLOSE_NAME);
+    expect(spec.series).toBe("price");
+    const figures = spec.figures as Array<Record<string, unknown>>;
+    expect(figures.map((f) => f.key)).toEqual(["prev"]);
+    expect(figures[0].type).toBe("line");
+  });
+
+  it("computes through prevCloseSeries against the base the loader set", async () => {
+    const mod = await freshModule();
+    const calc = registered[0].calc as (bars: KLineData[]) => Array<{ prev?: number }>;
+    // The base has to come from the same module instance the `calc` closure
+    // reads, which is the point of setting it in the loader rather than here.
+    mod.setChangeBase(440);
+    expect(calc([bar(441), bar(442)])).toEqual([{ prev: 440 }, { prev: 440 }]);
+    mod.setChangeBase(null);
+    expect(calc([bar(441)])).toEqual([{}]);
   });
 });

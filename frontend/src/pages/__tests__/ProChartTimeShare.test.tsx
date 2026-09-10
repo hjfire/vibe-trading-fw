@@ -17,12 +17,13 @@
  * - switching to a symbol with no minute source must drop 分时, or the next
  *   request is a 400 on a view the user can still see lit up.
  */
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataLoader, KLineData } from "klinecharts";
 
 import { ProChart } from "../ProChart";
-import { TIME_SHARE_COUNT } from "@/lib/timeShare";
+import { TIME_SHARE_COUNT, DEFAULT_CANDLE_BAR_SPACE, getChangeBase, setChangeBase } from "@/lib/timeShare";
 import { publishThemeChange } from "@/lib/theme-store";
 
 const SESSION_KEY = "pro-chart.session.v1";
@@ -53,6 +54,24 @@ const h = vi.hoisted(() => ({
   payload: [] as KLineData[],
   prevClose: null as number | null,
   sessionDate: "",
+  /**
+   * The zoom, the right offset and the scroll, kept as state rather than as a
+   * call log (㉘). `setBarSpace` is the whole of "does one trading day fit on
+   * screen", and a fake that only recorded that it was called would pass while
+   * the page fitted nothing at all.
+   */
+  barSpace: 8,
+  spaceCalls: [] as number[],
+  offsetRight: 42,
+  scrolled: 0,
+  /** Width the fake reports for the price pane's main widget; 0 = jsdom. */
+  domWidth: 0,
+  /** How many times `init` ran, so a StrictMode remount is observable. */
+  inits: 0,
+  /** `setPaneOptions` calls tagged by which mount made them (㉘, see below). */
+  paneCalls: [] as Array<{ init: number; id: string; height: number | undefined }>,
+  /** What the 昨收 base was at the instant bars were delivered to the chart. */
+  basesAtDelivery: [] as Array<number | null>,
 }));
 
 /** One minute bar, ascending, the way /market/kline answers. */
@@ -71,6 +90,11 @@ function sessionBars(): KLineData[] {
   return [440.1, 441, 442, 443, 444.4].map((close, i) => minuteBar(i, close));
 }
 
+/** A full A-share session of minute bars, for the fit-to-width assertions. */
+function sessionBarsOf(n: number): KLineData[] {
+  return Array.from({ length: n }, (_, i) => minuteBar(i, 440 + (i % 5) * 0.4));
+}
+
 function runLoad(type: "init" | "forward"): void {
   const loader = h.loader;
   if (!loader) return;
@@ -86,6 +110,10 @@ function runLoad(type: "init" | "forward"): void {
       symbol: { ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 },
       callback: (data, more) => {
         const bars = (Array.isArray(data) ? data : [data]) as KLineData[];
+        // Captured *inside* the delivery: the 昨收 line's `calc` runs here, so a
+        // base written after this call would not reach the line until some later
+        // data event that 分时 never gets (no paging, no push).
+        h.basesAtDelivery.push(getChangeBase());
         if (type === "init") h.list = bars;
         else h.list = [...bars, ...h.list];
         h.inFlight -= 1;
@@ -97,20 +125,50 @@ function runLoad(type: "init" | "forward"): void {
 }
 
 vi.mock("klinecharts", () => ({
-  init: () => ({
+  init: () => {
+    h.inits += 1;
+    // One pane list *per chart instance*, because that is what the library hands
+    // out: a fresh chart's sub panes start at its own default 100px, which is the
+    // whole reason the StrictMode remount below needs the budget re-applied.
+    const panes: Array<{ id: string; height: number; minHeight: number; state: string }> = [
+      { id: "candle_pane", height: 300, minHeight: 30, state: "normal" },
+    ];
+    return {
     getSymbol: () => ({ ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 }),
     getDataList: () => h.list,
     getIndicators: (filter?: { id?: string; name?: string; paneId?: string }) =>
       h.mounted.filter((ind) => matchesFilter(ind, filter)).map((ind) => ({ ...ind })),
     getOverlays: () => [],
-    getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
-    getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
-    getOffsetRightDistance: () => 0,
+    getPaneOptions: () => panes.map((p) => ({ ...p })),
+    getBarSpace: () => ({ bar: h.barSpace, halfBar: h.barSpace / 2, gapBar: h.barSpace, halfGapBar: h.barSpace / 2 }),
+    getOffsetRightDistance: () => h.offsetRight,
+    setOffsetRightDistance: (distance: number) => {
+      h.offsetRight = distance;
+    },
+    // Mirrors `StoreImp.setBarSpace` (dist 13666) closely enough to matter: it
+    // stores the value and re-derives nothing, so the width it was computed
+    // against is the page's business, not the library's.
+    setBarSpace: (space: number) => {
+      h.barSpace = space;
+      h.spaceCalls.push(space);
+    },
+    scrollToRealTime: () => {
+      h.scrolled += 1;
+    },
+    getDom: (_paneId?: string, position?: string) =>
+      position === "main" || position === undefined
+        ? { getBoundingClientRect: () => ({ width: h.domWidth, height: 200 }) }
+        : null,
     applyOptions: () => {},
     setStyles: (s: { candle?: { type?: string } }) => {
       h.styles.push(s);
     },
-    setPaneOptions: () => true,
+    setPaneOptions: (o: { id?: string; height?: number }) => {
+      const pane = panes.find((p) => p.id === o.id);
+      if (pane && typeof o.height === "number") pane.height = o.height;
+      h.paneCalls.push({ init: h.inits, id: o.id ?? "", height: o.height });
+      return true;
+    },
     resize: () => {},
     setDataLoader: (loader: DataLoader) => {
       h.loader = loader;
@@ -133,6 +191,11 @@ vi.mock("klinecharts", () => ({
       // stacking this file now pins.
       h.nextId += 1;
       h.mounted.push({ id: `${value.name}_${h.nextId}`, name: value.name, paneId: value.paneId ?? "" });
+      // A named pane the chart does not hold yet appears at the library's own
+      // default height (100px) — the number `applyPaneLayout` exists to correct.
+      if (value.paneId && !panes.some((p) => p.id === value.paneId)) {
+        panes.push({ id: value.paneId, height: 100, minHeight: 30, state: "normal" });
+      }
       return value.name;
     },
     removeIndicator: (filter: { id?: string; name?: string; paneId?: string } | undefined) => {
@@ -144,7 +207,8 @@ vi.mock("klinecharts", () => ({
     createOverlay: () => null,
     removeOverlay: () => true,
     overrideOverlay: () => true,
-  }),
+    };
+  },
   dispose: () => {},
   registerIndicator: () => {},
   registerOverlay: () => {},
@@ -252,6 +316,17 @@ beforeEach(() => {
   h.payload = sessionBars();
   h.prevClose = 440;
   h.sessionDate = "2026-09-04";
+  h.barSpace = 8;
+  h.spaceCalls = [];
+  h.offsetRight = 42;
+  h.scrolled = 0;
+  h.domWidth = 0;
+  h.inits = 0;
+  h.paneCalls = [];
+  h.basesAtDelivery = [];
+  // Module state outlives the component: the 昨收 base is held in `timeShare.ts`,
+  // so a test that ran after one with a base would otherwise inherit it.
+  setChangeBase(null);
 });
 
 describe("clicking 分时", () => {
@@ -517,12 +592,178 @@ describe("the price pane carries one overlay, not one per click", () => {
       fireEvent.click(buttonOf("分时"));
       await settle();
       expect(mountedCount("AVG_PRICE")).toBe(1);
+      expect(mountedCount("PREV_CLOSE")).toBe(1);
       expect(mountedCount("MA")).toBe(0);
 
       fireEvent.click(buttonOf("15分"));
       await settle();
       expect(mountedCount("MA")).toBe(1);
       expect(mountedCount("AVG_PRICE")).toBe(0);
+      expect(mountedCount("PREV_CLOSE")).toBe(0);
     }
+  });
+});
+
+/**
+ * One trading day has to fit in the pane (㉘).
+ *
+ * Reported as "分时显示不正常". The cause is not the line style: `candle.type:
+ * "area"` changes the drawing while the zoom stays at whatever it was (the
+ * library's default is 10px a bar), so a 331-bar HK session in a 376px pane
+ * showed 15:22-16:00 and the rest of the day lived behind a drag. Measured on
+ * the live page, and it is the open upstream request klinecharts/KLineChart#790
+ * — the library has no example, so the fit had to be written down here.
+ *
+ * `h.domWidth` is what makes this testable at all: jsdom says 0 for everything,
+ * which the page reads as "cannot answer" and acts on by changing nothing.
+ */
+describe("分时 fills the pane with the session", () => {
+  it("sets the zoom, closes the right gap and pins the view to the last bar", async () => {
+    h.domWidth = 375;
+    h.payload = sessionBarsOf(240);
+    seedSession("600519.SH", "1D");
+    await mountChart();
+    expect(h.barSpace).toBe(8); // candles are nobody's business
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    // 375 / 240 = 1.5625, floored to 1.56 so the session ends inside the pane.
+    expect(h.barSpace).toBe(1.56);
+    expect(h.offsetRight).toBe(0);
+    expect(h.scrolled).toBeGreaterThan(0);
+  });
+
+  it("fits again when the host is resized", async () => {
+    // The fit is a property of the width, so a width change invalidates it; a
+    // split-screen resize that left the zoom alone shrank the line back into a
+    // corner of the pane.
+    h.domWidth = 375;
+    h.payload = sessionBarsOf(240);
+    seedSession("600519.SH", "1D", true);
+    await mountChart();
+    expect(h.barSpace).toBe(1.56);
+
+    h.domWidth = 750;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await settle();
+    expect(h.barSpace).toBe(3.12);
+  });
+
+  it("gives the candles their own zoom back when 分时 ends", async () => {
+    h.domWidth = 375;
+    h.payload = sessionBarsOf(240);
+    seedSession("600519.SH", "1D");
+    await mountChart();
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(h.barSpace).toBe(1.56);
+
+    fireEvent.click(buttonOf("15分"));
+    await settle();
+    // Not 1.56: a K-line chart of 500 daily bars at 1.5px a bar is the same
+    // complaint arriving on the other side of the toggle.
+    expect(h.barSpace).toBe(8);
+  });
+
+  it("leaves the zoom alone for a host that reports no width", async () => {
+    h.payload = sessionBarsOf(240);
+    seedSession("600519.SH", "1D");
+    await mountChart();
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(h.spaceCalls).toEqual([]);
+    expect(h.barSpace).toBe(8);
+  });
+
+  it("hands the default zoom back when the page opened on 分时", async () => {
+    // This one came out of the live check, not from reading the code: a session
+    // restored onto 分时 never had a candle view to borrow a zoom from, so
+    // leaving it had nothing saved to put back — and kept the 1.1px the line
+    // needed, handing the user 176 daily bars squeezed into a strip.
+    h.domWidth = 375;
+    h.payload = sessionBarsOf(240);
+    seedSession("600519.SH", "1D", true);
+    await mountChart();
+    expect(h.barSpace).toBe(1.56); // fitted for the restored session
+
+    fireEvent.click(buttonOf("15分"));
+    await settle();
+    expect(h.barSpace).toBe(DEFAULT_CANDLE_BAR_SPACE);
+  });
+});
+
+describe("the 昨收 line is fed before the bars are", () => {
+  it("knows yesterday by the time the chart computes the overlays", async () => {
+    // The order is the whole test: the 昨收 line's `calc` runs inside the
+    // delivery, and 分时 gets no later data event to catch up on (no paging, no
+    // push), so a base written after `callback` draws nothing.
+    h.prevClose = 440;
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(h.basesAtDelivery.at(-1)).toBe(440);
+    expect(mountedCount("PREV_CLOSE")).toBe(1);
+  });
+
+  it("stays empty when the server did not reach yesterday", async () => {
+    h.prevClose = null;
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    // No line at an invented level: the badge says 昨收未知 and the chart agrees.
+    expect(h.basesAtDelivery.at(-1)).toBeNull();
+    expect(screen.getByTestId("time-share-badge").textContent).toContain("昨收未知");
+  });
+});
+
+/**
+ * The height budget under React's double mount (㉘).
+ *
+ * `applyPaneLayout` guards against undoing a separator drag by remembering the
+ * last `chartHeight|pane ids` it budgeted. A ref survives a StrictMode remount;
+ * the chart inside it does not — the second mount gets a fresh chart whose
+ * panes are back at the library's defaults, and a guard that only compares the
+ * string returns early. Measured on the dev page 2026-09-05: a 358px host with a
+ * 130px main chart and two 100px sub panes, where the plan said 180/75/75. The
+ * production build mounts once and never showed it, which is how it shipped.
+ */
+describe("a StrictMode remount still gets its pane budget", () => {
+  it("re-applies the budget for the second chart instance", async () => {
+    seedSession("0700.HK", "1D");
+    vi.spyOn(window.HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
+    render(
+      <StrictMode>
+        <ProChart />
+      </StrictMode>,
+    );
+    await settle();
+    expect(h.inits).toBe(2);
+    for (const init of [1, 2]) {
+      expect(h.paneCalls.some((c) => c.init === init)).toBe(true);
+    }
+    // The budget, not merely *a* call: 360px of host leaves 75px per sub pane,
+    // and a chart that answered with its own default 100 is the squashed main
+    // chart this file's sibling entries keep filing.
+    for (const id of ["sub:VOL", "sub:MACD"]) {
+      expect(h.paneCalls.filter((c) => c.init === 2 && c.id === id).map((c) => c.height)).toEqual([75]);
+    }
+  });
+
+  it("does not rebudget the same instance twice for one layout", async () => {
+    // The other half of the guard: the ResizeObserver fires on every side-panel
+    // toggle, and re-running the budget would fight a separator drag.
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    const after = h.paneCalls.length;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await settle();
+    expect(h.paneCalls.length).toBe(after);
   });
 });

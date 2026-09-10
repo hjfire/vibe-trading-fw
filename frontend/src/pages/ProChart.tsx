@@ -15,9 +15,15 @@ import { fetchKline, periodToInterval, INTERVALS, type IntervalKey } from "@/lib
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
   AVG_PRICE_NAME,
+  DEFAULT_CANDLE_BAR_SPACE,
+  PREV_CLOSE_NAME,
   TIME_SHARE_COUNT,
   TIME_SHARE_INTERVAL,
+  TIME_SHARE_RETRY_MS,
+  ensurePrevCloseIndicator,
   ensureTimeShareIndicator,
+  fitBarSpace,
+  setChangeBase,
   timeShareBadge,
   type SessionInfo,
 } from "@/lib/timeShare";
@@ -467,9 +473,16 @@ export function ProChart() {
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indCount, layoutTick]);
-  // Last `chartHeight|sub pane ids` the budget was applied for; see
-  // `applyPaneLayout` for why anything else must not trigger a rebudget.
-  const layoutSigRef = useRef("");
+  // Last `chartHeight|sub pane ids` the budget was applied for, and *which
+  // chart* it was applied to; see `applyPaneLayout` for both guards.
+  const layoutSigRef = useRef<{ chart: Chart; sig: string } | null>(null);
+  /**
+   * The zoom the candles were at before 分时 overwrote it to fit a session
+   * (㉘). Leaving the line without putting it back would hand the user a K-line
+   * chart at 1.1px a bar — the same "display is wrong" complaint wearing a
+   * different hat.
+   */
+  const candleSpaceRef = useRef<number | null>(null);
   const refreshIndCount = () => {
     setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
     setLayoutTick((t) => t + 1);
@@ -538,8 +551,15 @@ export function ProChart() {
     // every tick would quietly undo that gesture, so only a new pane set or a
     // new chart height counts as "the numbers no longer add up".
     const signature = `${chartHeight}|${ids.join(",")}`;
-    if (signature === layoutSigRef.current) return;
-    layoutSigRef.current = signature;
+    // The chart identity is part of the guard, not a detail: React's StrictMode
+    // double mount (dev) hands the second mount a brand-new chart whose panes
+    // are back at the library's defaults, while a ref keyed on the string alone
+    // still remembers it as applied. Measured 2026-09-05 that left a 358px host
+    // with a 130px main chart and two 100px sub panes — the plan was 180/75/75 —
+    // which is the "分时 被挤扁" half of the report.
+    const applied = layoutSigRef.current;
+    if (applied !== null && applied.chart === chart && applied.sig === signature) return;
+    layoutSigRef.current = { chart, sig: signature };
     const plan = planPaneHeights({ chartHeight, subPaneIds: ids });
     setPaneStarved(plan.starved ? { main: plan.mainHeight, sub: plan.subPaneHeight } : null);
     for (const pane of normal) {
@@ -553,11 +573,41 @@ export function ProChart() {
   };
 
   /**
-   * The price pane carries exactly one of these two, because the one thing is
-   * decided here and nowhere else (㉖): moving averages for candles, 均价 for
-   * 分时. MA over a single session of 1-minute bars is noise, and a broker's
-   * 分时 never shows it; the 均价 is the line that gives the price line its
-   * meaning. Sub panes (VOL/MACD and the user's own formulas) are left alone.
+   * Give a 分时 session the whole pane (㉘).
+   *
+   * `candle.type: "area"` changes the drawing, not the window: the chart keeps
+   * the zoom it already had (`DEFAULT_BAR_SPACE = 10`, dist 13056) and
+   * `_adjustVisibleRange` (dist 13533) divides the pane width by it. Measured on
+   * a live 331-bar HK session in a 376px pane, that shows 15:22-16:00 and makes
+   * the user drag for the other six and a half hours — the complaint in
+   * klinecharts/KLineChart#790, which the library still has no answer for. The
+   * three calls below are the whole recipe, and `fitBarSpace` holds the one
+   * clamp that matters (the library's `setBarSpace` no-ops outside [1, 50]).
+   *
+   * It runs when the session arrives and when the host is resized — not on a
+   * timer and not on every data event, so a zoom the user made by hand during a
+   * session stays theirs.
+   */
+  const fitSessionToWidth = (chart: Nullable<Chart>, barCount: number) => {
+    if (!chart || !viewRef.current.timeShare) return;
+    const width = chart.getDom(MAIN_PANE_ID, "main")?.getBoundingClientRect().width ?? 0;
+    const space = fitBarSpace(width, barCount);
+    if (space === null) return; // jsdom / detached host: leave the zoom alone
+    // A 分时 ends where the session ends. Leaving the default right offset put a
+    // `16:06` tick on the axis of a 16:00 close — a minute that never traded.
+    chart.setOffsetRightDistance(0);
+    chart.setBarSpace(space);
+    chart.scrollToRealTime(0);
+  };
+
+  /**
+   * The price pane carries the 分时 pair or MA, never both (㉖→㉘): moving
+   * averages for candles, 均价 + 昨收 for the line. MA over a single session of
+   * 1-minute bars is noise, and a broker's 分时 never shows it; the 均价 is the
+   * line that gives the price line its meaning, and the 昨收 is what makes it
+   * readable — without a level to compare against, a day that closed down 3%
+   * and a day that closed up 3% draw the same shape. Sub panes (VOL/MACD and the
+   * user's own formulas) are left alone.
    *
    * "Exactly one" has to be enforced *here*, because the library does not:
    * `createIndicator(value, true)` always appends. `StoreImp.addIndicator`
@@ -573,15 +623,21 @@ export function ProChart() {
    */
   const syncPriceOverlay = (chart: Nullable<Chart>, timeShare: boolean) => {
     if (!chart) return;
-    if (timeShare) ensureTimeShareIndicator();
-    const wanted = timeShare ? AVG_PRICE_NAME : "MA";
-    chart.removeIndicator({ name: timeShare ? "MA" : AVG_PRICE_NAME });
-    const live = chart.getIndicators({ name: wanted });
-    // Defensive against a pane that is already carrying copies: keep the first,
-    // drop the rest, so the invariant holds from any starting state.
-    live.slice(1).forEach((extra) => chart.removeIndicator({ id: extra.id }));
-    if (live.length === 0) {
-      chart.createIndicator({ name: wanted, paneId: MAIN_PANE_ID }, true);
+    if (timeShare) {
+      ensureTimeShareIndicator();
+      ensurePrevCloseIndicator();
+    }
+    const wanted = timeShare ? [AVG_PRICE_NAME, PREV_CLOSE_NAME] : ["MA"];
+    const gone = timeShare ? ["MA"] : [AVG_PRICE_NAME, PREV_CLOSE_NAME];
+    gone.forEach((name) => chart.removeIndicator({ name }));
+    for (const name of wanted) {
+      const live = chart.getIndicators({ name });
+      // Defensive against a pane that is already carrying copies: keep the first,
+      // drop the rest, so the invariant holds from any starting state.
+      live.slice(1).forEach((extra) => chart.removeIndicator({ id: extra.id }));
+      if (live.length === 0) {
+        chart.createIndicator({ name, paneId: MAIN_PANE_ID }, true);
+      }
     }
   };
 
@@ -647,20 +703,39 @@ export function ProChart() {
         }
         if (type !== "backward") setStatus((s) => ({ ...s, loading: true, error: null }));
         try {
-          const res = await fetchKline({
+          const request: Parameters<typeof fetchKline>[0] = {
             symbol: chart.getSymbol()?.ticker ?? symbol,
             interval: iv,
             count: line ? TIME_SHARE_COUNT : PAGE,
             before: line ? null : before,
             session: line ? "latest" : undefined,
-          });
+          };
+          let res: Awaited<ReturnType<typeof fetchKline>>;
+          try {
+            res = await fetchKline(request);
+          } catch (e) {
+            if (!line) throw e;
+            // One retry, and only for 分时. FutuOpenD answers the first
+            // minute-bar call after an idle stretch with an error and the next
+            // one normally — seen live 2026-09-05, where the page's 分时 request
+            // failed while four calls made a second apart from the same process
+            // each returned 331 bars. Candles have a fallback chain and do not
+            // need this; 分时 has one source, so a miss there is a blank chart.
+            await new Promise((r) => setTimeout(r, TIME_SHARE_RETRY_MS));
+            res = await fetchKline(request);
+          }
           // 分时 replaces the list with one session and pages nowhere; candles
           // keep the scroll-back contract (see `klinePaging.ts`).
           const page = line
             ? { bars: res.bars as KLineData[], more: { forward: false, backward: false } }
             : shapeResponse(type, res.bars as KLineData[], bounds, PAGE);
           const bars = page.bars;
+          // Before the delivery, not after: the 昨收 line's `calc` runs inside
+          // `callback`, so a base written here would only be picked up by the
+          // next data event — which 分时 never gets (no paging, no push).
+          if (line) setChangeBase(typeof res.prev_close === "number" ? res.prev_close : null);
           callback(bars, page.more);
+          if (line) fitSessionToWidth(chart, bars.length);
           setStatus({ loading: false, error: null, source: res.source });
           // A failed refresh leaves the previous answer on screen, so the badge
           // is rewritten only by a response that actually arrived: blanking it
@@ -772,6 +847,9 @@ export function ProChart() {
     const onResize = () => {
       chart.resize();
       applyPaneLayout(chart);
+      // The width the session was fitted to is gone; a resize that leaves the
+      // zoom alone shrinks the line into part of the pane again (㉘).
+      fitSessionToWidth(chart, chart.getDataList().length);
     };
     window.addEventListener("resize", onResize);
     // The host is a `flex-1` box, so its height changes without a window resize
@@ -838,6 +916,20 @@ export function ProChart() {
     const chart = chartRef.current;
     const target = viewPeriod(view);
     const periodChanged = target !== viewPeriod(viewRef.current);
+    // The zoom swap that goes with the view swap, before the reload below: the
+    // fit is a property of the 分时 view, not of the bars, so it has to be
+    // borrowed on entry and returned on exit (㉘).
+    if (chart && view.timeShare !== viewRef.current.timeShare) {
+      if (view.timeShare) {
+        candleSpaceRef.current = chart.getBarSpace().bar;
+      } else {
+        // Nothing saved means the page *opened* on 分时, so no candle view ever
+        // had a zoom to borrow — hand back the library's own default rather than
+        // the session-fitted 1.1px the line needed.
+        chart.setBarSpace(candleSpaceRef.current ?? DEFAULT_CANDLE_BAR_SPACE);
+        candleSpaceRef.current = null;
+      }
+    }
     viewRef.current = view;
     setInterval(view.interval);
     setTimeShare(view.timeShare);

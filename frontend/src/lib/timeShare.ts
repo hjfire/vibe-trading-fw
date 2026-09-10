@@ -39,6 +39,65 @@ export const TIME_SHARE_COUNT = 800;
 /** Overlay name of the 均价 line; also the key `createIndicator` takes. */
 export const AVG_PRICE_NAME = "AVG_PRICE";
 
+/** Overlay name of the 昨收 reference line (㉘), same convention. */
+export const PREV_CLOSE_NAME = "PREV_CLOSE";
+
+/**
+ * Zoom limits the library enforces on bar spacing, copied from its own layout
+ * options (`StoreImp._layoutOptions`, klinecharts 10.0.3 dist 13249). They are
+ * not advisory: `StoreImp.setBarSpace` (dist 13666) *returns without doing
+ * anything* outside this window, so a value that ignores them silently no-ops
+ * the fit instead of clamping.
+ */
+export const BAR_SPACE_LIMIT = { min: 1, max: 50 } as const;
+
+/**
+ * Bar spacing that puts `barCount` bars inside `contentWidth` pixels.
+ *
+ * This is the thing `candle.type: "area"` does *not* do. Switching to a line
+ * changes the drawing, not the window: the chart keeps whatever zoom it had
+ * (default `DEFAULT_BAR_SPACE = 10`, dist 13056) and `_adjustVisibleRange`
+ * (dist 13533) divides the pane width by it, so a 331-bar session at 10px per
+ * bar shows the last ~37 minutes and makes the user drag for the rest. Upstream
+ * klinecharts/KLineChart#790 (open, 2026-04-01) is that exact complaint — "一天
+ * 内的数据没有在一个屏幕内展示，而是像日k图那样还是要左右滑动" — and the library
+ * still ships no example, which is why the arithmetic lives here.
+ *
+ * Rounding is *down* (2 decimals) so the whole session lands inside the pane
+ * with room to spare rather than hanging one bar off the right edge. `null` is
+ * returned for a host that cannot answer (jsdom, a detached element), which the
+ * caller must read as "leave the zoom alone".
+ */
+export function fitBarSpace(contentWidth: number, barCount: number): number | null {
+  if (!Number.isFinite(contentWidth) || contentWidth <= 0) return null;
+  if (!Number.isFinite(barCount) || barCount <= 0) return null;
+  const space = Math.floor((contentWidth / barCount) * 100) / 100;
+  if (space < BAR_SPACE_LIMIT.min) return BAR_SPACE_LIMIT.min; // too narrow to fit
+  return Math.min(space, BAR_SPACE_LIMIT.max);
+}
+
+/**
+ * The zoom a K-line chart gets back when 分时 ends and nothing was borrowed
+ * (㉘). It is the library's own `DEFAULT_BAR_SPACE` (dist 13056), which is what
+ * the pane would have been at had the user never entered 分时 — the case that
+ * matters is a page that *opened* on 分时 (restored session), where no candle
+ * view ever existed to remember a zoom from. Measured live: leaving that page's
+ * 分时 without this fallback kept 1.12px a bar and handed back 176 daily bars
+ * in a strip, i.e. the same complaint moved to the other side of the toggle.
+ */
+export const DEFAULT_CANDLE_BAR_SPACE = 10;
+
+/**
+ * How long to wait before the one retry a 分时 request gets (㉘).
+ *
+ * FutuOpenD answers the first minute-bar call after an idle stretch with an
+ * error and the next one fine (observed live 2026-09-05: the browser's 分时 call
+ * failed with "OpenD did not answer" while four parallel calls from the same
+ * process all returned 331 bars in under a second). A retry costs one request
+ * of the seven-day allowance only on a request that already returned nothing.
+ */
+export const TIME_SHARE_RETRY_MS = 600;
+
 /** One row of the 均价 overlay. `avg` is in price units, so `series: "price"`. */
 export interface AvgPriceRow {
   avg?: number;
@@ -144,6 +203,49 @@ export function timeShareBadge(
 }
 
 let indicatorRegistered = false;
+let prevCloseRegistered = false;
+
+/**
+ * Yesterday's close, as the 昨收 line needs it.
+ *
+ * A registered indicator's `calc` only ever receives the bar list, so the one
+ * number that line is made of has to be reachable from module scope. It is set
+ * by the data loader *before* it hands the bars to the chart: `calc` runs
+ * inside that delivery, so a base written afterwards would leave a line that
+ * stays missing until the next data event — invisible, and with nothing on
+ * screen to say why.
+ */
+let changeBase: number | null = null;
+
+export function setChangeBase(prevClose: number | null): void {
+  changeBase = typeof prevClose === "number" && Number.isFinite(prevClose) && prevClose > 0 ? prevClose : null;
+}
+
+export function getChangeBase(): number | null {
+  return changeBase;
+}
+
+/** One row of the 昨收 overlay; `{}` when there is no base to draw. */
+export interface PrevCloseRow {
+  prev?: number;
+}
+
+/**
+ * A flat line at yesterday's close, one row per bar.
+ *
+ * Without this the 分时 has no zero: the line floats between the session's own
+ * high and low, so a day that closed down 3% and a day that closed up 3% look
+ * identical, and the only number that says which is in a status strip off the
+ * chart. Brokers draw it dashed and grey for exactly that reason.
+ *
+ * An unknown base returns rows with no key rather than an empty array — the
+ * shape `averagePriceSeries` already proves the library tolerates — and it also
+ * means the line never *invents* a level: no 昨收, no line.
+ */
+export function prevCloseSeries(bars: readonly unknown[], base: number | null = changeBase): PrevCloseRow[] {
+  const value = typeof base === "number" && Number.isFinite(base) && base > 0 ? base : null;
+  return bars.map(() => (value === null ? {} : { prev: value }));
+}
 
 /**
  * Register the 均价 overlay once per page load.
@@ -168,5 +270,39 @@ export function ensureTimeShareIndicator(): void {
     series: "price",
     figures: [{ key: "avg", title: "均价: ", type: "line" as const }],
     calc: (dataList: KLineData[]) => averagePriceSeries(dataList),
+  });
+}
+
+/**
+ * Register the 昨收 reference line once per page load (㉘).
+ *
+ * Same guard and same `figures[].type` trap as `ensureTimeShareIndicator`.
+ * `series: "price"` matters twice over here: the value is a price, and a
+ * registered indicator on the price pane participates in the pane's y-range
+ * (`YAxisImp.createRangeImp`, dist 984), so a session that stayed entirely
+ * below yesterday's close still gets the line — and the level it is measuring
+ * against — on screen instead of off the top edge.
+ *
+ * Grey and dashed on purpose. The two colours already in the pane are the blue
+ * price line and the palette-coloured 均价; a third saturated line reads as
+ * another series rather than as the ruler.
+ */
+export function ensurePrevCloseIndicator(): void {
+  if (prevCloseRegistered) return;
+  prevCloseRegistered = true;
+  registerIndicator({
+    name: PREV_CLOSE_NAME,
+    shortName: "昨收",
+    precision: 2,
+    series: "price",
+    figures: [
+      {
+        key: "prev",
+        title: "昨收: ",
+        type: "line" as const,
+        styles: () => ({ color: "#9aa0a6", size: 1, style: "dashed" as const, dashedValue: [4, 3] }),
+      },
+    ],
+    calc: (dataList: KLineData[]) => prevCloseSeries(dataList),
   });
 }
