@@ -1472,8 +1472,17 @@ describe("/pro-chart 副图上的画线", () => {
     localStorage.setItem(DRAWING_KEY, JSON.stringify({ "600519.SH|1D": drawings }));
   const disabled = (name: string): boolean =>
     (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
-  /** Turns a pane off the way the workbench does: it stops existing (dist 15323-15358). */
-  const closePane = (id: string) => {
+  /**
+   * Turns a built-in strip off the way ㉛'s picker does, which is two things.
+   * The page stops wanting it — that per-view list is what `syncSubPanes`
+   * re-applies whenever the view gets rewired, so a strip closed only in the
+   * chart would be back on the next symbol switch — and the library destroys the
+   * emptied pane underneath it (dist 15330-15347). This fake answers
+   * `getIndicators` with `[]`, so the second half has to be done by hand.
+   */
+  const closePane = (id: string, name = id.replace("sub:", "")) => {
+    fireEvent.click(screen.getByRole("button", { name: "副图指标" }));
+    fireEvent.click(screen.getByRole("button", { name: `关闭副图 ${name}` }));
     const i = h.panes.findIndex((p) => p.id === id);
     if (i >= 0) h.panes.splice(i, 1);
   };
@@ -1574,11 +1583,10 @@ describe("/pro-chart 副图上的画线", () => {
     // And the export is the full set, not the half that happens to be visible.
     expect((await captureExport()).drawings.map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
 
-    // MACD comes back: the waiting line goes home, and it is still one line.
-    h.chart?.createIndicator({ name: "MACD", paneId: SUB_MACD });
-    act(() => {
-      h.indProps?.onChartIndicatorsChanged?.();
-    });
+    // MACD comes back — asked for again through the picker, which is the only
+    // thing in the app that can put a built-in strip up — and the waiting line
+    // goes home to it, still one line.
+    fireEvent.click(screen.getByRole("button", { name: "副图指标 MACD" }));
     await flush();
     expect(h.overlays.map((o) => o.paneId).sort()).toEqual([MAIN, SUB_MACD]);
     expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 2");
@@ -1611,11 +1619,8 @@ describe("/pro-chart 副图上的画线", () => {
     expect(screen.getByText(/在等 MACD/)).toBeTruthy();
     expect(bucketOf().map((d) => d.paneId).sort()).toEqual([MAIN, SUB_MACD]);
 
-    // Re-opening the formula puts that line back on its own pane.
-    h.chart?.createIndicator({ name: "MACD", paneId: SUB_MACD });
-    act(() => {
-      h.indProps?.onChartIndicatorsChanged?.();
-    });
+    // Re-opening the strip from the picker puts that line back on its own pane.
+    fireEvent.click(screen.getByRole("button", { name: "副图指标 MACD" }));
     await flush();
     expect(h.overlays.map((o) => o.paneId).sort()).toEqual([MAIN, SUB_MACD]);
     expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 2");

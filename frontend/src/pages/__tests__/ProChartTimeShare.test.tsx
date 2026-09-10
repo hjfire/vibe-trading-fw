@@ -46,6 +46,12 @@ const h = vi.hoisted(() => ({
    * copy the library's filter semantics rather than the convenient one.
    */
   mounted: [] as Array<{ id: string; name: string; paneId: string }>,
+  /**
+   * The newest chart's pane list (㉛). `removeIndicator` destroying a strip is
+   * only half of "the height came back"; this is the other half, and it is what
+   * a test asserts when it wants to know what the chart still holds.
+   */
+  panes: [] as Array<{ id: string; height: number; minHeight: number; state: string }>,
   nextId: 0,
   requests: [] as Array<Record<string, unknown>>,
   loader: null as DataLoader | null,
@@ -156,13 +162,28 @@ vi.mock("klinecharts", () => ({
     const panes: Array<{ id: string; height: number; minHeight: number; state: string }> = [
       { id: "candle_pane", height: 300, minHeight: 30, state: "normal" },
     ];
+    // ...and the same for the indicators mounted on it (㉛). A disposed chart's
+    // panes die with it, so a second `init` must not look at the first chart's
+    // VOL/MACD and conclude they are already drawn — that is precisely the
+    // StrictMode case the budget test below measures. `h.mounted` / `h.panes`
+    // track the *newest* instance, which is the only one a test drives.
+    const mounted: Array<{ id: string; name: string; paneId: string }> = [];
+    h.mounted = mounted;
+    h.panes = panes;
     return {
     getSymbol: () => ({ ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 }),
     getDataList: () => h.list,
     getIndicators: (filter?: { id?: string; name?: string; paneId?: string }) =>
-      h.mounted.filter((ind) => matchesFilter(ind, filter)).map((ind) => ({ ...ind })),
+      mounted.filter((ind) => matchesFilter(ind, filter)).map((ind) => ({ ...ind })),
     getOverlays: () => [],
-    getPaneOptions: () => panes.map((p) => ({ ...p })),
+    // Both shapes, like the real one (dist 15587-15594): no argument lists every
+    // pane, an id answers that pane or `null`. `syncSubPanes` and ⑲'s `paneLookup`
+    // read the second form, so a fake that always answered with the whole list
+    // would let the page believe every strip is still on screen.
+    getPaneOptions: (id?: string) =>
+      id === undefined || id === null
+        ? panes.map((p) => ({ ...p }))
+        : panes.find((p) => p.id === id) ?? null,
     getBarSpace: () => ({ bar: h.barSpace, halfBar: h.barSpace / 2, gapBar: h.barSpace, halfGapBar: h.barSpace / 2 }),
     // Dist 13710: the pixel form is derived from the bar count on the way out, so
     // a test that reads it is reading what the chart is drawing.
@@ -216,7 +237,7 @@ vi.mock("klinecharts", () => ({
       // the pane. A fake that quietly refused the duplicate would have hidden the
       // stacking this file now pins.
       h.nextId += 1;
-      h.mounted.push({ id: `${value.name}_${h.nextId}`, name: value.name, paneId: value.paneId ?? "" });
+      mounted.push({ id: `${value.name}_${h.nextId}`, name: value.name, paneId: value.paneId ?? "" });
       // A named pane the chart does not hold yet appears at the library's own
       // default height (100px) — the number `applyPaneLayout` exists to correct.
       if (value.paneId && !panes.some((p) => p.id === value.paneId)) {
@@ -225,10 +246,24 @@ vi.mock("klinecharts", () => ({
       return value.name;
     },
     removeIndicator: (filter: { id?: string; name?: string; paneId?: string } | undefined) => {
-      const before = h.mounted.length;
-      h.mounted = h.mounted.filter((ind) => !matchesFilter(ind, filter));
+      const before = mounted.length;
+      const doomed = mounted.filter((ind) => matchesFilter(ind, filter));
+      for (let i = mounted.length - 1; i >= 0; i--) {
+        if (matchesFilter(mounted[i], filter)) mounted.splice(i, 1);
+      }
+      // Dist 15330-15347: `ChartImp.removeIndicator` destroys a sub pane that is
+      // left without an indicator. A fake that kept the pane would let
+      // `applyPaneLayout` hand height to strips the real chart has already
+      // dropped, so a "closing a sub chart frees the height" test would pass on
+      // a chart that never freed anything.
+      for (const paneId of [...new Set(doomed.map((i) => i.paneId))]) {
+        if (paneId === "candle_pane" || paneId === "x_axis_pane") continue;
+        if (mounted.some((ind) => ind.paneId === paneId)) continue;
+        const at = panes.findIndex((p) => p.id === paneId);
+        if (at > -1) panes.splice(at, 1);
+      }
       if (filter?.name) h.indicators.push({ op: "remove", name: filter.name });
-      return h.mounted.length !== before;
+      return mounted.length !== before;
     },
     createOverlay: () => null,
     removeOverlay: () => true,
@@ -273,16 +308,20 @@ vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
 vi.mock("@/components/charts/IndicatorEditor", () => ({ default: () => null }));
 
 /**
- * `StoreImp.getIndicatorsByFilter` (dist 14176): an id in the filter matches on
- * id *alone*, otherwise a name matches by name, and an empty filter matches
- * everything. Reproduced rather than approximated because the whole bug turns
- * on the first clause.
+ * `StoreImp.getIndicatorsByFilter` (dist 14176): `paneId` narrows to that pane
+ * *first*, then an id in the filter matches on id **alone**, otherwise a name
+ * matches by name, and an empty filter matches everything. Reproduced rather
+ * than approximated because both of the first clauses decide real bugs: the
+ * `paneId` clause is what a sub-pane swap is scoped by (㉡), and the id clause
+ * is why `createIndicator(x, true)` appends a duplicate instead of noticing the
+ * copy already mounted.
  */
 function matchesFilter(
   ind: { id: string; name: string; paneId: string },
   filter?: { id?: string; name?: string; paneId?: string },
 ): boolean {
   if (!filter) return true;
+  if (filter.paneId !== undefined && ind.paneId !== filter.paneId) return false;
   if (filter.id !== undefined) return ind.id === filter.id;
   if (filter.name !== undefined) return ind.name === filter.name;
   return true;
@@ -290,6 +329,11 @@ function matchesFilter(
 
 function mountedCount(name: string): number {
   return h.mounted.filter((ind) => ind.name === name).length;
+}
+
+/** The sub-chart indicators on the fake chart, in mount (i.e. display) order. */
+function subPaneNames(): string[] {
+  return h.mounted.filter((ind) => ind.paneId !== "candle_pane").map((ind) => ind.name);
 }
 
 /** The right margin in pixels, through the same derivation the chart uses. */
@@ -345,6 +389,7 @@ beforeEach(() => {
   h.styles = [];
   h.indicators = [];
   h.mounted = [];
+  h.panes = [];
   h.nextId = 0;
   h.requests = [];
   h.loader = null;
@@ -888,5 +933,267 @@ describe("a StrictMode remount still gets its pane budget", () => {
     });
     await settle();
     expect(h.paneCalls.length).toBe(after);
+  });
+});
+
+/**
+ * Which sub charts sit under the price pane (local custom ㉛).
+ *
+ * The ask was three things — take 分时 from Futu OpenD, show 成交量 on its sub
+ * chart, and let the user add or change indicators — and the first two are
+ * settled elsewhere (the route assertions at the top of this file; the default
+ * set below). What these tests guard is the *editing*, and above all the
+ * boundary the editor must not cross: `syncPriceOverlay` owns 均价 / 昨收 / MA on
+ * the main pane, and the workbench owns the user's own formulas. A
+ * `syncSubPanes` written as "remove everything not wanted" would pass a test
+ * that only looks at VOL and MACD, and would quietly eat somebody's script.
+ *
+ * Everything is driven through the toolbar, and every expectation is what the
+ * chart ends up holding (`subPaneNames()`) or what landed in `localStorage` —
+ * not a call log, because "the page called createIndicator" is true even when
+ * the pane opened on top of another one.
+ */
+describe("副图指标 (㉛)", () => {
+  const SUB_SETS_KEY = "pro-chart.subIndicators.v1";
+  const USER_IND_KEY = "pro-chart.userIndicators.v2";
+
+  /** Seed one saved formula; `enabled: false` means it is written but not on the chart. */
+  function seedScript(id: string, enabled: boolean): void {
+    localStorage.setItem(
+      USER_IND_KEY,
+      JSON.stringify([
+        { id, label: `脚本${id}`, kind: "pane", params: [], code: "return { D: close };", enabled },
+      ]),
+    );
+  }
+
+  function savedSets(): Record<string, string[]> {
+    const raw = localStorage.getItem(SUB_SETS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+  }
+
+  async function openPicker(): Promise<void> {
+    fireEvent.click(buttonOf("副图指标"));
+    await settle();
+  }
+
+  it("分时 只挂成交量，退回 K 线又把 MACD 铺回来", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL"]);
+
+    // The other way, from state rather than from the default: the K 线 list was
+    // never rewritten by the 分时 view, so MACD comes back where it was.
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+    // Reading a default is not an edit — nothing should have been banked.
+    expect(localStorage.getItem(SUB_SETS_KEY)).toBeNull();
+  });
+
+  it("a session restored straight into 分时 opens with one sub chart", async () => {
+    seedSession("0700.HK", "1m", true);
+    await mountChart();
+    expect(lastCandleType()).toBe("area");
+    expect(subPaneNames()).toEqual(["VOL"]);
+  });
+
+  it("挑一个指标只多一条副图，已有的那条不动", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+
+    fireEvent.click(buttonOf("副图指标 RSI"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD", "RSI"]);
+    expect(savedSets()).toEqual({ kline: ["VOL", "MACD", "RSI"], timeShare: ["VOL"] });
+    // Already-mounted entries leave the catalogue, so a double click cannot
+    // append a second copy — `createIndicator` never refuses one (㉘).
+    expect(buttonOf("副图指标 RSI").disabled).toBe(true);
+    expect(buttonOf("副图指标 成交量").disabled).toBe(true);
+
+    fireEvent.click(buttonOf("关闭副图 MACD"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "RSI"]);
+    expect(savedSets().kline).toEqual(["VOL", "RSI"]);
+  });
+
+  it("关掉的那条副图，换个标的也不会自己活过来", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+    fireEvent.click(buttonOf("关闭副图 MACD"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL"]);
+
+    // A symbol switch re-runs the view wiring. "Is MACD already up?" has to be
+    // read off the pane it would live on — the library destroys that pane when
+    // the strip closes — or a chart that is asked to show the wanted set quietly
+    // pushes back the one the user just turned off.
+    fireEvent.click(buttonOf("AAPL"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL"]);
+    expect(h.panes.map((p) => p.id)).toEqual(["candle_pane", "sub:VOL"]);
+  });
+
+  it("「换」一步关掉旧的、把新的画在最后一条上", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+
+    fireEvent.click(buttonOf("更换副图 VOL"));
+    await settle();
+    // Armed: the catalogue now replaces instead of appending, so even a full
+    // pane set can be edited without closing anything first.
+    expect(screen.getByText(/替换「成交量」为/)).toBeTruthy();
+
+    fireEvent.click(buttonOf("副图指标 KDJ"));
+    await settle();
+    // Not `sub:VOL` running KDJ — the id is derived from the indicator so a
+    // drawing parked on a closed strip cannot end up labelled with the wrong
+    // owner (⑲). The new strip therefore lands at the end.
+    expect(subPaneNames()).toEqual(["MACD", "KDJ"]);
+    expect(h.indicators.filter((i) => i.op === "create" && i.name === "KDJ").at(-1)?.paneId).toBe("sub:KDJ");
+    expect(savedSets().kline).toEqual(["MACD", "KDJ"]);
+  });
+
+  it("取消「换」之后，同一个点击变回追加", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+
+    fireEvent.click(buttonOf("更换副图 MACD"));
+    await settle();
+    fireEvent.click(buttonOf("取消替换"));
+    await settle();
+    fireEvent.click(buttonOf("副图指标 WR"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD", "WR"]);
+  });
+
+  it("恢复默认 只重置当前视图的那一套", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+    fireEvent.click(buttonOf("副图指标 RSI"));
+    await settle();
+    fireEvent.click(buttonOf("副图指标 BIAS"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD", "RSI", "BIAS"]);
+
+    fireEvent.click(buttonOf("恢复默认副图"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+    // The 分时 list was never the one being edited.
+    expect(savedSets()).toEqual({ kline: ["VOL", "MACD"], timeShare: ["VOL"] });
+  });
+
+  it("关掉全部副图，剩下的高度回到主图", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+    fireEvent.click(buttonOf("关闭副图 VOL"));
+    await settle();
+    fireEvent.click(buttonOf("关闭副图 MACD"));
+    await settle();
+
+    expect(subPaneNames()).toEqual([]);
+    // An emptied list is a choice, so it must persist as `[]` and not fall back.
+    expect(savedSets()).toEqual({ kline: [], timeShare: ["VOL"] });
+    // The strips are gone from the chart — the only way the main chart gets their
+    // height back, since `ChartImp._layout` hands candle_pane the remainder.
+    expect(h.panes.map((p) => p.id)).toEqual(["candle_pane"]);
+    // And the redistribution that led there is real: one 360px host gives two sub
+    // panes 75px each and a lone one 120px (`subMaxPx`). A page that left a
+    // closed strip on the chart would stop at the first number.
+    expect(h.paneCalls.filter((c) => c.id === "sub:MACD").map((c) => c.height)).toEqual([75, 120]);
+  });
+
+  it("副图挂到上限之后，目录不再给加", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await openPicker();
+    for (const name of ["RSI", "KDJ", "WR", "BIAS"]) {
+      fireEvent.click(buttonOf(`副图指标 ${name}`));
+      await settle();
+    }
+    expect(subPaneNames()).toHaveLength(6);
+    expect(screen.getByText(/6\/6 个副图/)).toBeTruthy();
+    expect(buttonOf("副图指标 CCI").disabled).toBe(true);
+    // 换 is still available at the cap: it frees a strip in the same click.
+    fireEvent.click(buttonOf("更换副图 BIAS"));
+    await settle();
+    expect(buttonOf("副图指标 CCI").disabled).toBe(false);
+    fireEvent.click(buttonOf("副图指标 CCI"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD", "RSI", "KDJ", "WR", "CCI"]);
+  });
+
+  it("换副图不吃用户的脚本，脚本也能从这一排开关", async () => {
+    seedScript("a1", true);
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    // The workbench mounts its own panes after the first bars arrive.
+    expect(subPaneNames()).toEqual(["VOL", "MACD", "UCI_a1"]);
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    // MACD closed, VOL kept, the script untouched — and it is still a sub pane
+    // the picker never lists, because it is not a built-in name.
+    expect(subPaneNames()).toEqual(["VOL", "UCI_a1"]);
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    // MACD comes back, but at the end — closing a strip releases its address and
+    // re-opening it appends, the same cost `withReplaced` pays for the same
+    // reason. What matters here is that `UCI_a1` was never touched.
+    expect(subPaneNames()).toEqual(["VOL", "UCI_a1", "MACD"]);
+
+    await openPicker();
+    expect(screen.queryByText(/当前没有副图/)).toBeNull();
+    fireEvent.click(buttonOf("自定义脚本 脚本a1"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+    // The switch itself has to say so, or the row reads as a script still on the
+    // chart that merely failed to draw.
+    expect(buttonOf("自定义脚本 脚本a1").textContent).toContain("· 关");
+    // The built-in list was never edited, so it stays unwritten — the toggle
+    // must not bank a pane set it only looked at.
+    expect(localStorage.getItem(SUB_SETS_KEY)).toBeNull();
+    // The switch flipped in storage too, or the pane would reappear on reload.
+    expect(JSON.parse(localStorage.getItem(USER_IND_KEY) ?? "[]")[0].enabled).toBe(false);
+  });
+
+  it("分时 自己那一套副图与 K 线各记各的", async () => {
+    seedSession("0700.HK", "1m", true);
+    await mountChart();
+    await openPicker();
+    fireEvent.click(buttonOf("副图指标 MACD"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+    expect(savedSets()).toEqual({ kline: ["VOL", "MACD"], timeShare: ["VOL", "MACD"] });
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(subPaneNames()).toEqual(["VOL", "MACD"]);
+    // …and the candles answer to their own list, which happens to agree here —
+    // the point is the click landed on the 分时 set, not on both.
+    expect(savedSets().kline).toEqual(["VOL", "MACD"]);
+  });
+
+  it("副图数量进了工具条的按钮，面板关掉也说得清", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    expect(screen.getByRole("button", { name: "副图指标" }).textContent).toBe("副图指标 · 2");
+    await openPicker();
+    fireEvent.click(buttonOf("关闭副图 VOL"));
+    await settle();
+    fireEvent.click(buttonOf("关闭副图 MACD"));
+    await settle();
+    expect(screen.getByRole("button", { name: "副图指标" }).textContent).toBe("副图指标 · 0");
   });
 });

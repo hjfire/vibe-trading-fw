@@ -29,7 +29,7 @@ import {
   timeShareBadge,
   type SessionInfo,
 } from "@/lib/timeShare";
-import { isSubPaneId, planPaneHeights, subPaneIdOf, subPaneIdsOf } from "@/lib/paneLayout";
+import { isSubPaneId, planPaneHeights, subPaneIdsOf } from "@/lib/paneLayout";
 import {
   DRAWING_COLORS,
   DRAWING_SIZES,
@@ -77,8 +77,24 @@ import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
 import { candidateFromSymbol } from "@/lib/symbolSearch";
 import IndicatorEditor from "@/components/charts/IndicatorEditor";
-import { applyUserIndicator, indicatorName } from "@/lib/indicatorLang";
-import { loadUserIndicators } from "@/lib/indicatorStore";
+import SubIndicatorPicker from "@/components/charts/SubIndicatorPicker";
+import { applyUserIndicator, indicatorName, removeUserIndicator } from "@/lib/indicatorLang";
+import { loadUserIndicators, saveUserIndicators } from "@/lib/indicatorStore";
+import {
+  MAX_SUB_PANES,
+  isBuiltinSubIndicator,
+  loadSubPaneSets,
+  saveSubPaneSets,
+  subIndicatorLabel,
+  subNamesForView,
+  subPaneIdFor,
+  withAdded,
+  withDefaults,
+  withRemoved,
+  withReplaced,
+  type SubPaneSets,
+  type SubViewKey,
+} from "@/lib/subIndicators";
 import { readShareLink, SHARE_QUERY_KEY } from "@/lib/scriptExchange";
 import { copyText, downloadText } from "@/components/charts/workbench/types";
 import { cardToDraft, type WorkbenchSeed } from "@/components/charts/workbench/types";
@@ -331,22 +347,19 @@ function takeDrawLinkTask(): ReturnType<typeof readDrawingsShareLink> | null {
 
 /**
  * Sub panes are worth naming (⑲): the library's own id is random per mount, so
- * a drawing stored against it has nowhere to live on the next load. The two
- * built-ins below are the sub panes mounted at startup; user formulas get a
- * pane id from the same helper inside `indicatorLang.applyUserIndicator`. (MA
- * is not here: it is an overlay and shares the main pane.)
+ * a drawing stored against it has nowhere to live on the next load. The names
+ * are addressable through `paneLayout.subPaneIdOf`; the built-ins now mounted at
+ * startup come from `subIndicators.ts` (㉛) and user formulas get a pane id from
+ * the same helper inside `indicatorLang.applyUserIndicator`. (MA is not in the
+ * list: it is an overlay and shares the main pane.)
  */
-const SUB_PANE_LABELS: Record<string, string> = {
-  VOL: "成交量",
-  MACD: "MACD",
-};
 
 /** What a pane id should read like next to a drawing (⑲). */
 function paneDisplayName(paneId: string, userLabels: ReadonlyMap<string, string>): string {
   if (paneId === MAIN_PANE_ID) return "主图";
   if (!isRestorablePaneId(paneId)) return "已关闭的副图";
   const name = paneIndicator(paneId);
-  return SUB_PANE_LABELS[name] ?? userLabels.get(name) ?? name;
+  return subIndicatorLabel(name, userLabels.get(name) ?? name);
 }
 
 /** Distinct panes a parked set is waiting for, in first-seen order. */
@@ -398,6 +411,15 @@ export function ProChart() {
   // A script handed over by a share link (local custom ⑪); the workbench
   // opens with it loaded into the editor, never mounted unseen.
   const [scriptSeed, setScriptSeed] = useState<WorkbenchSeed | null>(null);
+  // Sub-chart indicator set (local custom ㉛): one ordered list per view, so
+  // 分时 can default to 成交量 alone while the candles keep 成交量 + MACD.
+  // A ref mirrors it for the same reason `viewRef` does: `syncSubPanes` runs
+  // from the init effect, from `setView` and from the picker handlers, and the
+  // first two read it before a re-render could have updated the state.
+  const [subSets, setSubSets] = useState<SubPaneSets>(loadSubPaneSets);
+  const subSetsRef = useRef<SubPaneSets>(subSets);
+  const [subPanelOpen, setSubPanelOpen] = useState(false);
+  const [subNotice, setSubNotice] = useState<string | null>(null);
   // Drawing (local custom ⑭): which tool is armed, and how many finished
   // drawings the chart holds. The count drives the undo/clear buttons and the
   // "画线已随标的保存" note, so it must be read back from the chart rather than
@@ -475,6 +497,9 @@ export function ProChart() {
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indCount, layoutTick]);
+  // The picker lists the saved formulas too, so "更换指标" reaches a custom
+  // script without the user having to know which drawer it was written in.
+  const userScripts = useMemo(() => loadUserIndicators(), [indCount, layoutTick]);
   // Last `chartHeight|sub pane ids` the budget was applied for, and *which
   // chart* it was applied to; see `applyPaneLayout` for both guards.
   const layoutSigRef = useRef<{ chart: Chart; sig: string } | null>(null);
@@ -580,6 +605,152 @@ export function ProChart() {
       if (Math.abs((pane.height ?? 0) - want) < 2) continue;
       chart.setPaneOptions({ id: pane.id, height: want });
     }
+  };
+
+  /** Which persisted list the current view reads and writes. */
+  const subViewOf = (line: boolean): SubViewKey => (line ? "timeShare" : "kline");
+
+  const sameList = (a: readonly string[], b: readonly string[]): boolean =>
+    a.length === b.length && a.every((name, i) => name === b[i]);
+
+  /**
+   * Put the chart's sub panes into exactly the wanted set (local custom ㉛).
+   *
+   * Two things it is careful *not* to do:
+   *
+   * - It only ever touches names in `BUILTIN_SUB_INDICATORS`. `MA` / 均价 / 昨收
+   *   belong to `syncPriceOverlay`, and a saved formula belongs to the workbench;
+   *   a pane set driven off a picker that also deleted those would quietly eat
+   *   somebody's script.
+   * - Additions go through `createIndicator({ name, paneId })` with `isStack`
+   *   left at its default, because passing `true` would stack two indicators into
+   *   one strip — the exact stacking `syncPriceOverlay` exists to prevent.
+   *
+   * "Is it already up?" is answered by the *pane*, not by `getIndicators({name})`:
+   * a `sub:` strip is only ever created under the id derived from its own
+   * indicator, and `ChartImp.removeIndicator` destroys it the moment its last
+   * indicator leaves (dist 15330-15347), so the two answers agree on a real
+   * chart — while this is also the existence probe ⑲ already uses before putting
+   * a drawing back (`paneLookup`), and a chart whose `getIndicators` a test double
+   * answers loosely cannot quietly resurrect a strip the user closed.
+   *
+   * Closing a pane is safe for drawings: the overlay callbacks park whatever was
+   * on it (⑲), and re-opening it under the same `sub:` id puts them back.
+   */
+  const syncSubPanes = (chart: Nullable<Chart>, wanted: readonly string[]) => {
+    if (!chart) return;
+    for (const ind of chart.getIndicators()) {
+      if (!isBuiltinSubIndicator(ind.name) || ind.paneId === MAIN_PANE_ID) continue;
+      if (wanted.includes(ind.name)) continue;
+      chart.removeIndicator({ paneId: ind.paneId });
+    }
+    for (const name of wanted) {
+      const paneId = subPaneIdFor(name);
+      if (chart.getPaneOptions(paneId) != null) continue;
+      chart.createIndicator({ name, paneId });
+    }
+    // Panes came and went; the main chart's floor is `planPaneHeights`'s problem.
+    applyPaneLayout(chart);
+  };
+
+  /**
+   * Commit a new pane set for the view on screen. Returns false when the list
+   * did not move, which is how the caller learns its click was a no-op — the
+   * picker is the only feedback channel here, and a button that did nothing and
+   * said nothing is indistinguishable from a broken one.
+   */
+  const applySubSets = (next: SubPaneSets): boolean => {
+    const view = subViewOf(viewRef.current.timeShare);
+    if (sameList(next[view], subSetsRef.current[view])) return false;
+    subSetsRef.current = next;
+    setSubSets(next);
+    saveSubPaneSets(next);
+    syncSubPanes(chartRef.current, subNamesForView(next, viewRef.current.timeShare));
+    // A strip that just came back may own lines that were parked when it closed
+    // (⑲); that effect is the only flush path, so bump the tick and let it run.
+    setLayoutTick((t) => t + 1);
+    return true;
+  };
+
+  const activeSubNames = (): string[] =>
+    subNamesForView(subSetsRef.current, viewRef.current.timeShare);
+
+  const addSub = (name: string) => {
+    const view = subViewOf(viewRef.current.timeShare);
+    if (activeSubNames().length >= MAX_SUB_PANES) {
+      setSubNotice(`副图最多 ${MAX_SUB_PANES} 个 — 先关掉一个再加`);
+      return;
+    }
+    setSubNotice(
+      applySubSets(withAdded(subSetsRef.current, view, name))
+        ? null
+        : `「${subIndicatorLabel(name)}」已经在副图上了`,
+    );
+  };
+
+  /**
+   * Close one strip and open `to` in its place (㉛). One click, because "I want
+   * RSI rather than MACD" is one decision — but the new strip lands at the
+   * bottom, and `subIndicators.withReplaced` says why: a pane id is derived from
+   * the indicator on it, so an in-place swap would leave `sub:MACD` running RSI
+   * and mislabel every drawing parked there.
+   */
+  const replaceSub = (from: string, to: string) => {
+    if (from === to) {
+      setSubNotice(null);
+      return;
+    }
+    const view = subViewOf(viewRef.current.timeShare);
+    const before = subNamesForView(subSetsRef.current, viewRef.current.timeShare);
+    if (!before.includes(from) || !applySubSets(withReplaced(subSetsRef.current, view, from, to))) {
+      setSubNotice(`「${subIndicatorLabel(to)}」没能替掉「${subIndicatorLabel(from)}」`);
+      return;
+    }
+    setSubNotice(null);
+  };
+
+  const removeSub = (name: string) => {
+    const view = subViewOf(viewRef.current.timeShare);
+    applySubSets(withRemoved(subSetsRef.current, view, name));
+    setSubNotice(null);
+  };
+
+  const resetSubs = () => {
+    const view = subViewOf(viewRef.current.timeShare);
+    applySubSets(withDefaults(subSetsRef.current, view));
+    setSubNotice(null);
+  };
+
+  /**
+   * Mount or un-mount one saved formula. Same contract as the workbench's own
+   * toggle, reached from here so the pane list is the one place a user looks at
+   * when deciding what is on screen.
+   */
+  const toggleScript = (id: string) => {
+    const chart = chartRef.current;
+    if (!chart) {
+      setSubNotice("图表尚未就绪，请稍后再试");
+      return;
+    }
+    const items = loadUserIndicators();
+    const item = items.find((x) => x.id === id);
+    if (!item) return;
+    if (item.enabled) {
+      removeUserIndicator(chart, id);
+      saveUserIndicators(items.map((x) => (x.id === id ? { ...x, enabled: false } : x)));
+      setSubNotice(null);
+    } else {
+      const err = applyUserIndicator(chart, item);
+      if (err) {
+        setSubNotice(`「${item.label}」挂载失败：${err}`);
+        refreshIndCount();
+        return;
+      }
+      saveUserIndicators(items.map((x) => (x.id === id ? { ...x, enabled: true } : x)));
+      setSubNotice(null);
+    }
+    refreshIndCount();
+    applyPaneLayout(chart);
   };
 
   /**
@@ -869,10 +1040,11 @@ export function ProChart() {
     chart.setPeriod(periodFor(viewPeriod(viewRef.current)));
     syncPriceOverlay(chart, viewRef.current.timeShare);
     // Named panes, so a drawing on the volume strip can find it again after a
-    // reload (⑲); the library's own ids are random per mount.
-    chart.createIndicator({ name: "VOL", paneId: subPaneIdOf("VOL") });
-    chart.createIndicator({ name: "MACD", paneId: subPaneIdOf("MACD") });
-    applyPaneLayout(chart);
+    // reload (⑲); the library's own ids are random per mount. Which strips to
+    // put up is the user's per-view choice (㉛) — 分时 defaults to 成交量 alone,
+    // because MACD(12,26,9) emits nothing for the first ~33 bars of the single
+    // session the line shows, which is the "副图一片空白" it used to read as.
+    syncSubPanes(chart, activeSubNames());
 
     const onResize = () => {
       chart.resize();
@@ -975,6 +1147,12 @@ export function ProChart() {
     // they are reading.
     if (!view.timeShare) setSessionInfo(null);
     syncPriceOverlay(chart, view.timeShare);
+    // Each view carries its own sub-chart set (㉛): leaving 分时 must not leave
+    // the candles showing a lone 成交量 strip the user only ever wanted for the
+    // line, and entering it must not resurrect the MACD strip that is empty for
+    // most of a live session. Read from the ref, not `subSets`: `viewRef` has
+    // already moved to the target view two lines above.
+    syncSubPanes(chart, subNamesForView(subSetsRef.current, view.timeShare));
     if (!chart) return;
     // `setPeriod` *is* the reload: StoreImp.setPeriod (dist 13421) calls
     // `resetData()` without comparing the incoming period to the live one, so
@@ -1537,6 +1715,21 @@ export function ProChart() {
         >
           ƒ 指标公式{indCount > 0 ? ` · ${indCount}` : ""}
         </button>
+        <button
+          className={cn(
+            "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+            subPanelOpen && "bg-muted font-medium ring-1 ring-primary",
+          )}
+          aria-label="副图指标"
+          aria-pressed={subPanelOpen}
+          title={`管理下面的副图：当前 ${activeSubNames().length} 个（分时与 K线各记各的，现在改的是${timeShare ? "分时" : "K线"}）`}
+          onClick={() => {
+            setSubNotice(null);
+            setSubPanelOpen((v) => !v);
+          }}
+        >
+          副图指标 · {activeSubNames().length}
+        </button>
         <span className="text-xs text-muted-foreground">画线:</span>
         <div className="flex gap-1">
           {DRAW_TOOLS.map((t) => (
@@ -1822,6 +2015,21 @@ export function ProChart() {
         </div>
       )}
 
+      {subPanelOpen && (
+        <SubIndicatorPicker
+          viewName={timeShare ? "分时" : "K线"}
+          names={subNamesForView(subSets, timeShare)}
+          scripts={userScripts}
+          notice={subNotice}
+          onAdd={addSub}
+          onReplace={replaceSub}
+          onRemove={removeSub}
+          onToggleScript={toggleScript}
+          onReset={resetSubs}
+          onOpenWorkbench={openFormulaPanel}
+        />
+      )}
+
       {formulaError && (
         <div className="text-xs text-red-500">
           已保存的指标公式未能加载：{formulaError}
@@ -1840,7 +2048,7 @@ export function ProChart() {
         <div ref={hostRef} className="min-h-[360px] flex-1 rounded-lg border" />
       </div>
       <div className="text-xs text-muted-foreground">
-        数据来自本项目自有行情链路（日线走 loader 回退链；分钟线优先走 FutuOpenD、覆盖 .SH/.SZ/.HK/.US，A股在富途未应答时落回新浪）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏可在主图或任一副图上落点（第一个落点在哪条面板，这条线就归谁；画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除并标注归属副图），副图被关闭时它的线会暂存在清单尾部、重开指标即回到原面板，「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式、锁定隐藏与归属面板），副图高度可拖分隔条微调，指标 MA/VOL/MACD 内置。
+        数据来自本项目自有行情链路（日线走 loader 回退链；分钟线优先走 FutuOpenD、覆盖 .SH/.SZ/.HK/.US，A股在富途未应答时落回新浪）；红涨绿跌。滚轮缩放、拖拽平移，上方「画线」工具栏可在主图或任一副图上落点（第一个落点在哪条面板，这条线就归谁；画好的线单击选中、可改颜色线宽，拖动改位，右键点击删除，「清单」里可逐条锁定/隐藏/删除并标注归属副图），副图被关闭时它的线会暂存在清单尾部、重开指标即回到原面板，「导出/链接/导入」把画线带走或接过来（.json 与 ?d= 链接都含样式、锁定隐藏与归属面板），副图高度可拖分隔条微调；副图挂哪几个指标由工具条上的「副图指标」选（内置 19 个，分时与 K线各记各的：分时默认只看成交量，K线默认成交量 + MACD），自定义公式在「ƒ 指标公式」工作台里写。
       </div>
       <IndicatorEditor
         open={indPanelOpen}
