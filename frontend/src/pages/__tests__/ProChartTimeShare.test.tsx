@@ -23,7 +23,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataLoader, KLineData } from "klinecharts";
 
 import { ProChart } from "../ProChart";
-import { TIME_SHARE_COUNT, DEFAULT_CANDLE_BAR_SPACE, getChangeBase, setChangeBase } from "@/lib/timeShare";
+import { TIME_SHARE_COUNT, BAR_SPACE_LIMIT, DEFAULT_CANDLE_BAR_SPACE, DEFAULT_CANDLE_OFFSET_RIGHT, getChangeBase, setChangeBase } from "@/lib/timeShare";
 import { publishThemeChange } from "@/lib/theme-store";
 
 const SESSION_KEY = "pro-chart.session.v1";
@@ -62,7 +62,23 @@ const h = vi.hoisted(() => ({
    */
   barSpace: 8,
   spaceCalls: [] as number[],
-  offsetRight: 42,
+  /**
+   * The right margin, held the way the library holds it — as a *bar count*
+   * (`_lastBarRightSideDiffBarCount`), converted from the pixels it was handed
+   * using the spacing in force at that instant (㉙, dist 13694). Storing the
+   * pixels instead would have let `setOffsetRightDistance` run *before*
+   * `setBarSpace` and still read back as applied, which is the order that shipped
+   * the half-empty pane: `setBarSpace` never revisits that bar count (dist
+   * 13666-13681), so the margin comes out scaled by the ratio of the spacings.
+   */
+  offsetRightBars: 5.25,
+  /**
+   * Margin applications as an ordered log, each tagged with the zoom that was in
+   * force when it landed. State alone cannot prove the order: the page fits twice
+   * on a session restored onto 分时, and a second application at the settled zoom
+   * quietly repairs what the first one skewed.
+   */
+  offsetCalls: [] as Array<{ distance: number; atSpace: number }>,
   scrolled: 0,
   /** Width the fake reports for the price pane's main widget; 0 = jsdom. */
   domWidth: 0,
@@ -72,6 +88,13 @@ const h = vi.hoisted(() => ({
   paneCalls: [] as Array<{ init: number; id: string; height: number | undefined }>,
   /** What the 昨收 base was at the instant bars were delivered to the chart. */
   basesAtDelivery: [] as Array<number | null>,
+  /**
+   * Every write the page made to the library's locale table. Deliberately NOT
+   * cleared by `beforeEach`: `registerLocale` patches a global once per page load
+   * (㉙), so an accumulator that survives the file is what lets any mount here
+   * answer "did the page ever call it" — which is the wiring half of the rule.
+   */
+  localePatches: [] as Array<{ tag: string; patch: Record<string, string> }>,
 }));
 
 /** One minute bar, ascending, the way /market/kline answers. */
@@ -141,9 +164,12 @@ vi.mock("klinecharts", () => ({
     getOverlays: () => [],
     getPaneOptions: () => panes.map((p) => ({ ...p })),
     getBarSpace: () => ({ bar: h.barSpace, halfBar: h.barSpace / 2, gapBar: h.barSpace, halfGapBar: h.barSpace / 2 }),
-    getOffsetRightDistance: () => h.offsetRight,
+    // Dist 13710: the pixel form is derived from the bar count on the way out, so
+    // a test that reads it is reading what the chart is drawing.
+    getOffsetRightDistance: () => Math.max(0, h.offsetRightBars * h.barSpace),
     setOffsetRightDistance: (distance: number) => {
-      h.offsetRight = distance;
+      h.offsetRightBars = distance / h.barSpace;
+      h.offsetCalls.push({ distance, atSpace: h.barSpace });
     },
     // Mirrors `StoreImp.setBarSpace` (dist 13666) closely enough to matter: it
     // stores the value and re-derives nothing, so the width it was computed
@@ -213,6 +239,11 @@ vi.mock("klinecharts", () => ({
   registerIndicator: () => {},
   registerOverlay: () => {},
   getSupportedLocales: () => ["en-US", "zh-CN"],
+  // Patched, not asserted here: `ensurePeriodUnitLabels` is once per page load,
+  // so the suite that owns that rule drives it in `klineLocale.test.ts`.
+  registerLocale: (tag: string, ls: Record<string, string>) => {
+    h.localePatches.push({ tag, patch: ls });
+  },
   version: () => "test",
 }));
 
@@ -259,6 +290,11 @@ function matchesFilter(
 
 function mountedCount(name: string): number {
   return h.mounted.filter((ind) => ind.name === name).length;
+}
+
+/** The right margin in pixels, through the same derivation the chart uses. */
+function offsetRightPx(): number {
+  return Math.max(0, h.offsetRightBars * h.barSpace);
 }
 
 function seedSession(symbol: string, interval: string, timeShare = false): void {
@@ -318,7 +354,8 @@ beforeEach(() => {
   h.sessionDate = "2026-09-04";
   h.barSpace = 8;
   h.spaceCalls = [];
-  h.offsetRight = 42;
+  h.offsetRightBars = 5.25;
+  h.offsetCalls = [];
   h.scrolled = 0;
   h.domWidth = 0;
   h.inits = 0;
@@ -605,7 +642,32 @@ describe("the price pane carries one overlay, not one per click", () => {
 });
 
 /**
- * One trading day has to fit in the pane (㉘).
+ * The heading over the 分时 (㉙).
+ *
+ * `09988.HK · 1` in the screenshot: the library builds that heading as
+ * `{ticker} · {span}{i18n(period.type)}` and ships `minute: ''` in both of its
+ * tables, so a minute period renders a bare number. The rule lives in
+ * `klineLocale.ts`; what this file can prove is that the page hands it to the
+ * library before it ever creates a chart.
+ */
+describe("the page registers the minute unit", () => {
+  it("patches every locale the chart holds, with the unit and nothing else", async () => {
+    seedSession("09988.HK", "1D", true);
+    await mountChart();
+    // The tags come from the fake's `getSupportedLocales`, so this also proves the
+    // page asked the library rather than inventing one — an unknown tag is the
+    // tooltip throw `chartLocale` exists to stop.
+    expect(h.localePatches.map((p) => p.tag).sort()).toEqual(["en-US", "zh-CN"]);
+    for (const { tag, patch } of h.localePatches) {
+      expect(Object.keys(patch)).toEqual(["minute"]);
+      expect(patch.minute.length).toBeGreaterThan(0);
+      expect(patch.minute).toBe(tag.toLowerCase().startsWith("zh") ? "分钟" : "Min");
+    }
+  });
+});
+
+/**
+ * One trading day has to fit in the pane (㉘→㉙).
  *
  * Reported as "分时显示不正常". The cause is not the line style: `candle.type:
  * "area"` changes the drawing while the zoom stays at whatever it was (the
@@ -614,11 +676,16 @@ describe("the price pane carries one overlay, not one per click", () => {
  * the live page, and it is the open upstream request klinecharts/KLineChart#790
  * — the library has no example, so the fit had to be written down here.
  *
+ * The fit has a second half, which ㉘ missed: the zoom is capped at 50px a bar,
+ * so a young session cannot always fill a wide pane, and where the leftover goes
+ * is a decision. "Where does the session start" is the assertion that catches it,
+ * and it only bites mid-session — see the 09:33 case below.
+ *
  * `h.domWidth` is what makes this testable at all: jsdom says 0 for everything,
  * which the page reads as "cannot answer" and acts on by changing nothing.
  */
 describe("分时 fills the pane with the session", () => {
-  it("sets the zoom, closes the right gap and pins the view to the last bar", async () => {
+  it("sets the zoom and spends only the rounding slack on the right", async () => {
     h.domWidth = 375;
     h.payload = sessionBarsOf(240);
     seedSession("600519.SH", "1D");
@@ -629,8 +696,40 @@ describe("分时 fills the pane with the session", () => {
     await settle();
     // 375 / 240 = 1.5625, floored to 1.56 so the session ends inside the pane.
     expect(h.barSpace).toBe(1.56);
-    expect(h.offsetRight).toBe(0);
+    // Not 0: 240 bars of 1.56px is 374.4px and the pane is 375px. That 0.6px is
+    // the floor's slack, and it now belongs to the right of the session instead
+    // of being silently clipped off its start.
+    expect(offsetRightPx()).toBeCloseTo(0.6, 6);
+    expect(h.barSpace * 240 + offsetRightPx()).toBeCloseTo(375, 6);
     expect(h.scrolled).toBeGreaterThan(0);
+  });
+
+  it("starts a session that is too young to fill the pane at the left edge", async () => {
+    // ㉙, the report that ㉘'s check could not see: a 09:33 screenshot of 09988.HK
+    // with 13 bars in a 922px panel. 922 / 13 wants 71px a bar, the library caps
+    // it at 50 (`barSpaceLimit.max`, dist 13667 — and it is init-only, so there is
+    // no raising it at runtime), so the session can only ever be 650px wide. The
+    // 272px left over must be the minutes the day has not traded yet, not a gap
+    // before the opening bell.
+    h.domWidth = 922;
+    h.payload = sessionBarsOf(13);
+    seedSession("09988.HK", "1D", true);
+    await mountChart();
+    expect(h.barSpace).toBe(BAR_SPACE_LIMIT.max);
+    expect(offsetRightPx()).toBeCloseTo(272, 6);
+    // The invariant, and the one that names the bug: session + margin is the pane,
+    // so there is nothing left to sit to the left of 09:30.
+    expect(h.barSpace * 13 + offsetRightPx()).toBeCloseTo(922, 6);
+    // And it was applied at the new zoom, not the old one: the fake stores the
+    // margin as a bar count exactly as the library does, so an offset set *before*
+    // `setBarSpace` would read back as 272 / 8 bars = 1360px here.
+    expect(h.offsetCalls.at(-1)?.distance).toBeCloseTo(272, 6);
+    expect(h.offsetRightBars).toBeCloseTo(5.44, 6);
+    // Every margin was applied *at* the zoom it was derived from. This is the
+    // order ㉙ shipped wrong, and it is invisible in the end state above.
+    for (const call of h.offsetCalls) {
+      expect(call.atSpace).toBe(BAR_SPACE_LIMIT.max);
+    }
   });
 
   it("fits again when the host is resized", async () => {
@@ -668,6 +767,28 @@ describe("分时 fills the pane with the session", () => {
     expect(h.barSpace).toBe(8);
   });
 
+  it("does not hand the candles a margin that was measured at the line's zoom", async () => {
+    // The other half of the borrow. A wide pane and a young session: `fitBarSpace`
+    // stops at 50px, so 13 bars take 650 of the 1920 and the remaining 1270 gets
+    // parked on the right — as a *bar count* (25.4), because that is how the store
+    // holds it (dist 13694). Return the zoom alone and the K-line chart opens with
+    // 25.4 bars of gap after the newest daily bar.
+    h.domWidth = 1920;
+    h.payload = sessionBarsOf(13);
+    seedSession("600519.SH", "1D");
+    await mountChart();
+
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(h.barSpace).toBe(BAR_SPACE_LIMIT.max);
+    expect(offsetRightPx()).toBeCloseTo(1270, 6);
+
+    fireEvent.click(buttonOf("15分"));
+    await settle();
+    expect(h.barSpace).toBe(8);
+    expect(offsetRightPx()).toBe(42); // 5.25 bars, exactly what the candles had
+  });
+
   it("leaves the zoom alone for a host that reports no width", async () => {
     h.payload = sessionBarsOf(240);
     seedSession("600519.SH", "1D");
@@ -675,6 +796,7 @@ describe("分时 fills the pane with the session", () => {
     fireEvent.click(buttonOf("分时"));
     await settle();
     expect(h.spaceCalls).toEqual([]);
+    expect(h.offsetCalls).toEqual([]); // the margin is part of the same answer
     expect(h.barSpace).toBe(8);
   });
 
@@ -692,6 +814,7 @@ describe("分时 fills the pane with the session", () => {
     fireEvent.click(buttonOf("15分"));
     await settle();
     expect(h.barSpace).toBe(DEFAULT_CANDLE_BAR_SPACE);
+    expect(offsetRightPx()).toBe(DEFAULT_CANDLE_OFFSET_RIGHT); // the margin too
   });
 });
 

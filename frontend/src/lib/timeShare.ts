@@ -77,6 +77,41 @@ export function fitBarSpace(contentWidth: number, barCount: number): number | nu
 }
 
 /**
+ * The empty column a fitted session leaves over on the right, in pixels.
+ *
+ * `fitBarSpace` can only offer a spacing inside [1, 50], and *both* ends of that
+ * window mean the session no longer fills the pane. The one that bit was the top:
+ * a 分时 is drawn while the day is still running, so at 09:33 there are thirteen
+ * bars to place, a 922px panel wants 71px of them, the library refuses anything
+ * past 50 (dist 13667, `_layoutOptions.barSpaceLimit`) and the drawn line ends up
+ * 650px wide. `setOffsetRightDistance(0)` then pins the *last* bar to the right
+ * edge, so the 272px nobody used piles up on the LEFT — the chart opens with a
+ * third of the pane empty and 09:30 somewhere off to the right, which is the
+ * "分时显示还是有问题" of 2026-09-10.
+ *
+ * Handing that remainder to the right instead puts it where the empty space
+ * belongs on a 分时: columns the session has not reached yet. The line starts at
+ * the opening bell at x = 0, which is what every broker's 分时 looks like.
+ * (The axis does extrapolate ticks into it — `StoreImp.dataIndexToTimestamp`
+ * dist 13784 — but at 09:33 the next five minutes are real trading time, and
+ * that is also when this is non-zero: past the close there are enough bars that
+ * `fitBarSpace` never hits the cap and the remainder is under 4px.)
+ *
+ * It is exactly `contentWidth - barSpace * barCount`, which is the condition for
+ * bar 0's centre to land at `barSpace / 2` — derived from `dataIndexToCoordinate`
+ * (dist 13885): `x(i) = totalBarSpace - (dataCount + offset/barSpace - i - 0.5) *
+ * barSpace`, so `x(0) = barSpace / 2` ⟺ `offset = totalBarSpace - dataCount *
+ * barSpace`. Zero for a session that did fit, so the after-close shape is
+ * unchanged to within the sub-pixel slack of the floor in `fitBarSpace`.
+ */
+export function fitOffsetRight(contentWidth: number, barSpace: number, barCount: number): number {
+  if (!Number.isFinite(contentWidth) || contentWidth <= 0) return 0;
+  if (!Number.isFinite(barSpace) || barSpace <= 0) return 0;
+  if (!Number.isFinite(barCount) || barCount <= 0) return 0;
+  return Math.max(0, contentWidth - barSpace * barCount);
+}
+
+/**
  * The zoom a K-line chart gets back when 分时 ends and nothing was borrowed
  * (㉘). It is the library's own `DEFAULT_BAR_SPACE` (dist 13056), which is what
  * the pane would have been at had the user never entered 分时 — the case that
@@ -86,6 +121,22 @@ export function fitBarSpace(contentWidth: number, barCount: number): number | nu
  * in a strip, i.e. the same complaint moved to the other side of the toggle.
  */
 export const DEFAULT_CANDLE_BAR_SPACE = 10;
+
+/**
+ * The right margin a K-line chart gets back when 分时 ends and nothing was
+ * borrowed — the companion to `DEFAULT_CANDLE_BAR_SPACE` above, for the other
+ * half of what `fitSessionToWidth` writes.
+ *
+ * It is the library's own `DEFAULT_OFFSET_RIGHT_DISTANCE` (dist 13057; 80px, which
+ * at the default 10px spacing is the 8 empty columns a fresh chart shows). The
+ * reason to return it rather than leave it: the store keeps the margin as a
+ * *bar count* (dist 13694) and `resetData` never revisits it, so restoring the
+ * zoom alone re-scales whatever 分时 had left there. A wide pane and a young
+ * session make that number large — 1920px against thirteen 50px bars is 1270px of
+ * remainder, 25.4 bars of it, which re-appears as a 254px gap after the newest
+ * daily bar once the zoom goes back to 10px.
+ */
+export const DEFAULT_CANDLE_OFFSET_RIGHT = 80;
 
 /**
  * How long to wait before the one retry a 分时 request gets (㉘).

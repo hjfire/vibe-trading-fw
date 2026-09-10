@@ -223,6 +223,7 @@ function paneHeights(): Record<string, number> {
 vi.mock("klinecharts", () => ({
   registerIndicator: vi.fn(),
   getSupportedLocales: () => ["en-US", "zh-CN"],
+  registerLocale: vi.fn(),
   dispose: vi.fn(),
   init: () => {
     const chart = {

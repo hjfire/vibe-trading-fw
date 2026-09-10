@@ -72,6 +72,7 @@ vi.mock("klinecharts", () => ({
   registerIndicator: () => {},
   registerOverlay: () => {},
   getSupportedLocales: () => ["en-US", "zh-CN"],
+  registerLocale: () => {},
   version: () => "test",
 }));
 

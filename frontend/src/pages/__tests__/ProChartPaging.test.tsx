@@ -117,6 +117,7 @@ function runLoad(type: "init" | "forward" | "backward"): void {
 vi.mock("klinecharts", () => ({
   registerIndicator: vi.fn(),
   getSupportedLocales: () => ["en-US", "zh-CN"],
+  registerLocale: vi.fn(),
   dispose: vi.fn(),
   init: () => ({
     getSymbol: () => ({ ticker: "600519.SH" }),

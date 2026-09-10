@@ -16,6 +16,7 @@ import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
   AVG_PRICE_NAME,
   DEFAULT_CANDLE_BAR_SPACE,
+  DEFAULT_CANDLE_OFFSET_RIGHT,
   PREV_CLOSE_NAME,
   TIME_SHARE_COUNT,
   TIME_SHARE_INTERVAL,
@@ -23,6 +24,7 @@ import {
   ensurePrevCloseIndicator,
   ensureTimeShareIndicator,
   fitBarSpace,
+  fitOffsetRight,
   setChangeBase,
   timeShareBadge,
   type SessionInfo,
@@ -70,7 +72,7 @@ import {
   mergeDrawings,
   readDrawingsShareLink,
 } from "@/lib/drawingExchange";
-import { chartLocale } from "@/lib/klineLocale";
+import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
 import { candidateFromSymbol } from "@/lib/symbolSearch";
@@ -483,6 +485,14 @@ export function ProChart() {
    * different hat.
    */
   const candleSpaceRef = useRef<number | null>(null);
+  /**
+   * The right margin 分时 overwrote, same borrow-and-return, for the other half
+   * of the pair (㉙). `fitSessionToWidth` parks the unfittable remainder there so
+   * the line starts at the bell; the store holds it as a bar count and `resetData`
+   * does not revisit it, so returning only the zoom re-scales that bar count
+   * against the candles and leaves a gap nobody asked for.
+   */
+  const candleOffsetRightRef = useRef<number | null>(null);
   const refreshIndCount = () => {
     setIndCount(loadUserIndicators().filter((x) => x.enabled).length);
     setLayoutTick((t) => t + 1);
@@ -581,22 +591,38 @@ export function ProChart() {
    * a live 331-bar HK session in a 376px pane, that shows 15:22-16:00 and makes
    * the user drag for the other six and a half hours — the complaint in
    * klinecharts/KLineChart#790, which the library still has no answer for. The
-   * three calls below are the whole recipe, and `fitBarSpace` holds the one
-   * clamp that matters (the library's `setBarSpace` no-ops outside [1, 50]).
+   * three calls below are the whole recipe, and `fitBarSpace` holds the clamp
+   * that decides whether the call lands at all (the library's `setBarSpace`
+   * no-ops outside [1, 50]).
    *
    * It runs when the session arrives and when the host is resized — not on a
    * timer and not on every data event, so a zoom the user made by hand during a
    * session stays theirs.
+   *
+   * The third call is the half that ㉘ got wrong: a fitted session is not always
+   * as wide as the pane, because `fitBarSpace` stops at the library's 50px
+   * ceiling. Mid-morning there are too few bars to fill a wide panel with, and
+   * pinning the last one to the right edge stacked the unused pixels on the left
+   * — the report of 2026-09-10 was a line starting in the middle of the chart.
+   * The remainder goes to the right now, where an unfinished day's empty minutes
+   * live; see `fitOffsetRight`.
    */
   const fitSessionToWidth = (chart: Nullable<Chart>, barCount: number) => {
     if (!chart || !viewRef.current.timeShare) return;
     const width = chart.getDom(MAIN_PANE_ID, "main")?.getBoundingClientRect().width ?? 0;
     const space = fitBarSpace(width, barCount);
     if (space === null) return; // jsdom / detached host: leave the zoom alone
-    // A 分时 ends where the session ends. Leaving the default right offset put a
-    // `16:06` tick on the axis of a 16:00 close — a minute that never traded.
-    chart.setOffsetRightDistance(0);
+    // Zoom first, and that order is load-bearing. `setOffsetRightDistance`
+    // converts the pixels it is handed into a bar count using whatever spacing
+    // is current (dist 13694: `_lastBarRightSideDiffBarCount = _offsetRightDistance
+    // / _barSpace`), and `setBarSpace` never recomputes that bar count (dist
+    // 13666-13681) — so offsetting before zooming skews the gap by the ratio of
+    // the two spacings instead of applying it.
     chart.setBarSpace(space);
+    chart.setOffsetRightDistance(fitOffsetRight(width, space, barCount));
+    // Provably a no-op once the offset is set (dist 15629 reads back the same
+    // field it was just written), and kept because it is the call that says
+    // "look at the newest bar" if that ever stops being true.
     chart.scrollToRealTime(0);
   };
 
@@ -669,6 +695,10 @@ export function ProChart() {
   // Create/destroy the chart once per mount.
   useEffect(() => {
     if (!hostRef.current) return;
+    // Before `init`, so the first tooltip of the first chart already reads
+    // 1分钟 instead of 1 (see `ensurePeriodUnitLabels`). Guarded internally,
+    // which is what makes the StrictMode double mount below harmless.
+    ensurePeriodUnitLabels();
     const chart = init(hostRef.current, {
       // Must be a tag KLineChart ships: an unknown one makes its tooltip throw
       // on every redraw (see `chartLocale`).
@@ -922,12 +952,19 @@ export function ProChart() {
     if (chart && view.timeShare !== viewRef.current.timeShare) {
       if (view.timeShare) {
         candleSpaceRef.current = chart.getBarSpace().bar;
+        candleOffsetRightRef.current = chart.getOffsetRightDistance();
       } else {
         // Nothing saved means the page *opened* on 分时, so no candle view ever
         // had a zoom to borrow — hand back the library's own default rather than
         // the session-fitted 1.1px the line needed.
         chart.setBarSpace(candleSpaceRef.current ?? DEFAULT_CANDLE_BAR_SPACE);
+        // Same order as the fit: the margin is stored as a bar count, so it has to
+        // be converted at the zoom it is going to be read back at.
+        chart.setOffsetRightDistance(
+          candleOffsetRightRef.current ?? DEFAULT_CANDLE_OFFSET_RIGHT,
+        );
         candleSpaceRef.current = null;
+        candleOffsetRightRef.current = null;
       }
     }
     viewRef.current = view;

@@ -18,6 +18,7 @@ import {
   changeTone,
   ensureTimeShareIndicator,
   fitBarSpace,
+  fitOffsetRight,
   formatChangePct,
   getChangeBase,
   prevCloseSeries,
@@ -223,6 +224,61 @@ describe("fitBarSpace", () => {
     expect(fitBarSpace(376, 0)).toBeNull();
     expect(fitBarSpace(Number.NaN, 331)).toBeNull();
     expect(fitBarSpace(-5, 331)).toBeNull();
+  });
+});
+
+/**
+ * Where the pixels a fitted session cannot use go (㉙). The same complaint as
+ * `fitBarSpace`, one report later — "分时显示还是有问题" — but this screenshot was
+ * taken at 09:33, with thirteen bars to draw in a 922px panel. ㉘ was checked
+ * after the close against 331 bars, and at that width/bar ratio the 50px ceiling
+ * is never reached, so the symptom could not have shown itself in that check.
+ */
+describe("fitOffsetRight", () => {
+  it("keeps the leftover of a capped fit out of the left edge", () => {
+    // 922 / 13 wants 71px a bar, the library refuses past 50, so 650px of pane is
+    // actually drawing the session and 272px is spare. Given to the right, that
+    // space is "minutes not yet traded"; given to the left, it is the half-empty
+    // chart in the report.
+    const space = fitBarSpace(922, 13)!;
+    expect(space).toBe(BAR_SPACE_LIMIT.max);
+    expect(fitOffsetRight(922, space, 13)).toBe(272);
+  });
+
+  it("is the exact value that puts bar 0 at half a bar from the left edge", () => {
+    // StoreImp.dataIndexToCoordinate (dist 13885):
+    //   x(i) = totalBarSpace - (dataCount + offset/barSpace - i - 0.5) * barSpace
+    // so x(0) === barSpace / 2 only when offset === totalBarSpace - n * barSpace.
+    const space = fitBarSpace(922, 13)!;
+    const offset = fitOffsetRight(922, space, 13);
+    expect(922 - (13 + offset / space - 0.5) * space).toBeCloseTo(space / 2, 6);
+  });
+
+  it("answers a rounded zero for a session that did fit", () => {
+    // Past the close there are enough bars that the ceiling never bites, so the
+    // only leftover is the 2dp floor in `fitBarSpace`. The check that matters is
+    // that this fix cannot make a fitted day visibly move: 1.97px of a 376px pane.
+    const space = fitBarSpace(376, 331)!;
+    expect(fitOffsetRight(376, space, 331)).toBeLessThan(4);
+    expect(fitOffsetRight(200, 1.13, 176)).toBeCloseTo(1.12, 6);
+    expect(fitOffsetRight(400, 1, 400)).toBe(0);
+  });
+
+  it("never sends the opening bell off the left edge", () => {
+    // The other end of the clamp: too many bars for the width pushes the spacing
+    // up to the minimum, so the bars overshoot the pane. A negative remainder
+    // here would shift the whole session left and cut off its start.
+    expect(fitOffsetRight(100, fitBarSpace(100, 331)!, 331)).toBe(0);
+  });
+
+  it("answers 0 when the host cannot", () => {
+    // Same "change nothing" contract as fitBarSpace's null, reached from the
+    // other side: the caller has already bailed on a null spacing, so a zero
+    // here only ever means "no leftover", never "wipe the offset the user set".
+    expect(fitOffsetRight(0, 10, 13)).toBe(0);
+    expect(fitOffsetRight(922, 0, 13)).toBe(0);
+    expect(fitOffsetRight(922, 50, 0)).toBe(0);
+    expect(fitOffsetRight(Number.NaN, 50, 13)).toBe(0);
   });
 });
 
