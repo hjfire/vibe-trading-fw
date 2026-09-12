@@ -99,7 +99,7 @@ def _parse_period(period: str) -> tuple[str, str]:
 
 
 def _load_universe_panel(
-    universe: str, period: str, *, use_cache: bool = True
+    universe: str, period: str, *, use_cache: bool = True, source: str | None = None
 ) -> dict[str, pd.DataFrame]:
     """Load OHLCV(+amount, +vwap) wide panel for the requested universe.
 
@@ -113,27 +113,44 @@ def _load_universe_panel(
         use_cache: When True (default) reuse a pickle in
             ``~/.vibe-trading/cache/`` if the same universe+period was fetched
             before. Set to False to force a re-fetch.
+        source: ``None`` (default) fetches from the vendor. ``"warehouse"``
+            builds the identical contract from locally stored bars, offline.
+            Any other value is refused rather than quietly ignored.
 
     Raises:
-        ValueError: unknown universe or bad period.
-        RuntimeError: ``TUSHARE_TOKEN`` unset when csi300 is requested.
+        ValueError: unknown universe, bad period, or an unsupported source.
+        RuntimeError: ``TUSHARE_TOKEN`` unset when csi300 is requested, or the
+            warehouse cannot serve.
     """
     if universe not in _UNIVERSE_TAG:
         raise ValueError(
             f"universe {universe!r} not recognized; expected one of {sorted(_UNIVERSE_TAG)}"
         )
+    if source not in (None, "warehouse"):
+        raise ValueError(
+            f"source {source!r} is not wired into the panel loader; expected "
+            "None (vendor fetch) or 'warehouse' (local bars)"
+        )
     start, end = _parse_period(period)
 
+    # The warehouse is the cache already: re-pickling it would add a second copy
+    # that stays stale after the next sync, which is the one way a local store
+    # can end up disagreeing with itself. Every warehouse read is a parquet scan
+    # measured in milliseconds, so nothing is gained by layering on top of it.
     cache_dir = Path.home() / ".vibe-trading" / "cache"
-    cache_path = cache_dir / f"{universe}_{start}_{end}.pkl"
-    if use_cache and cache_path.is_file():
+    cache_path = cache_dir / f"{_panel_cache_stem(universe, start, end, source)}.pkl"
+    if use_cache and source is None and cache_path.is_file():
         cached = _read_pickle_cache(cache_path)
         if cached is not None:
             logger.info("universe %s: loaded from cache %s", universe, cache_path)
             return cached
 
     if universe == "csi300":
-        panel = _load_csi300_panel(start, end)
+        panel = (
+            _load_warehouse_csi300_panel(start, end)
+            if source == "warehouse"
+            else _load_csi300_panel(start, end)
+        )
     elif universe == "sp500":
         panel = _load_sp500_panel(start, end)
     elif universe == "btc-usdt":
@@ -158,10 +175,24 @@ def _load_universe_panel(
             "meaningful results."
         )
 
-    if use_cache:
+    if use_cache and source is None:
         _write_pickle_cache(cache_dir, cache_path, panel)
 
     return panel
+
+
+def _panel_cache_stem(universe: str, start: str, end: str, source: str | None) -> str:
+    """Return the pickle cache stem, namespaced by source only when one is given.
+
+    The vendor path keeps its historical name so existing caches stay valid; the
+    warehouse path cannot share it, because two panels whose prices are anchored
+    to different data would otherwise overwrite each other at random. ``-`` rather
+    than ``:`` as the separator: the cache directory is on the user's disk, and
+    Windows rejects a colon in a filename.
+    """
+    if source is None:
+        return f"{universe}_{start}_{end}"
+    return f"{universe}-{source}_{start}_{end}"
 
 
 def _sha256_path(cache_path: Path) -> Path:
@@ -306,28 +337,27 @@ _SP500_FALLBACK_CODES = [
 ]
 
 
-def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
-    """CSI 300 panel via Tushare. Includes ``amount`` (required by gtja191).
+def _csi300_constituents(
+    pro: Any, start: str, end: str
+) -> tuple[list[str], str, str | None, "pd.DataFrame | None"]:
+    """Resolve the CSI 300 roster for a window, plus its membership matrix.
 
-    Constituents are taken from the most recent ``index_weight`` snapshot in
-    the requested window; if that call fails we degrade to a 30-name
-    blue-chip fallback so the bench still runs.
+    Shared with the local warehouse sync, which has to fill the same names: one
+    definition of "was a member during the window" keeps a survivorship-biased
+    roster from being derived two different ways.
+
+    Args:
+        pro: A Tushare Pro client (anything exposing ``index_weight``).
+        start: Window start, ``YYYY-MM-DD``.
+        end: Window end, ``YYYY-MM-DD``.
+
+    Returns:
+        ``(codes, constituent_source, constituent_source_date, membership)``.
+        ``codes`` holds every name that was a member at *any* point in the
+        window; ``membership`` is a date x code boolean matrix, or ``None`` when
+        the roster call failed and the hand-picked fallback was used.
     """
-    token = get_env_config().data.tushare_token.strip()
-    if not token or token == "your-tushare-token":
-        raise RuntimeError(
-            "TUSHARE_TOKEN not in agent/.env or environment; required for csi300 universe"
-        )
-
-    try:
-        import tushare as ts
-    except ImportError as exc:
-        raise RuntimeError(f"tushare not installed: {exc}") from exc
-
-    pro = ts.pro_api(token)
-    sd = start.replace("-", "")
     ed = end.replace("-", "")
-
     codes: list[str] = []
     constituent_source = "tushare index_weight"
     constituent_source_date: str | None = None
@@ -371,6 +401,34 @@ def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
         constituent_source = "hand-picked fallback"
         constituent_source_date = None
         logger.warning("csi300: using %d-name fallback (degraded run)", len(codes))
+    return codes, constituent_source, constituent_source_date, membership
+
+
+def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
+    """CSI 300 panel via Tushare. Includes ``amount`` (required by gtja191).
+
+    Constituents are taken from the most recent ``index_weight`` snapshot in
+    the requested window; if that call fails we degrade to a 30-name
+    blue-chip fallback so the bench still runs.
+    """
+    token = get_env_config().data.tushare_token.strip()
+    if not token or token == "your-tushare-token":
+        raise RuntimeError(
+            "TUSHARE_TOKEN not in agent/.env or environment; required for csi300 universe"
+        )
+
+    try:
+        import tushare as ts
+    except ImportError as exc:
+        raise RuntimeError(f"tushare not installed: {exc}") from exc
+
+    pro = ts.pro_api(token)
+    sd = start.replace("-", "")
+    ed = end.replace("-", "")
+
+    codes, constituent_source, constituent_source_date, membership = _csi300_constituents(
+        pro, start, end
+    )
 
     # Fetch raw daily in parallel — we need ``amount`` which the standard
     # loader drops. Tushare's free tier permits ~200 calls/min so 4 concurrent
@@ -423,10 +481,54 @@ def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
             ", ".join(dropped[:10]) + ("..." if len(dropped) > 10 else ""),
         )
 
+    return _assemble_csi300_panel(
+        fetched,
+        membership=membership,
+        constituent_source=constituent_source,
+        constituent_source_date=constituent_source_date,
+        codes=codes,
+        dropped=dropped,
+    )
+
+
+def _assemble_csi300_panel(
+    fetched: dict[str, pd.DataFrame],
+    *,
+    membership: pd.DataFrame | None,
+    constituent_source: str,
+    constituent_source_date: str | None,
+    codes: list[str],
+    dropped: list[str],
+    extra_meta: dict[str, Any] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Turn per-code frames into the wide csi300 panel, with its honesty metadata.
+
+    Shared by the vendor path and the local warehouse so the two cannot drift
+    apart in the two places that actually decide whether a bench is trustworthy:
+    how vwap is derived and which names are allowed into each date's
+    cross-section. One definition is also what makes acceptance criterion 5
+    ("the warehouse panel equals the vendor panel value for value") testable.
+
+    Args:
+        fetched: ``{code: frame}`` with a ``trade_date`` index and
+            open/high/low/close/volume(/amount), already corporate-action
+            adjusted to this window's anchor.
+        membership: date x symbol point-in-time roster, or ``None`` when the
+            roster was degraded to a static list.
+        constituent_source: Verbatim roster provenance.
+        constituent_source_date: Latest roster snapshot, if known.
+        codes: Every name the roster claimed for the window.
+        dropped: Names with no usable adjustment factors, hence absent.
+        extra_meta: Provenance keys the caller wants carried (warehouse root...).
+
+    Returns:
+        ``dict[field -> wide DataFrame]`` plus the ``_meta`` blob.
+    """
     panel = _wide_from_fetched(fetched, include_amount=True)
     # CN equity vwap: Tushare ``amount`` is in 千元, ``volume`` in 手. True VWAP
     # = (amount * 1000 CNY) / (volume * 100 shares). Matches
-    # ``src.factors.base.vwap(EQUITY_CN)``.
+    # ``src.factors.base.vwap(EQUITY_CN)``. The warehouse stores both columns
+    # verbatim under those canonical units, so the same formula holds there.
     if "amount" in panel and "volume" in panel:
         from src.factors.base import safe_div
 
@@ -465,8 +567,98 @@ def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
         # Prices are corporate-action adjusted; raw pro.daily is not.
         "price_adjustment": "qfq",
         "dropped_unadjustable": len(dropped),
+        **(extra_meta or {}),
     }
     return panel
+
+
+def _load_warehouse_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
+    """Build the csi300 panel from locally stored bars — no network, no token.
+
+    This is the research-facing read end of :mod:`backtest.warehouse`. The point
+    of the whole store is here: a bench can be re-run years later, offline, and
+    land on the same numbers, because the bars it priced are on disk with their
+    provenance and adjustment factors rather than whatever an endpoint returned
+    that day.
+
+    Names come from the stored point-in-time roster intersected with what
+    actually has bars, and the mask is applied by the shared assembler, so an
+    offline panel does not quietly become a survivor-selected one. When no
+    roster was ever stored (the vendor roster call had failed during the sync)
+    the panel is assembled unmasked and says so: ``survivorship_bias=true``.
+
+    Args:
+        start: Window start, ``YYYY-MM-DD``.
+        end: Window end, ``YYYY-MM-DD``; also the qfq anchor, so levels are
+            scaled the same way the vendor path scales them for that window.
+
+    Returns:
+        The panel dict, same contract as :func:`_load_csi300_panel`.
+
+    Raises:
+        RuntimeError: The warehouse is disabled, empty, or has no daily bars for
+            any roster member in the window.
+    """
+    from backtest.warehouse import loader as warehouse_loader
+    from backtest.warehouse import store as warehouse_store
+
+    reason = warehouse_loader.disabled_reason()
+    if reason:
+        raise RuntimeError(f"warehouse panel cannot be built: {reason}")
+
+    membership, roster_meta = warehouse_store.read_universe_roster("csi300")
+    stored = set(warehouse_store.stored_symbols())
+    if membership is not None:
+        members = {str(code) for code in membership.columns}
+        codes = sorted(stored & members)
+    else:
+        codes = sorted(stored)
+    if not codes:
+        if membership is not None:
+            raise RuntimeError(
+                "warehouse panel: none of the stored symbols is a csi300 member; "
+                "sync the index names themselves with 'python -m backtest.warehouse "
+                "sync --universe csi300 --since <YYYY-MM-DD>'"
+            )
+        raise RuntimeError(
+            "warehouse panel: no bars are stored yet; run 'python -m "
+            "backtest.warehouse sync --universe csi300 --since <YYYY-MM-DD>'"
+        )
+
+    # adjust="qfq": raw prices plus per-row factors are what the store holds,
+    # and the read side does the arithmetic, anchored to this window's end.
+    fetched = warehouse_store.read_bars(codes, interval="1D", start=start, end=end)
+    dropped = sorted(set(codes) - set(fetched))
+    if not fetched:
+        raise RuntimeError(
+            f"warehouse panel: {len(codes)} stored member(s) produced no bar in "
+            f"{start}..{end}; check the window against 'python -m "
+            "backtest.warehouse list'"
+        )
+    if dropped:
+        logger.warning(
+            "warehouse csi300: %d/%d member(s) contributed no usable bar "
+            "(no stored rows, or no adjustment factor): %s",
+            len(dropped),
+            len(codes),
+            ", ".join(dropped[:10]) + ("..." if len(dropped) > 10 else ""),
+        )
+
+    return _assemble_csi300_panel(
+        fetched,
+        membership=membership,
+        constituent_source=str(roster_meta.get("constituent_source") or "warehouse: no stored roster"),
+        constituent_source_date=roster_meta.get("constituent_source_date"),
+        codes=codes,
+        dropped=dropped,
+        extra_meta={
+            # The run card must be able to name the store the bars came from,
+            # not merely that a store was involved.
+            "data_source": "warehouse",
+            "warehouse_root": str(warehouse_loader.bars_dir(None)),
+            "stored_symbols": len(stored),
+        },
+    )
 
 
 def _load_sp500_panel(start: str, end: str) -> dict[str, pd.DataFrame]:

@@ -326,6 +326,7 @@ def run_bench_strict(
     top: int = 20,
     on_progress: ProgressCb | None = None,
     registry: Registry | None = None,
+    data_source: str | None = None,
 ) -> dict[str, Any]:
     """Strict-mode bench: like ``run_bench`` but with mandatory random control.
 
@@ -352,6 +353,9 @@ def run_bench_strict(
         top: How many top-IR alphas to keep in summary lists.
         on_progress: Optional ``(n_done, n_total, alpha_id)`` callback.
         registry: Optional pre-built registry for tests.
+        data_source: Panel source for ``_load_universe_panel``; ``None`` fetches
+            from the vendor, ``"warehouse"`` benches the local store. A strict
+            rail is only worth running on a panel that can be fetched again.
 
     Returns:
         Dict containing all the keys ``run_bench()`` returns, plus:
@@ -428,8 +432,11 @@ def run_bench_strict(
     if not alpha_ids:
         return _finish_error(f"no alphas registered under zoo={zoo!r}")
 
+    # Only pass the source through when it was asked for: callers that patch
+    # this loader with a two-argument stub must keep working.
+    load_kwargs: dict[str, Any] = {"source": data_source} if data_source else {}
     try:
-        panel = _load_universe_panel(universe, period)
+        panel = _load_universe_panel(universe, period, **load_kwargs)
     except (ValueError, NotImplementedError, RuntimeError) as exc:
         return _finish_error(f"universe load failed: {exc}")
 

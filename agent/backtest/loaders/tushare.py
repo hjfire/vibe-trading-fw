@@ -216,7 +216,99 @@ class DataLoader:
         start_date: str,
         end_date: str,
     ) -> Optional[pd.DataFrame]:
-        """Fetch and normalize one daily OHLCV frame, routing by symbol type."""
+        """Fetch and normalize one daily OHLCV frame, routing by symbol type.
+
+        Prices come back forward-adjusted. :meth:`fetch_raw_with_factor` is the
+        unadjusted pair the local warehouse stores; both share
+        :meth:`_fetch_raw_daily_pair` so the endpoint routing exists once.
+        """
+        pair = self._fetch_raw_daily_pair(code, start_date, end_date)
+        if pair is None:
+            return None
+        bars, factor = pair
+        ohlcv = bars[["open", "high", "low", "close", "volume"]]
+        if factor is None:
+            # An index level is already continuous across its members'
+            # ex-dates, and Tushare publishes no HK factor series: both are
+            # served as delivered, which is what they always were.
+            return ohlcv
+
+        adjusted = apply_qfq(ohlcv, factor)
+        if adjusted is None:
+            # Returning the raw frame here is what produced the defect: a
+            # close-to-close return across an ex-date spans the mechanical gap,
+            # measured at -47.2%% on 300750.SZ 2023-04-26 against a true +5.4%%.
+            logger.warning(
+                "tushare: no usable adjustment factors for %s — dropping the "
+                "symbol rather than backtesting it on unadjusted prices",
+                code,
+            )
+        return adjusted
+
+    def fetch_raw_with_factor(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        *,
+        interval: str = "1D",
+    ) -> Dict[str, tuple[pd.DataFrame, Optional[pd.DataFrame]]]:
+        """Fetch **unadjusted** daily bars plus each symbol's factor frame.
+
+        This is the local warehouse's entry point. Nothing here is adjusted and
+        nothing is dropped for a missing factor: the caller decides, because
+        "no factor" means "cannot be stored" for the warehouse but "cannot be
+        backtested" for the loader. Unlike :meth:`fetch` this bypasses the
+        per-request loader cache on purpose — the warehouse is the durable
+        cache, and a second copy in front of it would only add a place for the
+        two to disagree.
+
+        Args:
+            codes: Symbols, e.g. ``["600519.SH", "510050.SH"]``.
+            start_date: Start date (YYYY-MM-DD).
+            end_date: End date (YYYY-MM-DD).
+            interval: Only ``1D`` is supported.
+
+        Returns:
+            Mapping code -> ``(bars, factor)``. ``bars`` is indexed by
+            ``trade_date`` with open/high/low/close/volume/amount as traded;
+            ``factor`` carries ``(trade_date, adj_factor)`` or ``None`` when the
+            symbol type has no factor series (index, HK) or the fetch failed.
+
+        Raises:
+            ValueError: ``interval`` is not a daily one.
+        """
+        validate_date_range(start_date, end_date)
+        if str(interval).strip().lower() not in {"1d", "d", "day", "daily", "1D"}:
+            raise ValueError(
+                f"fetch_raw_with_factor supports daily bars only, got interval={interval!r}"
+            )
+
+        sd = start_date.replace("-", "")
+        ed = end_date.replace("-", "")
+        result: Dict[str, tuple[pd.DataFrame, Optional[pd.DataFrame]]] = {}
+        for code in codes:
+            try:
+                pair = self._fetch_raw_daily_pair(code, sd, ed)
+            except Exception as exc:  # noqa: BLE001 - one bad symbol must not end the run
+                # A quota rejection is not "this symbol has no data": reporting
+                # it as empty would let the sync's own rate control keep sprinting
+                # into a wall, so it bubbles up to the caller's throttle.
+                if _is_rate_limited(exc):
+                    raise
+                logger.warning("failed to fetch %s: %s", code, exc)
+                continue
+            if pair is not None:
+                result[code] = pair
+        return result
+
+    def _fetch_raw_daily_pair(
+        self,
+        code: str,
+        start_date: str,
+        end_date: str,
+    ) -> Optional[tuple[pd.DataFrame, Optional[pd.DataFrame]]]:
+        """Route by symbol type and return ``(unadjusted bars, factor frame)``."""
         if _is_us_equity(code) or _is_crypto(code):
             logger.warning("tushare does not support %s (US/crypto); skipping", code)
             return None
@@ -247,31 +339,24 @@ class DataLoader:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
         df = df.set_index("trade_date")
         df = df.rename(columns={"vol": "volume"})
-        for col in ["open", "high", "low", "close", "volume"]:
+        for col in ["open", "high", "low", "close", "volume", "amount"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        ohlcv = df[["open", "high", "low", "close", "volume"]].dropna(
-            subset=["open", "high", "low", "close"]
-        )
+        keep = [
+            col
+            for col in ("open", "high", "low", "close", "volume", "amount")
+            if col in df.columns
+        ]
+        bars = df[keep].dropna(subset=["open", "high", "low", "close"])
         if adjust is None:
-            return ohlcv
+            return bars, None
 
         try:
             factor = _call_with_backoff(adjust, ts_code=code, start_date=start_date, end_date=end_date)
         except Exception as exc:  # noqa: BLE001 - one bad fetch must not raise
             logger.warning("tushare adjustment-factor fetch failed for %s: %s", code, exc)
             factor = None
-        adjusted = apply_qfq(ohlcv, factor)
-        if adjusted is None:
-            # Returning the raw frame here is what produced the defect: a
-            # close-to-close return across an ex-date spans the mechanical gap,
-            # measured at -47.2%% on 300750.SZ 2023-04-26 against a true +5.4%%.
-            logger.warning(
-                "tushare: no usable adjustment factors for %s — dropping the "
-                "symbol rather than backtesting it on unadjusted prices",
-                code,
-            )
-        return adjusted
+        return bars, factor
 
     def _merge_basic_fields(
         self,

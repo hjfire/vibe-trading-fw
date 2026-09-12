@@ -142,6 +142,7 @@ def run_bench(
     on_progress: ProgressCb | None = None,
     registry: Registry | None = None,
     only: Iterable[str] | None = None,
+    data_source: str | None = None,
 ) -> dict[str, Any]:
     """Run a bench end-to-end and return the API-shaped summary.
 
@@ -160,6 +161,10 @@ def run_bench(
             alpha list is restricted to this set — used by ``alpha compare`` to
             bench just a handful of named alphas instead of the whole zoo. Ids
             not registered under ``zoo`` are silently dropped from the subset.
+        data_source: Panel source passed to ``_load_universe_panel``; ``None``
+            (default) fetches from the vendor, ``"warehouse"`` reads the local
+            store. Reproducibility is the reason this exists: the same window
+            must be re-benchable offline off the exact bars used the first time.
 
     Returns:
         Dict with keys: ``status``, ``zoo``, ``universe``, ``period``,
@@ -192,8 +197,11 @@ def run_bench(
             entry["wall_seconds"] = round(time.monotonic() - start, 2)
             return entry
 
+    # Only pass the source through when it was asked for: callers that patch
+    # this loader with a two-argument stub must keep working.
+    load_kwargs: dict[str, Any] = {"source": data_source} if data_source else {}
     try:
-        panel = _load_universe_panel(universe, period)
+        panel = _load_universe_panel(universe, period, **load_kwargs)
     except (ValueError, NotImplementedError, RuntimeError) as exc:
         entry["status"] = "error"
         entry["error"] = f"universe load failed: {exc}"

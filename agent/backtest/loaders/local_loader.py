@@ -38,7 +38,12 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import yaml
 
-from backtest.loaders.base import cached_loader_fetch, validate_date_range, validate_ohlc
+from backtest.loaders.base import (
+    _duckdb_sql_string,
+    cached_loader_fetch,
+    validate_date_range,
+    validate_ohlc,
+)
 from backtest.loaders.registry import register
 
 logger = logging.getLogger(__name__)
@@ -190,13 +195,60 @@ def _read_csv(path: str, col_map: dict[str, str], date_fmt: str | None) -> pd.Da
 
 
 def _read_parquet(path: str, col_map: dict[str, str], date_fmt: str | None) -> pd.DataFrame | None:
-    df = pd.read_parquet(path)
-    if isinstance(df.index, pd.DatetimeIndex):
+    """Read one parquet file through DuckDB.
+
+    DuckDB, not ``pd.read_parquet``: pandas needs the optional ``pyarrow`` (or
+    ``fastparquet``) engine that this project does not declare, so a parquet
+    source used to raise ``ImportError`` on a clean install. DuckDB is already a
+    dependency and is the same engine ``backtest.warehouse`` reads with.
+
+    One shape difference has to be bridged: pandas restored the file's index as a
+    ``DatetimeIndex``, while DuckDB returns it as an ordinary column — named after
+    the index, ``__index_level_0__`` when it was unnamed, and always in the last
+    position (measured, not assumed). :func:`_recovered_index_column` finds it.
+    """
+    import duckdb
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        df = con.execute(
+            f"SELECT * FROM read_parquet({_duckdb_sql_string(path)})"
+        ).df()
+    finally:
+        con.close()
+
+    if isinstance(df.index, pd.DatetimeIndex):  # pragma: no cover - engine-dependent
         df = df.reset_index()
-        if date_fmt is None and col_map.get("date", "date") not in df.columns:
+    date_col = col_map.get("date", "date")
+    if date_fmt is None and date_col not in df.columns:
+        # Only guessed when no date format was configured: a caller who passed
+        # ``date_format`` is naming a string column, and parsing a guessed
+        # datetime column with that format would raise instead of reading data.
+        candidate = _recovered_index_column(df)
+        if candidate is not None:
             col_map = dict(col_map)
-            col_map["date"] = df.columns[0]
+            col_map["date"] = candidate
     return _normalize_columns(df, col_map, date_fmt)
+
+
+def _recovered_index_column(df: pd.DataFrame) -> str | None:
+    """Return the column DuckDB recovered from a parquet's datetime index.
+
+    Order matters: an explicitly-named index column or the ``__index_level_0__``
+    sentinel is unambiguous, so a file with several datetime columns is still
+    read the way it was written. Only when neither sentinel is present does the
+    position rule kick in — DuckDB appends the recovered index last, and a lone
+    datetime column can only mean the index.
+    """
+    for name in ("__index_level_0__", "index"):
+        if name in df.columns and pd.api.types.is_datetime64_any_dtype(df[name]):
+            return name
+    times = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])]
+    if len(times) == 1:
+        return times[0]
+    if len(df.columns) and pd.api.types.is_datetime64_any_dtype(df[df.columns[-1]]):
+        return str(df.columns[-1])
+    return None
 
 
 def _read_duckdb(

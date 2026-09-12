@@ -58,6 +58,7 @@ VALID_SOURCES: set[str] = {
     "mt5",
     "tickerall",
     "local",
+    "warehouse",  # the user's own stored bars (backtest.warehouse), opt-in
     "auto",
 }
 
@@ -115,6 +116,7 @@ def _ensure_registered() -> None:
         "backtest.loaders.mt5_loader",
         "backtest.loaders.tickerall_loader",
         "backtest.loaders.local_loader",
+        "backtest.warehouse.loader",
     ]
     import importlib
     for mod in _loader_modules:
@@ -142,8 +144,31 @@ def _ensure_registered() -> None:
 # as if it were Toman — a caliber error of about six orders of magnitude, not a
 # missing-data error. An unreachable Iranian endpoint must be visible.
 _NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset(
-    {"local", "qveris", "tickerall", "fmp", "nobitex", "wallex"}
+    {"local", "qveris", "tickerall", "fmp", "nobitex", "wallex", "warehouse"}
 )  # QVERIS-INTEGRATION
+
+# ``warehouse`` is also deliberately absent from every FALLBACK_CHAINS entry. Two
+# reasons: the store is opt-in and can be empty, so an auto chain would ask a
+# question no one configured it to answer; and a chain member must be a
+# permutation-safe name, since ``is_valid_source_order`` compares a user's saved
+# MARKET_DATA_ORDER_* value against the written defaults, membership included.
+# Ask for it by name (``--data-source warehouse``) or not at all.
+
+
+def _warehouse_hint() -> str:
+    """Return the warehouse loader's own unavailable reason, for a registry error.
+
+    Imported lazily and defensively: ``backtest.warehouse.loader`` imports this
+    module for ``@register``, so a top-level import would be a cycle, and a
+    missing optional dependency must not take the whole registry down with it.
+    """
+    try:
+        from backtest.warehouse.loader import disabled_reason
+
+        reason = disabled_reason()
+    except Exception:  # noqa: BLE001 - the hint is decoration, not behaviour
+        return ""
+    return reason
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +250,10 @@ PRICE_CALIBER_BY_SOURCE: dict[str, str] = {
     "tiingo": "split_dividend",  # prefers adjOpen/High/Low/Close, else adjClose/close
     "fmp": "split_dividend",  # Stable historical-price-eod/full, scaled by adjClose/close
     "futu": "split_dividend",  # request_history_kline autype="qfq" (verified 2026-09-06)
+    # Raw prices plus a per-row adj_factor on disk, adjusted forward from the
+    # requested window's end — the same caliber tushare serves, computed here
+    # rather than taken from the vendor, which is why it gets its own name.
+    "warehouse": "split_dividend",
     # Split-adjusted only.
     "pykrx": "split",  # get_market_ohlcv_by_date(adjusted=True), Naver-backed
     # Unadjusted.
@@ -491,6 +520,9 @@ def get_loader_cls_with_fallback(source: str) -> Type[Any]:
             "wallex": "Wallex's public endpoint was unreachable. It quotes in "
                       "Toman (TMN) and has no substitute — check network access "
                       "to api.wallex.ir.",
+            # Quoted from the loader itself so the two cannot drift: the same
+            # sentence is the CLI's answer to "why is this empty".
+            "warehouse": _warehouse_hint(),
         }.get(source, "")
         raise NoAvailableSourceError(
             f"Data source '{source}' is unavailable and does not fall back to a "

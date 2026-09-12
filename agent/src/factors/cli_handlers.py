@@ -422,6 +422,7 @@ def _run_single_zoo_with_progress(
     n_target: int,
     reg: Registry,
     run_bench: Callable[..., dict[str, Any]],
+    data_source: str | None = None,
 ) -> dict[str, Any]:
     """Run :func:`bench_runner.run_bench` for one zoo with a Rich progress bar."""
     if _console is None or Progress is None:
@@ -431,6 +432,7 @@ def _run_single_zoo_with_progress(
             period=period,
             top=top,
             registry=reg,
+            data_source=data_source,
         )
 
     with Progress(
@@ -459,6 +461,7 @@ def _run_single_zoo_with_progress(
             top=top,
             on_progress=on_progress,
             registry=reg,
+            data_source=data_source,
         )
 
 
@@ -471,6 +474,7 @@ def _run_all_zoos_with_progress(
     start_ts: float,
     reg: Registry,
     run_bench: Callable[..., dict[str, Any]],
+    data_source: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate across every zoo for the ``--yes`` / no-``--zoo`` case."""
     zoos = sorted({reg.get(aid).zoo for aid in target_ids})
@@ -490,6 +494,7 @@ def _run_all_zoos_with_progress(
             top=top,
             on_progress=cb,
             registry=reg,
+            data_source=data_source,
         )
         if sub.get("status") == "ok":
             all_rows.extend(sub.get("rows", []) or [])
@@ -550,6 +555,9 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
         if (getattr(args, "oos_split", None) or getattr(args, "random_seeds", 5) != 5) and not getattr(args, "strict", False):
             _err("alpha bench: --oos-split/--random-seeds only take effect with --strict.")
             return 1
+        # Read once, carried everywhere: the panel source decides where every
+        # number in this run came from, so it must not be re-derived per call.
+        data_source = getattr(args, "data_source", None)
         try:
             if getattr(args, "strict", False):
                 from src.factors.bench_runner_strict import run_bench_strict
@@ -612,11 +620,22 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
             if _console
             else f"Bench: {n_target} alphas x {args.universe} x {args.period}{strict_banner}"
         )
-        _print(
-            "[dim]ETA: ~3-5 min (cache hit) / ~10-20 min (cold fetch)[/dim]"
-            if _console
-            else "ETA: ~3-5 min (cache hit) / ~10-20 min (cold fetch)"
-        )
+        if data_source == "warehouse":
+            # The vendor ETA describes a network fetch. A warehouse run reads
+            # parquet partitions, and promising 10-20 minutes for a run that
+            # takes seconds would have the reader wait for a hang that is not
+            # happening (or dismiss a real one when it finishes early).
+            _print(
+                "[dim]source: local warehouse — panel reads from disk[/dim]"
+                if _console
+                else "source: local warehouse — panel reads from disk"
+            )
+        else:
+            _print(
+                "[dim]ETA: ~3-5 min (cache hit) / ~10-20 min (cold fetch)[/dim]"
+                if _console
+                else "ETA: ~3-5 min (cache hit) / ~10-20 min (cold fetch)"
+            )
 
         # --- 3. Run the bench loop with a live progress bar --------------- #
         start_ts = time.monotonic()
@@ -632,6 +651,7 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
                 n_target=n_target,
                 reg=reg,
                 run_bench=run_bench,
+                data_source=data_source,
             )
         else:
             # Multi-zoo path: aggregate across every zoo (bench_runner requires
@@ -644,6 +664,7 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
                 start_ts=start_ts,
                 reg=reg,
                 run_bench=run_bench,
+                data_source=data_source,
             )
 
         # --- 5. Handle bench-loop errors / propagate exit code ------------- #
@@ -665,6 +686,16 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
                 _err("  1. Register for a free token at https://tushare.pro/register")
                 _err("  2. Add 'TUSHARE_TOKEN=<your_token>' to agent/.env  (or ~/.vibe-trading/.env)")
                 _err("  3. Re-run this command")
+            elif data_source == "warehouse":
+                # The warehouse fails for reasons a token cannot fix, and the
+                # two fixes are opposite work: fill the store, or turn it on.
+                _err("")
+                _err("How to fix:")
+                _err("  1. Check what is stored: python -m backtest.warehouse list")
+                _err("  2. Fill it if empty:  python -m backtest.warehouse sync "
+                     "--universe csi300 --since <YYYY-MM-DD>")
+                _err("  3. Enable it: 'VIBE_TRADING_WAREHOUSE_ENABLED=true' in agent/.env "
+                     "(or ~/.vibe-trading/.env)")
             return 1
 
         # --- 6. Render HTML report (delegating to alpha_bench_tool helpers) -#
@@ -842,7 +873,12 @@ def cmd_alpha_compare(args: argparse.Namespace) -> int:
 
         sort_key = getattr(args, "sort", "ir") or "ir"
         envelope = compare_alphas(
-            targets, args.universe, args.period, sort=sort_key, registry=reg
+            targets,
+            args.universe,
+            args.period,
+            sort=sort_key,
+            registry=reg,
+            data_source=getattr(args, "data_source", None),
         )
         print(json.dumps(envelope, indent=2, default=str))
 
@@ -1002,6 +1038,16 @@ def add_subparser(subparsers: Any) -> argparse.ArgumentParser:
         default="2020-2025",
         help="Period spec: YYYY-YYYY or YYYY-MM-DD/YYYY-MM-DD (e.g. 2020-2025)",
     )
+    p_bench.add_argument(
+        "--data-source",
+        default=None,
+        choices=["warehouse"],
+        help=(
+            "Panel source: 'warehouse' benches the locally stored bars offline "
+            "(python -m backtest.warehouse sync fills them); the default fetches "
+            "from the vendor"
+        ),
+    )
     p_bench.add_argument("--top", type=int, default=20, help="Top-N alphas to keep (default: 20)")
     p_bench.add_argument(
         "--strict",
@@ -1049,6 +1095,15 @@ def add_subparser(subparsers: Any) -> argparse.ArgumentParser:
         "--period",
         default="2020-2025",
         help="Period spec: YYYY-YYYY or YYYY-MM-DD/YYYY-MM-DD (e.g. 2020-2025)",
+    )
+    p_compare.add_argument(
+        "--data-source",
+        default=None,
+        choices=["warehouse"],
+        help=(
+            "Panel source: 'warehouse' compares on the locally stored bars "
+            "offline; the default fetches from the vendor"
+        ),
     )
     p_compare.add_argument(
         "--sort",

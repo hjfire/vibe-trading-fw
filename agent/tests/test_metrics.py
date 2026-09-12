@@ -127,6 +127,18 @@ class TestBarsPerYear:
         assert calc_bars_per_year("1D", "sina") == 252
         assert calc_bars_per_year("1m", "sina") == 252 * 240
 
+    def test_warehouse_annualises_like_the_market_it_stores(self) -> None:
+        """The local store is not its own market; it re-serves what was synced.
+
+        Today that is Tushare ``a_share`` only (the write gate refuses markets
+        whose canonical units are undeclared), so the honest assertion is the
+        equality with its upstream, not an independently chosen number.
+        """
+        assert calc_bars_per_year("1D", "warehouse") == 252
+        assert calc_bars_per_year("1m", "warehouse") == 252 * 240
+        assert calc_bars_per_year("5m", "warehouse") == calc_bars_per_year("5m", "tushare")
+        assert calc_bars_per_year("1H", "warehouse") == calc_bars_per_year("1H", "tushare")
+
     # US equity (252-day, 390-min session) sources
     def test_us_yahoo(self) -> None:
         assert calc_bars_per_year("1D", "yahoo") == 252

@@ -206,6 +206,15 @@ class DataConfig(_EnvBase):
     vibe_tw_stock_db: str = Field(alias="VIBE_TW_STOCK_DB", default="")
     vibe_trading_data_cache: EnvBool = Field(alias="VIBE_TRADING_DATA_CACHE", default=False)
     vibe_trading_data_cache_root: str = Field(alias="VIBE_TRADING_DATA_CACHE_ROOT", default="")
+    # Local market-data warehouse (backtest/warehouse/): an opt-in on-disk store
+    # of raw bars + adjustment factors. Off by default, and an empty root must
+    # never make ``source=warehouse`` look like a working data path.
+    vibe_trading_warehouse_enabled: EnvBool = Field(
+        alias="VIBE_TRADING_WAREHOUSE_ENABLED", default=False
+    )
+    vibe_trading_warehouse_root: str = Field(
+        alias="VIBE_TRADING_WAREHOUSE_ROOT", default=""
+    )
     aliyun_iqs_api_key: str = Field(alias="ALIYUN_IQS_API_KEY", default="")
     qveris_api_key: str = Field(alias="QVERIS_API_KEY", default="")
     qveris_base_url: str = Field(alias="QVERIS_BASE_URL", default="")

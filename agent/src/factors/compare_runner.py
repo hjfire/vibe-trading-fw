@@ -93,6 +93,7 @@ def compare_alphas(
     sort: str = "ir",
     registry: Registry | None = None,
     on_progress: ProgressCb | None = None,
+    data_source: str | None = None,
 ) -> dict[str, Any]:
     """Bench a hand-picked set of alphas head-to-head and rank them.
 
@@ -107,6 +108,10 @@ def compare_alphas(
             fresh :class:`Registry`.
         on_progress: Optional ``(n_done, n_total, alpha_id)`` callback fired once
             per evaluated alpha, counting across the whole comparison.
+        data_source: Panel source forwarded to :func:`run_bench` — ``None``
+            fetches from the vendor, ``"warehouse"`` compares on the locally
+            stored bars. Comparing two alphas whose ICs came from different
+            panels would rank them on nothing.
 
     Returns:
         On success, ``status="ok"`` with ``universe``, ``period``, ``sort``,
@@ -147,6 +152,9 @@ def compare_alphas(
     rows: list[dict[str, Any]] = []
     base = 0
     for zoo, zids in sorted(by_zoo.items()):
+        # Passed only when set, so a ``run_bench`` double with a fixed signature
+        # keeps working and the default path is unchanged.
+        source_kwargs = {"data_source": data_source} if data_source else {}
         sub = bench_runner.run_bench(
             zoo=zoo,
             universe=universe,
@@ -155,6 +163,7 @@ def compare_alphas(
             only=zids,
             registry=reg,
             on_progress=_zoo_progress_cb(on_progress, base, total),
+            **source_kwargs,
         )
         if sub.get("status") == "ok":
             for raw in sub.get("rows", []) or []:
