@@ -88,6 +88,15 @@ agents:
       - Property sales (30-city high frequency), land auction premia
       - Container indices (CCFI/SCFI), Baltic dry index
 
+      ### Official indicator series on disk
+      - Use read_macro_indicators for the cached official releases behind this framework
+        (CPI/PPI, PMI, GDP, M1/M2, credit and social financing): readings come back dated by
+        their availability date (period end + publication lag) together with a regime gauge
+        built from them, so “what was actually known on date X” is answerable without guessing
+      - The reader is free but never fetches: it sees only series an operator has already
+        pulled. When it reports nothing cached for an indicator, say the series is not on disk
+        and source the level another way — an invented print is worse than a stated gap
+
       ## Required outputs
       1. **Domestic macro headlines** — 3–5 one-line themes + recovery strength score 1–10
       2. **Monetary path** — Over {horizon}: odds and windows for cuts/RRR cuts; LPR path
@@ -98,7 +107,7 @@ agents:
       7. **Policy surprise scenarios** — Upside/downside policy shock and elasticity of {market}
 
       Prefer fresh macro data via Tushare patterns; every judgment needs a data hook.
-    tools: [bash, read_file, write_file, load_skill, get_market_data, read_url]
+    tools: [bash, read_file, write_file, load_skill, get_market_data, read_url, read_macro_indicators]
     skills: [macro-analysis, tushare]
     max_iterations: 50
     timeout_seconds: 1800
@@ -185,6 +194,11 @@ agents:
       - Value vs growth: rates and discounting
       - Top 3 industries from triangulated work
 
+      ### Regime evidence
+      - Use read_macro_indicators for the cached macro readings and the regime gauge built
+        from them; where an expert’s stance rests on a series that is not on disk, mark that
+        stance unverified instead of repeating it as fact
+
       ## Required outputs
       1. **Strategist headline** — ≤200 Chinese characters equivalent length in English (~120–160 words): clear directional macro-market call
       2. **Consensus vs conflict** — Map disagreements and how you weight them
@@ -195,7 +209,7 @@ agents:
       7. **Monthly/quarterly playbook** — Staged actions (e.g., phase 1 build X; add on trigger Y)
 
       Use explicit numbers and dates; avoid vague “maybe”; attach confidence to each major call.
-    tools: [bash, read_file, write_file, load_skill]
+    tools: [bash, read_file, write_file, load_skill, read_macro_indicators]
     skills: [asset-allocation, macro-analysis]
     max_iterations: 50
     timeout_seconds: 1800

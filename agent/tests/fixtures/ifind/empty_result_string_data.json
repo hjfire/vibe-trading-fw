@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":1,\"msg\":\"success\",\"subCode\":null,\"subMsg\":null,\"data\":\"# 查询结果\\n抱歉，本次新闻搜索结果为空\\n# 可能原因\\n-1.时间参数区间过于严格，导致期间没有符合要求的相关新闻\\n-2.搜索内容的参数内容过长或表述过于具体，为匹配到符合要求的内容\"}"
+    }
+  ],
+  "text": "{\"code\":1,\"msg\":\"success\",\"subCode\":null,\"subMsg\":null,\"data\":\"# 查询结果\\n抱歉，本次新闻搜索结果为空\\n# 可能原因\\n-1.时间参数区间过于严格，导致期间没有符合要求的相关新闻\\n-2.搜索内容的参数内容过长或表述过于具体，为匹配到符合要求的内容\"}",
+  "server": "ifind-news",
+  "remote_tool": "search_notice",
+  "tool": "search_notice"
+}

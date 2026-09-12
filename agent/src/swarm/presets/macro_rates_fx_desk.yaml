@@ -45,8 +45,18 @@ agents:
       - Crypto: historically rallies when real rates decline
       - EM assets: US rate direction drives EM capital flows
 
+      ### VI. Official Indicator Series Already On Disk
+      - Use read_macro_indicators for cached official series (policy rates, CPI/PPI, PMI,
+        money and credit aggregates): every reading is dated by its availability date
+        (period end + publication lag), so a level never appears in the record before it
+        could actually have been known
+      - The reader is free and read-only, but it never fetches and it only sees series an
+        operator has already pulled: when it reports no cached series for an indicator,
+        state that the data is not on disk and reach the level via read_url instead — do
+        not quote a remembered number
+
       Use load_skill for macro analysis and global macro frameworks.
-    tools: [bash, read_file, write_file, load_skill, read_url]
+    tools: [bash, read_file, write_file, load_skill, read_url, read_macro_indicators]
     skills: [macro-analysis, global-macro, credit-analysis]
     max_iterations: 50
     timeout_seconds: 1800
