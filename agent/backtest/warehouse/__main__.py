@@ -6,9 +6,11 @@
     python -m backtest.warehouse list
     python -m backtest.warehouse sql "SELECT symbol, count(*) FROM bars GROUP BY 1"
 
-Deliberately not wired into ``agent/cli``: that surface is a 5000-line argparse
-pile with slash commands and banner counts, and a data tool does not need any of
-it to be usable. Exit codes are the contract for scripts: ``0`` success or a
+Two entry points run this parser: ``python -m backtest.warehouse`` and, through
+a pass-through sub-command, ``vibe-trading warehouse`` (see :file:`cli/_legacy.py`,
+which delegates argv untouched rather than restating these flags). Keeping the
+flag surface in one file is the point: a second copy is how two CLIs drift apart.
+Exit codes are the contract for scripts: ``0`` success or a
 clean audit, ``1`` work that failed or a dirty audit, ``2`` a configuration
 problem that no retry will fix.
 """
@@ -32,10 +34,24 @@ EXIT_FAILED = 1
 EXIT_CONFIG = 2
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Return the argument parser for the warehouse sub-commands."""
+def build_parser(prog: str = "python -m backtest.warehouse") -> argparse.ArgumentParser:
+    """Return the argument parser for the warehouse sub-commands.
+
+    Args:
+        prog: How the usage line names this entry point. The packaged CLI
+            (:file:`cli/_legacy.py`) passes ``"vibe-trading warehouse"`` so a
+            reader can copy the help they are looking at, instead of being told
+            to run a module path from a working directory they may not have.
+
+    ``--root`` / ``-v`` are accepted both before and after the sub-command:
+    typed alone they belong to the program, and people write
+    ``... list --root D:/bars`` as often as ``... --root D:/bars list``. A
+    sub-command that rejects the first form reads like a broken install, so each
+    sub-parser inherits them (``SUPPRESS`` keeps the sub-command from overwriting
+    a value the program-level parser already captured).
+    """
     parser = argparse.ArgumentParser(
-        prog="python -m backtest.warehouse",
+        prog=prog,
         description="Local, backtest-ready market-data warehouse (parquet + DuckDB).",
     )
     parser.add_argument(
@@ -45,9 +61,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="warehouse directory (default: $VIBE_TRADING_WAREHOUSE_ROOT or ~/.vibe-trading/warehouse)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="log INFO and above")
+
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument(
+        "--root",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    shared.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+
     sub = parser.add_subparsers(dest="command", required=True)
 
-    fill = sub.add_parser("sync", help="fetch bars into the warehouse")
+    fill = sub.add_parser("sync", parents=[shared], help="fetch bars into the warehouse")
     target = fill.add_mutually_exclusive_group(required=True)
     target.add_argument("--symbols", help="comma-separated tickers, e.g. 600519.SH,510050.SH")
     target.add_argument(
@@ -79,7 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fill.add_argument("--json", action="store_true", help="emit the report as JSON")
 
-    check = sub.add_parser("audit", help="report coverage, suspected halts, bad rows")
+    check = sub.add_parser(
+        "audit", parents=[shared], help="report coverage, suspected halts, bad rows"
+    )
     check.add_argument("--interval", default=sync.DEFAULT_INTERVAL)
     check.add_argument("--symbols", help="comma-separated tickers to narrow the halt scan")
     check.add_argument(
@@ -93,10 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--json", action="store_true")
 
-    listing = sub.add_parser("list", help="inventory what is stored")
+    listing = sub.add_parser("list", parents=[shared], help="inventory what is stored")
     listing.add_argument("--json", action="store_true")
 
-    query = sub.add_parser("sql", help="query the stored bars directly")
+    query = sub.add_parser("sql", parents=[shared], help="query the stored bars directly")
     query.add_argument("statement", help="SQL; the bars table is exposed as 'bars'")
     query.add_argument("--csv", type=Path, default=None, help="write the result here as well")
     query.add_argument(
@@ -256,9 +286,10 @@ def _human_bytes(count: int) -> str:
     return f"{size:.1f}TB"
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, prog: str | None = None) -> int:
     """Entry point; returns the process exit code."""
-    args = build_parser().parse_args(argv)
+    parser = build_parser(prog) if prog else build_parser()
+    args = parser.parse_args(argv)
     _configure_logging(bool(getattr(args, "verbose", False)))
     root = Path(args.root).expanduser() if args.root else None
     handlers = {"sync": cmd_sync, "audit": cmd_audit, "list": cmd_list, "sql": cmd_sql}

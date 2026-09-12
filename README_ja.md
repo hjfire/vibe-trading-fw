@@ -909,6 +909,7 @@ vibe-trading run -p "..."  # single run
 vibe-trading serve         # API server
 vibe-trading alpha list    # 462 個の事前構築 alpha を閲覧；show / bench / compare / export-manifest サブコマンド利用可
 vibe-trading playbook list # 定期リサーチのテンプレート 5 本；show / create サブコマンド利用可
+vibe-trading warehouse list    # ローカルのバー倉庫：sync / audit / list / sql
 vibe-trading channels status --local  # IM チャンネル設定と install hints を確認
 vibe-trading provider doctor  # 秘匿処理済みの provider/proxy/package 診断を出力
 ```

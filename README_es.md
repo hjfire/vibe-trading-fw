@@ -942,6 +942,7 @@ vibe-trading run -p "..."  # single run
 vibe-trading serve         # API server
 vibe-trading alpha list    # explora 462 alphas preconstruidos; subcomandos show / bench / compare / export-manifest disponibles
 vibe-trading playbook list # cinco plantillas de investigación programada; subcomandos show / create disponibles
+vibe-trading warehouse list    # tu propio almacén local de velas: sync / audit / list / sql
 vibe-trading channels status --local  # inspecciona la configuración de canales IM y sugerencias de instalación
 vibe-trading provider doctor  # imprime diagnósticos redactados de provider/proxy/paquetes
 ```

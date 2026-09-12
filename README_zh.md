@@ -914,6 +914,7 @@ vibe-trading run -p "..."  # single run
 vibe-trading serve         # API server
 vibe-trading alpha list    # 浏览 462 个预置 alpha；支持 show / bench / compare / export-manifest 子命令
 vibe-trading playbook list # 五个定时研究模板；支持 show / create 子命令
+vibe-trading warehouse list    # 本地行情仓库：sync / audit / list / sql（默认关闭的数据源）
 vibe-trading channels status --local  # 检查 IM 通道配置和依赖安装提示
 vibe-trading provider doctor  # 打印脱敏后的 provider/proxy/依赖诊断
 ```

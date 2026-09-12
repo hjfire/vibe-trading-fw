@@ -907,6 +907,7 @@ vibe-trading run -p "..."  # single run
 vibe-trading serve         # API server
 vibe-trading alpha list    # 사전 빌드된 462개 alpha 탐색; show / bench / compare / export-manifest 서브커맨드 사용 가능
 vibe-trading playbook list # 예약 리서치 템플릿 5개; show / create 서브커맨드 사용 가능
+vibe-trading warehouse list    # 로컬 바 저장소: sync / audit / list / sql
 vibe-trading channels status --local  # IM 채널 설정과 설치 힌트 확인
 vibe-trading provider doctor  # 마스킹된 provider/proxy/패키지 진단 출력
 ```

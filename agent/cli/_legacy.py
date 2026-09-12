@@ -5366,6 +5366,21 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_forget_parser.add_argument("name", help="Memory title or filename stem")
     memory_forget_parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
 
+    # The warehouse flag surface lives in backtest/warehouse/__main__.py and is
+    # passed through untouched (see the interception in main()): restating sync's
+    # ~10 options here is how two copies of one CLI drift apart. ``add_help`` is
+    # off because this parser must not answer ``--help``; the delegated parser
+    # does, and it prints the real sub-command list. Registering the name still
+    # matters: it is what makes ``warehouse`` show up in ``vibe-trading --help``.
+    warehouse_parser = subparsers.add_parser(
+        "warehouse",
+        add_help=False,
+        help="Local bar warehouse: sync raw bars + factors, audit halts, query stored bars with SQL",
+    )
+    warehouse_parser.add_argument(
+        "warehouse_args", nargs=argparse.REMAINDER, help="sync | audit | list | sql [... flags]"
+    )
+
     portfolio_parser = subparsers.add_parser(
         "portfolio",
         help="Read-only multi-broker portfolio (the Web UI /portfolio page, in the terminal)",
@@ -6344,9 +6359,36 @@ def cmd_dev(
     return exit_code
 
 
+def _dispatch_warehouse(rest: list[str]) -> int:
+    """Run ``vibe-trading warehouse ...`` with the warehouse's own parser.
+
+    ``serve`` is the precedent for handing over ``raw_argv`` instead of parsed
+    arguments; warehouse goes one step further and is intercepted before
+    ``parse_args`` (see :func:`main`), because argparse cannot forward a leading
+    ``--help`` through a positional -- REMAINDER will not match an option-like
+    token -- and answering ``vibe-trading warehouse --help`` with this file's
+    usage error is worse than useless to someone looking for the command.
+
+    A bare ``warehouse`` asks for help too, for the same reason.
+    """
+    from backtest.warehouse.__main__ import main as _warehouse_main
+
+    try:
+        return _coerce_exit_code(
+            _warehouse_main(rest or ["--help"], prog="vibe-trading warehouse")
+        )
+    except SystemExit as exc:
+        # The delegated parser calls ``sys.exit`` for --help and for usage
+        # errors; this command must return a code like every other one, or the
+        # exit path depends on which file happened to parse the args.
+        return int(exc.code) if isinstance(exc.code, int) else EXIT_USAGE_ERROR
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint returning a process exit code."""
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv[:1] == ["warehouse"]:
+        return _dispatch_warehouse(raw_argv[1:])
     parser = _build_parser()
     try:
         args = parser.parse_args(raw_argv)

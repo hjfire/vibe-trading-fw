@@ -904,6 +904,7 @@ vibe-trading run -p "..."  # single run
 vibe-trading serve         # API server
 vibe-trading alpha list    # استعرض 462 ألفا جاهز؛ متاح show / bench / compare / export-manifest
 vibe-trading playbook list # خمسة قوالب بحث مجدولة؛ متاح show / create
+vibe-trading warehouse list    # مستودعك المحلي لبيانات الشموع: sync / audit / list / sql
 vibe-trading channels status --local  # فحص إعدادات قنوات IM وتلميحات التثبيت
 vibe-trading provider doctor  # طباعة تشخيصات المزود/الوكيل/الحزم بعد إخفاء الأسرار
 ```
