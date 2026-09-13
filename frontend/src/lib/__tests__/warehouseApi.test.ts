@@ -10,10 +10,11 @@ import { formatBytes, warehouseApi, WarehouseApiError } from "../warehouseApi";
  * failed". Both are claims the UI cannot verify from its own mock.
  */
 
-function reply(body: unknown, status = 200): Response {
+function reply(body: unknown, status = 200, contentType = "application/json"): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers({ "content-type": contentType }),
     json: async () => body,
   } as unknown as Response;
 }
@@ -24,6 +25,19 @@ const queued: Response[] = [];
 /** Queue the body the next `fetch` should answer with. */
 function serverReturns(body: unknown, status = 200) {
   queued.push(reply(body, status));
+}
+
+/** Queue a body the client must not try to read as JSON. */
+function serverReturnsRaw(text: string, status = 200, contentType = "text/html; charset=utf-8") {
+  queued.push({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers({ "content-type": contentType }),
+    json: async () => {
+      throw new SyntaxError(`Unexpected token '<', "${text}"... is not valid JSON`);
+    },
+    text: async () => text,
+  } as unknown as Response);
 }
 
 function lastUrl(): string {
@@ -121,6 +135,7 @@ describe("error surface", () => {
     queued.push({
       ok: false,
       status: 502,
+      headers: new Headers({ "content-type": "application/json" }),
       json: async () => {
         throw new Error("not json");
       },
@@ -131,6 +146,30 @@ describe("error surface", () => {
     expect(caught).toBeInstanceOf(WarehouseApiError);
     expect(caught.status).toBe(502);
     expect(caught.message).toContain("502");
+  });
+
+  it("reads an HTML answer as the missing route it is, not as a parse error", async () => {
+    // What actually happened on first contact with a real server: the SPA
+    // handler answers every unmatched path with index.html and status 200, so
+    // `res.ok` is true and `res.json()` throws a SyntaxError that names neither
+    // the path nor the reason. A bare "Unexpected token '<'" is the bug this
+    // case exists to keep fixed.
+    serverReturnsRaw("<!doctype html><html><head>…", 200);
+
+    const caught = (await warehouseApi.status().catch((exc: unknown) => exc)) as WarehouseApiError;
+
+    expect(caught).toBeInstanceOf(WarehouseApiError);
+    expect(caught.name).toBe("WarehouseApiError");
+    expect(caught.message).toContain("/api/warehouse/status");
+    expect(caught.message).toMatch(/not JSON/);
+    expect(caught.message).toMatch(/restart/i);
+    expect(caught.message).toContain("text/html");
+  });
+
+  it("says the same thing when a proxy hands back a page with 401", async () => {
+    serverReturnsRaw("<!doctype html>login", 401);
+
+    await expect(warehouseApi.status()).rejects.toThrow(/not JSON/);
   });
 });
 

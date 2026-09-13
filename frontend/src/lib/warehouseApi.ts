@@ -124,8 +124,36 @@ export class WarehouseApiError extends Error {
   }
 }
 
-async function errorFrom(res: Response): Promise<WarehouseApiError> {
+/**
+ * A response that is not JSON is never "fine": the SPA handler answers *every*
+ * unmatched path with `index.html` and status **200**, so an API route the
+ * running server does not know about looks successful right up until
+ * `res.json()` throws a bare `SyntaxError: Unexpected token '<'`. The likeliest
+ * reason for that on this page is a server process older than this feature.
+ */
+const NON_JSON_HINT =
+  "the server answered with something that is not JSON. An unregistered path is " +
+  "served the web app's own index.html with status 200, which usually means the " +
+  "running API server predates this page -- restart it.";
+
+function contentType(res: Response): string {
+  return res.headers.get("content-type") ?? "unknown";
+}
+
+function isJson(res: Response): boolean {
+  return contentType(res).toLowerCase().includes("json");
+}
+
+function nonJsonError(path: string, res: Response): WarehouseApiError {
+  return new WarehouseApiError(
+    `${path} (HTTP ${res.status}): ${NON_JSON_HINT} Got ${contentType(res)}.`,
+    res.status,
+  );
+}
+
+async function errorFrom(path: string, res: Response): Promise<WarehouseApiError> {
   let detail = `request failed (${res.status})`;
+  if (!isJson(res)) return nonJsonError(path, res);
   try {
     const body = (await res.json()) as { error?: unknown; detail?: unknown };
     detail = String(body.error || body.detail || detail);
@@ -143,7 +171,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
-  if (!res.ok) throw await errorFrom(res);
+  if (!res.ok) throw await errorFrom(path, res);
+  if (!isJson(res)) throw nonJsonError(path, res);
   return (await res.json()) as T;
 }
 
