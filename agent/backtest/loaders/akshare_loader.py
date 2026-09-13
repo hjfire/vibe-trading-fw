@@ -54,6 +54,160 @@ def _is_crypto(code: str) -> bool:
     return "-USDT" in code.upper() or "/USDT" in code.upper()
 
 
+#: The local warehouse's A-share entry point. Sina is used rather than the
+#: ``stock_zh_a_hist`` (Eastmoney push2) endpoint the online ``fetch`` walks
+#: because push2 is blocked by this project's own residential proxy and Tencent's
+#: kline host answers HTTP 501 under load, while Sina stayed reachable
+#: (项目档案.md 坑⑧, re-confirmed 2026-09-13).
+_SINA_DAILY_ALIASES = frozenset({"1d", "d", "day", "daily"})
+
+#: Sina quotes daily ``volume`` in single shares. That is not a documentation
+#: claim: ``stock_zh_a_daily`` computes ``turnover = volume /
+#: (outstanding_share * 10000)`` on its own way out, and ``outstanding_share``
+#: arrives in 万股 — a ratio of like units only if volume is shares. The
+#: warehouse's canonical A-share unit is board lots, and ``volume_units`` is
+#: declared per *source* rather than per endpoint, so the conversion belongs here
+#: and not in the class attribute that ``fetch`` also relies on.
+_SINA_SHARES_PER_LOT = 100.0
+
+
+def _sina_stock_symbol(code: str) -> Optional[str]:
+    """Return Sina's ``sh600519`` form for an A-share stock, or None.
+
+    ETFs and Beijing-listed shares are refused on purpose: ``stock_zh_a_daily``
+    is the Shanghai/Shenzhen equity feed, and handing it ``518880.SH`` would
+    store a fund whose "adjustment factor" came from a stock table — a plausible
+    number with no meaning, which is the failure this loader exists to catch.
+    """
+    if _is_etf_listed(code):
+        return None
+    symbol, _, suffix = code.upper().partition(".")
+    if suffix not in {"SH", "SZ"} or not symbol.isdigit():
+        return None
+    return f"{suffix.lower()}{symbol}"
+
+
+def _date_value_columns(frame: pd.DataFrame) -> tuple[str, str]:
+    """Return ``(date column, value column)`` of a two-column vendor table.
+
+    Detected by dtype and name rather than by position or literal: akshare builds
+    the factor frame with ``reset_index()`` on an unnamed index, so the date
+    column can come back named ``index``, ``dt`` or ``date`` depending on the
+    release, and the value is ``hfq_factor`` or ``qfq_factor``.
+    """
+    date_col = next(
+        (col for col in frame.columns if pd.api.types.is_datetime64_any_dtype(frame[col])),
+        None,
+    )
+    value_col = next((col for col in frame.columns if "factor" in str(col).lower()), None)
+    if date_col is None or value_col is None:
+        raise ValueError(
+            f"expected a dated factor table, got columns {list(frame.columns)!r}"
+        )
+    return str(date_col), str(value_col)
+
+
+def _assert_cumulative(series: pd.Series) -> None:
+    """Refuse a factor series that does not rise across corporate actions.
+
+    ``store.read_bars(adjust="qfq")`` re-anchors on read as
+    ``factor / factor_at_window_end``, which only pulls history *down* when the
+    factor is a cumulative multiplier — Sina's ``hfq_factor``, applied by its own
+    consumer as ``price * hfq_factor``. Sina's *qfq* factor is a divisor
+    (``price / qfq_factor``) and falls over time; stored as-is it would scale
+    every past bar up instead of down, and no row would ever look invalid.
+    """
+    steps = series.diff().dropna()
+    worst = float(steps.min()) if len(steps) else 0.0
+    if worst < -1e-9:
+        raise ValueError(
+            f"sina factor decreases by {worst:.6g} somewhere in its history, so it "
+            "is not a cumulative multiplier; refusing to store it under adj_factor"
+        )
+
+
+def _assert_share_basis(volume: pd.Series, amount: pd.Series, close: pd.Series) -> None:
+    """Confirm Sina's volume is per share via the payoff identity.
+
+    ``amount / (volume * close)`` is ~1.0 when volume and amount are both quoted
+    per share and ~100.0 if volume were board lots. Measuring costs one division
+    and catches the class of bug recorded as HKUDS/Vibe-Trading#1062 (akshare's
+    own docs state shares for an endpoint that delivered lots); a silent 100x on
+    volume survives into every vwap-derived factor.
+    """
+    usable = volume.gt(0) & amount.gt(0) & close.gt(0)
+    if int(usable.sum()) < 5:
+        return  # nothing measurable in this window; the declared unit stands
+    ratio = float((amount[usable] / (volume[usable] * close[usable])).median())
+    if not 0.2 <= ratio <= 5.0:
+        raise ValueError(
+            f"sina volume is not in shares (median amount/(volume*close) = "
+            f"{ratio:.4g}); re-measure the unit before storing it "
+            "(see HKUDS/Vibe-Trading#1062)"
+        )
+
+
+def _sina_bars(raw: pd.DataFrame) -> pd.DataFrame:
+    """Turn Sina's unadjusted daily frame into warehouse bars.
+
+    Prices stay as traded; ``volume`` is converted to the canonical board-lot
+    unit; the index is a unique, sorted ``trade_date`` — the shape
+    :func:`backtest.warehouse.sync._merge_factor` reindexes a factor onto.
+    """
+    frame = raw.copy()
+    date_col = next((col for col in ("date", "trade_date") if col in frame.columns), None)
+    if date_col is not None:
+        stamps = pd.to_datetime(frame[date_col], errors="coerce")
+    else:
+        stamps = pd.to_datetime(pd.Series(frame.index, dtype="object"), errors="coerce")
+
+    bars = pd.DataFrame(index=pd.DatetimeIndex(stamps.to_numpy()))
+    for col in ("open", "high", "low", "close", "volume", "amount"):
+        bars[col] = (
+            pd.to_numeric(frame[col], errors="coerce").to_numpy()
+            if col in frame.columns
+            else float("nan")
+        )
+
+    bars = bars[bars.index.notna()]
+    bars = bars[~bars.index.duplicated(keep="last")].sort_index()
+    bars.index.name = "trade_date"
+
+    volume = bars["volume"].fillna(0.0)
+    _assert_share_basis(volume, bars["amount"], bars["close"])
+    bars["volume"] = volume / _SINA_SHARES_PER_LOT
+    return bars.dropna(subset=["open", "high", "low", "close"])
+
+
+def _sina_factor(ak, symbol: str, axis: pd.DatetimeIndex) -> pd.DataFrame:
+    """Expand Sina's sparse 后复权 factor table to one row per session in *axis*.
+
+    The expansion is the loader's job, not the store's: ``_merge_factor`` aligns
+    on exact stamps and leaves misses NaN, and the write gate reads a NaN factor
+    as "this bar cannot be stored yet". A table carrying one row per ex-date
+    would therefore refuse almost every session in the window.
+    """
+    table = ak.stock_zh_a_daily(symbol=symbol, adjust="hfq-factor")
+    if table is None or table.empty:
+        raise ValueError("sina published no adjustment-factor table")
+    date_col, value_col = _date_value_columns(table)
+    stamps = pd.DatetimeIndex(pd.to_datetime(table[date_col], errors="coerce").to_numpy())
+    values = pd.to_numeric(table[value_col], errors="coerce").to_numpy()
+    series = pd.Series(values, index=stamps).dropna().sort_index()
+    series = series[~series.index.duplicated(keep="last")]
+    if series.empty:
+        raise ValueError("sina adjustment table carried no usable factors")
+    _assert_cumulative(series)
+    # ``method="ffill"`` is the point, not an optimization: a plain reindex drops
+    # every source label absent from the target, so a factor published years
+    # before the window would leave the whole window empty and the gate would
+    # refuse every bar. Labels *before* the first published factor stay NaN — a
+    # back fill would quote a bar a factor the market had not issued yet, which
+    # is the future-information leak store._adjust_qfq refuses on the read side.
+    dense = series.reindex(axis, method="ffill")
+    return pd.DataFrame({"trade_date": axis, "adj_factor": dense.to_numpy()})
+
+
 #: Sina takes the bare contract code. Passing the exchange suffix through does
 #: not return an empty frame — ``futures_zh_daily_sina("RB2601.SHFE")`` raises
 #: ``ValueError: Length mismatch`` from inside akshare, so the suffix has to be
@@ -343,6 +497,92 @@ class DataLoader:
         # The dated endpoint ignores the window, so slice it here; without this
         # a one-month request came back with the contract's entire history.
         return df.loc[str(start_date):str(end_date)]
+
+    def fetch_raw_with_factor(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        *,
+        interval: str = "1D",
+    ) -> Dict[str, tuple[pd.DataFrame, Optional[pd.DataFrame]]]:
+        """Fetch **unadjusted** Sina daily bars plus Sina's own factor series.
+
+        The local warehouse's entry point, mirroring
+        :meth:`backtest.loaders.tushare.DataLoader.fetch_raw_with_factor` so
+        ``warehouse.sync`` can hold either source to one contract: nothing here
+        is adjusted, and unlike :meth:`fetch` this bypasses the per-request
+        loader cache because the store *is* the durable cache.
+
+        The factor comes from Sina as published data (``adjust="hfq-factor"``),
+        not reverse-engineered from a ratio of the vendor's adjusted series — the
+        route that failed for FutuOpenD, whose qfq is a constant *difference* so
+        ``qfq/raw`` drifts on nearly every day and cannot be stored as a step
+        factor. Sina's table is sparse (one row per ex-date), so it is expanded
+        onto the sessions here with a forward fill only: back-filling would hand
+        an early bar a factor that had not been published yet.
+
+        Args:
+            codes: Symbols, e.g. ``["600519.SH", "000001.SZ"]``.
+            start_date: Start date (YYYY-MM-DD).
+            end_date: End date (YYYY-MM-DD).
+            interval: Only ``1D`` is supported.
+
+        Returns:
+            Mapping code -> ``(bars, factor)``. ``bars`` is indexed by
+            ``trade_date`` with as-traded open/high/low/close, ``volume`` in
+            board lots and ``amount`` in CNY; ``factor`` carries one row per bar
+            ``(trade_date, adj_factor)`` or ``None`` when Sina's table could not
+            be read — the write gate then refuses those rows and records them as
+            pending rather than storing an unadjusted series.
+
+        Raises:
+            ValueError: ``interval`` is not a daily one.
+        """
+        validate_date_range(start_date, end_date)
+        if str(interval).strip().lower() not in _SINA_DAILY_ALIASES:
+            raise ValueError(
+                f"fetch_raw_with_factor supports daily bars only, got interval={interval!r}"
+            )
+
+        import akshare as ak
+
+        result: Dict[str, tuple[pd.DataFrame, Optional[pd.DataFrame]]] = {}
+        for code in codes:
+            try:
+                pair = self._fetch_sina_raw_pair(ak, code, start_date, end_date)
+            except Exception as exc:  # noqa: BLE001 - one bad symbol must not end the run
+                logger.warning("failed to fetch %s: %s", code, exc)
+                continue
+            if pair is not None:
+                result[code] = pair
+        return result
+
+    def _fetch_sina_raw_pair(
+        self, ak, code: str, start_date: str, end_date: str
+    ) -> Optional[tuple[pd.DataFrame, Optional[pd.DataFrame]]]:
+        """Read one stock's unadjusted bars and its adjustment factors from Sina."""
+        symbol = _sina_stock_symbol(code)
+        if symbol is None:
+            logger.warning(
+                "akshare warehouse source serves SH/SZ stocks only; %s has no factor series here", code
+            )
+            return None
+
+        sd = start_date.replace("-", "")
+        ed = end_date.replace("-", "")
+        raw = ak.stock_zh_a_daily(symbol=symbol, start_date=sd, end_date=ed, adjust="")
+        if raw is None or raw.empty:
+            logger.warning("sina returned no unadjusted daily bars for %s", code)
+            return None
+        bars = _sina_bars(raw)
+
+        try:
+            factor = _sina_factor(ak, symbol, bars.index)
+        except Exception as exc:  # noqa: BLE001 - a missing factor is a hole, not a halt
+            logger.warning("akshare adjustment-factor fetch failed for %s: %s", code, exc)
+            factor = None
+        return bars, factor
 
     @staticmethod
     def _normalize(df: pd.DataFrame, date_col: str = "日期") -> pd.DataFrame:

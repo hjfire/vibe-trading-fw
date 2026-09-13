@@ -565,8 +565,8 @@ def _require_admissible(
             "adj_factor column. A source that only offers window-anchored adjusted "
             "prices (e.g. baostock's adjustflag='2') cannot feed the warehouse: the "
             "stored series would be silently re-anchored by the next dividend. Use a "
-            "source that exposes raw prices plus the factor series (tushare via "
-            "fetch_raw_with_factor)."
+            "source that exposes raw prices plus the factor series (tushare or "
+            "akshare via fetch_raw_with_factor)."
         )
 
 

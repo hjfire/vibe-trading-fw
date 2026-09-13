@@ -41,6 +41,11 @@ from backtest.warehouse.schema import classify_asset, declared_amount_unit, norm
 
 logger = logging.getLogger(__name__)
 
+#: Tushare stays the default even though ``akshare`` needs no token: akshare's
+#: Sina path carries an explicit "heavy scraping gets the IP banned" warning and
+#: serves SH/SZ stocks only, while a multi-year CSI300 pull is precisely heavy
+#: scraping. A token-less install is told which source to pass by
+#: :func:`load_source` rather than having a source picked for it.
 DEFAULT_SOURCE = "tushare"
 DEFAULT_INTERVAL = "1D"
 DEFAULT_YEARS = 10
@@ -236,6 +241,23 @@ class Throttle:
 # ---------------------------------------------------------------------------
 
 
+def factor_capable_sources() -> list[str]:
+    """Return every registered source that can fill the warehouse, sorted.
+
+    Computed from the registry rather than restated as a literal, because the
+    answer is exactly the question :func:`load_source` asks, and a hardcoded
+    list would keep naming tushare alone after a second source was wired up.
+    """
+    from backtest.loaders.registry import LOADER_REGISTRY, _ensure_registered
+
+    _ensure_registered()
+    return sorted(
+        name
+        for name, loader_cls in LOADER_REGISTRY.items()
+        if hasattr(loader_cls, "fetch_raw_with_factor")
+    )
+
+
 def load_source(source: str = DEFAULT_SOURCE) -> Any:
     """Return a loader instance for *source*, with no silent fallback.
 
@@ -260,15 +282,21 @@ def load_source(source: str = DEFAULT_SOURCE) -> Any:
         raise SyncConfigError(
             f"source {name!r} cannot supply unadjusted prices plus an adjustment "
             "factor; only sources with fetch_raw_with_factor() may fill the "
-            "warehouse, because a stored qfq series is re-anchored by the next dividend"
+            "warehouse, because a stored qfq series is re-anchored by the next "
+            f"dividend. Sources that can: {factor_capable_sources()}"
         )
     try:
         loader = loader_cls()
     except Exception as exc:  # noqa: BLE001 - construction reads credentials
         raise SyncConfigError(f"source {name!r} failed to initialize: {exc}") from exc
     if not loader.is_available():
+        # The default source needs a token this install may not have, and the
+        # other capable sources do not — naming them turns a dead end into a
+        # copy-pasteable command without picking one on the caller's behalf.
+        others = [candidate for candidate in factor_capable_sources() if candidate != name]
+        hint = f"; try --source <{'|'.join(others)}>" if others else ""
         raise SyncConfigError(
-            f"source {name!r} is unavailable (missing credentials or network)"
+            f"source {name!r} is unavailable (missing credentials or network){hint}"
         )
     return loader
 
@@ -343,9 +371,13 @@ def resolve_universe(
     if key in {"csi300", "csi 300", "沪深300"}:
         api = getattr(loader, "api", None)
         if api is None:
+            # A free source can still fill the warehouse — it just cannot name the
+            # index for you, and the command that got here said --universe. Saying
+            # so without the way out reads as "this source cannot sync at all".
             raise SyncConfigError(
                 f"universe {universe!r} needs a source that exposes an index-weight "
-                f"roster; {getattr(loader, 'name', '?')!r} does not"
+                f"roster; {getattr(loader, 'name', '?')!r} does not — sync specific "
+                "names with --symbols 600519.SH,000001.SZ instead"
             )
         from src.tools.alpha_bench_tool import _csi300_constituents
 
