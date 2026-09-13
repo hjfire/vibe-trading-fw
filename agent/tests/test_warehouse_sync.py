@@ -644,8 +644,72 @@ def test_a_source_that_cannot_initialize_reports_why(monkeypatch: pytest.MonkeyP
     _ensure_registered()
     monkeypatch.setitem(LOADER_REGISTRY, "broken", Broken)
 
-    with pytest.raises(sync.SyncConfigError, match="failed to initialize"):
+    with pytest.raises(sync.SyncConfigError, match="failed to initialize") as exc:
         sync.load_source("broken")
+    # A loader that raises *while constructing* is where a token-less install
+    # actually lands — before is_available() is ever asked — so the free way out
+    # has to be on this message too, not only on the unavailable one.
+    assert "try --source" in str(exc.value)
+    assert "akshare" in str(exc.value)
+
+
+def test_a_single_alternative_is_printed_where_it_can_be_pasted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--source <akshare>`` is not a command, it is a shell redirect.
+
+    The bracket form is right for a choice and wrong for the one name there is,
+    which is the common case on this machine (tushare plus exactly one free
+    source). Pinned on the message rather than on the helper, because the thing
+    a user copies is the message.
+    """
+    from backtest.loaders.registry import LOADER_REGISTRY, _ensure_registered
+
+    class Broken:
+        name = "broken"
+
+        def __init__(self) -> None:
+            raise RuntimeError("api init error")
+
+        def fetch_raw_with_factor(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("must not be reached")
+
+    _ensure_registered()
+    monkeypatch.setitem(LOADER_REGISTRY, "broken", Broken)
+    monkeypatch.setattr(sync, "factor_capable_sources", lambda: ["broken", "akshare"])
+
+    with pytest.raises(sync.SyncConfigError) as exc:
+        sync.load_source("broken")
+
+    assert "try --source akshare" in str(exc.value)
+    assert "<" not in str(exc.value)
+
+
+def test_several_alternatives_are_still_printed_as_a_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bare-name rule must not delete the "pick one" signal when there are two."""
+    from backtest.loaders.registry import LOADER_REGISTRY, _ensure_registered
+
+    class Broken:
+        name = "broken"
+
+        def __init__(self) -> None:
+            raise RuntimeError("api init error")
+
+        def fetch_raw_with_factor(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("must not be reached")
+
+    _ensure_registered()
+    monkeypatch.setitem(LOADER_REGISTRY, "broken", Broken)
+    monkeypatch.setattr(
+        sync, "factor_capable_sources", lambda: ["broken", "akshare", "other"]
+    )
+
+    with pytest.raises(sync.SyncConfigError) as exc:
+        sync.load_source("broken")
+
+    assert "try --source <akshare|other>" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

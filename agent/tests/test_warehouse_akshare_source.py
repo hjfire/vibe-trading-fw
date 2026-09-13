@@ -30,6 +30,7 @@ from backtest.loaders.akshare_loader import (
     _sina_bars,
     _sina_factor,
     _sina_stock_symbol,
+    _with_exchange_suffix,
 )
 from backtest.loaders.cn_adjust import apply_qfq
 from backtest.warehouse import sync
@@ -142,19 +143,166 @@ def test_an_unavailable_default_names_the_free_alternative(
     assert "tokenless" not in str(exc.value).split("try --source")[1]
 
 
-def test_a_free_source_that_cannot_name_the_index_is_told_to_name_stocks() -> None:
-    """``--universe csi300`` is the command this round's users will type first.
+def test_a_source_with_no_way_to_name_the_index_is_told_to_name_stocks() -> None:
+    """The refusal belongs to a source that cannot resolve a roster at all.
 
-    The roster comes from an index-weight API, which the token-less source has
-    no equivalent of. Refusing without the alternative reads as "akshare cannot
-    sync", which is the opposite of what the other two diagnostics say.
+    It used to be akshare's sentence too, which is why it is pinned with a stub
+    here: refusing without the alternative reads as "this source cannot sync",
+    and the command that got here is the one the docs print first.
     """
-    loader = sync.load_source("akshare")
+    class NoRoster:
+        name = "no-roster"
+
+        def fetch_raw_with_factor(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("must not be reached")
+
     with pytest.raises(sync.SyncConfigError, match="index-weight") as exc:
         sync.resolve_universe(
-            "csi300", start="2024-01-01", end="2024-06-30", loader=loader
+            "csi300", start="2024-01-01", end="2024-06-30", loader=NoRoster()
         )
     assert "--symbols" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# The named roster, without a token
+# ---------------------------------------------------------------------------
+
+
+def _cons_frame(sh: int = 150, sz: int = 150, date: str = "2026-09-11") -> pd.DataFrame:
+    """The CSIndex constituent table: one row per member, as of a single date."""
+    return pd.DataFrame(
+        [
+            {"日期": date, "成分券代码": f"{600000 + i:06d}", "交易所": "上海证券交易所"}
+            for i in range(sh)
+        ]
+        + [
+            {"日期": date, "成分券代码": f"{i + 1:06d}", "交易所": "深圳证券交易所"}
+            for i in range(sz)
+        ]
+    )
+
+
+def _stub_csindex(frame: Any) -> SimpleNamespace:
+    """A fake ``akshare`` exposing only the compiler's constituent table."""
+
+    def index_stock_cons_csindex(*, symbol: str):
+        return frame
+
+    return SimpleNamespace(index_stock_cons_csindex=index_stock_cons_csindex)
+
+
+def test_the_exchange_column_wins_and_a_malformed_code_is_dropped() -> None:
+    assert _with_exchange_suffix("000001", "上海证券交易所") == "000001.SH"
+    assert _with_exchange_suffix("600519", "深圳证券交易所") == "600519.SZ"
+    # No exchange text at all: fall back to the code prefix.
+    assert _with_exchange_suffix("600519", "") == "600519.SH"
+    assert _with_exchange_suffix("000001", None) == "000001.SZ"
+    # Not a stock code: refuse rather than guess a suffix onto a name that never
+    # existed in the index.
+    assert _with_exchange_suffix("12345", "深圳证券交易所") is None
+    assert _with_exchange_suffix("H30199", "上海证券交易所") is None
+
+
+def test_the_free_source_can_name_todays_index_members() -> None:
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(__import__("sys").modules, "akshare", _stub_csindex(_cons_frame()))
+    try:
+        codes, snapshot = DataLoader().fetch_universe_members("csi300")
+    finally:
+        monkey.undo()
+
+    assert len(codes) == 300
+    assert snapshot == "2026-09-11"
+    assert "600000.SH" in codes and "000001.SZ" in codes
+    assert all(code.endswith((".SH", ".SZ")) for code in codes)
+    assert DataLoader().fetch_universe_members("sse50") is None, (
+        "a name this source cannot resolve is left for the caller to refuse"
+    )
+
+
+def test_a_short_roster_is_refused_rather_than_synced_as_an_index() -> None:
+    """40 names under the flag `--universe csi300` is a partial download.
+
+    Filling the store with 13% of an index and calling it CSI 300 is worse than
+    failing: every downstream panel would silently be about the wrong market.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(
+        __import__("sys").modules, "akshare", _stub_csindex(_cons_frame(sh=20, sz=20))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="below the") as exc:
+            DataLoader().fetch_universe_members("csi300")
+    finally:
+        monkey.undo()
+    assert "40 names" in str(exc.value)
+
+
+def test_resolve_universe_without_a_token_still_returns_the_names() -> None:
+    """`--universe csi300 --source akshare` is the command a token-less install types."""
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(__import__("sys").modules, "akshare", _stub_csindex(_cons_frame()))
+    try:
+        roster = sync.resolve_universe(
+            "csi300", start="2016-09-11", end="2026-09-11", loader=DataLoader()
+        )
+    finally:
+        monkey.undo()
+
+    assert len(roster.codes) == 300
+    assert roster.universe == "csi300"
+    assert "akshare" in roster.constituent_source
+    assert roster.constituent_source_date == "2026-09-11"
+
+
+def test_a_snapshot_roster_is_never_stored_as_point_in_time_membership(
+    tmp_path,
+) -> None:
+    """The whole honesty of the free path is this one assertion.
+
+    The compiler publishes who is in the index *today*. Writing that as a
+    membership matrix would make a 2016 panel of 2026's winners look resolved, so
+    the matrix stays empty and no roster file is written — which is what lets a
+    reader report ``survivorship_bias=true`` instead of trusting a roster nobody
+    resolved.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(__import__("sys").modules, "akshare", _stub_csindex(_cons_frame()))
+    try:
+        roster = sync.resolve_universe(
+            "csi300", start="2016-09-11", end="2026-09-11", loader=DataLoader()
+        )
+    finally:
+        monkey.undo()
+
+    assert roster.membership is None
+    assert roster.pit_membership is False
+    assert roster.persist(root=tmp_path) is None
+    assert list(tmp_path.rglob("*")) == [], "a snapshot must not reach the roster table"
+
+
+def test_a_roster_call_that_fails_ends_in_a_pasteable_command() -> None:
+    """A network failure here is a config error with a way out, not a traceback."""
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(
+        __import__("sys").modules,
+        "akshare",
+        SimpleNamespace(
+            index_stock_cons_csindex=lambda **_kw: (_ for _ in ()).throw(
+                RuntimeError("connection reset")
+            )
+        ),
+    )
+    try:
+        with pytest.raises(sync.SyncConfigError, match="could not resolve the roster") as exc:
+            sync.resolve_universe(
+                "csi300", start="2024-01-01", end="2024-06-30", loader=DataLoader()
+            )
+    finally:
+        monkey.undo()
+
+    assert "--symbols" in str(exc.value)
+    assert "connection reset" in str(exc.value), "the real reason must survive the wrap"
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +378,48 @@ def test_a_divisor_table_is_refused_before_it_can_invert_the_history() -> None:
     ak, _ = _stub_akshare(factor=_factor_frame(_FACTOR_DATES, [1.35, 1.0]))
     bars = _sina_bars(_raw_frame())
 
-    with pytest.raises(ValueError, match="not a cumulative multiplier"):
+    with pytest.raises(ValueError, match="not a cumulative multiplier") as exc:
         _sina_factor(ak, "sh600519", bars.index)
+    # The message has to carry where and how much: "decreases by -0.0249 somewhere
+    # in its history" made the first real refusal (000568.SZ) unanswerable without
+    # fetching the vendor table by hand, and the negative magnitude read as a
+    # double negative.
+    assert "falls by 0.35 at 2024-06-19" in str(exc.value)
+
+
+def test_a_dip_the_synced_window_never_reads_does_not_lose_the_symbol() -> None:
+    """One bad row in 2002 must not cost the whole 2024 fill.
+
+    This is 000568.SZ as the vendor actually published it: hfq factor 6.5515 on
+    2002-10-28, 6.5267 on 2002-11-11 (a 0.38% dip), then back up to 10.44 and on
+    to 40.24 today. Judged over its whole life the series is "not cumulative" and
+    the symbol is refused for every window forever; judged over the window being
+    stored, the dip is invisible and the bars are correct.
+    """
+    ak, _ = _stub_akshare(
+        factor=_factor_frame(
+            ["2002-10-28", "2002-11-11", "2024-06-19"], [6.5515517, 6.5266724, 8.9]
+        )
+    )
+    bars = _sina_bars(_raw_frame())
+
+    factor = _sina_factor(ak, "sz000568", bars.index)
+
+    assert factor["adj_factor"].tolist() == [
+        6.5266724, 6.5266724, 8.9, 8.9, 8.9
+    ], "the pre-window row is the window's baseline, and the dip is not stored"
+
+
+def test_a_dip_inside_the_window_is_still_refused() -> None:
+    """Scoping the guard must not silence it where the bars would be wrong."""
+    ak, _ = _stub_akshare(
+        factor=_factor_frame(["2002-10-28", "2024-06-17", "2024-06-19"], [1.0, 8.9, 6.5])
+    )
+    bars = _sina_bars(_raw_frame())
+
+    with pytest.raises(ValueError, match="not a cumulative multiplier") as exc:
+        _sina_factor(ak, "sz000568", bars.index)
+    assert "falls by 2.4 at 2024-06-19" in str(exc.value)
 
 
 def test_the_factor_table_is_located_by_dtype_not_by_column_name() -> None:

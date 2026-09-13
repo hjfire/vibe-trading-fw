@@ -288,17 +288,42 @@ def load_source(source: str = DEFAULT_SOURCE) -> Any:
     try:
         loader = loader_cls()
     except Exception as exc:  # noqa: BLE001 - construction reads credentials
-        raise SyncConfigError(f"source {name!r} failed to initialize: {exc}") from exc
+        # This, not the branch below, is what a token-less install actually hits:
+        # tushare raises while building its client, before is_available() is ever
+        # asked. Carrying the same way out here is the difference between the
+        # first command in the docs ending in "api init error" and ending in a
+        # source the reader can paste.
+        others = [candidate for candidate in factor_capable_sources() if candidate != name]
+        raise SyncConfigError(
+            f"source {name!r} failed to initialize: {exc}{_source_hint(others)}"
+        ) from exc
     if not loader.is_available():
         # The default source needs a token this install may not have, and the
         # other capable sources do not — naming them turns a dead end into a
         # copy-pasteable command without picking one on the caller's behalf.
         others = [candidate for candidate in factor_capable_sources() if candidate != name]
-        hint = f"; try --source <{'|'.join(others)}>" if others else ""
         raise SyncConfigError(
-            f"source {name!r} is unavailable (missing credentials or network){hint}"
+            f"source {name!r} is unavailable (missing credentials or network)"
+            f"{_source_hint(others)}"
         )
     return loader
+
+
+def _source_hint(others: list[str]) -> str:
+    """Render the "you could use these instead" tail of a source failure.
+
+    One candidate is printed bare and several in ``<a|b>`` angle-bracket form,
+    because a message meant to be pasted has to be pasteable: ``--source <a>``
+    is a shell redirect waiting to happen, and the bracket form is only correct
+    where it genuinely says "pick one". Shared by both refusal branches — the
+    first version of this hint lived in only one of them, which is how a
+    token-less install's very first command ended up unreadable (see the
+    construction branch above, where that install actually lands).
+    """
+    if not others:
+        return ""
+    listed = others[0] if len(others) == 1 else "|".join(others)
+    return f"; try --source <{listed}>" if len(others) > 1 else f"; try --source {listed}"
 
 
 @dataclass
@@ -358,27 +383,23 @@ def resolve_universe(
         universe: Currently ``csi300`` only; other names raise.
         start: Window start, ``YYYY-MM-DD``.
         end: Window end, ``YYYY-MM-DD``.
-        loader: The source instance, used for its Tushare ``api`` client.
+        loader: The source instance. A Tushare ``api`` client gives a monthly
+            point-in-time roster; a source without one may still expose
+            ``fetch_universe_members`` for today's roster (see
+            :func:`_resolve_from_source_roster` for what that costs).
 
     Returns:
         A :class:`UniverseRoster`: the symbols that were index members at any
         point in the window, and the matrix saying which were members when.
 
     Raises:
-        SyncConfigError: Unknown universe, or no client to ask.
+        SyncConfigError: Unknown universe, or no source hook to ask.
     """
     key = str(universe).strip().lower()
     if key in {"csi300", "csi 300", "沪深300"}:
         api = getattr(loader, "api", None)
         if api is None:
-            # A free source can still fill the warehouse — it just cannot name the
-            # index for you, and the command that got here said --universe. Saying
-            # so without the way out reads as "this source cannot sync at all".
-            raise SyncConfigError(
-                f"universe {universe!r} needs a source that exposes an index-weight "
-                f"roster; {getattr(loader, 'name', '?')!r} does not — sync specific "
-                "names with --symbols 600519.SH,000001.SZ instead"
-            )
+            return _resolve_from_source_roster(universe, key, loader)
         from src.tools.alpha_bench_tool import _csi300_constituents
 
         codes, constituent_source, source_date, membership = _csi300_constituents(
@@ -406,6 +427,68 @@ def resolve_universe(
         )
     raise SyncConfigError(
         f"universe {universe!r} is not resolvable here; pass --symbols or use csi300"
+    )
+
+
+def _resolve_from_source_roster(universe: str, key: str, loader: Any) -> UniverseRoster:
+    """Expand a universe from whatever roster *this* source publishes itself.
+
+    The point-in-time matrix stays ``None`` on purpose, and that single choice is
+    what keeps the free path honest: ``UniverseRoster.persist`` then writes no
+    roster file, so a panel built offline from these names reports
+    ``survivorship_bias=true`` instead of treating today's members as if they had
+    been members ten years ago. This is the same degraded channel
+    ``_csi300_constituents`` uses for its hand-picked fallback, so the honesty of
+    the store does not depend on which source happened to run.
+
+    Raises:
+        SyncConfigError: The source cannot name the index at all, the name is not
+            one it knows, or its roster call failed.
+    """
+    source = getattr(loader, "name", "?")
+    fetch = getattr(loader, "fetch_universe_members", None)
+    if fetch is None:
+        # A free source can still fill the warehouse — it just cannot name the
+        # index for you, and the command that got here said --universe. Saying so
+        # without the way out reads as "this source cannot sync at all".
+        raise SyncConfigError(
+            f"universe {universe!r} needs a source that exposes an index-weight "
+            f"roster; {source!r} does not — sync specific names with "
+            "--symbols 600519.SH,000001.SZ instead"
+        )
+    try:
+        found = fetch(key)
+    except Exception as exc:  # noqa: BLE001 - a failed roster is a config error here
+        raise SyncConfigError(
+            f"universe {universe!r}: source {source!r} could not resolve the roster "
+            f"({exc}) — sync specific names with --symbols instead"
+        ) from exc
+    if found is None:
+        raise SyncConfigError(
+            f"universe {universe!r} is not resolvable here; pass --symbols or use csi300"
+        )
+
+    codes, snapshot_date = found
+    logger.warning(
+        "warehouse: csi300 roster came from %s constituents%s — that is today's %d-name "
+        "list, not the index history, so no point-in-time membership is stored and a "
+        "panel over these names reports survivorship_bias=true",
+        source,
+        f" as of {snapshot_date}" if snapshot_date else "",
+        len(codes),
+    )
+    return UniverseRoster(
+        universe="csi300",
+        codes=[str(code) for code in codes],
+        # Not an oversight: a one-row all-True matrix here would claim the 2016
+        # members are known, when all it says is "these survived to today". The
+        # panel reads absence as survivorship_bias=true and a fabricated row as
+        # resolved, so the empty field is the only honest value available.
+        membership=None,
+        constituent_source=f"{source} constituents" + (
+            f" ({snapshot_date})" if snapshot_date else ""
+        ),
+        constituent_source_date=snapshot_date,
     )
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -87,6 +87,27 @@ def _sina_stock_symbol(code: str) -> Optional[str]:
     return f"{suffix.lower()}{symbol}"
 
 
+def _with_exchange_suffix(code: Any, exchange: Any) -> Optional[str]:
+    """Turn a CSIndex constituent row into the warehouse's ``600519.SH`` form.
+
+    The compiler's table carries a Chinese exchange name per row, which is
+    authoritative; the code prefix is only a fallback for a table that omits it.
+    A code that is not six digits is dropped rather than guessed at, because a
+    wrong suffix here syncs a name that never existed in the index.
+    """
+    digits = str(code).strip().split(".")[0]
+    if not digits.isdigit() or len(digits) != 6:
+        return None
+    text = str(exchange or "")
+    if "上海" in text:
+        suffix = "SH"
+    elif "深圳" in text:
+        suffix = "SZ"
+    else:
+        suffix = "SH" if digits[0] in {"6", "9"} else "SZ"
+    return f"{digits}.{suffix}"
+
+
 def _date_value_columns(frame: pd.DataFrame) -> tuple[str, str]:
     """Return ``(date column, value column)`` of a two-column vendor table.
 
@@ -107,7 +128,7 @@ def _date_value_columns(frame: pd.DataFrame) -> tuple[str, str]:
     return str(date_col), str(value_col)
 
 
-def _assert_cumulative(series: pd.Series) -> None:
+def _assert_cumulative(series: pd.Series, window: pd.DatetimeIndex | None = None) -> None:
     """Refuse a factor series that does not rise across corporate actions.
 
     ``store.read_bars(adjust="qfq")`` re-anchors on read as
@@ -116,14 +137,37 @@ def _assert_cumulative(series: pd.Series) -> None:
     consumer as ``price * hfq_factor``. Sina's *qfq* factor is a divisor
     (``price / qfq_factor``) and falls over time; stored as-is it would scale
     every past bar up instead of down, and no row would ever look invalid.
+
+    Args:
+        series: The published ex-date -> factor table, sorted and de-duplicated.
+        window: The sessions this sync is actually filling. When given, only the
+            steps a stored bar can see are judged — see the note below.
+
+    Note:
+        Scoping to *window* is not a loosening, it is the question. A decrease is
+        only a defect if a bar we are about to store reads a factor that fell; the
+        single label before the window is kept as that window's baseline, and any
+        earlier history belongs to a sync that will re-ask this guard for its own
+        range. Judging the whole published life cost 000568.SZ its entire
+        2016-2026 fill over one 0.38% dip in 2002 that no stored bar can see, and
+        the refusal was not retryable. A real divisor still falls at every
+        dividend inside any window long enough to contain one.
     """
-    steps = series.diff().dropna()
-    worst = float(steps.min()) if len(steps) else 0.0
-    if worst < -1e-9:
-        raise ValueError(
-            f"sina factor decreases by {worst:.6g} somewhere in its history, so it "
-            "is not a cumulative multiplier; refusing to store it under adj_factor"
-        )
+    checked = series
+    if window is not None and len(window):
+        start = int(series.index.searchsorted(pd.Timestamp(window.min()), side="right"))
+        end = int(series.index.searchsorted(pd.Timestamp(window.max()), side="right"))
+        checked = series.iloc[max(start - 1, 0):end]
+    steps = checked.diff().dropna()
+    downs = steps[steps < -1e-9]
+    if downs.empty:
+        return
+    stamp = downs.idxmin()
+    raise ValueError(
+        f"sina factor falls by {-float(downs.min()):.6g} at {stamp.date()} "
+        f"({len(downs)} of {len(steps)} steps decrease in the synced window), so it "
+        "is not a cumulative multiplier; refusing to store it under adj_factor"
+    )
 
 
 def _assert_share_basis(volume: pd.Series, amount: pd.Series, close: pd.Series) -> None:
@@ -197,7 +241,7 @@ def _sina_factor(ak, symbol: str, axis: pd.DatetimeIndex) -> pd.DataFrame:
     series = series[~series.index.duplicated(keep="last")]
     if series.empty:
         raise ValueError("sina adjustment table carried no usable factors")
-    _assert_cumulative(series)
+    _assert_cumulative(series, axis)
     # ``method="ffill"`` is the point, not an optimization: a plain reindex drops
     # every source label absent from the target, so a factor published years
     # before the window would leave the whole window empty and the gate would
@@ -583,6 +627,67 @@ class DataLoader:
             logger.warning("akshare adjustment-factor fetch failed for %s: %s", code, exc)
             factor = None
         return bars, factor
+
+    #: Named rosters this source can name, mapped to the CSIndex table behind them.
+    _UNIVERSE_INDEX_CODES = {"csi300": "000300"}
+
+    #: A constituent table with fewer rows than this is a partial download, not
+    #: a small index - syncing "csi300" as 40 names would be worse than failing.
+    _MIN_ROSTER_NAMES = 200
+
+    def fetch_universe_members(
+        self, universe: str
+    ) -> Optional[tuple[list[str], Optional[str]]]:
+        """Today's members of a named index, from the compiler's own table.
+
+        There is deliberately no point-in-time answer here: the compiler publishes
+        the roster in force on *one* date, so a ten-year window filled from it holds
+        today's members for all ten years. A caller must therefore leave the
+        membership matrix empty, which makes the warehouse report such a panel as
+        survivorship-biased rather than pretending the roster is historical.
+
+        Args:
+            universe: ``csi300`` only; any other name returns ``None`` so the
+                caller gets to choose its own refusal message.
+
+        Returns:
+            ``(codes, snapshot_date)`` where codes carry the same ``.SH``/``.SZ``
+            suffixes every other warehouse symbol uses, or ``None`` for a name
+            this source cannot resolve.
+
+        Raises:
+            RuntimeError: The table came back empty or implausibly short.
+        """
+        index_code = self._UNIVERSE_INDEX_CODES.get(str(universe).strip().lower())
+        if index_code is None:
+            return None
+
+        import akshare as ak
+
+        frame = ak.index_stock_cons_csindex(symbol=index_code)
+        if frame is None or frame.empty:
+            raise RuntimeError(f"csindex returned no constituent rows for {index_code}")
+        if "成分券代码" not in frame.columns:
+            raise RuntimeError(
+                f"csindex constituent table for {index_code} has no 成分券代码 column; "
+                f"got {list(frame.columns)}"
+            )
+
+        codes = sorted(
+            {
+                suffixed
+                for row in frame.to_dict("records")
+                if (suffixed := _with_exchange_suffix(row.get("成分券代码"), row.get("交易所")))
+            }
+        )
+        if len(codes) < self._MIN_ROSTER_NAMES:
+            raise RuntimeError(
+                f"csindex roster for {index_code} has {len(codes)} names, below the "
+                f"{self._MIN_ROSTER_NAMES} floor - refusing to treat that as an index"
+            )
+        date_col = frame.get("日期")
+        snapshot = str(date_col.iloc[0]) if date_col is not None and len(date_col) else None
+        return codes, snapshot
 
     @staticmethod
     def _normalize(df: pd.DataFrame, date_col: str = "日期") -> pd.DataFrame:
