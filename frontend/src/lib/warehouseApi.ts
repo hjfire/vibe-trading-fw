@@ -128,13 +128,17 @@ export class WarehouseApiError extends Error {
  * A response that is not JSON is never "fine": the SPA handler answers *every*
  * unmatched path with `index.html` and status **200**, so an API route the
  * running server does not know about looks successful right up until
- * `res.json()` throws a bare `SyntaxError: Unexpected token '<'`. The likeliest
- * reason for that on this page is a server process older than this feature.
+ * `res.json()` throws a bare `SyntaxError: Unexpected token '<'`. Both live
+ * failures of this page took that shape — once because the server process
+ * predated the routes, once because the browser kept serving the cached shell
+ * after the server had been fixed — so the message names both, in the order
+ * they can be checked.
  */
 const NON_JSON_HINT =
   "the server answered with something that is not JSON. An unregistered path is " +
-  "served the web app's own index.html with status 200, which usually means the " +
-  "running API server predates this page -- restart it.";
+  "served the web app's own index.html with status 200. Two things do that: the " +
+  "running API server predates this page (restart it), or the browser is " +
+  "replaying a cached copy of that page (hard-reload with Ctrl+Shift+R).";
 
 function contentType(res: Response): string {
   return res.headers.get("content-type") ?? "unknown";
@@ -168,6 +172,11 @@ async function errorFrom(path: string, res: Response): Promise<WarehouseApiError
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
+    // A cached reply is a second opinion nobody asked for. When the route is
+    // missing this endpoint used to be handed index.html carrying ETag and
+    // Last-Modified but no Cache-Control, so the browser kept that wrong answer
+    // for hours and the page went on failing *after* the server was fixed.
+    cache: "no-store",
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });

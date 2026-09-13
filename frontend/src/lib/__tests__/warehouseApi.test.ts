@@ -20,6 +20,7 @@ function reply(body: unknown, status = 200, contentType = "application/json"): R
 }
 
 const requested: string[] = [];
+const requestedInit: RequestInit[] = [];
 const queued: Response[] = [];
 
 /** Queue the body the next `fetch` should answer with. */
@@ -44,13 +45,19 @@ function lastUrl(): string {
   return String(requested[requested.length - 1]);
 }
 
+function lastInit(): RequestInit {
+  return requestedInit[requestedInit.length - 1] ?? {};
+}
+
 beforeEach(() => {
   requested.length = 0;
+  requestedInit.length = 0;
   queued.length = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       requested.push(String(input));
+      requestedInit.push(init ?? {});
       const next = queued.shift();
       // Failing here names the missing stub instead of surfacing as a
       // "cannot read json of undefined" somewhere inside the client.
@@ -98,6 +105,26 @@ describe("audit query building", () => {
     await warehouseApi.audit({ symbols: "600519.SH,000001.SZ" });
 
     expect(lastUrl()).toContain("symbols=600519.SH%2C000001.SZ");
+  });
+
+  it("refuses to let the browser keep a reply it can be wrong about", async () => {
+    // The field shape: an unregistered path used to answer with index.html plus
+    // ETag/Last-Modified and no Cache-Control, so the page kept reading an
+    // hours-old HTML body out of the disk cache even after the server was fixed.
+    serverReturns({ status: "ok", clean: true });
+
+    await warehouseApi.audit();
+
+    expect(lastInit().cache).toBe("no-store");
+  });
+
+  it("still hands the abort signal to fetch", async () => {
+    serverReturns({ status: "ok", clean: true });
+    const controller = new AbortController();
+
+    await warehouseApi.audit({ signal: controller.signal });
+
+    expect(lastInit().signal).toBe(controller.signal);
   });
 });
 
@@ -162,7 +189,12 @@ describe("error surface", () => {
     expect(caught.name).toBe("WarehouseApiError");
     expect(caught.message).toContain("/api/warehouse/status");
     expect(caught.message).toMatch(/not JSON/);
+    // Both causes have to stay named: the first live failure was a stale server,
+    // the second one was the browser replaying the cached shell *after* that
+    // server had been fixed. A message pointing at only one of them sends the
+    // reader off to restart a service that is already fine.
     expect(caught.message).toMatch(/restart/i);
+    expect(caught.message).toMatch(/cach|hard-reload/i);
     expect(caught.message).toContain("text/html");
   });
 
