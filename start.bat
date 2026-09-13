@@ -21,8 +21,14 @@ start "Vibe-Trading Backend" cmd /k "cd /d %~dp0agent && python api_server.py"
 :: for an HTTP probe once something is actually bound.
 :: Keep this block ASCII: cmd reads a UTF-8 .bat byte-by-byte and a long non-ASCII
 :: comment line desynchronises the reader and gets the tail executed.
+:: Probe /health, not /api/health: that path was never registered (system_routes.py
+:: serves /health, /live, /ready at the root). It still "passed" while the SPA
+:: fallback answered unknown /api/* paths with 200 + index.html - which is exactly
+:: the lie spa.py stopped telling. A wrong path therefore reads as a dead backend:
+:: this loop burns its whole 90s printing 404s, then lies with "did not answer".
+:: /health is unauthenticated JSON, so it also proves the app is up, not just bound.
 echo [2/3] waiting for backend, up to 90s...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$sw=[Diagnostics.Stopwatch]::StartNew(); $ok=$false; while($sw.Elapsed.TotalSeconds -lt 90){ $up=[Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -eq 8000 }; if($up){ try{ Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/health' -UseBasicParsing -TimeoutSec 3 | Out-Null; $ok=$true; break }catch{} }; Start-Sleep -Milliseconds 500 }; if(-not $ok){ exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$sw=[Diagnostics.Stopwatch]::StartNew(); $ok=$false; while($sw.Elapsed.TotalSeconds -lt 90){ $up=[Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -eq 8000 }; if($up){ try{ Invoke-WebRequest -Uri 'http://127.0.0.1:8000/health' -UseBasicParsing -TimeoutSec 3 | Out-Null; $ok=$true; break }catch{} }; Start-Sleep -Milliseconds 500 }; if(-not $ok){ exit 1 }"
 if errorlevel 1 (
   echo       [WARN] backend did not answer within 90s, starting frontend anyway.
 ) else (

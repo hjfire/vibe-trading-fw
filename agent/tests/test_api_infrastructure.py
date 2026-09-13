@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
+
 import pytest
 
 import api_server
@@ -207,6 +210,36 @@ def test_is_spa_html_route_runs_collection_not_spa():
 
 def test_is_spa_html_route_unknown():
     assert helpers._is_spa_html_route("/api/health") is False
+
+
+# ============================================================================
+# Launcher probe <-> registered routes
+# ============================================================================
+
+
+def test_start_bat_only_probes_registered_routes():
+    """``start.bat`` gates the frontend on an HTTP probe, so its path is a contract.
+
+    It probed ``/api/health``, which was never registered - the SPA fallback answered
+    it with 200 + index.html, so the launcher was green for the wrong reason. Once
+    ``spa.py`` stopped lying about unknown ``/api/*`` paths, that wrong path costs a
+    90 s flood of 404s in the backend window plus a false "backend did not answer"
+    banner. The failure is loud either way; this just makes it loud before startup
+    instead of after.
+    """
+    bat = Path(__file__).resolve().parents[2] / "start.bat"
+    # Encoding is explicit on purpose: this file is UTF-8 with Chinese echo lines and
+    # a bare read_text() reads it as GBK on a Chinese Windows.
+    probed = set(
+        re.findall(
+            r"http://127\.0\.0\.1:8000(/[A-Za-z0-9_\-/]*)", bat.read_text(encoding="utf-8")
+        )
+    )
+    assert probed, "start.bat no longer probes the backend over HTTP - update this test"
+
+    registered = {getattr(route, "path", "") for route in api_server.app.routes}
+    missing = sorted(probed - registered)
+    assert not missing, f"start.bat probes paths that do not exist: {missing}"
 
 
 # ============================================================================
