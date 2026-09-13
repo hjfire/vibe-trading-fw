@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router";
-import { Activity, BarChart3, BellRing, Bot, BookOpen, CalendarClock, CandlestickChart, Check, ChevronDown, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BellRing, Bot, BookOpen, CalendarClock, CandlestickChart, Check, ChevronDown, Database, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -28,6 +28,10 @@ export function Layout() {
     { to: "/reports", icon: FileText, label: t('layout.reports') },
     { to: "/portfolio", icon: WalletCards, label: t('layout.portfolio') },
     { to: "/alpha-zoo", icon: Layers, label: t('layout.alphaZoo') },
+    // Local custom ㊱: the local bar warehouse. Its own slot is deliberate --
+    // the same complaint that put **使用说明** in this list ("找不到新功能")
+    // applies to a data layer that only a `python -m ...` line can reach.
+    { to: "/warehouse", icon: Database, label: t('layout.warehouse', { defaultValue: '数据仓库' }) },
     { to: "/options", icon: CandlestickChart, label: t('layout.optionsLab') },
     { to: "/settings", icon: Settings, label: t('layout.settings') },
     { to: "/correlation", icon: BarChart3, label: t('layout.correlation') },

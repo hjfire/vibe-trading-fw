@@ -333,6 +333,10 @@ from src.api.scheduled_routes import (  # noqa: E402, F401
 from src.api.alerts_routes import register_alerts_routes  # noqa: E402
 register_alerts_routes(app)
 
+# --- Local bar warehouse (read-only dashboard; local customization) ---
+from src.api.warehouse_routes import register_warehouse_routes  # noqa: E402
+register_warehouse_routes(app)
+
 
 # ============================================================================
 # Main Entry Point

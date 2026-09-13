@@ -33,6 +33,10 @@ const Correlation = lazy(() =>
 const AlphaZoo = lazy(() =>
   import("@/pages/AlphaZoo").then((m) => ({ default: m.AlphaZoo })),
 );
+// Local custom ㊱: the local bar warehouse (inventory + health check, read-only).
+const Warehouse = lazy(() =>
+  import("@/pages/Warehouse").then((m) => ({ default: m.Warehouse })),
+);
 const OptionsLab = lazy(() =>
   import("@/pages/OptionsLab").then((m) => ({ default: m.OptionsLab })),
 );
@@ -82,6 +86,7 @@ export const router = createBrowserRouter([
       { path: "/pro-chart", element: wrap(ProChart) },
       { path: "/help", element: wrap(Help) },
       { path: "/alpha-zoo", element: wrap(AlphaZoo) },
+      { path: "/warehouse", element: wrap(Warehouse) },
       { path: "/alpha-zoo/bench", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/:alphaId", element: wrap(AlphaZoo) },
