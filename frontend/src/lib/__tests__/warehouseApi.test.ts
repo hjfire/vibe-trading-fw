@@ -189,10 +189,12 @@ describe("error surface", () => {
     expect(caught.name).toBe("WarehouseApiError");
     expect(caught.message).toContain("/api/warehouse/status");
     expect(caught.message).toMatch(/not JSON/);
-    // Both causes have to stay named: the first live failure was a stale server,
-    // the second one was the browser replaying the cached shell *after* that
-    // server had been fixed. A message pointing at only one of them sends the
-    // reader off to restart a service that is already fine.
+    // Every cause has to stay named. The three this endpoint has actually
+    // produced: an unproxied dev path (Vite answers the shell), a stale API
+    // server (its SPA handler answers the shell), and the browser replaying a
+    // cached shell *after* the server had been fixed. A message pointing at one
+    // of them sends the reader off to restart a service that is already fine.
+    expect(caught.message).toMatch(/proxy|PROXY_PATHS/i);
     expect(caught.message).toMatch(/restart/i);
     expect(caught.message).toMatch(/cach|hard-reload/i);
     expect(caught.message).toContain("text/html");

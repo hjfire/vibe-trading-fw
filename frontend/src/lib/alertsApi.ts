@@ -1,4 +1,5 @@
 import { authHeaders } from "@/lib/apiAuth";
+import { isJsonReply, nonJsonReplyMessage } from "@/lib/apiReply";
 
 /**
  * Thin client for the `/alerts` routes (local custom ㉑).
@@ -225,12 +226,23 @@ async function errorFrom(res: Response): Promise<AlertApiError> {
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
+    // A cached reply is a second opinion nobody asked for. This prefix is both
+    // an API namespace and an SPA route, so a cache that keeps the wrong answer
+    // here is a page that keeps failing after the server was fixed.
+    cache: "no-store",
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) throw await errorFrom(res);
   const text = await res.text();
-  return (text ? JSON.parse(text) : null) as T;
+  if (!text) return null as T;
+  // 200 + HTML is a fallback page, not a response: dev Vite answers any path
+  // whose prefix is not proxied with the shell, and `JSON.parse` of that is a
+  // bare `SyntaxError: Unexpected token '<'` shown to the operator as-is.
+  if (!isJsonReply(res)) {
+    throw new AlertApiError(nonJsonReplyMessage(path, res), res.status);
+  }
+  return JSON.parse(text) as T;
 }
 
 function qs(params: Record<string, string | number | boolean | null | undefined>): string {

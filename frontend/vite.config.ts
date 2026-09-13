@@ -54,6 +54,14 @@ export default defineConfig(({ mode }) => {
         // (/options/payoff, /options/chain) — same dual role as /correlation.
         // Overrides the plain PROXY_PATHS entry above.
         "/options": apiProxyWithHtmlFallback,
+        // /alerts is the same dual role (SPA route + /alerts/rules, /alerts/run,
+        // /alerts/webhook/{id}). Without this entry Vite's own SPA fallback
+        // answers those API calls with index.html at status 200, so the page
+        // shows `Unexpected token '<'` instead of data — a prefix missing here
+        // is indistinguishable from a dead backend unless you look at the
+        // content-type. `src/__tests__/apiProxyCoverage.test.ts` pins that every
+        // path the API clients call is covered here.
+        "/alerts": apiProxyWithHtmlFallback,
         "^/alpha(?:/|$)": apiProxy,
       },
     },

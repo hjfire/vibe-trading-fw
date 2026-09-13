@@ -1,4 +1,5 @@
 import { authHeaders } from "@/lib/apiAuth";
+import { isJsonReply, nonJsonReplyMessage } from "@/lib/apiReply";
 
 /**
  * Thin client for the `/api/warehouse/*` routes (local custom ㊱).
@@ -124,40 +125,16 @@ export class WarehouseApiError extends Error {
   }
 }
 
-/**
- * A response that is not JSON is never "fine": the SPA handler answers *every*
- * unmatched path with `index.html` and status **200**, so an API route the
- * running server does not know about looks successful right up until
- * `res.json()` throws a bare `SyntaxError: Unexpected token '<'`. Both live
- * failures of this page took that shape — once because the server process
- * predated the routes, once because the browser kept serving the cached shell
- * after the server had been fixed — so the message names both, in the order
- * they can be checked.
- */
-const NON_JSON_HINT =
-  "the server answered with something that is not JSON. An unregistered path is " +
-  "served the web app's own index.html with status 200. Two things do that: the " +
-  "running API server predates this page (restart it), or the browser is " +
-  "replaying a cached copy of that page (hard-reload with Ctrl+Shift+R).";
-
-function contentType(res: Response): string {
-  return res.headers.get("content-type") ?? "unknown";
-}
-
-function isJson(res: Response): boolean {
-  return contentType(res).toLowerCase().includes("json");
-}
-
 function nonJsonError(path: string, res: Response): WarehouseApiError {
-  return new WarehouseApiError(
-    `${path} (HTTP ${res.status}): ${NON_JSON_HINT} Got ${contentType(res)}.`,
-    res.status,
-  );
+  // The *why* lives in `apiReply.ts`, next to the identical check the other
+  // local-custom clients run, because this endpoint has now failed three
+  // different ways under one message.
+  return new WarehouseApiError(nonJsonReplyMessage(path, res), res.status);
 }
 
 async function errorFrom(path: string, res: Response): Promise<WarehouseApiError> {
   let detail = `request failed (${res.status})`;
-  if (!isJson(res)) return nonJsonError(path, res);
+  if (!isJsonReply(res)) return nonJsonError(path, res);
   try {
     const body = (await res.json()) as { error?: unknown; detail?: unknown };
     detail = String(body.error || body.detail || detail);
@@ -181,7 +158,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) throw await errorFrom(path, res);
-  if (!isJson(res)) throw nonJsonError(path, res);
+  if (!isJsonReply(res)) throw nonJsonError(path, res);
   return (await res.json()) as T;
 }
 

@@ -145,6 +145,38 @@ describe("alertsApi transport", () => {
     });
   });
 
+  it("reads a 200 that is not JSON as the routing failure it is", async () => {
+    // This is the shape this page has lived with since local custom ㉑ shipped:
+    // `/alerts` is both an SPA route and an API prefix, and while its prefix was
+    // missing from vite.config.ts, Vite answered every API call with index.html
+    // at status 200. `res.ok` was true, so the page rendered the bare
+    // `SyntaxError: Unexpected token '<'` as if it were a server message.
+    fetchMock.mockResolvedValue(
+      new Response('<!doctype html><html><head><title>Vibe-Trading</title>', {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+
+    const error = await alertsApi.listRules().catch((e) => e);
+
+    expect(error).toBeInstanceOf(AlertApiError);
+    expect(error.status).toBe(200);
+    expect(error.message).not.toMatch(/Unexpected token/);
+    expect(error.message).toContain("/alerts/rules");
+    expect(error.message).toMatch(/not JSON/);
+    expect(error.message).toMatch(/proxy|PROXY_PATHS/i);
+    expect(error.message).toMatch(/restart/i);
+    expect(error.message).toMatch(/cach|hard-reload/i);
+    expect(error.message).toContain("text/html");
+  });
+
+  it("refuses to let the browser keep a reply it can be wrong about", async () => {
+    fetchMock.mockResolvedValue(jsonResponse([]));
+    await alertsApi.listRules();
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ cache: "no-store" });
+  });
+
   it('defaults "evaluate now" to not pushing', async () => {
     // Two fresh Responses: a body can only be read once, so one shared object
     // would make the second call fail for a reason unrelated to the query.
