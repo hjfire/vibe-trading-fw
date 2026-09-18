@@ -189,6 +189,15 @@ def _warehouse_hint() -> str:
     return reason
 
 
+def is_no_network_fallback_source(source: str) -> bool:
+    """Whether an explicit request for *source* must never silently degrade.
+
+    The set itself stays module-private; callers outside the registry ask
+    through this predicate instead of importing the underscore name.
+    """
+    return source in _NO_NETWORK_FALLBACK_SOURCES
+
+
 # ---------------------------------------------------------------------------
 # Fallback chains: market_type -> ordered list of source names
 # ---------------------------------------------------------------------------
