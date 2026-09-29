@@ -42,12 +42,17 @@ export interface Tok {
 
 const IDENT_START = /[A-Za-z_\u4e00-\u9fa5]/;
 const IDENT_BODY = /[A-Za-z0-9_\u4e00-\u9fa5]/;
-const NUM_RE = /^(\d[\d_]*(\.\d[\d_]*)?|\.\d[\d_]*)([eE][+-]?\d+)?/;
+// A trailing dot is a valid integer literal in Pine (`result += 1.`); the
+// optional fraction group lets `\d+\.` match while `.5` stays with the second
+// alternative.
+const NUM_RE = /^(\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)([eE][+-]?\d+)?/;
 /** TradingView colour literals: `#rrggbb`, optionally with alpha `#rrggbbaa`. */
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6})(?![0-9a-fA-F])/;
 /** Multi-char operators, longest first so `>=` never lexes as `>` + `=`. */
-const OPS_MULTI = [":=", "==", "!=", "<>", ">=", "<=", "&&", "||", "=>", "+=", "-="];
+const OPS_MULTI = [":=", "==", "!=", "<>", ">=", "<=", "&&", "||", "=>", "+=", "-=", "*=", "/=", "%="];
 const OPS_SINGLE = "+-*/%^<>=,()[]{}:?.!~";
+/** `x op= y` is Pine shorthand for `x := x op y`. */
+const COMPOUND_OPS = new Set(["+=", "-=", "*=", "/=", "%="]);
 /** A trailing operator/comma means the statement continues on the next line. */
 const CONTINUE_END = new Set([
   "=", ":=", "+", "-", "*", "/", "%", "^", "<", ">", "<=", ">=", "==", "!=", "<>",
@@ -149,9 +154,6 @@ export function tokenizePine(src: string): Tok[] {
     }
     const multi = OPS_MULTI.find((o) => src.startsWith(o, i));
     if (multi) {
-      if (multi === "+=" || multi === "-=") {
-        throw new PineError(`第 ${line} 行：不支持 "${multi}" 复合赋值，请写成 x := x ${multi === "+=" ? "+" : "-"} y`);
-      }
       push("op", multi, col);
       col += multi.length;
       i += multi.length;
@@ -215,7 +217,7 @@ const TYPE_WORDS = new Set([
   // (`infoTb`/`ln`) as trailing junk. dropTypeWords only consumes a word when
   // the *next* token is an identifier, so `table.new(...)` (followed by `.`) and
   // a bare `table` reference are never mistaken for a type annotation.
-  "table", "line", "label", "box", "polyline", "matrix",
+  "table", "line", "label", "box", "polyline", "matrix", "array", "map",
 ]);
 
 /** Statement keywords that are never variable names. */
@@ -300,7 +302,8 @@ export class PineParser {
         );
       }
       const stmt = this.parseStatement();
-      if (stmt) body.push(stmt);
+      if (Array.isArray(stmt)) body.push(...stmt);
+      else if (stmt) body.push(stmt);
     }
     return body;
   }
@@ -398,13 +401,23 @@ export class PineParser {
     return this.parseStatements(first.col);
   }
 
-  private parseStatement(): Stmt | null {
+  private parseStatement(): Stmt | Stmt[] | null {
     const head = this.peek();
     const indent = this.indentHere();
     const t = this.peek();
 
-    if (t.kind === "ident" && (t.value === "while" || t.value === "switch" || t.value === "type" || t.value === "export" || t.value === "import")) {
+    if (t.kind === "ident" && (t.value === "while" || t.value === "switch" || t.value === "type" || t.value === "export")) {
       throw new PineError(`第 ${t.line} 行：暂不支持 "${t.value}" 语法，请改写为 if/三元表达式`);
+    }
+    // `import TradingView/ta/9` is a v5/v6 module import. The ta.* library is
+    // already global here, so the import line is a no-op: consume and skip it.
+    if (t.kind === "ident" && t.value === "import") {
+      for (;;) {
+        const s = this.peek();
+        if (s.kind === "nl" || s.kind === "eof") break;
+        this.next();
+      }
+      return null;
     }
     if (this.looksLikeFnDef()) return this.parseFn(indent);
     if (t.kind === "ident" && t.value === "if") return this.parseIf(indent);
@@ -447,11 +460,36 @@ export class PineParser {
     if (cur.kind === "ident") {
       const after = this.tk[this.pos + 1];
       if (after?.kind === "op" && after.value === "=") {
-        const name = this.next().value;
-        this.next(); // "="
-        const value = this.parseExpr();
+        // `a = 1` and the comma-parallel form `var a = 0, var b = 0.0, ...`.
+        const decls: Stmt[] = [];
+        for (;;) {
+          const nm = this.peek();
+          if (nm.kind !== "ident") break;
+          this.next(); // name
+          this.expectOp("=");
+          const value = this.parseExpr();
+          decls.push({ k: "decl", names: [nm.value], value, persist, line: nm.line });
+          if (this.isOp(",")) {
+            this.next(); // ","
+            this.skipNl();
+            if (this.isIdent("var")) { this.next(); persist = true; }
+            this.dropTypeWords();
+            continue;
+          }
+          break;
+        }
         this.endOfStmt();
-        return { k: "decl", names: [name], value, persist, line: cur.line };
+        return decls.length === 1 ? decls[0] : decls;
+      }
+      if (after?.kind === "op" && COMPOUND_OPS.has(after.value)) {
+        // `cnt += 1` desugars to `cnt := cnt + 1` (reassignment semantics).
+        const name = this.next().value;
+        const opTok = this.next(); // "+=" etc
+        const core = opTok.value.slice(0, -1); // "+=" -> "+"
+        const rhs = this.parseExpr();
+        this.endOfStmt();
+        const value: Expr = { k: "bin", op: core, a: { k: "id", name, line: cur.line }, b: rhs, line: cur.line };
+        return { k: "assign", name, value, line: cur.line };
       }
       if (after?.kind === "op" && after.value === ":=") {
         const name = this.next().value;
@@ -469,16 +507,59 @@ export class PineParser {
   }
 
   private dropTypeWords(): void {
-    // `float x =`, `const float x =`, `series int i =` …
+    // `float x =`, `const float x =`, `series int i =` … and the array-typed
+    // form `float[] buffer =` / `int[] idx =` (Pine's typed-array declaration),
+    // plus the generic form `array<float> buf` / `map<int, MyUDT> m`.
     for (;;) {
       const t = this.peek();
-      const n = this.tk[this.pos + 1];
-      if (t.kind === "ident" && TYPE_WORDS.has(t.value) && n?.kind === "ident") {
-        this.next();
+      if (!(t.kind === "ident" && TYPE_WORDS.has(t.value))) break;
+      let p = this.pos + 1;
+      let kind: "none" | "array" | "generic" = "none";
+      if (
+        this.tk[p]?.kind === "op" && this.tk[p].value === "[" &&
+        this.tk[p + 1]?.kind === "op" && this.tk[p + 1].value === "]"
+      ) {
+        p += 2;
+        kind = "array";
+      } else {
+        const g = this.genericEnd(p);
+        if (g !== null) { p = g; kind = "generic"; }
+      }
+      const nxt = this.tk[p];
+      if (nxt && nxt.kind === "ident") {
+        this.next(); // type word
+        if (kind === "array") { this.next(); this.next(); } // [ ]
+        else if (kind === "generic") { this.pos = p; } // jump past <...>
         continue;
       }
       break;
     }
+  }
+
+  /**
+   * If tokens starting at `from` (which must be a `<`) form a generic type
+   * argument list (`<int>`, `<string, float>`, `<map<int, float>>`), return the
+   * index just past the closing `>`; otherwise null. Only type tokens (`ident`,
+   * `,`, `.`, `[`, `]`, nested `< >`) are allowed, and `and`/`or`/`not`/keywords
+   * are rejected — that keeps a comparison (`a < b and ...`) out of the fast
+   * path, so `<` followed by non-type content is left for the relational parser.
+   */
+  private genericEnd(from: number): number | null {
+    if (this.tk[from]?.kind !== "op" || this.tk[from].value !== "<") return null;
+    let depth = 0;
+    for (let p = from; p < this.tk.length; p++) {
+      const t = this.tk[p];
+      if (t.kind === "op" && t.value === "<") { depth++; continue; }
+      if (t.kind === "op" && t.value === ">") { depth--; if (depth === 0) return p + 1; continue; }
+      if (t.kind === "nl" || t.kind === "eof") return null;
+      if (t.kind === "ident") {
+        if (KEYWORDS.has(t.value) || t.value === "and" || t.value === "or" || t.value === "not") return null;
+        continue;
+      }
+      if (t.kind === "op" && (t.value === "," || t.value === "." || t.value === "[" || t.value === "]")) continue;
+      return null;
+    }
+    return null;
   }
 
   private parseIf(indent: number): Stmt {
@@ -693,6 +774,15 @@ export class PineParser {
         throw new PineError(`第 ${t.line} 行："${t.value}" 是关键字，不能这样使用`);
       }
       this.next();
+      // Generic type arguments on a builtin call (`array.new<float>(0)`,
+      // `map.new<string, float>()`) are compile-time only; skip the `<...>` so
+      // the call parses to its plain name (array/map support is a runtime
+      // concern for later phases). Only skipped when the list is immediately
+      // followed by `(`, so a comparison `a < b` is never mistaken for one.
+      if (this.isOp("<")) {
+        const g = this.genericEnd(this.pos);
+        if (g !== null && this.tk[g]?.kind === "op" && this.tk[g].value === "(") this.pos = g;
+      }
       if (this.isOp("(")) {
         this.next();
         const args: Arg[] = [];

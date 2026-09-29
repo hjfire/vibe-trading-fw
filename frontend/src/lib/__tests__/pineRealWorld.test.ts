@@ -328,3 +328,58 @@ describe("real-world Pine sources", () => {
     expect(tunedTrades).not.toBe(defaults.result.report?.trades.length);
   });
 });
+
+/**
+ * Syntax shapes demanded by the 40-script TradingView corpus. Each construct
+ * used to die in the parser (a hard ERROR); now it either runs or reaches the
+ * runtime as an honest feature-boundary ABORT. The bar is the same as above:
+ * it must parse, and where the value is unambiguous it must be right.
+ */
+describe("Pine v5/v6 syntax shapes the corpus demanded", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const parseOk = (code: string): { abort?: string } => {
+    const out = compilePine(code, BARS, {}) as { error?: string; abort?: string };
+    if (out.error) throw new Error(`解析失败：${out.error}`);
+    return out;
+  };
+
+  it("desugars compound assignment into reassignment", () => {
+    // 0 → +5 → *2 → -3 = 7 on every bar; order-sensitive and deterministic.
+    const a = run(head + "x = 0\nx += 5\nx *= 2\nx -= 3\nplot(x, \"x\")");
+    expect(a.result.lines[0].values[10]).toBe(7);
+    const b = run(head + "y = 10\ny /= 4\nplot(y, \"y\")");
+    expect(b.result.lines[0].values[10]).toBeCloseTo(2.5, 10);
+  });
+
+  it("lexes a trailing-dot integer literal", () => {
+    expect(run(head + 'plot(2. + 3., "d")').result.lines[0].values[10]).toBe(5);
+  });
+
+  it("ignores an `import TradingView/ta/N` module line", () => {
+    const a = run("//@version=5\nimport TradingView/ta/9\nindicator(\"t\")\nplot(ta.sma(close, 5), \"s\")");
+    expect(filled(a)).toBeGreaterThan(0);
+  });
+
+  it("accepts comma-parallel declarations", () => {
+    const a = run(head + "var a = 1, var b = 2, var c = 3\nplot(a + b + c, \"s\")");
+    expect(a.result.lines[0].values[10]).toBe(6);
+  });
+
+  it("parses typed-array and generic-arg declarations (array support is runtime)", () => {
+    // Both must reach the runtime (array not yet supported) rather than die in
+    // the parser on `float[]` / `<float>`.
+    expect(parseOk(head + "var float[] buf = array.new_float(na)\nplot(buf, \"b\")").abort || "").toMatch(/array/);
+    expect(parseOk(head + "nwe = array.new<float>(0)\nplot(1, \"n\")").abort || "").toMatch(/array/);
+  });
+
+  it("never mistakes a comparison for a generic type-argument list", () => {
+    // `a < b and …` / `low[1]` / `a < b ? …` all stop the generic scan, so they
+    // still evaluate as boolean comparisons rather than being silently skipped.
+    const a = run(head + "sig = close < open\nplot(sig ? 1 : 0, \"s\")");
+    expect(a.result.lines[0].values.every((v) => v === 0 || v === 1)).toBe(true);
+    const b = run(head + "x = high < low[1] and (close > open)\nplot(x ? 1 : 0, \"x\")");
+    const bVals = b.result.lines[0].values.filter((v) => Number.isFinite(v)) as number[];
+    expect(bVals.length).toBeGreaterThan(0); // `low[1]` is na only on the first bar
+    expect(bVals.every((v) => v === 0 || v === 1)).toBe(true);
+  });
+});
