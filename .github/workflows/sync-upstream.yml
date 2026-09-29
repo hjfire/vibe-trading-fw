@@ -23,15 +23,31 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.SYNC_TOKEN }} # 用个人访问令牌作为推送凭证
 
-      - name: Merge upstream/main into main
+      - name: Fetch upstream
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/HKUDS/Vibe-Trading.git
           git fetch upstream
+
+      - name: Merge upstream/main into main
+        run: |
           if git merge-base --is-ancestor upstream/main main; then
             echo "Already up to date - nothing to sync."
             exit 0
           fi
+          # bash -e would end the step at the failing line, which is exactly the
+          # report below. Splitting the steps is what makes the run page name the
+          # stage; this is what makes it name the files.
+          set +e
           git merge upstream/main --no-edit
-          git push origin main
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::upstream merge conflicted; resolve by hand and push from a clone"
+            git diff --name-only --diff-filter=U | sed 's/^/CONFLICT: /'
+            exit "$status"
+          fi
+
+      - name: Push main
+        run: git push origin main
