@@ -1,8 +1,19 @@
 import { authHeaders } from "@/lib/apiAuth";
 import type { KLineData, Period, PeriodType } from "klinecharts";
 
-/** Thin client for the /market/kline route added in Phase-A. Kept in its own
- *  module (not the upstream `api.ts`) so daily upstream syncs never conflict. */
+/** Thin client for the chart's bar feed. Kept in its own module (not the
+ *  upstream `api.ts`) so daily upstream syncs never conflict.
+ *
+ *  It speaks the TradingView **UDF** protocol (`/api/udf/history`), which is why
+ *  the translation layer below exists: the page thinks in KLineChart's units
+ *  (epoch **milliseconds**, `interval=1m`, row-wise bars) and the protocol
+ *  thinks in its own (epoch **seconds**, `resolution=1`, column-wise arrays).
+ *  Both ends of that difference have bitten charts before — a seconds/ms mixup
+ *  puts the axis at 1970 — so the conversion is done in this one function and
+ *  nowhere else in the codebase. `agent/src/api/udf_routes.py` serves the same
+ *  bars as the old `/market/kline` route (it calls `_kline_sync` directly);
+ *  only the wire format changed, which is what makes the switch safe.
+ */
 
 export type IntervalKey = "1m" | "5m" | "15m" | "30m" | "60m" | "1D" | "1W" | "1M";
 
@@ -63,6 +74,57 @@ export interface KlineResponse {
   error?: string;
 }
 
+/** UDF spellings of this page's interval keys (`/config.supported_resolutions`).
+ *  The protocol names intraday bars by bare minutes and calendar bars by a unit
+ *  letter, so the table is the whole translation — no string munging, because
+ *  munging is how `1M` (monthly) becomes `1m` (one minute). */
+export const RESOLUTION_BY_INTERVAL: Record<IntervalKey, string> = {
+  "1m": "1",
+  "5m": "5",
+  "15m": "15",
+  "30m": "30",
+  "60m": "60",
+  "1D": "D",
+  "1W": "W",
+  "1M": "M",
+};
+
+/** The columnar part of a `/history` answer, protocol-shaped. */
+export interface UdfHistoryColumns {
+  /** Bar times, unix **seconds** — the protocol's unit, not the page's. */
+  t?: number[];
+  o?: number[];
+  h?: number[];
+  l?: number[];
+  c?: number[];
+  v?: number[];
+}
+
+/** One `/api/udf/history` answer, in the protocol's own shape. */
+export interface UdfHistoryResponse extends UdfHistoryColumns {
+  s: "ok" | "error" | "no_data" | string;
+  errmsg?: string;
+  /** Only with `s: "no_data"`: seconds of the newest bar further back. */
+  nextTime?: number;
+  session_date?: string;
+  prev_close?: number | null;
+  source?: string;
+}
+
+/** Columnar UDF arrays -> KLineChart's row-wise bars, seconds -> milliseconds. */
+export function columnsToBars(data: UdfHistoryColumns): KLineData[] {
+  const times = data.t ?? [];
+  const at = (column?: number[]) => column ?? [];
+  return times.map((sec, i) => ({
+    timestamp: sec * 1000,
+    open: at(data.o)[i] ?? 0,
+    high: at(data.h)[i] ?? 0,
+    low: at(data.l)[i] ?? 0,
+    close: at(data.c)[i] ?? 0,
+    volume: at(data.v)[i] ?? 0,
+  }));
+}
+
 export interface QuoteRow {
   symbol: string;
   ok: boolean;
@@ -86,6 +148,22 @@ export function periodToInterval(period: Period): IntervalKey {
   return map[period.span] ?? "1D";
 }
 
+/**
+ * Fetch one page of bars over the UDF protocol.
+ *
+ * The signature is the old `/market/kline` one on purpose: the chart page, the
+ * screener and four page tests all speak `interval` / `before` / `count` /
+ * `bars`, and the only thing that changed is the wire. `before` (epoch ms,
+ * strictly older) becomes `to` (epoch s, not inclusive); `count` becomes
+ * `countback`, which the protocol defines as beating `from` — so paging stays a
+ * single unambiguous request shape instead of a window the server might read
+ * differently.
+ *
+ * `no_data` is not an error and not an empty page: it is "nothing in this
+ * window, the nearest bar further back is at `nextTime`". Callers already treat
+ * an empty `bars` as "stop paging", so it collapses here rather than inventing
+ * a fourth status for one caller to re-expand.
+ */
 export async function fetchKline(params: {
   symbol: string;
   interval: IntervalKey;
@@ -99,25 +177,34 @@ export async function fetchKline(params: {
 }): Promise<KlineResponse> {
   const q = new URLSearchParams();
   q.set("symbol", params.symbol);
-  q.set("interval", params.interval);
-  q.set("count", String(params.count ?? 500));
+  q.set("resolution", RESOLUTION_BY_INTERVAL[params.interval]);
+  q.set("countback", String(params.count ?? 500));
   q.set("adjust", params.adjust ?? "qfq");
-  if (params.before) q.set("before", String(params.before));
+  if (params.before) q.set("to", String(Math.floor(params.before / 1000)));
   if (params.session) q.set("session", params.session);
-  const res = await fetch(`/market/kline?${q.toString()}`, {
+  const res = await fetch(`/api/udf/history?${q.toString()}`, {
     headers: authHeaders(),
     signal: params.signal,
   });
-  const body = (await res.json().catch(() => ({}))) as Partial<KlineResponse> & { detail?: string };
+  const body = (await res.json().catch(() => ({}))) as Partial<UdfHistoryResponse> & { detail?: string };
   if (!res.ok) {
-    throw new Error(body.error || body.detail || `HTTP ${res.status}`);
+    throw new Error(body.errmsg || body.detail || `HTTP ${res.status}`);
   }
+  if (body.s === "error") {
+    // The protocol answers a broken request with HTTP 200 and `s: "error"`, so
+    // the status code cannot be the only failure check here — and the message
+    // is the data route's own ("sina minute bars have no path for 0700.HK…"),
+    // which is the difference between the user restarting OpenD and hunting a
+    // network problem that does not exist.
+    throw new Error(body.errmsg || "history failed");
+  }
+  const bars = body.s === "ok" ? columnsToBars(body) : [];
   return {
-    status: body.status ?? "ok",
-    symbol: body.symbol ?? params.symbol,
-    interval: body.interval ?? params.interval,
+    status: body.s ?? "ok",
+    symbol: params.symbol,
+    interval: params.interval,
     source: body.source ?? "",
-    bars: Array.isArray(body.bars) ? body.bars : [],
+    bars,
     // Both keys are only ever present on a `session=latest` answer, and
     // `prev_close: null` is that case's honest "I could not see yesterday" —
     // normalising a missing number to 0 here would print +0.00%.

@@ -891,8 +891,10 @@ export function ProChart() {
         // the view by the length it got`). Answering a `backward` with older
         // data therefore re-delivered the same block forever and snapped the
         // chart back under the mouse. See `klinePaging.ts` for the source lines.
-        // Timestamps flow end-to-end in milliseconds (KLineChart's unit); the
-        // backend `before` filter is likewise epoch-ms — no unit conversion.
+        // Timestamps flow through this page in milliseconds (KLineChart's
+        // unit). The feed itself is the TradingView UDF protocol, whose bar
+        // times are unix seconds: the conversion happens once, inside
+        // `fetchKline`, and never in a caller — see marketApi.ts.
         const bounds = boundsOf(chart.getDataList());
         const before = pagingBefore(type, timestamp ?? null, bounds);
         if (line && type === "forward") {

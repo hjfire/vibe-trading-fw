@@ -122,7 +122,8 @@ describe("every API path the clients call is proxied in dev", () => {
       expect.arrayContaining([
         "/alerts/rules",
         "/api/warehouse/status",
-        "/market/kline",
+        "/api/udf/history",
+        "/market/quote",
         "/sessions/",
         "/correlation",
         "/upload",
