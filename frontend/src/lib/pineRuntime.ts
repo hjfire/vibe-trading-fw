@@ -141,6 +141,8 @@ export class PineRuntime {
 
   /** User-defined functions, keyed by name (`f(x) => …`). */
   private readonly fns = new Map<string, FnStmt>();
+  /** Registered UDT (`type Name`) field layouts, name → field names in order. */
+  private readonly types = new Map<string, string[]>();
   /**
    * Current variable scope. "" is the script's global scope; a call site of a
    * user function gets `f<cid>`, because in Pine each call site keeps its own
@@ -400,6 +402,13 @@ export class PineRuntime {
         this.write(this.vkey(s.name), value, false);
         return;
       }
+      case "type": {
+        // A record type declaration: register the field layout once. The value
+        // model is a positional `V[]` tagged with `@udt:<name>`, built by `.new`.
+        this.types.set(s.name, s.fieldNames);
+        this.lastValue = sentinel("void");
+        return;
+      }
       case "expr": {
         const value = this.val(s.value);
         this.lastValue = value;
@@ -551,6 +560,28 @@ export class PineRuntime {
    *     function reads what that same call site computed on the previous bar;
    *   - a block body returns the value of its last statement.
    */
+  /**
+   * Build a UDT record: a `V[]` whose first slot is the `@udt:<type>` tag and
+   * whose remaining slots are field values in declaration order. Positional
+   * args fill fields left-to-right; named args (`Type.new(f1=x)`) land by name.
+   */
+  private buildUdt(typeName: string, args: Arg[]): V {
+    const fields = this.types.get(typeName) ?? [];
+    const values: V[] = fields.map(() => NA);
+    let pos = 0;
+    for (const a of args) {
+      const v = this.val(a.value);
+      if (a.name) {
+        const i = fields.indexOf(a.name);
+        if (i >= 0) values[i] = v;
+      } else {
+        if (pos < values.length) values[pos] = v;
+        pos++;
+      }
+    }
+    return [sentinel(`udt:${typeName}`), ...values];
+  }
+
   private callFn(fn: FnStmt, args: Arg[], cid: number): V {
     if (this.fnDepth >= FN_DEPTH_CAP) {
       throw new PineError(`函数 "${fn.name}" 递归超过 ${FN_DEPTH_CAP} 层，请检查是否无限递归`);
@@ -726,6 +757,23 @@ export class PineRuntime {
     // Zero-arg builtins are sometimes read as plain names (`timenow`, `timeframe.period`).
     const fn = MISC[name];
     if (fn) return fn([], this.ctx);
+    // UDT field access: `featureSeries.f1` arrives as one dotted ident. If the
+    // base is a `@udt:`-tagged record, resolve the field by declared order.
+    const dot = name.indexOf(".");
+    if (dot > 0) {
+      const base = name.slice(0, dot);
+      const field = name.slice(dot + 1);
+      if (this.lookup(base)) {
+        const rec = this.readSeries(base);
+        if (Array.isArray(rec) && typeof rec[0] === "string" && rec[0].startsWith("@udt:")) {
+          const fields = this.types.get(rec[0].slice("@udt:".length));
+          if (fields) {
+            const idx = fields.indexOf(field);
+            return idx >= 0 ? (rec as V[])[idx + 1] : NA;
+          }
+        }
+      }
+    }
     throw new PineError(`未定义的变量 "${name}"。已声明的变量：${this.declaredNames()}`);
   }
 
@@ -841,6 +889,13 @@ export class PineRuntime {
       return fn(args, this.ctx);
     }
     // Free-form array call `array.push(buf, v)`; the target array comes first.
+    // A UDT constructor (`FeatureSeries.new(...)`) when the prefix is a
+    // registered `type`. Guarded by types.has so `map.new`/`array.new_float`
+    // (not user types) fall through to their own branches below.
+    if (name.endsWith(".new")) {
+      const typeName = name.slice(0, -".new".length);
+      if (this.types.has(typeName)) return this.buildUdt(typeName, args);
+    }
     if (name.startsWith("array.")) return this.runArray(name.slice("array.".length), args, null);
     // Free-form map call `map.put(m, k, v)`; the target map (an interleaved
     // `V[]`) comes first. Method-form is intentionally not routed (see pineMap).

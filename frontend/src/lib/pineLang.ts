@@ -205,6 +205,7 @@ export type Stmt =
   | { k: "decl"; names: string[]; value: Expr; persist: boolean; line: number }
   | { k: "assign"; name: string; value: Expr; line: number }
   | { k: "expr"; value: Expr; line: number }
+  | { k: "type"; name: string; fieldNames: string[]; line: number }
   | { k: "if"; arms: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[] | null; line: number }
   | { k: "for"; varName: string; from: Expr; to: Expr; step: Expr | null; body: Stmt[]; line: number }
   | { k: "forin"; varName: string; source: Expr; body: Stmt[]; line: number }
@@ -383,6 +384,11 @@ export class PineParser {
       do {
         this.skipNl();
         this.dropTypeWords();
+        // A parameter is `[Type] name [= default]`. dropTypeWords handles the
+        // built-in / generic type prefixes; a USER type (`FeatureSeries fs`),
+        // which the parser cannot know in advance, shows up as an identifier
+        // followed by another identifier — drop it as an annotation too.
+        while (this.peek().kind === "ident" && this.tk[this.pos + 1]?.kind === "ident") this.next();
         const pt = this.peek();
         if (pt.kind !== "ident") {
           throw new PineError(`第 ${pt.line} 行：函数参数只能是名字（可带默认值，如 f(len = 14)）`);
@@ -419,8 +425,13 @@ export class PineParser {
     const indent = this.indentHere();
     const t = this.peek();
 
-    if (t.kind === "ident" && (t.value === "type" || t.value === "export")) {
-      throw new PineError(`第 ${t.line} 行：暂不支持 "${t.value}" 语法，请改写为 if/三元表达式`);
+    // A UDT declaration `type Name` + indented field lines. `type` followed by
+    // an identifier is a record type; anything else stays rejected.
+    if (t.kind === "ident" && t.value === "type" && this.tk[this.pos + 1]?.kind === "ident") {
+      return this.parseType(indent);
+    }
+    if (t.kind === "ident" && t.value === "export") {
+      throw new PineError(`第 ${t.line} 行：暂不支持 "export" 语法，请改写为 if/三元表达式`);
     }
     // `import TradingView/ta/9` is a v5/v6 module import. The ta.* library is
     // already global here, so the import line is a no-op: consume and skip it.
@@ -677,6 +688,36 @@ export class PineParser {
     let p = from;
     while (this.tk[p]?.kind === "nl") p++;
     return { tok: this.tk[p], at: p };
+  }
+
+  /**
+   * `type Name` + an indented block of `<Type> field` lines. Field value TYPES
+   * are compile-time annotations; the runtime record is positional (fields in
+   * declaration order), so we only need the field NAMES and their order.
+   */
+  private parseType(indent: number): Stmt {
+    const line = this.next().line; // "type"
+    const nameTok = this.next(); // Type name
+    if (nameTok.kind !== "ident") {
+      throw new PineError(`第 ${line} 行："type" 后应接类型名`);
+    }
+    this.endOfStmt();
+    const fieldNames: string[] = [];
+    for (;;) {
+      const first = this.skipNl();
+      if (first.kind === "eof" || first.col <= indent) break;
+      // Consume the whole field line; the LAST identifier is the field name
+      // (`array<float> f1` → f1, `float f2` → f2). Generics never reach here.
+      let lastIdent = "";
+      for (;;) {
+        const tk = this.peek();
+        if (tk.kind === "nl" || tk.kind === "eof") break;
+        if (tk.kind === "ident") lastIdent = tk.value;
+        this.next();
+      }
+      if (lastIdent) fieldNames.push(lastIdent);
+    }
+    return { k: "type", name: nameTok.value, fieldNames, line };
   }
 
   /** `while cond` + an indented block — mirrors parseFor's body handling. */

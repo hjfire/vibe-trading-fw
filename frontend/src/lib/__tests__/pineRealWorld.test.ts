@@ -606,6 +606,66 @@ describe("Pine switch", () => {
   });
 });
 
+describe("Pine user-defined types (type / .new / field access)", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("builds a record with positional args and reads fields (missing → na)", () => {
+    const a = run(
+      head +
+        "type Point\n    float x\n    float y\n" +
+        "p = Point.new(3.0, 4.0)\n" +
+        "plot(p.x, \"px\")\nplot(p.y, \"py\")\nplot(nz(p.z), \"pz\")",
+    );
+    expect(line(a, "px")!.values[10]).toBe(3);
+    expect(line(a, "py")!.values[10]).toBe(4);
+    expect(line(a, "pz")!.values[10]).toBe(0); // no such field → na → nz → 0
+  });
+
+  it("accepts named constructor args in any order", () => {
+    const a = run(
+      head +
+        "type Box\n    float hi\n    float lo\n" +
+        "b = Box.new(lo=1.0, hi=2.0)\nplot(b.hi, \"hi\")\nplot(b.lo, \"lo\")",
+    );
+    expect(line(a, "hi")!.values[10]).toBe(2);
+    expect(line(a, "lo")!.values[10]).toBe(1);
+  });
+
+  it("returns array-valued fields that array.* operates on", () => {
+    const a = run(
+      head +
+        "type Holder\n    array<float> f1\n" +
+        "src = array.new_float()\narray.push(src, close)\n" +
+        "h = Holder.new(src)\nplot(array.size(h.f1), \"n\")",
+    );
+    expect(line(a, "n")!.values[10]).toBe(1);
+  });
+
+  it("routes same-named fields to the right type via the record's own tag", () => {
+    const a = run(
+      head +
+        "type A\n    float val\ntype B\n    array<float> val\n" +
+        "arr = array.new_float()\narray.push(arr, 7.0)\n" +
+        "x = A.new(5.0)\ny = B.new(arr)\n" +
+        "plot(x.val, \"xv\")\nplot(array.size(y.val), \"yv\")",
+    );
+    expect(line(a, "xv")!.values[10]).toBe(5); // A.val is the float
+    expect(line(a, "yv")!.values[10]).toBe(1); // B.val is a 1-elem array
+  });
+
+  it("passes a UDT as a typed function parameter and reads its fields inside", () => {
+    const a = run(
+      head +
+        "type Point\n    float x\n    float y\n" +
+        "p = Point.new(3.0, 4.0)\n" +
+        "sumX(Point q) =>\n    q.x + q.y\n" +
+        "plot(sumX(p), \"s\")",
+    );
+    expect(line(a, "s")!.values[10]).toBe(7); // user-type param `Point q` + q.x, q.y
+  });
+});
+
 describe("Pine maps (map.*)", () => {
   const head = "//@version=5\nindicator(\"t\")\n";
   const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
