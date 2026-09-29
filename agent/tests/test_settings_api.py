@@ -532,6 +532,31 @@ def test_update_data_source_settings_persists_tushare_token(
     assert "TUSHARE_TOKEN=ts-secret-token" in env_text
 
 
+def test_update_data_source_settings_persists_gildata_token(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    response = client.put(
+        "/settings/data-sources",
+        json={"gildata_token": "gd-secret-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gildata_token_configured"] is True
+    assert body["gildata_token_hint"] is None
+    assert "gd-secret-token" not in response.text
+    assert "gd-s...oken" not in response.text
+
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "GILDATA_TOKEN=gd-secret-token" in env_text
+
+    cleared = client.put(
+        "/settings/data-sources", json={"clear_gildata_token": True},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["gildata_token_configured"] is False
+
+
 def test_desktop_secure_mode_never_persists_injected_tushare_token(
     client: TestClient,
     tmp_path: Path,
@@ -665,7 +690,7 @@ def test_get_data_source_settings_lists_default_source_orders(
     orders = {entry["market"]: entry for entry in entries}
     assert set(orders) == {
         "a_share", "us_equity", "hk_equity", "india_equity", "kr_equity",
-        "ca_equity", "vietnam_equity", "uk_equity", "crypto", "futures",
+        "ca_equity", "ar_equity", "vietnam_equity", "uk_equity", "crypto", "futures",
         "fund", "macro", "forex", "index",
     }
     a_share = orders["a_share"]
@@ -688,16 +713,19 @@ def test_update_source_orders_persists_and_hot_applies(
 ) -> None:
     from backtest.loaders import registry
 
+    # A rotation of the live default chain, not a hardcoded list: the API only
+    # accepts an exact permutation, so the literal broke the day gildata joined
+    # ``a_share`` — it is the reason this very hunk conflicted.
+    order = ["tushare"] + [
+        s for s in registry.get_default_source_order("a_share") if s != "tushare"
+    ]
     response = client.put(
         "/settings/data-sources",
         json={
             "source_orders": [
                 {
                     "market": "a_share",
-                    "order": [
-                        "tushare", "tencent", "mootdx", "eastmoney",
-                        "baostock", "akshare", "futu", "local",
-                    ],
+                    "order": order,
                 },
             ],
         },
@@ -711,9 +739,11 @@ def test_update_source_orders_persists_and_hot_applies(
     assert entry["effective_order"][0] == "tushare"
     assert entry["override"] is not None
     assert entry["override"][0] == "tushare"
-    # ...persisted to the dotenv...
+    # ...persisted to the dotenv, exactly as it was sent. The literal this
+    # replaces pinned upstream's chain and broke the day this fork's chain grew
+    # a ``futu`` head, so the check is against ``order`` itself.
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "MARKET_DATA_ORDER_A_SHARE=tushare,tencent,mootdx" in env_text
+    assert f"MARKET_DATA_ORDER_A_SHARE={','.join(order)}\n" in env_text
     # ...synced into the running process env...
     assert os.environ.get("MARKET_DATA_ORDER_A_SHARE", "").startswith("tushare,")
     # ...and hot-applied to the live registry chain.
@@ -727,16 +757,16 @@ def test_update_source_orders_reset_clears_override(
 ) -> None:
     from backtest.loaders import registry
 
+    order = ["tushare"] + [
+        s for s in registry.get_default_source_order("a_share") if s != "tushare"
+    ]
     put = client.put(
         "/settings/data-sources",
         json={
             "source_orders": [
                 {
                     "market": "a_share",
-                    "order": [
-                        "tushare", "tencent", "mootdx", "eastmoney",
-                        "baostock", "akshare", "futu", "local",
-                    ],
+                    "order": order,
                 },
             ],
         },

@@ -1,7 +1,8 @@
 """Fixed backtest entrypoint: read config.json, select loader by source, import signal_engine, run engine.
 
 Supports ``source="auto"`` to route codes to loaders by symbol format.
-Supports ``interval`` for bar size (1m/5m/15m/30m/1H/4H/1D, default 1D).
+Supports ``interval`` for bar size (1m/5m/15m/30m/1H/4H/1D/1W/1M, default 1D;
+1W and 1M are built from daily bars, see ``loaders.base.resample_bars``).
 Supports ``engine`` for backtest engine (daily/options, default daily).
 
 Usage: ``python -m backtest.runner <run_dir>``
@@ -25,13 +26,19 @@ from backtest.loaders.registry import (
     FALLBACK_CHAINS,
     LOADER_REGISTRY,
     VALID_SOURCES,
+    additive_caliber_warning,
     get_loader_cls_with_fallback,
     is_no_network_fallback_source,
     mixed_caliber_warning,
     price_caliber,
     resolve_loader,
 )
-from backtest.loaders.base import NoAvailableSourceError, validate_ohlc
+from backtest.loaders.base import (
+    NoAvailableSourceError,
+    resample_bars,
+    source_interval,
+    validate_ohlc,
+)
 # Symbol classification lives in ``_market_hooks`` so runner.py and
 # composite.py share a single source of truth (audit-2026-05-18 B1+C1+C2).
 # ``_detect_market`` is also re-exported here for back-compat with
@@ -41,13 +48,14 @@ from backtest.engines._market_hooks import (  # noqa: F401  (re-exported)
     _detect_market,
     _detect_submarket,
     _is_china_futures,
+    hk_counter_currency,
     strip_local_prefix,
 )
 from backtest.rebalance_mask import RebalanceMask, validate_rebalance_mask
 
 logger = logging.getLogger(__name__)
 
-_VALID_INTERVALS = {"1m", "5m", "15m", "30m", "1H", "4H", "1D"}
+_VALID_INTERVALS = {"1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W", "1M"}
 _VALID_ENGINES = {"daily", "options"}
 _PRICE_PANEL_COLUMNS = ("open", "high", "low", "close", "volume", "vwap", "amount")
 _FUND_PREFIX = "fund:"
@@ -842,6 +850,7 @@ _MARKET_TO_SOURCE = {
     "india_equity": "yahoo",
     "kr_equity": "pykrx",
     "ca_equity": "yahoo",
+    "ar_equity": "yahoo",
     "uk_equity": "yahoo",
     "vietnam_equity": "yahoo",
     "crypto": "okx",
@@ -1319,6 +1328,10 @@ _INTERVAL_SECONDS: dict[str, float] = {
     "1H": 3_600.0,
     "4H": 14_400.0,
     "1D": 86_400.0,
+    "1W": 604_800.0,
+    # A mean month (365.25 / 12 days): a calendar month runs 28 to 31, so a
+    # monthly series' median spacing sits within 1.1x of it either way.
+    "1M": 2_629_800.0,
 }
 
 #: How far the served bar spacing may sit from the declared interval's spacing
@@ -1333,10 +1346,11 @@ _SPACING_MISMATCH_RATIO = 1.5
 #: (``[1, 1, 3]`` -> 1 day); two do not (``[1, 3]`` -> 2 days).
 _MIN_BARS_FOR_SPACING = 4
 
-#: Spacing at least this many times a day is a weekly or monthly series, not a
-#: daily one with gaps: a daily index over a holiday week measures a median of
-#: two or three days, a weekly file seven. Such a series has no trading-day
-#: table to look up and needs none -- its bars per year is the calendar's.
+#: Spacing at least this many times a day that matches no supported interval
+#: (a fortnightly or quarterly file) is a coarse series, not a daily one with
+#: gaps: a daily index over a holiday week measures a median of two or three
+#: days. Such a series has no trading-day table to look up and needs none --
+#: its bars per year is the calendar's.
 _WIDER_THAN_DAILY_RATIO = 4.0
 _CALENDAR_YEAR_SECONDS = 365.25 * 86_400.0
 
@@ -1393,8 +1407,9 @@ def _annualisation_bars(
     :func:`~backtest.metrics.calc_bars_per_year` -- looked up with the interval
     the spacing actually matches -- so the per-source trading-day table keeps
     producing the number and a run card never picks up a window-dependent one.
-    Bars spaced wider than any supported interval (a weekly or monthly file)
-    are annualised from the calendar instead, 52 for a weekly series; a
+    A weekly or monthly file declared ``1D`` matches ``1W`` / ``1M`` (52 / 12).
+    Bars spaced wider than daily that match no supported interval (a quarterly
+    file) are annualised from the calendar instead, 4 for a quarterly series; a
     spacing that matches nothing in either direction keeps the declaration.
 
     Args:
@@ -1480,6 +1495,21 @@ def _create_market_engine(source: str, config: dict, codes: List[str]):
     # Detect dominant market type from codes
     markets = {_detect_market(c) for c in codes} if codes else set()
 
+    # The Hong Kong pool books in HKD. HKEX numbers its RMB and USD counters
+    # in their own code ranges, and no source in the hk_equity chain but Yahoo
+    # declares a currency, so the code decides before any engine prices them.
+    foreign_counters = sorted(
+        f"{c} ({hk_counter_currency(c)})"
+        for c in codes
+        if _detect_market(c) == "hk_equity" and hk_counter_currency(c) not in (None, "HKD")
+    )
+    if foreign_counters:
+        raise ValueError(
+            "Hong Kong backtests book in HKD, but these codes are HKEX counters traded "
+            f"in another currency: {', '.join(foreign_counters)}. Use the HKD-traded "
+            "counter of the same security instead."
+        )
+
     # Cross-market -> CompositeEngine
     if len(markets) > 1:
         from backtest.engines.composite import CompositeEngine
@@ -1518,6 +1548,15 @@ def _create_market_engine(source: str, config: dict, codes: List[str]):
     if "vietnam_equity" in markets:
         from backtest.engines.vietnam_equity import VietnamEquityEngine
         return VietnamEquityEngine(config)
+    # Argentina market-data routing is supported, but BYMA execution rules
+    # are not modeled yet. Fail closed instead of silently applying US/crypto
+    # commissions, lot sizes, settlement, or short-selling assumptions.
+    if "ar_equity" in markets:
+        raise ValueError(
+            "Argentina .BA market data is supported, but Argentina backtest "
+            "execution rules are not modeled yet"
+        )
+
     # Index symbols (^SPX, ^FTSE, ...) — priced like a US/global-listed
     # instrument (GlobalEquityEngine, US rules) and never the China/crypto
     # default the source-based fallback would pick.
@@ -1629,7 +1668,7 @@ def _fetch_auto(codes: List[str], config: dict, interval: str = "1D") -> dict:
         local_name = str(getattr(local_loader, "name", "local") or "local")
         served_by.add(local_name)
         for code in local_result:
-            caliber_stamps[code] = (local_name, price_caliber(local_name, _detect_market(code)))
+            caliber_stamps[code] = (local_name, price_caliber(local_name, _detect_market(code), code))
         merged.update(local_result)
 
     market_groups = _group_codes_by_market([code for code in codes if code not in set(local_codes)])
@@ -1659,7 +1698,7 @@ def _fetch_auto(codes: List[str], config: dict, interval: str = "1D") -> dict:
         if market_result:
             served_by.add(src_name)
             for code in market_result:
-                caliber_stamps[code] = (src_name, price_caliber(src_name, market))
+                caliber_stamps[code] = (src_name, price_caliber(src_name, market, code))
         missing = [code for code in market_codes if code not in market_result]
 
         # Retry only missing symbols so a partial primary response does not
@@ -1683,14 +1722,16 @@ def _fetch_auto(codes: List[str], config: dict, interval: str = "1D") -> dict:
                 fb_served_by = str(getattr(fb_loader, "name", fb_name) or fb_name)
                 served_by.add(fb_served_by)
                 for code in mapped:
-                    caliber_stamps[code] = (fb_served_by, price_caliber(fb_served_by, market))
+                    caliber_stamps[code] = (fb_served_by, price_caliber(fb_served_by, market, code))
                 logger.info(
                     "Runtime fallback: %s -> %s for %s", src_name, fb_name, market
                 )
 
         if missing:
+            served = sorted(set(merged) - set(missing))
             raise NoAvailableSourceError(
-                f"incomplete data for {market}; missing symbols: {missing}"
+                f"incomplete data for {market}; missing symbols: {missing}; "
+                f"served symbols: {served}"
             )
         merged.update(market_result)
 
@@ -1722,7 +1763,10 @@ def fetch_data_map(config: dict) -> DataFetchResult:
     config = copy.deepcopy(config)
     source = str(config.get("source") or "tushare")
     codes = list(config.get("codes") or [])
-    interval = str(config.get("interval") or "1D")
+    # Weekly and monthly bars are built from daily ones after the fetch, so
+    # every loader below is asked for daily bars (#1479).
+    requested_interval = str(config.get("interval") or "1D")
+    interval = source_interval(requested_interval)
 
     # ``local:`` picks the loader; the instrument is the bare symbol. Everything
     # downstream (engine, signals, artifacts, run card) sees the bare symbol, so
@@ -1779,7 +1823,7 @@ def fetch_data_map(config: dict) -> DataFetchResult:
         for code in data_map:
             caliber_stamps[code] = (
                 served_by,
-                price_caliber(served_by, _detect_market(code)),
+                price_caliber(served_by, _detect_market(code), code),
             )
         used_sources = [served_by] if data_map else []
         missing = [code for code in codes if code not in data_map]
@@ -1806,58 +1850,79 @@ def fetch_data_map(config: dict) -> DataFetchResult:
         # lines as a trace. Callers want snapshot provenance, not a padded row
         # count.
         if missing and not is_no_network_fallback_source(primary_source):
-            market = _detect_market(codes[0])
-            for fallback_source in FALLBACK_CHAINS.get(market, []):
-                if not missing:
-                    break
-                if (
-                    fallback_source == primary_source
-                    or fallback_source not in LOADER_REGISTRY
-                ):
-                    continue
-                fallback_loader = LOADER_REGISTRY[fallback_source]()
-                if not fallback_loader.is_available():
-                    continue
-                fallback_codes = _normalize_codes(missing, fallback_source)
-                fallback_result = fallback_loader.fetch(
-                    fallback_codes,
-                    config.get("start_date", ""),
-                    config.get("end_date", ""),
-                    interval=interval,
-                )
-                mapped = _restore_original_codes(
-                    fallback_result, missing, fallback_codes
-                )
-                if mapped:
-                    data_map.update(mapped)
-                    missing = [code for code in missing if code not in mapped]
-                    fb_served_by = str(
-                        getattr(fallback_loader, "name", fallback_source)
-                        or fallback_source
+            missing_by_market: dict[str, list[str]] = {}
+            for code in missing:
+                missing_by_market.setdefault(_detect_market(code), []).append(code)
+            for market, market_missing in missing_by_market.items():
+                for fallback_source in FALLBACK_CHAINS.get(market, []):
+                    if not market_missing:
+                        break
+                    if (
+                        fallback_source == primary_source
+                        or fallback_source not in LOADER_REGISTRY
+                    ):
+                        continue
+                    fallback_loader = LOADER_REGISTRY[fallback_source]()
+                    if not fallback_loader.is_available():
+                        continue
+                    fallback_codes = _normalize_codes(market_missing, fallback_source)
+                    fallback_result = fallback_loader.fetch(
+                        fallback_codes,
+                        config.get("start_date", ""),
+                        config.get("end_date", ""),
+                        interval=interval,
                     )
-                    for code in mapped:
-                        caliber_stamps[code] = (
-                            fb_served_by,
-                            price_caliber(fb_served_by, _detect_market(code)),
+                    mapped = _restore_original_codes(
+                        fallback_result, market_missing, fallback_codes
+                    )
+                    if mapped:
+                        data_map.update(mapped)
+                        market_missing = [code for code in market_missing if code not in mapped]
+                        fb_served_by = str(
+                            getattr(fallback_loader, "name", fallback_source)
+                            or fallback_source
                         )
-                    if not used_sources:
-                        source = fb_served_by
-                        loader = fallback_loader
-                    used_sources.append(fb_served_by)
-                    logger.info(
-                        "Runtime fallback: %s -> %s", primary_source, fb_served_by
-                    )
+                        for code in mapped:
+                            caliber_stamps[code] = (
+                                fb_served_by,
+                                price_caliber(fb_served_by, market, code),
+                            )
+                        if not used_sources:
+                            source = fb_served_by
+                            loader = fallback_loader
+                        used_sources.append(fb_served_by)
+                        logger.info(
+                            "Runtime fallback: %s -> %s", primary_source, fb_served_by
+                        )
+                missing = [code for code in missing if code not in data_map]
 
         if missing:
             raise NoAvailableSourceError(
-                f"incomplete data for source={primary_source}; missing symbols: {missing}"
+                f"incomplete data for source={primary_source}; missing symbols: {missing}; "
+                f"served symbols: {sorted(data_map)}"
             )
 
-    data_map = _sanitize_data_map(data_map)
+    data_map = {
+        code: resample_bars(frame, requested_interval)
+        for code, frame in _sanitize_data_map(data_map).items()
+    }
     caliber_stamps = {
         code: stamp for code, stamp in caliber_stamps.items() if code in data_map
     }
-    caliber_warning = mixed_caliber_warning(caliber_stamps)
+    # Both warnings can apply at once (a tencent+baostock basket mixes calibers
+    # *and* serves an additive one), and each says something the other does not,
+    # so they are reported together rather than one shadowing the other.
+    caliber_warning = (
+        "\n".join(
+            warning
+            for warning in (
+                mixed_caliber_warning(caliber_stamps),
+                additive_caliber_warning(caliber_stamps),
+            )
+            if warning
+        )
+        or None
+    )
     if caliber_warning:
         logger.warning("%s", caliber_warning)
     return DataFetchResult(

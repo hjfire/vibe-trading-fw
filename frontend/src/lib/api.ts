@@ -10,11 +10,13 @@ const BASE = "";
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -108,6 +110,7 @@ export interface PortfolioAccount {
   last_success_at?: string;
   total_usd?: number | null;
   total_cny?: number | null;
+  total_display?: number | null;
   priced_value_usd?: number;
   cash_usd?: number;
   unpriced_or_other_usd?: number;
@@ -132,15 +135,15 @@ export interface PortfolioSnapshot {
   created_at: string;
   /** False whenever any enabled source did not reach `status === "ok"`. */
   complete: boolean;
-  display_currency?: "USD" | "CNY";
-  totals: { usd: number; cny: number };
+  display_currency?: string;
+  totals: { usd: number; cny: number; display?: number };
   valuation?: {
     priced_usd: number;
     cash_usd: number;
     unpriced_or_other_usd: number;
     identified_coverage: number;
   };
-  fx: { usd_cny: number; usd_hkd: number; fetched_at: string; stale: boolean };
+  fx: { usd_cny: number; usd_hkd: number; rates?: Record<string, number>; fetched_at: string; stale: boolean };
   accounts: PortfolioAccount[];
   positions: PortfolioPosition[];
   combined_holdings?: Array<{
@@ -187,7 +190,7 @@ export interface PortfolioSourceSettings {
 }
 
 export interface PortfolioSettings {
-  display_currency: "USD" | "CNY";
+  display_currency: string;
   sources: PortfolioSourceSettings[];
 }
 
@@ -294,16 +297,25 @@ export interface PortfolioSettingsResponse {
 
 async function errorFromResponse(res: Response): Promise<ApiError> {
   let detail = `HTTP ${res.status}`;
+  let code: string | undefined;
   try {
     const body = await res.json();
     // Options endpoints report errors under an `error` key
     // ({status:"error", error} / {ok:false, error}) rather than detail/message.
-    detail = body.detail || body.message || body.error || detail;
+    const raw = body.detail ?? body.message ?? body.error;
+    if (typeof raw === "string" && raw) {
+      detail = raw;
+    } else if (raw && typeof raw === "object") {
+      const structured = raw as { code?: unknown; message?: unknown };
+      if (typeof structured.code === "string" && structured.code) code = structured.code;
+      if (typeof structured.message === "string" && structured.message) detail = structured.message;
+      else if (code) detail = code;
+    }
   } catch { /* ignore */ }
   if (res.status === 401 || res.status === 403) {
     detail = getAuthRequiredMessage();
   }
-  return new ApiError(detail, res.status);
+  return new ApiError(detail, res.status, code);
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -524,6 +536,18 @@ export const api = {
     request<ChannelPairingCommandResponse>("/channels/pairing/command", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  // Web-based IM channel configuration; non-2xx (400/422) throws ApiError.
+  getChannelsConfig: () => request<ChannelsConfigResponse>("/channels/config"),
+  putChannelConfig: (name: string, body: ChannelPutBody) =>
+    request<ChannelPutResult>(`/channels/config/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testChannel: (name: string, body?: ChannelTestBody) =>
+    request<ChannelTestResult>(`/channels/${encodeURIComponent(name)}/test`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
     }),
   // Alpha Zoo API
   listAlphas: (params: AlphaListParams = {}) => {
@@ -800,6 +824,8 @@ export interface SourceOrderUpdate {
 export interface DataSourceSettings {
   tushare_token_configured: boolean;
   tushare_token_hint?: string | null;
+  gildata_token_configured: boolean;
+  gildata_token_hint?: string | null;
   baostock_supported: boolean;
   baostock_installed: boolean;
   baostock_message: string;
@@ -810,6 +836,8 @@ export interface DataSourceSettings {
 export interface UpdateDataSourceSettingsRequest {
   tushare_token?: string;
   clear_tushare_token?: boolean;
+  gildata_token?: string;
+  clear_gildata_token?: boolean;
   source_orders?: SourceOrderUpdate[];
 }
 
@@ -845,6 +873,69 @@ export interface ChannelPairingCommandRequest {
 export interface ChannelPairingCommandResponse {
   channel: string;
   reply: string;
+}
+
+export interface ChannelFieldHint {
+  key: string;
+  type: "text" | "password" | "bool" | "list";
+  secret: boolean;
+  required: boolean;
+  help_key?: string | null;
+}
+
+export interface ChannelSecretStatus {
+  set: boolean;
+  masked: string;
+}
+
+export interface ChannelConfigEntry {
+  display_name: string;
+  available: boolean;
+  loaded: boolean;
+  install_hint: string;
+  error: string;
+  supports_test: boolean;
+  sdk_available: boolean;
+  fields: ChannelFieldHint[];
+  values: Record<string, unknown>;
+  secrets: Record<string, ChannelSecretStatus>;
+}
+
+export interface ChannelsConfigResponse {
+  /** Display-only path (home-relative `~/...` or a bare basename), never absolute. */
+  config_path: string;
+  writable: boolean;
+  runtime_running: boolean;
+  channels: Record<string, ChannelConfigEntry>;
+}
+
+// Merge-patches one channel section: an absent secret field is kept as-is,
+// `clear_<field>: true` removes a stored secret, and an enable transition
+// auto-verifies credentials unless `skip_verify` is set.
+export type ChannelPutBody = {
+  config: Record<string, unknown>;
+  skip_verify?: boolean;
+} & {
+  [clearFlag: `clear_${string}`]: boolean | undefined;
+};
+
+export interface ChannelPutResult {
+  channel: ChannelConfigEntry;
+  applied: "hot_swapped" | "reset" | "deferred";
+}
+
+export type ChannelTestBody = {
+  config?: Record<string, unknown>;
+} & {
+  [clearFlag: `clear_${string}`]: boolean | undefined;
+};
+
+export interface ChannelTestResult {
+  ok: boolean;
+  code: "ok" | "invalid_credentials" | "network" | "unsupported";
+  detail?: string;
+  sdk_available: boolean;
+  tested_saved_config: boolean;
 }
 
 // --- Types matching backend API contracts ---
@@ -1136,6 +1227,10 @@ export type SectorAssetClass =
   | "india_equity"
   | "kr_equity"
   | "ca_equity"
+  | "ar_equity"
+  | "uk_equity"
+  | "vietnam_equity"
+  | "index"
   | "crypto"
   | "futures"
   | "forex";
@@ -1173,6 +1268,24 @@ export function fetchRunSectorMap(runId: string, refresh?: boolean): Promise<Sec
   return request<SectorMapResponse>(`/runs/${encodeURIComponent(runId)}/positions/sectors${qs}`);
 }
 
+export interface RunCardToolTrace {
+  tool: "backtest" | "load_data" | "generate_signals";
+  started_at: string;
+  ended_at: string;
+  status: "ok" | "error" | "cancelled";
+  args_hash: string;
+  result_hash: string;
+}
+
+export interface RunCardCitation {
+  metric: string;
+  artifact_id: string;
+  column: string;
+  /** One-based data row, excluding the CSV header. */
+  row: number;
+  sha256: string;
+}
+
 export interface RunCard {
   schema_version?: string;
   generated_at?: string;
@@ -1187,6 +1300,8 @@ export interface RunCard {
   validation?: unknown;
   warnings?: string[];
   artifacts?: RunCardArtifact[];
+  tool_traces?: RunCardToolTrace[];
+  citations?: RunCardCitation[];
   [key: string]: unknown;
 }
 

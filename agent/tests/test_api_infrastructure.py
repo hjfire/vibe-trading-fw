@@ -68,10 +68,47 @@ def test_no_circular_imports():
 
 
 def test_api_server_is_thin_assembler():
+    """``api_server.py`` stays a wiring file: the route modules do the work.
+
+    This was a flat ``< 400`` lines. That proxy is now saturated by upstream
+    itself — the 2026-09-29 merge landed at 398 lines, two of them a newly
+    registered router (``channels_config_routes``) — so a fork that registers
+    its own routers (market / UDF / alerts / warehouse) fails the number while
+    changing nothing but registrations. The invariant the number was standing
+    in for is checked directly instead: no route decorators inline, no
+    top-level function beyond the preflight / lifespan / entry-point trio, and
+    a ceiling that moves with the registration surface rather than with a
+    constant somebody picked while the file was smaller.
+    """
     import inspect
+
     source = inspect.getsource(api_server)
-    total_lines = len(source.splitlines())
-    assert total_lines < 400, f"api_server.py has {total_lines} lines, expected < 400"
+    lines = source.splitlines()
+
+    inline_routes = [
+        line
+        for line in lines
+        if re.match(r"^@\w*\.(get|post|put|patch|delete)\b", line)
+    ]
+    assert not inline_routes, f"api_server.py defines routes inline: {inline_routes}"
+
+    allowed_defs = {
+        "_run_startup_preflight",
+        "_stop_scheduled_research_on_shutdown",
+        "_lifespan",
+        "serve_main",
+    }
+    defined = set(re.findall(r"^(?:async )?def (\w+)", source, re.M))
+    assert defined <= allowed_defs, f"api_server.py grew functions: {sorted(defined - allowed_defs)}"
+
+    registrations = len(re.findall(r"^register_\w+\(app\)", source, re.M)) + len(
+        re.findall(r"app\.include_router\(", source)
+    )
+    budget = 300 + 6 * registrations
+    assert len(lines) < budget, (
+        f"api_server.py has {len(lines)} lines for {registrations} router "
+        f"registrations (budget {budget}); move logic into src/api/"
+    )
 
 
 # ============================================================================

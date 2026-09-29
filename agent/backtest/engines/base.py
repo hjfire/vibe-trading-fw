@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -257,8 +258,17 @@ def _align(
         is the bounded-ffill trading view; ``close_val_df`` carries the last
         traded close through halts of any length and is only for valuation.
     """
-    # Build unified sorted date index from all symbols' trading calendars
-    indexes = [data_map[c].index for c in codes]
+    # Build unified sorted date index from all symbols' trading calendars.
+    # Everything below works on int64 epochs, and ``asi8`` / ``view("i8")``
+    # count in the index's own unit: a duckdb-backed local source arrives as
+    # datetime64[us], which read as nanoseconds put the run in 1970 and, beside
+    # a nanosecond source, matched none of its bars. One unit for all of them.
+    ns_index = {
+        c: idx if idx.unit == "ns" else idx.as_unit("ns")
+        for c in codes
+        for idx in (data_map[c].index,)
+    }
+    indexes = [ns_index[c] for c in codes]
     merged = np.unique(np.concatenate([index.asi8 for index in indexes]))
     common_tz = indexes[0].tz
     if all(index.tz == common_tz for index in indexes) and common_tz is not None:
@@ -280,7 +290,7 @@ def _align(
     close_arr = np.full((n_dates, n_codes), np.nan)
     for j, c in enumerate(codes):
         series = data_map[c]["close"]
-        row_idx = np.searchsorted(dates_i8, series.index.values.view("i8"))
+        row_idx = np.searchsorted(dates_i8, indexes[j].asi8)
         close_arr[row_idx, j] = series.values
 
     # Vectorized ffill with limit using pandas (C-optimized internals)
@@ -320,7 +330,7 @@ def _align(
         shifted_vals[0] = 0.0
         shifted_vals[1:] = sig_vals[:-1]
         # Place into unified grid via searchsorted
-        row_idx = np.searchsorted(dates_i8, own_idx.values.view("i8"))
+        row_idx = np.searchsorted(dates_i8, ns_index[c].asi8)
         pos_arr[row_idx, j] = shifted_vals
 
     # Vectorized ffill with limit using pandas (C-optimized)
@@ -888,6 +898,7 @@ class BaseEngine(ABC):
         Returns:
             Metrics dictionary.
         """
+        trace_started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         codes = config.get("codes", [])
         interval = config.get("interval", "1D")
         extra_fields = config.get("extra_fields") or None
@@ -1148,6 +1159,16 @@ class BaseEngine(ABC):
             data_sources=_run_card_data_sources(config, loader),
             strategy_path=run_dir / "code" / "signal_engine.py",
             warnings=card_warnings or None,
+            tool_traces=[
+                {
+                    "tool": "backtest",
+                    "args": config,
+                    "started_at": trace_started_at,
+                    "ended_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "status": "ok",
+                    "result": m,
+                }
+            ],
         )
 
         # Print scalar metrics (skip nested dicts for JSON compat).
@@ -1281,14 +1302,20 @@ class BaseEngine(ABC):
                 # bisection step (#1470). The sleeve that leaves the basket is
                 # reported once, after the search, as the rebalance path does.
                 wanted = [order.symbol for order in planned]
+                # Nothing fits until a candidate proves it does: with cash below
+                # zero (a funding debit leaves it there) not even the empty plan
+                # fits, and the full-scale plan used to fall through to
+                # _execute_open_order and abort the run (#1542).
+                fitting: list[_OpenOrder] = []
                 low, high = 0.0, 1.0
                 for _ in range(50):
                     mid = (low + high) / 2.0
                     candidate = _plans(mid, observe=False)
                     if sum(order.cost for order in candidate) <= self.capital + 1e-9:
-                        low, planned = mid, candidate
+                        low, fitting = mid, candidate
                     else:
                         high = mid
+                planned = fitting
                 fitted = {order.symbol for order in planned}
                 for symbol in wanted:
                     if symbol not in fitted:
@@ -1757,7 +1784,23 @@ class BaseEngine(ABC):
         if projected_capital < -1e-9:
             fitted = self._fit_rebalance_opens(opens, reductions, ts)
             if fitted is None:
-                raise ValueError("insufficient capital for position rebalance")
+                if sum(order.capital_credit for order in reductions) < 0:
+                    # The reductions themselves consume cash (a close whose loss
+                    # exceeds its margin): no dropping of opens repairs that, so
+                    # the bar aborts atomically as #1274 decided.
+                    raise ValueError("insufficient capital for position rebalance")
+                # Cash was already below zero (a funding debit can leave it
+                # there) and the reductions only release it: drop every open,
+                # still run the reductions, and report each open (#1542).
+                for order in opens:
+                    self._on_plan_rejected(order.symbol, "insufficient_capital", ts)
+                if opens:
+                    logger.warning(
+                        "Cash below zero at %s; no open or increase fits, dropped: %s",
+                        ts,
+                        ", ".join(sorted({order.symbol for order in opens})),
+                    )
+                fitted = []
             opens = fitted
 
         for order in reductions:
@@ -1793,8 +1836,10 @@ class BaseEngine(ABC):
         diagnostics see the dropped leg.
 
         Returns the fitted orders, or ``None`` when no scale fits — not even
-        an empty open sleeve — which the caller must treat as an atomic
-        abort (nothing has been committed at that point).
+        an empty open sleeve; nothing has been committed at that point. The
+        caller aborts atomically when the reductions themselves consume cash
+        (#1274), and otherwise — cash was already below zero — drops every
+        open and still runs the reductions (#1542).
         """
         released = sum(order.capital_credit for order in reductions)
 

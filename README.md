@@ -1,5 +1,5 @@
 <p align="center">
-  <b>English</b> | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> | <a href="README_ko.md">한국어</a> | <a href="README_ar.md">العربية</a> | <a href="README_es.md">Español</a>
+  <b>English</b> | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> | <a href="README_ko.md">한국어</a> | <a href="README_ar.md">العربية</a> | <a href="README_es.md">Español</a> | <a href="README_id.md">Bahasa Indonesia</a>
 </p>
 
 <p align="center">
@@ -52,14 +52,36 @@
 
 > ⚠️ **Security warning:** The X account `VibeTrading_HKU`, Virtuals project `101845`, and token contract `0x640BDBF77b6447E8b7DB7894cED84BD1c40571f4` are not official Vibe-Trading assets. We have never launched or endorsed any token or memecoin. Do not buy, connect a wallet, or sign anything. [Details](SECURITY.md#official-channels--impersonation).
 
+- **2026-09-29** 🚀 **v0.1.16 released** ([Release notes](https://github.com/HKUDS/Vibe-Trading/releases/tag/v0.1.16), `pip install -U vibe-trading-ai`): 492 commits and 116 merged pull requests since 0.1.15, from 16 contributors. **The theme of this cycle is a number that can show where it came from.** The grounding gate no longer guesses what a number is from the words around it: the model declares each figure's role (observed, derived, proposed, cited or count), the gate checks it against the session's tool evidence, and a figure that fails is cut instead of the whole answer being refused. A backtest's own output — Sortino, turnover, weights and Monte Carlo p-values, not only Sharpe — now grounds the report written about it, and run cards cite a metric only where the saved CSV agrees. Long research runs keep what they fetched: compaction follows each model's real context window instead of a fixed 40K estimate. The missing-data sweep reached 59 more alphas. **Fixed in this release, from a user's report:** failed runs keep their steps and the stop message names the call that produced nothing; `read_file` says where it may read instead of letting the model guess paths until the no-progress stop; on Codex, mid-run instructions no longer replace the system prompt, reasoning carries between turns and the default model is `gpt-6-sol`; and `get_market_data` asks for `AAPL.US` rather than returning empty data for a bare US ticker. **New:** Argentina (BYMA), weekly and monthly bars, Bahasa Indonesia, Gildata, OpenCode, Email and WebSocket channels, IM channel setup in the Web UI, and KIS, Upbit, Toss Securities and Scalable Capital connectors, 18 brokers in all. Thanks [@Shizoqua](https://github.com/Shizoqua), [@zeus229](https://github.com/zeus229), [@cgycorey](https://github.com/cgycorey), [@shadowinlife](https://github.com/shadowinlife), [@lorenzozanee](https://github.com/lorenzozanee), [@he-yufeng](https://github.com/he-yufeng), [@chiww](https://github.com/chiww), [@as950118](https://github.com/as950118), [@woshi77777stars](https://github.com/woshi77777stars), [@Yoruxyv](https://github.com/Yoruxyv), [@sambazhu](https://github.com/sambazhu), [@0xouzm](https://github.com/0xouzm), [@tingkk](https://github.com/tingkk), [@tonydo](https://github.com/tonydo), [@alanwilhelm](https://github.com/alanwilhelm) and [@modelpath-dev](https://github.com/modelpath-dev)!
+
+- **2026-09-28** 🛠️ **Source health and connector transparency**: scheduled public-source canaries report outages and data drift with bounded, credential-free probes ([#1627](https://github.com/HKUDS/Vibe-Trading/pull/1627)); BaoStock socket requests now have deadlines and serialize concurrent sessions ([#1615](https://github.com/HKUDS/Vibe-Trading/pull/1615)). Copilot credential lookups refresh after a short cache TTL ([#1619](https://github.com/HKUDS/Vibe-Trading/pull/1619)). A generated broker matrix preserves each profile’s paper/live permissions and labels declared capabilities separately from runtime verification ([#1629](https://github.com/HKUDS/Vibe-Trading/pull/1629)). **Grounding and MT5 follow-up:** explicit evidence symbols and exact field references are preserved; localized grouped figures retain the existing numeric tolerance ([#1584](https://github.com/HKUDS/Vibe-Trading/pull/1584), [#1586](https://github.com/HKUDS/Vibe-Trading/pull/1586), [#1588](https://github.com/HKUDS/Vibe-Trading/pull/1588)). Text-only correction attempts are bounded ([#1600](https://github.com/HKUDS/Vibe-Trading/pull/1600)). MT5 search uses the selected terminal and refuses ambiguous broker aliases; backtest sandboxes receive only validated attachment settings ([#1597](https://github.com/HKUDS/Vibe-Trading/pull/1597), [#1598](https://github.com/HKUDS/Vibe-Trading/pull/1598)).
+
+- **2026-09-27** 🛠️ **Verifiable run cards and safer research**: Run cards now show hashed backtest execution records and verified metric-to-CSV references in JSON, Markdown and Run Detail ([#1612](https://github.com/HKUDS/Vibe-Trading/pull/1612)). GTJA high/low recency factors use the correct day count and consistent tie handling ([#1604](https://github.com/HKUDS/Vibe-Trading/pull/1604)); India short covers check the buy-side circuit band ([#1608](https://github.com/HKUDS/Vibe-Trading/pull/1608)). Token usage remains readable without exempting arbitrary credential strings ([#1606](https://github.com/HKUDS/Vibe-Trading/pull/1606)), malformed MCP schemas retain their object properties ([#1607](https://github.com/HKUDS/Vibe-Trading/pull/1607)), and immediate-order goal checks preserve research questions ([#1605](https://github.com/HKUDS/Vibe-Trading/pull/1605)). Setup documentation now correctly identifies OpenRouter as the shipped default ([#1609](https://github.com/HKUDS/Vibe-Trading/issues/1609)).
+
+<details>
+<summary>Earlier news</summary>
+
+- **2026-09-26** 🛠️ **More reliable indicators and trading limits**: Technical indicators retain their observation date and can reuse results lost during conversation compaction ([#1590](https://github.com/HKUDS/Vibe-Trading/pull/1590), [#1601](https://github.com/HKUDS/Vibe-Trading/pull/1601)). All five Qlib158 WVMA windows now use absolute returns in the numerator ([#1594](https://github.com/HKUDS/Vibe-Trading/pull/1594)); Benford checks preserve the correct leading digit at numeric boundaries ([#1591](https://github.com/HKUDS/Vibe-Trading/pull/1591)). An explicitly zero exposure limit stays zero ([#1593](https://github.com/HKUDS/Vibe-Trading/pull/1593)), and Dhan paper orders reject fractional or invalid quantities without rounding away input precision ([#1595](https://github.com/HKUDS/Vibe-Trading/pull/1595)). Invalid optional numeric environment variables fall back to defaults while explicit configuration constraints remain enforced ([#1592](https://github.com/HKUDS/Vibe-Trading/pull/1592)). Runtime triggers keep the correct field defaults and subclass factory behavior ([#1599](https://github.com/HKUDS/Vibe-Trading/pull/1599)).
+
+- **2026-09-25** 🛠️ **More reliable research sessions and channel diagnostics**: A text column in a backtest CSV no longer discards the numeric metrics ([#1579](https://github.com/HKUDS/Vibe-Trading/pull/1579)), and conversation compaction now counts reasoning content in its retained-message budget ([#1582](https://github.com/HKUDS/Vibe-Trading/pull/1582)). Failed channel loads now log the actual exception ([#1580](https://github.com/HKUDS/Vibe-Trading/pull/1580)); the Telegram guide clarifies that CLI and Web controls share the same API runtime ([#1583](https://github.com/HKUDS/Vibe-Trading/pull/1583)). Robinhood portfolio reads reject malformed buying-power objects while keeping omitted or null values unknown ([#1526](https://github.com/HKUDS/Vibe-Trading/pull/1526)). Leaving a chat also cancels pending history-scroll timers. Thanks [@Shizoqua](https://github.com/Shizoqua) and [@lorenzozanee](https://github.com/lorenzozanee)!
+
+
+
+- **2026-09-24** 💱 **A dollar line priced as pesos, Email and WebSocket in the Web UI, and a CI break from an SDK update**: BYMA and the TSX list US-dollar lines beside their home-currency ones (GGALD.BA, DLR-U.TO), and an Argentine or Canadian backtest priced them in its single peso or Canadian-dollar pool. The loaders now admit a line only in its market's currency, as LSE lines already were, and every other declared quote currency travels with the data, so an answer names the right one ([#1576](https://github.com/HKUDS/Vibe-Trading/pull/1576)). Hong Kong's RMB and USD counters (80700.HK, 9834.HK), which HKEX numbers in their own code ranges, are refused in a Hong Kong backtest for the same reason and quoted in their own currency. Stock profiles carry the listing's own venue and currency beside the issuer's fundamentals ([#1577](https://github.com/HKUDS/Vibe-Trading/pull/1577)), grounding and symbol search know every market the data layer routes ([#1575](https://github.com/HKUDS/Vibe-Trading/pull/1575)), and `technical_indicators` reports volume with the unit its source declares — board lots or shares, 100× apart ([#1571](https://github.com/HKUDS/Vibe-Trading/pull/1571)). Email and WebSocket join the guided channel setup, with mail-server certificates now verified and settings writes closed to cross-site pages, and a plain IMAP login is upgraded with STARTTLS before the password goes out ([#1544](https://github.com/HKUDS/Vibe-Trading/pull/1544)). **Fixed:** an explicit provider header lost to an ambient twin under openai 3.19.2, which had turned every PR's CI red ([#1568](https://github.com/HKUDS/Vibe-Trading/pull/1568)); a backtest from a microsecond-resolution source was dated 1970 ([#1560](https://github.com/HKUDS/Vibe-Trading/pull/1560)); a research goal that is plainly an order is refused again ([#1562](https://github.com/HKUDS/Vibe-Trading/pull/1562)); a strict-bench OOS split could leave one side empty ([#1559](https://github.com/HKUDS/Vibe-Trading/pull/1559)); HRP label alignment, cross-validation label order and non-finite quant inputs ([#1555](https://github.com/HKUDS/Vibe-Trading/pull/1555), [#1556](https://github.com/HKUDS/Vibe-Trading/pull/1556), [#1557](https://github.com/HKUDS/Vibe-Trading/pull/1557), [#1558](https://github.com/HKUDS/Vibe-Trading/pull/1558)); the shadow-account overtrading window ([#1563](https://github.com/HKUDS/Vibe-Trading/pull/1563)); and asset growth was read day over day ([#1564](https://github.com/HKUDS/Vibe-Trading/pull/1564)). Thanks [@Shizoqua](https://github.com/Shizoqua), [@zeus229](https://github.com/zeus229) and [@shadowinlife](https://github.com/shadowinlife)!
+
+- **2026-09-23** 🇦🇷 **Argentine listings, a short book sized upside down, and the last half of the tail-risk gate**: `.BA` symbols — BYMA equities and CEDEARs — route to Yahoo as their own ARS market, and the Web UI groups and labels them like any other; an Argentine backtest still fails closed until BYMA execution rules are modelled ([#1543](https://github.com/HKUDS/Vibe-Trading/pull/1543)). The mean-variance and turnover-aware optimizers scored every position as if it were held long, so the strongest shorts got the least capital. Both now size on position returns, where a long and a short of two correlated names hedge each other instead of reading as correlated — on a +0.92 correlated pair the old objective put the whole book on the long, the new one splits it 0.51 / -0.49 ([#1548](https://github.com/HKUDS/Vibe-Trading/pull/1548)). And a tail-risk figure now has to name its own field once a session holds more than one measure or confidence level, so an ES 95% can no longer quote the VaR 95% value under a call id ([#1425](https://github.com/HKUDS/Vibe-Trading/issues/1425)). **Fixed:** Monte-Carlo validation annualises at the venue's bars per year instead of a hardcoded 252, so its Sharpe agrees with the rest of the same report ([#1546](https://github.com/HKUDS/Vibe-Trading/pull/1546)); a futures order on a negative-price bar is no longer rejected outright ([#1547](https://github.com/HKUDS/Vibe-Trading/pull/1547)); a factor's IC ratio is left unset for a negative baseline instead of reading real decay as healthy improvement ([#1549](https://github.com/HKUDS/Vibe-Trading/pull/1549)); and two memories sharing a title under different types keep their own index rows and link targets ([#1545](https://github.com/HKUDS/Vibe-Trading/pull/1545)). Thanks [@zeus229](https://github.com/zeus229), [@Shizoqua](https://github.com/Shizoqua) and [@he-yufeng](https://github.com/he-yufeng)!
+
+- **2026-09-22** 📅 **Weekly and monthly bars, and a compaction replay that could lose evidence**: `get_market_data` and backtests take `1W` and `1M` (rejected since 09-20 so `1M` would not fetch minute bars). Every source still serves daily bars and the period bar is built from them, dated on the last trading day of its week or month, so a 21-month review is one call of 21 bars ([#1479](https://github.com/HKUDS/Vibe-Trading/issues/1479)). A price index is stamped unadjusted instead of by what its source does to a stock ([#1541](https://github.com/HKUDS/Vibe-Trading/issues/1541)). A read-only tool result that context compaction removed is restored from the run's own memory instead of fetched again, capped per run, and a write empties that memory so a regenerated file is read afresh ([#1488](https://github.com/HKUDS/Vibe-Trading/pull/1488)). A tail-risk figure declared with a field ref is checked against that field, so a VaR 99% quoting the 95% value is caught ([#1444](https://github.com/HKUDS/Vibe-Trading/pull/1444)). QVeris refuses stock and ETF bars, whose adjustment its search-ranked pick cannot state, and quotes priced per result ([#1494](https://github.com/HKUDS/Vibe-Trading/issues/1494)). Thanks [@sambazhu](https://github.com/sambazhu), [@zeus229](https://github.com/zeus229), [@he-yufeng](https://github.com/he-yufeng), [@jw232](https://github.com/jw232) and [@cgycorey](https://github.com/cgycorey)!
+
+- **2026-09-22** 💸 **A backtest that died when funding pushed cash below zero, and three more tools that read a rejected query as no data**: a crypto funding debit can leave free cash below zero, and the next position the strategy wanted then found no size that fit, not even zero, so the run aborted with "planned order … exceeds available capital" (or "insufficient capital for position rebalance"). That open is now skipped and reported once as `insufficient_capital`, the bar's reductions still run, and a close whose loss exceeds its margin still aborts the bar as before ([#1542](https://github.com/HKUDS/Vibe-Trading/issues/1542)). Block trades, margin trading and financial statements now tell Eastmoney rejecting a stale query apart from a genuinely empty answer, through the same check shareholder count, dragon-tiger and lockup expiry use. Answers in Spanish, German and other decimal-comma locales now ground `17,93 %` or `1.410,00 CNY` against the tool results, while two unspaced numbers like `1400,1777` stay two numbers, and a figure has to match its evidence to the precision it is written at ([#1517](https://github.com/HKUDS/Vibe-Trading/pull/1517)). Thanks [@turtle696966969696](https://github.com/turtle696966969696) for a trace reconciled to the cent, and [@zeus229](https://github.com/zeus229)!
+
+- **2026-09-21** 🔌 **IM channels configured from the Web UI, and 24 alphas that emitted a value computed from a missing bar**: Settings now edits each IM channel with masked secrets, a connection test on the unsaved form, and a per-channel hot apply with no restart; DingTalk and QQ get guided setups ([#1520](https://github.com/HKUDS/Vibe-Trading/pull/1520), [#1529](https://github.com/HKUDS/Vibe-Trading/pull/1529)), and every adapter logs through stdlib again, so diagnostics that a `{}` placeholder used to swallow reach the log ([#1533](https://github.com/HKUDS/Vibe-Trading/pull/1533)). In the Alpha Zoo, a comparison whose operand is NaN because its window holds a missing bar reads False and emits a constant; the #1463 sweep, which nudged the bar by a tick, could not see it. A gap-versus-gap-free check found 24 more alphas, which now mask on their inputs' reach while a correlation undefined on complete data keeps its old verdict ([#1523](https://github.com/HKUDS/Vibe-Trading/pull/1523), [#1534](https://github.com/HKUDS/Vibe-Trading/pull/1534), [#1463](https://github.com/HKUDS/Vibe-Trading/issues/1463)). **Data:** a lockup's `free_shares` is the unlocking quantity, not the float it was read from ([#1513](https://github.com/HKUDS/Vibe-Trading/pull/1513)); dragon-tiger seats are ranked within each listing reason ([#1512](https://github.com/HKUDS/Vibe-Trading/pull/1512)); shareholder-count history returns real periods ([#1518](https://github.com/HKUDS/Vibe-Trading/pull/1518)); Tencent, Eastmoney and AKShare A-share prices are labelled dividend-additive ([#1497](https://github.com/HKUDS/Vibe-Trading/pull/1497)); Gildata joins the A-share chain as a token-gated source ([#1474](https://github.com/HKUDS/Vibe-Trading/pull/1474)); portfolios value any ISO-4217 currency and fail one source, not the snapshot, on a missing rate ([#1510](https://github.com/HKUDS/Vibe-Trading/pull/1510)); `connector account` shows Binance, Futu and Trading 212 balances ([#1539](https://github.com/HKUDS/Vibe-Trading/issues/1539)). **New:** Bahasa Indonesia UI and README ([#1482](https://github.com/HKUDS/Vibe-Trading/pull/1482)). **Removed:** the Requesty provider — point `openrouter` at its base URL instead. Thanks [@shadowinlife](https://github.com/shadowinlife), [@he-yufeng](https://github.com/he-yufeng), [@Shizoqua](https://github.com/Shizoqua), [@lorenzozanee](https://github.com/lorenzozanee), [@cgycorey](https://github.com/cgycorey), [@zeus229](https://github.com/zeus229), [@sambazhu](https://github.com/sambazhu), [@Yoruxyv](https://github.com/Yoruxyv) and [@jastincheis](https://github.com/jastincheis)!
+
 - **2026-09-20** 🛠️ **Clearer data requests and everyday fixes**: monthly `1M` requests are now explicitly rejected instead of silently fetching one-minute bars ([#1487](https://github.com/HKUDS/Vibe-Trading/pull/1487)); weekly/monthly support remains tracked in [#1479](https://github.com/HKUDS/Vibe-Trading/issues/1479). Welcome quick actions highlight the selected chip ([#1500](https://github.com/HKUDS/Vibe-Trading/pull/1500)), DingTalk sanitizes downloaded filenames ([#1506](https://github.com/HKUDS/Vibe-Trading/pull/1506)), Signal preserves text around mentions after emoji ([#1478](https://github.com/HKUDS/Vibe-Trading/pull/1478)), and credit-spread tables merge equivalent `5` / `5.0` tenor columns ([#1507](https://github.com/HKUDS/Vibe-Trading/pull/1507)).
 
 - **2026-09-19** 🛠️ **Data errors that looked like missing disclosures or the wrong provider**: A-share shareholder counts work again after an upstream column rename; rejected queries now report the provider's error instead of claiming the stock has no disclosure ([#1490](https://github.com/HKUDS/Vibe-Trading/pull/1490)). Market-data provenance now names the loader that actually served each symbol, with the matching fallback flag and adjustment label, even when the requested SDK is unavailable ([#1491](https://github.com/HKUDS/Vibe-Trading/issues/1491)). QVeris no longer overwrites `indicators` with an end date ([#1496](https://github.com/HKUDS/Vibe-Trading/pull/1496)); adjustment selection, adjusted-response parsing and billing remain tracked in [#1494](https://github.com/HKUDS/Vibe-Trading/issues/1494). Thanks [@cgycorey](https://github.com/cgycorey) and [@lorenzozanee](https://github.com/lorenzozanee)!
 
 - **2026-09-18** ✂️ **A redacted answer that lost its row numbers, and one starved order counted as twenty-six**: when the grounding gate released an answer with its unverified figures cut, a ranked table came back with `(omitted※)` where 1, 2, 3, the `12m` in its headers and "3 names" in the prose had been. Every integer in a table cell counted as a measurement, and each cut figure's digits were then swept off the rest of the page. A column that numbers its rows is now structure, a plain integer beside words in a cell is read as it would be in a sentence, and the sweep never keys on a single digit; invented returns and multiples are still cut ([#1471](https://github.com/HKUDS/Vibe-Trading/issues/1471)). In `hold` mode, the search that scales a basket down to the available cash booked a `zero_size` rejection on every step, so one contract the cash could not hold read as 26 lot-rounding failures; it is now one `insufficient_capital` ([#1470](https://github.com/HKUDS/Vibe-Trading/issues/1470)). **Fixed:** a `local:` code in a backtest is served from your own dataset or refused, never filled from a network source ([#1467](https://github.com/HKUDS/Vibe-Trading/issues/1467)); the event-study CAR standard error now includes the covariance between daily forecasts that share estimated parameters — with a 30-day estimation window the standardised CAR's variance on null events was 1.41–1.46 and is now 1.07–1.08 ([#1466](https://github.com/HKUDS/Vibe-Trading/issues/1466)); a real `historical_var` / `parametric_var` result grounds the VaR it returned ([#1464](https://github.com/HKUDS/Vibe-Trading/issues/1464)); and twenty alphas no longer fill a missing bar with a constant, while recursive smoothers skip the gap and continue under a rule that is now written down and tested ([#1463](https://github.com/HKUDS/Vibe-Trading/issues/1463)). **Later the same day:** a plain `LANGCHAIN_PROVIDER=openai` setup with `gpt-5.6-terra` failed on its first tool call, because Chat Completions refuses function tools for the `gpt-5.6` models unless the reasoning effort is `none`. The adapter now retries such a request once on `/v1/responses`, where the reasoning is kept, and remembers that route for the model ([#1473](https://github.com/HKUDS/Vibe-Trading/issues/1473)). **New:** OpenCode Go / Zen as a built-in `opencode` provider that sends the `x-opencode-session` id the relay requires, in the compaction thread too ([#1416](https://github.com/HKUDS/Vibe-Trading/pull/1416), closes [#1415](https://github.com/HKUDS/Vibe-Trading/issues/1415)). **Merged:** an entry memory GC archived is no longer handed to compression as well ([#1450](https://github.com/HKUDS/Vibe-Trading/pull/1450)); the Patell z uses each normal-return model's own degrees of freedom ([#1449](https://github.com/HKUDS/Vibe-Trading/pull/1449)); the microstructure estimators reject NaN and infinite inputs instead of returning a zero spread ([#1451](https://github.com/HKUDS/Vibe-Trading/pull/1451)); a source that must never fall back to the network keeps that promise per symbol too ([#1441](https://github.com/HKUDS/Vibe-Trading/pull/1441)); and a backtest checks the declared interval against the served bar spacing before annualising, so a daily file declared `1H` is no longer annualised at the hourly rate and a weekly file annualises at 52 ([#1432](https://github.com/HKUDS/Vibe-Trading/pull/1432)). Thanks [@5gaLbt](https://github.com/5gaLbt) and [@turtle696966969696](https://github.com/turtle696966969696) for the reports, and [@tonydo](https://github.com/tonydo), [@Shizoqua](https://github.com/Shizoqua) and [@chiww](https://github.com/chiww) for the fixes!
-
-<details>
-<summary>Earlier news</summary>
 
 - **2026-09-17** 🔐 **A Robinhood login that reaches several accounts, and a live gate that refused every real order while its tests passed**: Robinhood can now be a read-only portfolio source that reads exactly one account, picked from Robinhood's own list with nothing preselected ([#1428](https://github.com/HKUDS/Vibe-Trading/issues/1428)), and live trading binds each mandate to one account the same way ([#1442](https://github.com/HKUDS/Vibe-Trading/issues/1442)). The runner and the pre-trade gate had been calling Robinhood with no account and reading its replies one level too shallow, so every reconciliation aborted and every order was refused, while the tests stayed green because their fixtures used a reply shape Robinhood never sends. Positions show unpriced until the quote reply is mapped. **Fixed:** a swarm worker saves its message log on every exit path that writes a summary ([#1439](https://github.com/HKUDS/Vibe-Trading/pull/1439)); qlib158's up- and down-day counts no longer count a missing close as a flat day ([#1459](https://github.com/HKUDS/Vibe-Trading/pull/1459)); a strategy's decay check no longer reads an infinite Sharpe as healthy ([#1447](https://github.com/HKUDS/Vibe-Trading/pull/1447)); and a custom alpha-zoo root no longer replaces a bundled alpha of the same name process-wide ([#1468](https://github.com/HKUDS/Vibe-Trading/pull/1468)). Thanks [@balu1866](https://github.com/balu1866) for the reply shapes, and [@cgycorey](https://github.com/cgycorey) and [@0xouzm](https://github.com/0xouzm)!
 
@@ -402,6 +424,82 @@ Every position row must provide a symbol and quantity. Unsupported currencies fa
 
 Built-in SDK connectors publish one machine-readable onboarding contract: authentication type, required credential fields, optional dependency, install command, and the read-only operation used for verification. `trading_connections` exposes the same contract to MCP clients, while the Portfolio connection center renders it as a generic form. The contract contains field names only — never credential values.
 
+<!-- BEGIN GENERATED broker-capability-matrix -->
+
+Declared built-in profiles, generated from `agent/src/trading/profiles.py`.
+Each row keeps its own environment and permissions; a paper order capability
+never grants live trading. These are declarations, not successful runtime or
+broker verification. Local plugins and user connection settings are excluded.
+
+The quote column shows the declared transport, not a verified endpoint or
+pricing coverage. Order kinds (market, limit, etc.) are not declared in the
+registry and are therefore not inferred here. The placement column reports
+the declared mandate requirement only; it does not attest to cancellation,
+flattening, copy-trading, or other runtime guard coverage. Paper placement can
+use a broker sandbox or local simulation. See each profile's notes and the
+[broker bring-up checklist](CONTRIBUTING.md#broker-bring-up-checklist).
+
+| Profile | Connector | Environment | Transport | Mode | Read capabilities | Quote path (declared) | Other capabilities | Placement requirement (declared) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+| `alpaca-live-sdk-readonly` | alpaca | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `alpaca-live-trade` | alpaca | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `alpaca-paper-sdk` | alpaca | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `alpaca-paper-trade` | alpaca | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `binance-live-sdk-readonly` | binance | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `binance-live-trade` | binance | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `binance-paper-sdk` | binance | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `binance-paper-trade` | binance | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `dhan-live-sdk-readonly` | dhan | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `dhan-paper-sdk` | dhan | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `dhan-paper-trade` | dhan | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `etoro-live-sdk-readonly` | etoro | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `etoro-live-trade` | etoro | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `copy.close`, `copy.poll`, `copy.precheck`, `copy.start`, `orders.cancel`, `orders.cancel_close`, `orders.place.requires_mandate`, `positions.close`, `positions.edit` | mandate required |
+| `etoro-paper-sdk` | etoro | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `etoro-paper-trade` | etoro | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.cancel`, `orders.cancel_close`, `orders.place`, `positions.close`, `positions.edit` | no mandate declared |
+| `futu-live-sdk-readonly` | futu | live | broker_sdk | read-only | `acc_cash_flow.read`, `account.read`, `capital_distribution.read`, `capital_flow.read`, `earnings_calendar.read`, `financials.read`, `history.read`, `history_deals.read`, `orders.read`, `positions.read`, `quotes.read`, `rehab.read` | broker_sdk | none declared | disabled (read-only) |
+| `futu-live-trade` | futu | live | broker_sdk | write-enabled | `acc_cash_flow.read`, `account.read`, `capital_distribution.read`, `capital_flow.read`, `earnings_calendar.read`, `financials.read`, `history.read`, `history_deals.read`, `orders.read`, `positions.read`, `quotes.read`, `rehab.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `futu-paper-sdk` | futu | paper | broker_sdk | read-only | `acc_cash_flow.read`, `account.read`, `capital_distribution.read`, `capital_flow.read`, `earnings_calendar.read`, `financials.read`, `history.read`, `history_deals.read`, `orders.read`, `positions.read`, `quotes.read`, `rehab.read` | broker_sdk | none declared | disabled (read-only) |
+| `futu-paper-trade` | futu | paper | broker_sdk | write-enabled | `acc_cash_flow.read`, `account.read`, `capital_distribution.read`, `capital_flow.read`, `earnings_calendar.read`, `financials.read`, `history.read`, `history_deals.read`, `orders.read`, `positions.read`, `quotes.read`, `rehab.read` | broker_sdk | `orders.place` | no mandate declared |
+| `ibkr-live-local-readonly` | ibkr | live | local_tws | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | local_tws | none declared | disabled (read-only) |
+| `ibkr-live-official-mcp-readonly` | ibkr | live | remote_mcp | read-only | `account.read`, `positions.read` | none declared | none declared | disabled (read-only) |
+| `ibkr-paper-local` | ibkr | paper | local_tws | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | local_tws | none declared | disabled (read-only) |
+| `kis-live-sdk-readonly` | kis | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `kis-paper-sdk` | kis | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `kis-paper-trade` | kis | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `longbridge-live-sdk-readonly` | longbridge | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `longbridge-paper-sdk` | longbridge | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `longbridge-paper-trade` | longbridge | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `mt5-live-sdk-readonly` | mt5 | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `mt5-live-trade` | mt5 | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `mt5-paper-sdk` | mt5 | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `mt5-paper-trade` | mt5 | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `okx-live-sdk-readonly` | okx | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `okx-live-trade` | okx | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `okx-paper-sdk` | okx | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `okx-paper-trade` | okx | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `robinhood-live-mcp` | robinhood | live | remote_mcp | write-enabled | `account.read`, `orders.read`, `positions.read`, `quotes.read` | remote_mcp | `orders.place.requires_mandate`, `runner.manage.requires_mandate` | mandate required |
+| `robinhood-live-mcp-readonly` | robinhood | live | remote_mcp | read-only | `account.read`, `positions.read` | none declared | none declared | disabled (read-only) |
+| `scalable-live-mcp-readonly` | scalable | live | remote_mcp | read-only | `quotes.read` | remote_mcp | none declared | disabled (read-only) |
+| `shoonya-live-sdk-readonly` | shoonya | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `shoonya-paper-sdk` | shoonya | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `shoonya-paper-trade` | shoonya | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `tiger-live-sdk-readonly` | tiger | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `tiger-live-trade` | tiger | live | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place.requires_mandate` | mandate required |
+| `tiger-paper-sdk` | tiger | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `tiger-paper-trade` | tiger | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `toss-live-sdk-readonly` | toss | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `trading212-live-sdk-readonly` | trading212 | live | broker_sdk | read-only | `account.read`, `instruments.read`, `order_history.read`, `orders.read`, `positions.read` | none declared | none declared | disabled (read-only) |
+| `trading212-paper-sdk` | trading212 | paper | broker_sdk | read-only | `account.read`, `instruments.read`, `order_history.read`, `orders.read`, `positions.read` | none declared | none declared | disabled (read-only) |
+| `upbit-live-sdk-readonly` | upbit | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `upbit-paper-sdk` | upbit | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `upbit-paper-trade` | upbit | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+| `zerodha-live-sdk-readonly` | zerodha | live | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `zerodha-paper-sdk` | zerodha | paper | broker_sdk | read-only | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | none declared | disabled (read-only) |
+| `zerodha-paper-trade` | zerodha | paper | broker_sdk | write-enabled | `account.read`, `history.read`, `orders.read`, `positions.read`, `quotes.read` | broker_sdk | `orders.place` | no mandate declared |
+
+<!-- END GENERATED broker-capability-matrix -->
+
 For a terminal-first setup, let the CLI collect secrets locally instead of putting them in a prompt or shell arguments:
 
 ```bash
@@ -452,7 +550,7 @@ the wall-clock activity watchdog.
 
 ## 📡 Data Sources & Smart Fallback
 
-One `get_market_data` call, **28 market-data sources**, one of them the optional **QVeris** premium marketplace and one your own on-disk **warehouse**. Set `source: "auto"` — the loader picks by symbol, then walks a per-market chain ordered by **IP-ban risk**: never-banned public sources first, throttled / key-gated ones last. Zero config, no single point of failure.
+One `get_market_data` call, **29 market-data sources**, one of them the optional **QVeris** premium marketplace and one your own on-disk **warehouse**. Set `source: "auto"` — the loader picks by symbol, then walks a per-market chain ordered by **IP-ban risk**: never-banned public sources first, throttled / key-gated ones last. Zero config, no single point of failure.
 
 | Source | Markets | Auth | Role |
 |--------|---------|------|------|
@@ -460,6 +558,7 @@ One `get_market_data` call, **28 market-data sources**, one of them the optional
 | `eastmoney` | A / US / HK | none | OHLCV + deep fundamentals & flow tools (throttled) |
 | `baostock` · `akshare` | A (+ US/HK/futures/macro/fx) | none | free fallbacks |
 | `tushare` | A / HK / futures / fund / macro | token | richest A-share |
+| `gildata` | A-share | token (Settings / `GILDATA_TOKEN`) | Hundsun Juyuan (恒生聚源) commercial feed — forward-adjusted dailies, joins the A-share chain tail |
 | `yahoo` | US / HK / Canada / UK | none | direct chart/quotes/options; TSX `.TO` / TSXV `.V`; LSE `.L` with declared-currency normalization |
 | `sina` · `stooq` | US | none | K-line to 1984 · EOD CSV |
 | `yfinance` | US / HK / Canada / UK | none | wrapper; TSX `.TO` / TSXV `.V`; LSE `.L` under the same GBP/GBp contract |
@@ -478,14 +577,16 @@ One `get_market_data` call, **28 market-data sources**, one of them the optional
 
 **Fallback chains (by IP-ban risk):**
 
-- **A-share** → `tencent` · `mootdx` · `eastmoney` · `baostock` · `akshare` · `tushare` · `local`
-- **US** → `yahoo` · `stooq` · `sina` · `eastmoney` · `yfinance` · `tiingo` · `fmp` · `finnhub` · `alphavantage` · `longbridge` · `akshare` · `local`
-- **HK** → `tencent` · `eastmoney` · `yahoo` · `futu` · `akshare` · `yfinance` · `tushare` · `longbridge` · `local`
+- **A-share** → `futu` · `tencent` · `mootdx` · `eastmoney` · `baostock` · `akshare` · `tushare` · `gildata` · `local`
+- **US** → `futu` · `yahoo` · `stooq` · `sina` · `eastmoney` · `yfinance` · `tiingo` · `fmp` · `finnhub` · `alphavantage` · `longbridge` · `akshare` · `local`
+- **HK** → `futu` · `tencent` · `eastmoney` · `yahoo` · `akshare` · `yfinance` · `tushare` · `longbridge` · `local`
 - **India (NSE/BSE)** → `yahoo` · `yfinance` · `india_broker` · `local`
 - **Korea (KOSPI/KOSDAQ)** → `pykrx` · `yahoo` · `yfinance` · `local`
 - **UK (LSE)** → `yahoo` · `yfinance` · `local` *(declared GBP/GBp quotes only)*
-- **Crypto** → `okx` · `ccxt` · `binance` · `yfinance` · `local`
-- **Forex / metals** → `mt5` · `yfinance` · `akshare` · `local` &nbsp;·&nbsp; *(futures / fund / macro → `tushare`/`akshare` → `local`)*
+- **Crypto** → `okx` · `binance` · `ccxt` · `yfinance` · `local`
+- **Forex / metals** → `mt5` · `akshare` · `yfinance` · `local`
+- **Canada / Vietnam / Argentina / indices** → `yahoo` · `yfinance` · `local`
+- **China futures** → `akshare` · `local` &nbsp;·&nbsp; **funds** → `tushare` · `akshare` · `local` &nbsp;·&nbsp; **macro** → `akshare` · `tushare` · `local`
 
 ### Using Longbridge explicitly
 
@@ -587,10 +688,10 @@ run from a clone (`pip install -e .`).
    ```
 
 2. **Register the module** so `@register` fires — add
-   `"backtest.loaders.<name>_loader"` to `_loader_modules` in
+   `"backtest.loaders.<name>_loader"` to `_LOADER_MODULES` in
    `agent/backtest/loaders/registry.py`.
 3. **Allow the name** through config validation — add `"mysource"` to
-   `_VALID_SOURCES` in `agent/backtest/runner.py`.
+   `VALID_SOURCES` in `agent/backtest/loaders/registry.py`.
 4. *(Optional)* slot it into a market's `FALLBACK_CHAINS` in `registry.py` so
    `source="auto"` can reach it.
 5. **Use it** — `source="mysource"` in a backtest config, or via the CLI / agent.
@@ -690,7 +791,7 @@ Run `vibe-trading alpha list` to browse, `vibe-trading alpha show <id>` for form
 | **Composite** | cross-market | one shared capital pool across markets (`source="auto"`) |
 | **options_portfolio** | options | multi-leg, Greeks, payoff/scenario |
 
-Intraday bars: 1m / 5m / 15m / 30m / 1H / 4H / 1D. 15 metrics + benchmark comparison, **5 portfolio optimizers** (equal-volatility / risk-parity / mean-variance / max-diversification / turnover-aware), and 3 validation tools (Monte Carlo / Bootstrap / Walk-Forward).
+Bars: 1m / 5m / 15m / 30m / 1H / 4H / 1D, plus weekly / monthly (1W / 1M, built from daily bars). 15 metrics + benchmark comparison, **5 portfolio optimizers** (equal-volatility / risk-parity / mean-variance / max-diversification / turnover-aware), and 3 validation tools (Monte Carlo / Bootstrap / Walk-Forward).
 
 </details>
 
@@ -852,7 +953,7 @@ vibe-trading-mcp               # start MCP server (stdio)
 - OpenAI Codex can also be used with ChatGPT OAuth: set `LANGCHAIN_PROVIDER=openai-codex`, then run `vibe-trading provider login openai-codex`. This does not use `OPENAI_API_KEY`.
 - GitHub Copilot can be used with an active Copilot subscription instead of a separately billed LLM API key. See [GitHub Copilot SDK provider](#github-copilot-sdk-provider).
 
-> **Supported LLM providers:** OpenRouter, Requesty, OpenAI, Anthropic (native Messages API), DeepSeek, OpenCode (Go / Zen), Gemini, Groq, DashScope/Qwen, Zhipu, Moonshot/Kimi, MiniMax, SiliconFlow (CN + Global), Xiaomi MIMO, Novita AI, iFlytek Spark, Z.ai, NVIDIA NIM, ModelScope, GitHub Copilot, Ollama (local). When no `*_BASE_URL` is set, each provider falls back to its canonical endpoint, so just a key is enough. See `.env.example` for config.
+> **Supported LLM providers:** OpenRouter, OpenAI, Anthropic (native Messages API), DeepSeek, OpenCode (Go / Zen), Gemini, Groq, DashScope/Qwen, Zhipu, Moonshot/Kimi, MiniMax, SiliconFlow (CN + Global), Xiaomi MIMO, Novita AI, iFlytek Spark, Z.ai, NVIDIA NIM, ModelScope, GitHub Copilot, Ollama (local). When no `*_BASE_URL` is set, each provider falls back to its canonical endpoint, so just a key is enough. See `.env.example` for config.
 
 > **Tip:** All markets work without any API keys thanks to automatic fallback. yfinance/Yahoo (HK/US/Canada/UK), OKX (crypto), mootdx (A-shares, TCP-direct, no IP throttle), and AKShare (A-shares, US, HK, futures, forex) are all free. LSE `.L` quotes must declare GBP or GBp so pence can be normalized before GBP accounting. Tushare token is optional — mootdx is the preferred no-token A-share fallback, with AKShare as a broader backup.
 
@@ -1007,7 +1108,7 @@ Vibe-Trading is a tool-heavy agent — skills, backtests, memory, and swarms all
 | **Sweet spot** (default) | `deepseek-v4-pro`, `deepseek/deepseek-v4-pro`, `x-ai/grok-4.20`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.6`, `qwen/qwen3-max-thinking` | Daily driver — reliable tool-calling at ~1/10 the cost |
 | **Avoid for agent use** | `*-nano`, `*-flash-lite`, `*-coder-next`, small / distilled variants | Tool-calling is unreliable — the agent will appear to "answer from memory" instead of loading skills or running backtests |
 
-The default `agent/.env.example` ships with DeepSeek official API + `deepseek-v4-pro`; OpenRouter users can use `deepseek/deepseek-v4-pro`.
+The default `agent/.env.example` uses OpenRouter + `deepseek/deepseek-v4-pro`; for the DeepSeek official API, select `LANGCHAIN_PROVIDER=deepseek` and `deepseek-v4-pro`.
 
 ---
 
@@ -1122,6 +1223,17 @@ vibe-trading channels login weixin     # run an adapter login hook when needed
 vibe-trading channels pairing --channel telegram list
 ```
 
+Telegram long polling permits only one active `getUpdates` poller per bot
+token. `vibe-trading serve` owns the channel runtime; it starts channels at
+startup when `VIBE_TRADING_CHANNELS_AUTO_START=true`, and the Web UI controls
+that same runtime. `vibe-trading channels start` sends a start request to the
+running API server (`VIBE_TRADING_API_URL`, default
+`http://127.0.0.1:8000`), so running it against that same server after
+auto-start does not create another poller. Keep only one API server process
+with a given Telegram bot token enabled. Separate server processes, or a CLI
+configured to target a different server, each own a runtime and can conflict
+when they use the same token.
+
 `vibe-trading channels login feishu` saves the QR-authorized app credentials to
 `~/.vibe-trading/agent.json` with owner-only file permissions before reporting
 login success.
@@ -1140,6 +1252,10 @@ The built-in adapters cover `websocket`, `telegram`, `slack`, `discord`, `matrix
 Commands are case-insensitive and must be sent as the entire message (e.g. `hello /new` is treated as a regular message, not a reset).
 
 > **`/pairing` is operator-gated.** In-chat pairing-control commands are rejected unless the sender is listed as an operator — set `channels.operators` (cross-channel authority) or a channel section's own `operators` list in your channels config. With no operators configured, in-chat `/pairing` is refused (fail-closed) and pairing is managed only through the authenticated CLI (`vibe-trading channels pairing …`) and the auth-gated REST endpoint. This prevents any allow-listed group member from taking over pairing across channels.
+
+**Configure from the Web UI**: the **IM Channels** panel on the Settings page configures channels without hand-editing files. Expand a channel to open its config panel: fields render from backend metadata, and secret values are never returned to the browser, only masked (`****` plus the last 4 characters). DingTalk is the first fully-guided channel: create an app at [open-dev.dingtalk.com](https://open-dev.dingtalk.com/), add the bot capability, enable Stream Mode (no public callback URL needed), copy the AppKey into Client ID and the AppSecret into Client Secret, then publish the app. QQ has joined it as a fully-guided channel: register a bot on the QQ Open Platform ([q.qq.com](https://q.qq.com/)), copy the AppID and AppSecret into the form, verify with **Test connection** before saving, then enable; no public callback URL is needed (WebSocket via the official botpy SDK). Email and WebSocket have joined as fully-guided channels: Email's **Test connection** probes the IMAP login, the mailbox folder and the SMTP login against your provider without sending anything, while WebSocket — a local server rather than a remote service — validates the TLS certificate/key material and the address availability on this machine; an address held by the already-running server reads as the expected state, not a failure. Saving a WebSocket config hot-swaps the server, so connected clients (including the Web UI chat) briefly disconnect and reconnect. **Test connection** probes the values in the form before anything is saved and answers with an honest result code (`ok`, `invalid_credentials`, `network`, or `unsupported`). **Enable** applies immediately: a running channel runtime hot-swaps that one adapter with no process restart, and enabling auto-verifies credentials unless you explicitly choose **Enable anyway** after a failed check. Disabling a channel keeps its stored credentials, so re-enabling needs no re-entry. Only the built-in adapters are listed here; entry-points plugin channels remain file-configured.
+
+Saves write the `channels.<name>` section of `~/.vibe-trading/agent.json` atomically. YAML config files are read-only for the web UI (JSON is required to edit from the browser), and the panel says so instead of failing. Channels without a dedicated guide render a generic form derived from their defaults.
 
 </details>
 
@@ -1548,6 +1664,17 @@ Configure `~/.vibe-trading/mt5.json` (create it yourself; `chmod 600` where supp
 }
 ```
 
+For broker-confirmed `search_symbol` results, set `terminal_path` in this file
+to the selected terminal executable. Symbol search reads only `symbol_info`
+and `symbols_get`, passes no login credentials, and does not read account or
+position data or alter Market Watch. Without an explicit path it returns no
+MT5 candidate.
+
+If several broker aliases match, specify the exact native symbol (for example,
+`EURUSDm`) or configure `symbol_suffix`; search never chooses an alias arbitrarily
+or substitutes a web-search result. Backtest sandboxes receive only a validated
+`terminal_path` and positive finite `timeout`, not account credentials.
+
 Then:
 
 ```bash
@@ -1890,7 +2017,7 @@ Vibe-Trading/
 │   │
 │   └── backtest/                   # Backtest engines
 │       ├── engines/                #   9 engines + composite cross-market engine + options_portfolio
-│       ├── loaders/                #   28 sources: tushare, okx, nobitex, wallex, binance, yfinance, akshare, baostock, tencent, mootdx, ccxt, futu, pykrx, local, eastmoney, sina, stooq, yahoo, finnhub, alphavantage, tiingo, fmp, longbridge, mt5, qveris, india_broker, tickerall, warehouse
+│       ├── loaders/                #   29 sources: tushare, okx, nobitex, wallex, binance, yfinance, akshare, baostock, tencent, mootdx, ccxt, futu, pykrx, local, eastmoney, sina, stooq, yahoo, finnhub, alphavantage, tiingo, fmp, longbridge, mt5, qveris, india_broker, tickerall, gildata, warehouse
 │       │   ├── base.py             #   DataLoader Protocol
 │       │   └── registry.py         #   Registry + auto-fallback chains
 │       ├── warehouse/              #   local bar store: parquet partitions + DuckDB, sync / audit / list / sql CLI
@@ -1951,7 +2078,7 @@ Vibe-Trading is part of the **[HKUDS](https://github.com/HKUDS)** agent ecosyste
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| **Trust Layer** | Reproducible run cards are emitted and shown in Run Detail; v1 adds tool traces and citations | v0 Shipped |
+| **Trust Layer** | Run cards display hashed backtest execution records and verified CSV metric references in Run Detail and Markdown; existing cards remain readable | Backtest trace + citation display shipped |
 | **Hypothesis Registry** | Durable research hypotheses with lifecycle status, data sources, skills, run-card links, and invalidation notes | Backend MVP Shipped |
 | **Research Autopilot** | Manual-first research loop: hypothesis → deterministic backtest → evidence report | Phase 1–3 Shipped |
 | **Data Bridge** | Bring-your-own data: local CSV/Parquet/SQL connectors with schema mapping | Local loader Shipped |
