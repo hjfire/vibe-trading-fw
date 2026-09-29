@@ -375,6 +375,12 @@ def _live_quote_row(symbol: str, row: dict[str, Any] | None) -> dict[str, Any] |
     Returns ``None`` when the row is empty or carries an unparseable
     ``update_time``: a quote published with a fabricated timestamp would be
     worse than no quote, because the chart and the alert rules both sort on it.
+
+    The session fields (``open``/``high``/``low``/``prev_close``/``volume``) ride
+    along because :func:`src.api.udf_routes._quote_value` needs them to fill a
+    UDF quote object, and a live snapshot without a session high is a number the
+    trading panel has to leave blank. They are additive for every existing
+    consumer of ``/market/quote``, which reads the four keys it already knew.
     """
     if not row or row.get("last") is None:
         return None
@@ -384,7 +390,7 @@ def _live_quote_row(symbol: str, row: dict[str, Any] | None) -> dict[str, Any] |
     except (TypeError, ValueError):
         logger.debug("futu quote for %s has an unparseable update_time %r", symbol, stamp)
         return None
-    return {
+    shaped = {
         "symbol": symbol,
         "ok": True,
         "last": round(float(row["last"]), 4),
@@ -393,6 +399,10 @@ def _live_quote_row(symbol: str, row: dict[str, Any] | None) -> dict[str, Any] |
         "realtime": True,
         "source": "futu",
     }
+    for key in ("open", "high", "low", "prev_close", "volume", "turnover"):
+        if row.get(key) is not None:
+            shaped[key] = round(float(row[key]), 4)
+    return shaped
 
 
 def _futu_live_quote(symbol: str) -> dict[str, Any] | None:
@@ -692,12 +702,21 @@ def _quote_one(symbol: str) -> dict[str, Any]:
     last = float(bars[-1]["close"])
     prev = float(bars[-2]["close"]) if len(bars) > 1 else last
     change_pct = ((last - prev) / prev * 100.0) if prev else 0.0
+    bar = bars[-1]
     return {
         "symbol": s,
         "ok": True,
         "last": round(last, 4),
         "change_pct": round(change_pct, 2),
         "timestamp": int(bars[-1]["timestamp"]),
+        # The last *settled* session's own numbers, named the same way the live
+        # tape names them: this row is not realtime, and the absence of
+        # ``realtime: true`` is what says so.
+        "open": round(float(bar["open"]), 4),
+        "high": round(float(bar["high"]), 4),
+        "low": round(float(bar["low"]), 4),
+        "prev_close": round(prev, 4),
+        "volume": round(float(bar.get("volume") or 0.0), 4),
     }
 
 

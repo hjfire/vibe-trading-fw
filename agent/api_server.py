@@ -307,6 +307,10 @@ register_options_routes(app)
 from src.api.market_routes import register_market_routes  # noqa: E402
 register_market_routes(app)
 
+# --- TradingView UDF datafeed protocol (same bars, standard wire format) ---
+from src.api.udf_routes import register_udf_routes  # noqa: E402
+register_udf_routes(app)
+
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)
