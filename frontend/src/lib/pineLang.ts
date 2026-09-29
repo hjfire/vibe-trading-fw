@@ -209,6 +209,13 @@ export type Stmt =
 const TYPE_WORDS = new Set([
   "int", "float", "bool", "string", "color", "time", "series", "simple", "const",
   "input", "temporary", "expr", "manual", "managed",
+  // Pine's drawing/table object types. `var table infoTb = table.new(...)` and
+  // `line ln = line.new(...)` put these in type position; without them the
+  // parser eats `table`/`line` as the variable name and reports the real name
+  // (`infoTb`/`ln`) as trailing junk. dropTypeWords only consumes a word when
+  // the *next* token is an identifier, so `table.new(...)` (followed by `.`) and
+  // a bare `table` reference are never mistaken for a type annotation.
+  "table", "line", "label", "box", "polyline", "matrix",
 ]);
 
 /** Statement keywords that are never variable names. */

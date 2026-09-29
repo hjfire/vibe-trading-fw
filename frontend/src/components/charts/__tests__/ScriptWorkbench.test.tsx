@@ -120,6 +120,19 @@ describe("编辑器 tab", () => {
     expect(screen.getByRole("button", { name: /保存并应用/ })).toBeTruthy();
   });
 
+  it("numbers every source line in the editor gutter, tracking edits", () => {
+    const code = '//@version=5\nindicator("x", overlay=true)\nplot(close)';
+    open({ seed: { draft: { ...EMPTY_DRAFT, code }, tab: "editor" as const } });
+    const gutter = screen.getByTestId("code-gutter");
+    const nums = () => Array.from(gutter.querySelectorAll("div")).map((d) => d.textContent);
+    expect(nums()).toEqual(["1", "2", "3"]);
+    // Editing the source must grow the gutter in lockstep with the textarea.
+    fireEvent.change(screen.getByPlaceholderText(/本地公式/), {
+      target: { value: `${code}\nplot(open)` },
+    });
+    expect(nums()).toEqual(["1", "2", "3", "4"]);
+  });
+
   it("refuses to mount a script that does not compile", async () => {
     open();
     fireEvent.change(screen.getByPlaceholderText(/本地公式/), {

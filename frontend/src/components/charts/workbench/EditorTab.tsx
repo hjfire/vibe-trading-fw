@@ -71,6 +71,10 @@ export default function EditorTab({
   getChartRef.current = getChart;
   const paramsRef = useRef(draft.paramsText);
   paramsRef.current = draft.paramsText;
+  // Line-number gutter scrolls in lockstep with the textarea (see the editor
+  // block below): the gutter itself is overflow-hidden and we mirror scrollTop.
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
 
   const dialect = detectDialect(draft.code);
 
@@ -173,14 +177,35 @@ export default function EditorTab({
           </div>
         </div>
 
-        <textarea
-          value={draft.code}
-          onChange={(e) => onDraft({ ...draft, code: e.target.value })}
-          spellCheck={false}
-          rows={12}
-          placeholder={"// 本地公式：return { 线名: ma(close, P[0]) };\n// 或 TradingView Pine：//@version=5 + indicator(...)"}
-          className="w-full resize-y rounded border bg-background p-2 font-mono text-[11px] leading-4 outline-none focus:border-primary"
-        />
+        <div className="flex rounded border bg-background focus-within:border-primary">
+          {/* Gutter shares the textarea's font metrics (font-mono / 11px /
+            leading-4) and top padding (py-2), and the textarea is wrap="off"
+            so one logical line is always one visual row — otherwise soft
+            wrapping would drift the numbers off their code. */}
+          <div
+            ref={gutterRef}
+            aria-hidden
+            data-testid="code-gutter"
+            className="shrink-0 select-none overflow-hidden py-2 pl-2 pr-1 text-right font-mono text-[11px] leading-4 text-muted-foreground"
+          >
+            {Array.from({ length: draft.code.split("\n").length }, (_, i) => (
+              <div key={i}>{i + 1}</div>
+            ))}
+          </div>
+          <textarea
+            ref={taRef}
+            value={draft.code}
+            onChange={(e) => onDraft({ ...draft, code: e.target.value })}
+            onScroll={(e) => {
+              if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+            }}
+            spellCheck={false}
+            wrap="off"
+            rows={12}
+            placeholder={"// 本地公式：return { 线名: ma(close, P[0]) };\n// 或 TradingView Pine：//@version=5 + indicator(...)"}
+            className="min-w-0 flex-1 resize-y whitespace-pre bg-background py-2 pl-1 pr-2 font-mono text-[11px] leading-4 outline-none"
+          />
+        </div>
 
         {/* live check */}
         {dialect === "pine" && (

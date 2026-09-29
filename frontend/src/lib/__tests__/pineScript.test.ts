@@ -69,6 +69,23 @@ describe("pine dialect sniffing", () => {
     expect(validatePine('indicator("x")\nplot(close)')).toBeNull();
   });
 
+  it("parses typed object declarations (`var table t = table.new(...)`)", () => {
+    // Regression: Pine's drawing/table object types (table/line/label/box/
+    // polyline/matrix) sit in type position; before they were listed in
+    // TYPE_WORDS the parser ate `table` as the variable name and reported the
+    // real name as "该行末尾有多余内容". Parse-only, so it does not depend on
+    // the runtime implementing table.new.
+    const src = [
+      '//@version=6',
+      'indicator("t")',
+      'var table infoTb = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 20), border_width=1)',
+      'table.cell(infoTb, 0, 0, "当前支撑")',
+      'var line ln = line.new(na, na, na, na)',
+      "plot(close)",
+    ].join("\n");
+    expect(validatePine(src)).toBeNull();
+  });
+
   it("tells a trading script from a drawing one, comments aside", () => {
     expect(isPineStrategy('strategy("双均线", overlay=true)\nplot(close)')).toBe(true);
     // No header but real order calls still trade (a ported script may keep its
