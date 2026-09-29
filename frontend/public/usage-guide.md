@@ -446,6 +446,35 @@ return { 中轨, 上轨 };
 - 副图高度可以拖分隔条微调：**副图组合不变时**（也不改窗口大小）你拖过的高度不会被程序改回去；一旦加减了副图或改了窗口大小，整排高度会重新算一次。
 - 主图上的 `MA`（分时上换成均价 + 昨收）和自定义公式的**主图**叠加不在这张清单里，也不会被它关掉——那是另一套归属，两边不打架。
 
+### 15.11 接 TradingView 官方图表库（UDF 数据接口）
+
+图表要的数据现在按**两种线格式**端出来，而**K 线本身是同一份**：
+
+| 线格式 | 路径 | 给谁看 |
+|---|---|---|
+| 本项目私有 | `/market/kline`、`/market/quote`、`/market/symbols` | 上面这个专业图表（开源 KLineChart） |
+| TradingView UDF 标准 | `/api/udf/config`、`/time`、`/search`、`/symbols`、`/symbol_info`、`/history`、`/quotes`、`/marks`、`/timescale_marks` | TradingView Advanced Charts（原 Charting Library） |
+
+UDF 那一侧照协议原文实现：时间戳是 unix **秒**、列式 `{s,t,o,h,l,c,v}`、`resolution=D`、支持 `countback`、空窗口回 `no_data` + `nextTime`。所以官方库自带的适配器可以直接指过来：
+
+```js
+new TradingView.widget({
+  container_id: "tv",
+  library_path: "<你申请授权后放 charting_library 的目录>",
+  locale: "zh",
+  // 二选一：
+  datafeed_url: "http://127.0.0.1:8000/api/udf",   // 用官方自带的 UDFCompatibleDatafeed
+  // datafeed: new UdfDatafeed(),                   // 或本项目的客户端 frontend/src/lib/udfDatafeed.ts
+});
+```
+
+- **前提要说清：Advanced Charts 免费但专有**。要用 TradingView 账号申请授权才能下载，许可禁止再分发，也不在 npm 上。所以本仓库里没有那个 widget，页面仍然由开源的 KLineChart 画；能光明正大放进来的只有它两侧的契约（服务端 `agent/src/api/udf_routes.py`、客户端 `frontend/src/lib/udfDatafeed.ts`）。拿到授权后是「就地插上」，不是「再写一套取数」。
+- **换过去不会换数据**：两侧都从同一个取数函数出来（富途 OpenD 优先、公开源兜底、周线月线由日线折叠），差别只有线格式。§18 那套额度与限流一条都没变，多一个消费者就是多请求几次。
+- 官方库接得上就这些：搜索、单标的解析、`1/5/15/30/60` 分钟与 `D/W/M`、以及 `/quotes` 的实时——**UDF 没有推送通道**，官方适配器本身也是按 `updateFrequency` 定时再读（默认 10 秒），本项目这里是一次批量快照，不自建私有 WebSocket。
+- 接不上、如实标注的：图表标记（`supports_marks: false`，`/marks` 老实回空数组）、按交易所整批列目录（`supports_group_request: false`，走搜索而不是端一整张名册）、盘口深度与下单桥（这条 feed 后面没有这些数据，就不冒充支持）。
+- **「分时」那种一天铺满一屏的视图是本页面的东西，UDF 里没有对应概念**。官方库要复现得用扩展参数 `/history?session=latest`（协议允许带自定义参数，官方 widget 会把它忽略掉）；复权口径同理是 `&adjust=`。这两个参数只有本项目页面在用。
+- 鉴权与别的 `/api/*` 同一条：配了 API 密钥时，外部页面里的 widget 也要带上才能取数。§17 那个 `/tv-chart` 是**另一回事**——它是 TradingView 的公开小部件，数据走 TradingView 自己的服务器，跟本机行情源与额度无关。
+
 ---
 
 ## 16 报警（侧栏 **Alerts**）
