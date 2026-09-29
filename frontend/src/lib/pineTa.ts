@@ -17,6 +17,7 @@ import {
   isNa,
   isTrue,
   numArg,
+  positional,
   type Builtin,
   type BuiltinCtx,
   type V,
@@ -858,10 +859,23 @@ export const TA: Record<string, Builtin> = {
     return emaStep(d * src, n, c.state(() => ({ prev: NA }) as Prev));
   },
 
-  // Needs bars from the future (Pine confirms a pivot `left`+`right` later);
-  // kept as na so such scripts still run, and the runtime warns once.
-  pivot_high: () => NA,
-  pivot_low: () => NA,
+  /**
+   * Real pivot detection (this used to be a `na` stub, which killed every
+   * Wyckoff / fractal / pivot-based script on the first bar). A pivot high at
+   * bar `p` is a bar whose source is strictly higher than the `left` bars
+   * before it and the `right` bars after it; Pine only confirms it `right` bars
+   * later, so the value is reported at bar `p + right` and `na` everywhere
+   * else. We keep our own rolling window of the source rather than reading
+   * `high[]` history, because the interpreter only exposes the *current* bar of
+   * an arbitrary `source=` series — this way the default (`high`/`low`) and a
+   * custom source both work. Ties disqualify the pivot, matching TradingView.
+   */
+  pivothigh: (args, c) => pivotStep(args, c, "high"),
+  pivotlow: (args, c) => pivotStep(args, c, "low"),
+  // Underscore aliases are not real Pine names, but keep them honest now that
+  // a working implementation exists instead of the old `na` stub.
+  pivot_high: (args, c) => pivotStep(args, c, "high"),
+  pivot_low: (args, c) => pivotStep(args, c, "low"),
 
   pivot_point: (args, c) => {
     const typeArg = argAt(args, 0, "type");
@@ -897,6 +911,37 @@ export const TA: Record<string, Builtin> = {
     }
   },
 };
+
+/**
+ * Shared body of `ta.pivothigh`/`ta.pivotlow`.
+ *
+ * Accepts both Pine layouts: `(left, right)` (source defaults to high/low) and
+ * `(source, left, right)`. Returns the pivot's source value on the confirming
+ * bar, `na` otherwise — including while the window has not yet filled.
+ */
+function pivotStep(args: Arg[], c: BuiltinCtx, kind: "high" | "low"): number {
+  const pos = positional(args);
+  const namedSource = args.some((a) => a.name === "source" || a.name === "src");
+  const hasSource = namedSource || pos.length >= 3;
+  const left = lenOf(args, c, hasSource ? 1 : 0, 5, `ta.pivot${kind}`);
+  const right = lenOf(args, c, hasSource ? 2 : 1, 2, `ta.pivot${kind}`);
+  const b = c.bars;
+  const i = c.bi;
+  const srcExpr = hasSource ? argAt(args, 0, "source", "src") : undefined;
+  const cur = srcExpr ? asNum(c.val(srcExpr)) : kind === "high" ? b.high[i] : b.low[i];
+  const st = c.state(() => ({ win: [] }) as Win);
+  push(st, cur, left + right + 1);
+  const w = st.win;
+  if (w.length < left + right + 1) return NA;
+  const p = w.length - 1 - right; // pivot bar sits `right` steps behind the newest
+  const pv = w[p];
+  if (Number.isNaN(pv)) return NA;
+  // Any neighbour that ties or beats the candidate on the relevant side kills it.
+  const out = (v: number) => Number.isNaN(v) || (kind === "high" ? v >= pv : v <= pv);
+  for (let k = p - left; k < p; k++) if (out(w[k])) return NA;
+  for (let k = p + 1; k <= p + right; k++) if (out(w[k])) return NA;
+  return pv;
+}
 
 function barOffset(args: Arg[], c: BuiltinCtx, dir: "max" | "min"): number {
   const src = srcOf(args, c);

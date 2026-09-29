@@ -385,3 +385,54 @@ describe("pine strategy simulation", () => {
     expect(closed?.price).toBeCloseTo(BARS[0].close, 8);
   });
 });
+
+describe("ta.pivothigh / ta.pivotlow", () => {
+  // Hand-built bars so a pivot lands at a known index (no RNG).
+  const pivotBars = (highs: number[], lows: number[]): KLineData[] =>
+    highs.map(
+      (h, i) =>
+        ({
+          timestamp: 1700000000000 + i * 86400000,
+          open: lows[i],
+          high: h,
+          low: lows[i],
+          close: (h + lows[i]) / 2,
+          volume: 1000,
+          turnover: 0,
+        }) as KLineData,
+    );
+  const runOn = (code: string, bars: KLineData[]): PineArtifact => {
+    const out = compilePine(code, bars, {});
+    if ("error" in out) throw new Error(`编译失败：${out.error}`);
+    return out;
+  };
+
+  it("confirms a pivot `right` bars after it and returns na elsewhere", () => {
+    const highs = [10, 12, 15, 12, 10, 9, 8];
+    const lows = [20, 18, 10, 18, 20, 21, 22];
+    const a = runOn(
+      [
+        "//@version=5",
+        'indicator("piv")',
+        "ph = ta.pivothigh(2, 2)",
+        "pl = ta.pivotlow(2, 2)",
+        'plot(ph, "PH")',
+        'plot(pl, "PL")',
+      ].join("\n"),
+      pivotBars(highs, lows),
+    );
+    // bar 2 is the peak (15) / trough (10); confirmed at bar 2 + right(2) = 4.
+    expect(seriesOf(a, "PH")).toEqual([undefined, undefined, undefined, undefined, 15, undefined, undefined]);
+    expect(seriesOf(a, "PL")).toEqual([undefined, undefined, undefined, undefined, 10, undefined, undefined]);
+  });
+
+  it("rejects a plateau — a neighbour that ties the candidate disqualifies it", () => {
+    const highs = [15, 15, 15, 12, 10, 9, 8];
+    const a = runOn(
+      ["//@version=5", 'indicator("p")', "plot(nz(ta.pivothigh(2, 2)), \"PH\")"].join("\n"),
+      pivotBars(highs, highs.map((h) => h - 5)),
+    );
+    // nz() keeps the line alive (an all-na plot is dropped); 0 everywhere = no pivot.
+    expect(seriesOf(a, "PH").every((v) => v === 0)).toBe(true);
+  });
+});
