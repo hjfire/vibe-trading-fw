@@ -365,11 +365,11 @@ describe("Pine v5/v6 syntax shapes the corpus demanded", () => {
     expect(a.result.lines[0].values[10]).toBe(6);
   });
 
-  it("parses typed-array and generic-arg declarations (array support is runtime)", () => {
-    // Both must reach the runtime (array not yet supported) rather than die in
-    // the parser on `float[]` / `<float>`.
-    expect(parseOk(head + "var float[] buf = array.new_float(na)\nplot(buf, \"b\")").abort || "").toMatch(/array/);
-    expect(parseOk(head + "nwe = array.new<float>(0)\nplot(1, \"n\")").abort || "").toMatch(/array/);
+  it("runs typed-array and generic-arg declarations now that array.* works", () => {
+    // Phase 2 turned these from an array-abort into a clean run: `float[]` and
+    // `array.new<float>` reach the array library and execute without aborting.
+    expect(parseOk(head + "var float[] buf = array.new_float(na)\nplot(buf, \"b\")").abort).toBeUndefined();
+    expect(parseOk(head + "nwe = array.new<float>(0)\nplot(1, \"n\")").abort).toBeUndefined();
   });
 
   it("never mistakes a comparison for a generic type-argument list", () => {
@@ -381,5 +381,91 @@ describe("Pine v5/v6 syntax shapes the corpus demanded", () => {
     const bVals = b.result.lines[0].values.filter((v) => Number.isFinite(v)) as number[];
     expect(bVals.length).toBeGreaterThan(0); // `low[1]` is na only on the first bar
     expect(bVals.every((v) => v === 0 || v === 1)).toBe(true);
+  });
+});
+
+/**
+ * `array.*` — the single biggest community-script blocker (Phase 2). Beyond
+ * shape checks, the rolling-window case reconciles a hand-built array mean
+ * against `ta.sma` bar for bar: an array that parses but silently sums the
+ * wrong window would sail through every other assertion here.
+ */
+describe("Pine arrays (array.*)", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("keeps a `var` buffer by reference and grows it across bars", () => {
+    // One push per bar on a persistent array → size is the 1-based bar count.
+    const a = run(head + "var acc = array.new_float(0)\narray.push(acc, close)\nplot(array.size(acc), \"n\")");
+    const n = line(a, "n")!.values;
+    expect(n[0]).toBe(1);
+    expect(n[10]).toBe(11);
+  });
+
+  it("rolls a 5-bar window with push/shift and matches ta.sma bar for bar", () => {
+    const a = run(
+      head +
+        "var buf = array.new_float(0)\n" +
+        "array.push(buf, close)\n" +
+        "if array.size(buf) > 5\n    array.shift(buf)\n" +
+        "float avg = na\n" +
+        "if array.size(buf) == 5\n    s = 0.0\n    for i = 0 to 4\n        s += array.get(buf, i)\n    avg := s / 5\n" +
+        "plot(avg, \"arrSMA\")\nplot(ta.sma(close, 5), \"refSMA\")\n" +
+        "plot(math.abs(avg - ta.sma(close, 5)) < 1e-9 ? 1 : 0, \"agree\")",
+    );
+    const agree = line(a, "agree")!.values;
+    const both = agree.filter((v) => Number.isFinite(v));
+    expect(both.length).toBeGreaterThan(BARS.length - 6);
+    expect(both.every((v) => v === 1)).toBe(true);
+    // And the array window genuinely equals the reference at a settled bar.
+    expect(line(a, "arrSMA")!.values[120]).toBeCloseTo(line(a, "refSMA")!.values[120] as number, 6);
+  });
+
+  it("supports method-form calls and typed constructors", () => {
+    // `a.push(...)` / `a.get(i)` / `a.size()` method syntax on an `array.new_int`
+    // buffer. Non-`var`, so the array is rebuilt each bar and stays [10, 20].
+    const a = run(head + "a = array.new_int(0)\na.push(10)\na.push(20)\nplot(a.get(1), \"v\")\nplot(a.size(), \"sz\")");
+    expect(line(a, "v")!.values[10]).toBe(20);
+    expect(line(a, "sz")!.values[10]).toBe(2);
+  });
+
+  it("aggregates with sum/avg/max/min and iterates with for...in", () => {
+    const a = run(
+      head +
+        "a = array.from(3, 1, 4, 1, 5)\n" +
+        "plot(array.sum(a), \"s\")\nplot(array.max(a), \"mx\")\nplot(array.min(a), \"mn\")\nplot(array.avg(a), \"av\")\n" +
+        "t = 0.0\nfor x in a\n    t += x\nplot(t, \"in\")",
+    );
+    expect(line(a, "s")!.values[10]).toBe(14);
+    expect(line(a, "mx")!.values[10]).toBe(5);
+    expect(line(a, "mn")!.values[10]).toBe(1);
+    expect(line(a, "av")!.values[10]).toBeCloseTo(2.8, 10);
+    expect(line(a, "in")!.values[10]).toBe(14); // for...in reproduces array.sum
+  });
+});
+
+/**
+ * Nested `ta.*` in an argument must keep per-call-site state (a corpus crash).
+ * `ta.rma(math.max(ta.change(close), 0), n)` — the inner `ta.change` shares the
+ * RSI block of a real downloaded strategy (NWERSIASF). Before the interpreter
+ * saved/restored the call-site id around `dispatch`, the nested call left
+ * `ctxCid` pointing at `ta.change`, so `ta.rma`'s rolling-window state resolved
+ * to `ta.change`'s `{prev}` shape and `push` threw
+ * "Cannot read properties of undefined (reading 'push')" on the first bar.
+ */
+describe("nested ta.* call sites", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+
+  it("runs the inline RSI form without corrupting the outer ta.rma state", () => {
+    const a = run(
+      head +
+        "up = ta.rma(math.max(ta.change(close), 0), 5)\n" +
+        "down = ta.rma(-math.min(ta.change(close), 0), 5)\n" +
+        "rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))\n" +
+        "plot(rsi, \"rsi\")",
+    );
+    const rsi = a.result.lines.find((l) => l.name === "rsi")!.values.filter((v) => Number.isFinite(v)) as number[];
+    expect(rsi.length).toBeGreaterThan(BARS.length / 2);
+    expect(rsi.every((v) => v >= 0 && v <= 100)).toBe(true);
   });
 });

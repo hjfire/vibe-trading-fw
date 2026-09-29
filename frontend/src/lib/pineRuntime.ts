@@ -21,6 +21,7 @@
 import { PineError, parsePine, type Arg, type Expr, type Stmt } from "./pineLang";
 import { TA } from "./pineTa";
 import { MISC, assertUnsupported, isDecorativeName } from "./pineMath";
+import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
 import { OrderSim, estimateTick } from "./pineOrders";
 import {
   NA,
@@ -392,6 +393,9 @@ export class PineRuntime {
       case "for":
         this.execFor(s);
         return;
+      case "forin":
+        this.execForIn(s);
+        return;
     }
   }
 
@@ -415,6 +419,32 @@ export class PineRuntime {
           break;
         }
         (this.env.get(key) as Series).cur = k;
+        for (const inner of s.body) this.exec(inner);
+      }
+    } finally {
+      if (saved) this.env.set(key, saved);
+      else this.env.delete(key);
+    }
+  }
+
+  /** `for x in arr` — bind each element to the loop var and run the body. */
+  private execForIn(s: Extract<Stmt, { k: "forin" }>): void {
+    const src = this.val(s.source);
+    if (!Array.isArray(src)) {
+      this.warn("for...in 需要数组，已跳过该循环");
+      return;
+    }
+    const key = this.vkey(s.varName);
+    const saved = this.env.get(key);
+    this.env.set(key, { hist: [], cur: NA, live: true, persist: true });
+    let guard = 0;
+    try {
+      for (const el of src) {
+        if (++guard > LOOP_CAP) {
+          this.warn(`for...in 超过 ${LOOP_CAP} 次迭代，已截断`);
+          break;
+        }
+        (this.env.get(key) as Series).cur = el;
         for (const inner of s.body) this.exec(inner);
       }
     } finally {
@@ -484,8 +514,15 @@ export class PineRuntime {
         return this.readIdx(e.base, Number.isNaN(k) ? 0 : Math.max(0, Math.trunc(k)));
       }
       case "call": {
+        // A builtin's rolling state is keyed by ctxCid, but evaluating its
+        // arguments can dispatch nested calls that clobber ctxCid. Save the
+        // call-site id and restore it after dispatch so `c.state()` inside the
+        // outer builtin still resolves to *this* call site, not the last nested
+        // one (e.g. ta.rma(math.max(ta.change(close), 0), n)).
+        const savedCid = this.ctxCid;
         this.ctxCid = e.cid;
         const out = this.dispatch(e);
+        this.ctxCid = savedCid;
         this.write("f:" + e.cid, out, false);
         return out;
       }
@@ -515,8 +552,10 @@ export class PineRuntime {
       const s = this.env.get("f:" + base.cid);
       if (!s) {
         // First read is also the first execution of that call site.
+        const savedCid = this.ctxCid;
         this.ctxCid = base.cid;
         const fresh = this.dispatch(base);
+        this.ctxCid = savedCid;
         this.write("f:" + base.cid, fresh, false);
         return fresh;
       }
@@ -686,6 +725,8 @@ export class PineRuntime {
       if (!fn) throw new PineError(`暂不支持 ${name}()。可用的 ta.* 函数：${availableTa()}`);
       return fn(args, this.ctx);
     }
+    // Free-form array call `array.push(buf, v)`; the target array comes first.
+    if (name.startsWith("array.")) return this.runArray(name.slice("array.".length), args, null);
     const misc = MISC[name];
     if (misc) return misc(args, this.ctx);
     if (!name.includes(".")) {
@@ -702,12 +743,49 @@ export class PineRuntime {
     // Method-style calls on a tracked variable (`lbl.set_text(…)`) can only be
     // no-ops here; say so instead of guessing a type for the name.
     const head = name.split(".")[0];
+    // `buf.push(v)` / `arr.size()` on an array variable route to the array
+    // library with the variable's live array as the target. Only a value that
+    // really is a `V[]` counts, so decorative object vars still warn below.
+    const method = name.slice(head.length + 1);
+    if (method && !method.includes(".") && !head.includes(".") && ARRAY_METHODS.has(method)) {
+      const s = this.lookup(head);
+      const self = s ? s.cur : undefined;
+      if (Array.isArray(self)) return this.runArray(method, args, self);
+    }
     if (this.lookup(head)) {
       this.warn(`${name}() 作用于对象变量 "${head}"，本实现不支持该调用，已忽略`);
       return nothing;
     }
     assertUnsupported(name);
     throw new PineError(`未实现的函数 "${name}()"。可用：ta.* / math.* / str.* / input.* / plot*`);
+  }
+
+  /**
+   * Shared body for both array call shapes. `self === null` is the free form
+   * `array.<op>(arr, …)` (target is the first value); a non-null `self` is the
+   * method form `arr.<op>(…)`. Constructors never carry a target.
+   */
+  private runArray(method: string, args: Arg[], self: V[] | null): V {
+    const vals = args.map((a) => this.val(a.value));
+    if (ARRAY_CTOR[method]) return ARRAY_CTOR[method](vals);
+    let arr: V[];
+    let p: V[];
+    if (self !== null) {
+      arr = self;
+      p = vals;
+    } else {
+      const first = vals[0];
+      if (!Array.isArray(first)) {
+        throw new PineError(`array.${method}() 的第一个参数必须是数组变量`);
+      }
+      arr = first;
+      p = vals.slice(1);
+    }
+    const fn = ARRAY_OPS[method];
+    if (!fn) {
+      throw new PineError(`暂不支持 array.${method}()。可用：${Object.keys(ARRAY_OPS).join(" ")}`);
+    }
+    return fn(arr, p, this.ctx);
   }
 
   /* ------------------------------------------------------------ header call */

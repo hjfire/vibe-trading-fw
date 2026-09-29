@@ -198,6 +198,7 @@ export type Stmt =
   | { k: "expr"; value: Expr; line: number }
   | { k: "if"; arms: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[] | null; line: number }
   | { k: "for"; varName: string; from: Expr; to: Expr; step: Expr | null; body: Stmt[]; line: number }
+  | { k: "forin"; varName: string; source: Expr; body: Stmt[]; line: number }
   | {
       k: "fn";
       name: string;
@@ -593,6 +594,14 @@ export class PineParser {
     const v = this.peek();
     if (v.kind !== "ident") throw new PineError(`第 ${line} 行：for 需要循环变量名`);
     this.next();
+    // `for x in arr` (Pine v6 array iteration) — distinct from the numeric
+    // `for i = from to [by]` form handled below.
+    if (this.isIdent("in")) {
+      this.next(); // "in"
+      const source = this.parseExpr();
+      const body = this.parseChildBlock(indent);
+      return { k: "forin", varName: v.value, source, body, line };
+    }
     let from: Expr;
     let to: Expr;
     let step: Expr | null = null;
