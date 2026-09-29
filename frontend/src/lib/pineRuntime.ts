@@ -312,7 +312,7 @@ export class PineRuntime {
       if (err instanceof ControlFlow) {
         // A break/continue that escaped every loop is a script bug, not a
         // feature gap; report it plainly instead of the generic abort text.
-        err = new PineError(`${err.kind} 只能用在 for 循环内部`);
+        err = new PineError(`${err.kind} 只能用在循环内部`);
       }
       const msg = err instanceof Error ? err.message : String(err);
       if (!this.warnSeen.has(msg)) {
@@ -410,6 +410,9 @@ export class PineRuntime {
       case "forin":
         this.execForIn(s);
         return;
+      case "while":
+        this.execWhile(s);
+        return;
       case "break":
         throw new ControlFlow("break");
       case "continue":
@@ -492,6 +495,36 @@ export class PineRuntime {
     } finally {
       if (saved) this.env.set(key, saved);
       else this.env.delete(key);
+    }
+  }
+
+  /**
+   * `while cond` — re-evaluate the guard every iteration. Pine has no
+   * host-side step limit, so a script that never flips its condition would
+   * hang the bar loop; LOOP_CAP truncates it with a warning, matching `for`.
+   * break/continue are caught here exactly as in execFor.
+   */
+  private execWhile(s: Extract<Stmt, { k: "while" }>): void {
+    let guard = 0;
+    for (;;) {
+      if (!isTrue(this.val(s.cond))) return;
+      if (++guard > LOOP_CAP) {
+        this.warn(`while 循环超过 ${LOOP_CAP} 次迭代，已截断`);
+        return;
+      }
+      let stop = false;
+      for (const inner of s.body) {
+        try {
+          this.exec(inner);
+        } catch (e) {
+          if (e instanceof ControlFlow) {
+            stop = e.kind === "break";
+            break;
+          }
+          throw e;
+        }
+      }
+      if (stop) return;
     }
   }
 

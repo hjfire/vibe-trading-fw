@@ -515,3 +515,40 @@ describe("time(), log.*, and loop control", () => {
     expect(line(c, "c")!.values[10]).toBe(5);
   });
 });
+
+/**
+ * Phase 4a control flow: `while`. Community scripts use it to count to a
+ * condition and to drain an array buffer, so the interpreter re-evaluates the
+ * guard each iteration and honours break/continue (with LOOP_CAP as a hang
+ * backstop, since Pine itself has no host step limit).
+ */
+describe("Pine while loops", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("counts up until the guard turns false", () => {
+    const a = run(head + "i = 0\nwhile i < 5\n    i += 1\nplot(i, \"i\")");
+    expect(line(a, "i")!.values[10]).toBe(5);
+  });
+
+  it("drains an array buffer with a size-guarded while", () => {
+    const a = run(
+      head +
+        "buf = array.new_float(0)\n" +
+        "buf.push(close)\nbuf.push(close)\nbuf.push(close)\n" +
+        "drained = 0\n" +
+        "while array.size(buf) > 0\n    buf.pop()\n    drained += 1\n" +
+        "plot(drained, \"d\")\nplot(array.size(buf), \"sz\")",
+    );
+    expect(line(a, "d")!.values[10]).toBe(3);
+    expect(line(a, "sz")!.values[10]).toBe(0);
+  });
+
+  it("terminates a never-false guard via break (0+1+2+3 = 6)", () => {
+    const a = run(
+      head +
+        "i = 0\ns = 0.0\nwhile true\n    if i == 4\n        break\n    s += i\n    i += 1\nplot(s, \"s\")",
+    );
+    expect(line(a, "s")!.values[10]).toBe(6);
+  });
+});

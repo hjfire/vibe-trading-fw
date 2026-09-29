@@ -199,6 +199,7 @@ export type Stmt =
   | { k: "if"; arms: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[] | null; line: number }
   | { k: "for"; varName: string; from: Expr; to: Expr; step: Expr | null; body: Stmt[]; line: number }
   | { k: "forin"; varName: string; source: Expr; body: Stmt[]; line: number }
+  | { k: "while"; cond: Expr; body: Stmt[]; line: number }
   | { k: "break"; line: number }
   | { k: "continue"; line: number }
   | {
@@ -409,7 +410,7 @@ export class PineParser {
     const indent = this.indentHere();
     const t = this.peek();
 
-    if (t.kind === "ident" && (t.value === "while" || t.value === "switch" || t.value === "type" || t.value === "export")) {
+    if (t.kind === "ident" && (t.value === "switch" || t.value === "type" || t.value === "export")) {
       throw new PineError(`第 ${t.line} 行：暂不支持 "${t.value}" 语法，请改写为 if/三元表达式`);
     }
     // `import TradingView/ta/9` is a v5/v6 module import. The ta.* library is
@@ -428,6 +429,7 @@ export class PineParser {
       throw new PineError(`第 ${head.line} 行："else" 必须紧跟在 "if" 块之后`);
     }
     if (t.kind === "ident" && t.value === "for") return this.parseFor(indent);
+    if (t.kind === "ident" && t.value === "while") return this.parseWhile(indent);
     // Loop-control statements. They carry no expression; the runtime signals a
     // break/continue by throwing a control-flow marker that execFor catches.
     if (t.kind === "ident" && (t.value === "break" || t.value === "continue")) {
@@ -598,6 +600,14 @@ export class PineParser {
       return { k: "if", arms, elseBody: body, line };
     }
     return { k: "if", arms, elseBody: null, line };
+  }
+
+  /** `while cond` + an indented block — mirrors parseFor's body handling. */
+  private parseWhile(indent: number): Stmt {
+    const line = this.next().line; // "while"
+    const cond = this.parseExpr();
+    const body = this.parseChildBlock(indent);
+    return { k: "while", cond, body, line };
   }
 
   private parseFor(indent: number): Stmt {
