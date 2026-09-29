@@ -15,10 +15,21 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["vitest/globals"],
+    // `node` and `vite/client` are here for the test files below: the guards
+    // that scan the repository read the filesystem (`node:fs`, `__dirname`) and
+    // one discovers locale JSON through `import.meta.glob`. This project used
+    // to stop at `["vitest/globals"]` and exclude every `__tests__` directory,
+    // which combined into a blind spot: the editor gave those files no project
+    // at all (an inferred config has neither `@types/node` nor `vitest/globals`,
+    // so `describe` was unknown too), and `tsc -b` never type-checked them, so
+    // the type errors they carried went unreported on every machine including
+    // CI. Sixteen of them surfaced the moment the files joined the program.
+    "types": ["vitest/globals", "node", "vite/client"],
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/__tests__"]
+  // No exclusion for tests: type-checking them has to happen somewhere, and a
+  // second tsconfig is not an option because the editor only ever binds a file
+  // to `tsconfig.json`. `npm run build` is what runs it, CI included.
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "tailwind.config.ts"]
 }
