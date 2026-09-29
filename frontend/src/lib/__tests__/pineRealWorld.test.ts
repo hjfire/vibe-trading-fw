@@ -552,3 +552,65 @@ describe("Pine while loops", () => {
     expect(line(a, "s")!.values[10]).toBe(6);
   });
 });
+
+/**
+ * Phase 4b data structure: `map.*`. Modelled as an interleaved `V[]`
+ * (`[k0, v0, …]`) so it reuses the same reference-mutation persistence that
+ * arrays do — a `var` map mutated by `map.put` still holds its entries on the
+ * next bar. Reconciling a hand-built map sum against a fixed total guards
+ * against a map that parses but silently drops or double-counts a key.
+ */
+describe("Pine maps (map.*)", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("round-trips put/get/size/contains", () => {
+    const a = run(
+      head +
+        "m = map.new<string, float>()\n" +
+        "map.put(m, \"a\", 1.0)\nmap.put(m, \"b\", 2.0)\n" +
+        "plot(map.size(m), \"sz\")\nplot(map.get(m, \"b\"), \"vb\")\n" +
+        "plot(map.contains(m, \"a\") ? 1 : 0, \"has\")\nplot(nz(map.get(m, \"zz\")), \"miss\")",
+    );
+    expect(line(a, "sz")!.values[10]).toBe(2);
+    expect(line(a, "vb")!.values[10]).toBe(2);
+    expect(line(a, "has")!.values[10]).toBe(1);
+    expect(line(a, "miss")!.values[10]).toBe(0); // missing key → na → nz → 0
+  });
+
+  it("iterates map.keys and re-reads values, matching a fixed total", () => {
+    const a = run(
+      head +
+        "m = map.new<string, float>()\n" +
+        "map.put(m, \"x\", 1.0)\nmap.put(m, \"y\", 3.0)\n" +
+        "ks = map.keys(m)\nt = 0.0\nfor k in ks\n    t += map.get(m, k)\nplot(t, \"sum\")\nplot(array.size(ks), \"nkeys\")",
+    );
+    expect(line(a, "sum")!.values[10]).toBe(4);
+    expect(line(a, "nkeys")!.values[10]).toBe(2);
+  });
+
+  it("persists a var map across bars (unique key per bar)", () => {
+    // A persistent counter feeds a distinct key each bar, so the map grows one
+    // entry per bar: size is the 1-based bar count at bar 10 → 11.
+    const a = run(
+      head +
+        "var m = map.new<float, float>()\nvar n = 0.0\n" +
+        "map.put(m, n, close)\nn := n + 1\n" +
+        "plot(map.size(m), \"sz\")",
+    );
+    expect(line(a, "sz")!.values[0]).toBe(1);
+    expect(line(a, "sz")!.values[10]).toBe(11);
+  });
+
+  it("clears to empty and updates an existing key in place (no growth)", () => {
+    const a = run(
+      head +
+        "m = map.new<string, float>()\n" +
+        "map.put(m, \"a\", 1.0)\nmap.put(m, \"a\", 9.0)\nplot(map.size(m), \"sz2\")\nplot(map.get(m, \"a\"), \"va\")\n" +
+        "map.clear(m)\nplot(map.size(m), \"sz0\")",
+    );
+    expect(line(a, "sz2")!.values[10]).toBe(1); // re-put same key → no new entry
+    expect(line(a, "va")!.values[10]).toBe(9);
+    expect(line(a, "sz0")!.values[10]).toBe(0);
+  });
+});

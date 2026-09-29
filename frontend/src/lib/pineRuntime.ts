@@ -22,6 +22,7 @@ import { PineError, parsePine, type Arg, type Expr, type Stmt } from "./pineLang
 import { TA } from "./pineTa";
 import { MISC, assertUnsupported, isDecorativeName } from "./pineMath";
 import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
+import { MAP_CTOR, MAP_OPS } from "./pineMap";
 import { OrderSim, estimateTick } from "./pineOrders";
 import {
   NA,
@@ -802,6 +803,9 @@ export class PineRuntime {
     }
     // Free-form array call `array.push(buf, v)`; the target array comes first.
     if (name.startsWith("array.")) return this.runArray(name.slice("array.".length), args, null);
+    // Free-form map call `map.put(m, k, v)`; the target map (an interleaved
+    // `V[]`) comes first. Method-form is intentionally not routed (see pineMap).
+    if (name.startsWith("map.")) return this.runMap(name.slice("map.".length), args);
     const misc = MISC[name];
     if (misc) return misc(args, this.ctx);
     if (!name.includes(".")) {
@@ -861,6 +865,25 @@ export class PineRuntime {
       throw new PineError(`暂不支持 array.${method}()。可用：${Object.keys(ARRAY_OPS).join(" ")}`);
     }
     return fn(arr, p, this.ctx);
+  }
+
+  /**
+   * Free-form `map.<op>(m, …)` only: the target map is the first value (an
+   * interleaved `[k0, v0, …]` `V[]`); a constructor (`map.new`/`map.new<k, v>`,
+   * generics already stripped by the parser) takes no target.
+   */
+  private runMap(method: string, args: Arg[]): V {
+    const vals = args.map((a) => this.val(a.value));
+    if (MAP_CTOR[method]) return MAP_CTOR[method](vals);
+    const fn = MAP_OPS[method];
+    if (!fn) {
+      throw new PineError(`暂不支持 map.${method}()。可用：${Object.keys(MAP_OPS).join(" ")}`);
+    }
+    const first = vals[0];
+    if (!Array.isArray(first)) {
+      throw new PineError(`map.${method}() 的第一个参数必须是 map 变量`);
+    }
+    return fn(first, vals.slice(1), this.ctx);
   }
 
   /* ------------------------------------------------------------ header call */

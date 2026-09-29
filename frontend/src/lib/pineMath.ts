@@ -442,9 +442,7 @@ export function isDecorativeName(name: string): boolean {
 /** Reject names we knowingly do not model, with a reason instead of na silence. */
 export function assertUnsupported(name: string): void {
   const hard: Record<string, string> = {
-    array: "Pine 数组（array.*）暂未支持，请把累计逻辑改写成滚动函数",
     matrix: "Pine matrix 暂未支持",
-    map: "Pine map 暂未支持",
     udt: "自定义类型（type）暂未支持",
   };
   const prefix = name.split(".")[0];
