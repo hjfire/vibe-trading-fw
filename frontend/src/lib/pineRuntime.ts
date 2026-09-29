@@ -46,6 +46,16 @@ import {
   type V,
 } from "./pineTypes";
 
+/**
+ * Clause match for `switch subj`: numbers compare by value (so `na` never
+ * matches — NaN !== NaN, mirroring Pine), anything else by string form (covers
+ * string cases and `@`-sentinel colours/enums).
+ */
+function switchEq(a: V, b: V): boolean {
+  if (typeof a === "number" && typeof b === "number") return a === b;
+  return asStr(a) === asStr(b);
+}
+
 /** Hard caps: a pasted script must never freeze the chart tab. */
 const HIST_CAP = 40000;
 const OP_LIMIT = 2.5e7;
@@ -618,7 +628,36 @@ export class PineRuntime {
         if (Number.isNaN(cond)) return NA;
         return cond !== 0 ? this.val(e.a) : this.val(e.b);
       }
+      case "switch": {
+        // `switch subj` compares each clause test to the subject; a bare
+        // `switch` treats each test as a boolean guard. First match wins, else
+        // the `=> default` clause, else na.
+        const subj = e.subject === null ? undefined : this.val(e.subject);
+        let body: Expr | Stmt[] | null = null;
+        for (const cse of e.cases) {
+          const v = this.val(cse.test);
+          const hit = subj === undefined ? isTrue(v) : switchEq(subj, v);
+          if (hit) {
+            body = cse.body;
+            break;
+          }
+        }
+        if (body === null) body = e.defaultBody;
+        if (body === null) return NA;
+        return Array.isArray(body) ? this.runBlock(body) : this.val(body);
+      }
     }
+  }
+
+  /** Run a statement block and return its last value (switch clause bodies). */
+  private runBlock(body: Stmt[]): V {
+    let out: V = NA;
+    for (const st of body) {
+      this.lastValue = NA;
+      this.exec(st);
+      out = this.lastValue;
+    }
+    return out;
   }
 
   private readIdx(base: Expr, k: number): V {

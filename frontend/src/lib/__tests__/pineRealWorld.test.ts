@@ -560,6 +560,52 @@ describe("Pine while loops", () => {
  * next bar. Reconciling a hand-built map sum against a fixed total guards
  * against a map that parses but silently drops or double-counts a key.
  */
+describe("Pine switch", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("matches a subject clause and its default fallback", () => {
+    const a = run(
+      head +
+        "sel = \"b\"\n" +
+        "v = switch sel\n    \"a\" => 10\n    \"b\" => 20\n    => 99\nplot(v, \"hit\")\n" +
+        "sel2 = \"zzz\"\n" +
+        "w = switch sel2\n    \"a\" => 10\n    => 99\nplot(w, \"def\")",
+    );
+    expect(line(a, "hit")!.values[10]).toBe(20);
+    expect(line(a, "def")!.values[10]).toBe(99); // no clause matched → default
+  });
+
+  it("runs a clause as an indented block and returns its last value", () => {
+    const a = run(
+      head +
+        "s = \"risk\"\nqty = switch s\n    \"pct\" =>\n        100 * 2\n    \"risk\" =>\n        base = 5\n        base + 3\n    =>\n        0\nplot(qty, \"q\")",
+    );
+    expect(line(a, "q")!.values[10]).toBe(8); // block body: base=5 then base+3
+  });
+
+  it("treats a bare switch's clauses as boolean guards", () => {
+    const a = run(
+      head +
+        "r = switch\n    close > high => 1\n    close <= high => 2\n    => 3\nplot(r, \"g\")",
+    );
+    expect(line(a, "g")!.values[10]).toBe(2); // close<=high always true
+  });
+
+  it("returns a switch from a function block body", () => {
+    const a = run(
+      head +
+        "cp = \"High\"\ngetCenter() =>\n    switch cp\n        \"High\" => 1\n        \"Low\" => 2\n        => 0\nr = getCenter()\nplot(r, \"c\")",
+    );
+    expect(line(a, "c")!.values[10]).toBe(1);
+  });
+
+  it("never matches a na case against a na subject (falls through to default)", () => {
+    const a = run(head + "x = na\nv = switch x\n    1 => 10\n    => 99\nplot(v, \"n\")");
+    expect(line(a, "n")!.values[10]).toBe(99); // na === anything is false
+  });
+});
+
 describe("Pine maps (map.*)", () => {
   const head = "//@version=5\nindicator(\"t\")\n";
   const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);

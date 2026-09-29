@@ -190,7 +190,16 @@ export type Expr =
   | { k: "call"; name: string; args: Arg[]; line: number; cid: number }
   | { k: "bin"; op: string; a: Expr; b: Expr; line: number }
   | { k: "un"; op: string; a: Expr; line: number }
-  | { k: "tern"; c: Expr; a: Expr; b: Expr; line: number };
+  | { k: "tern"; c: Expr; a: Expr; b: Expr; line: number }
+  | {
+      k: "switch";
+      /** `switch x` → subject present (clauses compare to it); bare `switch` → null (clauses are bool guards). */
+      subject: Expr | null;
+      cases: { test: Expr; body: Expr | Stmt[] }[];
+      /** The `=> body` clause with no test (evaluated when nothing matched). */
+      defaultBody: Expr | Stmt[] | null;
+      line: number;
+    };
 
 export type Stmt =
   | { k: "decl"; names: string[]; value: Expr; persist: boolean; line: number }
@@ -410,7 +419,7 @@ export class PineParser {
     const indent = this.indentHere();
     const t = this.peek();
 
-    if (t.kind === "ident" && (t.value === "switch" || t.value === "type" || t.value === "export")) {
+    if (t.kind === "ident" && (t.value === "type" || t.value === "export")) {
       throw new PineError(`第 ${t.line} 行：暂不支持 "${t.value}" 语法，请改写为 if/三元表达式`);
     }
     // `import TradingView/ta/9` is a v5/v6 module import. The ta.* library is
@@ -430,6 +439,11 @@ export class PineParser {
     }
     if (t.kind === "ident" && t.value === "for") return this.parseFor(indent);
     if (t.kind === "ident" && t.value === "while") return this.parseWhile(indent);
+    // A bare `switch` statement (a function block body whose value is the
+    // switch result). The RHS form `x = switch …` is handled inside parseExpr.
+    if (t.kind === "ident" && t.value === "switch") {
+      return { k: "expr", value: this.parseSwitch(), line: t.line };
+    }
     // Loop-control statements. They carry no expression; the runtime signals a
     // break/continue by throwing a control-flow marker that execFor catches.
     if (t.kind === "ident" && (t.value === "break" || t.value === "continue")) {
@@ -602,6 +616,69 @@ export class PineParser {
     return { k: "if", arms, elseBody: null, line };
   }
 
+  /* --------------------------------------------------------------- switch */
+
+  /**
+   * `switch [subject]` followed by indented `case => body` clauses (and an
+   * optional `=> default` clause). The subject is optional: a bare `switch`
+   * makes each clause a boolean guard. A clause body is either an inline
+   * expression on the arrow line or an indented block (whose value is its last
+   * statement). Clauses are collected while their first token stays at the
+   * column of the first clause; the switch ends on any dedent — matching how
+   * TradingView writes switch both as a statement and as an assignment RHS.
+   */
+  private parseSwitch(): Expr {
+    const line = this.next().line; // consume "switch"
+    let subject: Expr | null = null;
+    const h = this.peek();
+    if (!(h.kind === "nl" || h.kind === "eof")) subject = this.parseExpr();
+    const cases: { test: Expr; body: Expr | Stmt[] }[] = [];
+    let defaultBody: Expr | Stmt[] | null = null;
+    let caseIndent = -1;
+    for (;;) {
+      const ahead = this.peekMeaningful(this.pos); // pure lookahead, no advance
+      if (ahead.tok.kind === "eof") break;
+      if (caseIndent < 0) caseIndent = ahead.tok.col;
+      else if (ahead.tok.col !== caseIndent) break;
+      this.pos = ahead.at; // jump onto the clause token (past newlines)
+      if (this.isOp("=>")) {
+        this.next();
+        defaultBody = this.parseSwitchBody(caseIndent);
+        continue;
+      }
+      const test = this.parseExpr();
+      this.expectOp("=>");
+      cases.push({ test, body: this.parseSwitchBody(caseIndent) });
+    }
+    // A block body leaves `this.pos` on the dedented next statement (its
+    // newlines already consumed). Rewind onto that newline so an enclosing
+    // `x = switch …` declaration still sees a line break in endOfStmt().
+    const cur = this.peek();
+    if (cur.kind !== "nl" && cur.kind !== "eof" && this.tk[this.pos - 1]?.kind === "nl") this.pos--;
+    return { k: "switch", subject, cases, defaultBody, line };
+  }
+
+  /** Clause body: an inline expression, or an indented block of statements. */
+  private parseSwitchBody(caseIndent: number): Expr | Stmt[] {
+    const t = this.peek();
+    if (!(t.kind === "nl" || t.kind === "eof")) return this.parseExpr();
+    const first = this.skipNl();
+    if (first.kind === "eof" || first.col <= caseIndent) {
+      // Empty clause body: back off so the token stays for the next clause /
+      // dedent handling, and yield `na`.
+      this.pos--;
+      return { k: "num", v: NaN, line: first.line };
+    }
+    return this.parseStatements(first.col);
+  }
+
+  /** Next non-newline token at/after `from`, WITHOUT moving this.pos. */
+  private peekMeaningful(from: number): { tok: Tok; at: number } {
+    let p = from;
+    while (this.tk[p]?.kind === "nl") p++;
+    return { tok: this.tk[p], at: p };
+  }
+
   /** `while cond` + an indented block — mirrors parseFor's body handling. */
   private parseWhile(indent: number): Stmt {
     const line = this.next().line; // "while"
@@ -769,6 +846,7 @@ export class PineParser {
 
   private parsePrimary(): Expr {
     const t = this.peek();
+    if (t.kind === "ident" && t.value === "switch") return this.parseSwitch();
     if (t.kind === "num") {
       this.next();
       const v = Number(t.value);
