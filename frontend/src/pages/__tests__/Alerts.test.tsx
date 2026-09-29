@@ -244,7 +244,9 @@ describe("Alerts composer", () => {
     fireEvent.change(screen.getByLabelText("Watches"), { target: { value: "event" } });
     fireEvent.submit(screen.getByRole("button", { name: /Save rule/ }));
 
-    const url = await screen.findByText(/\/alerts\/webhook\/tv-push\?key=s3cret$/);
+    // Awaited, not bound: it waits for the reveal to render and throws if the
+    // secret never appears; nothing reads the element itself.
+    await screen.findByText(/\/alerts\/webhook\/tv-push\?key=s3cret$/);
     expect(screen.getByText("Webhook URL for tv-push")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));

@@ -58,12 +58,12 @@ const locales: Record<string, Record<string, unknown>> = Object.fromEntries(
 );
 
 describe("i18n locale parity", () => {
-  it.each(Object.entries(locales))("%s has every key from en.json", (name, locale) => {
+  it.each(Object.entries(locales))("%s has every key from en.json", (_code, locale) => {
     const missing = enKeys.filter((key) => !hasPath(locale, key));
     expect(missing).toEqual([]);
   });
 
-  it.each(Object.entries(locales))("%s has no extra keys beyond en.json", (name, locale) => {
+  it.each(Object.entries(locales))("%s has no extra keys beyond en.json", (_code, locale) => {
     const localeKeys = collectKeys(locale);
     const extra = localeKeys.filter((key) => !hasPath(en as unknown as Record<string, unknown>, key));
     expect(extra).toEqual([]);

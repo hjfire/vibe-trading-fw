@@ -53,7 +53,11 @@ interface AxisBounds {
 function valueXAxes(): AxisBounds[] {
   return charts.flatMap((chart) =>
     chart.setOption.mock.calls
-      .map((call) => {
+      // The annotation is what makes the filter below legal: without it the
+      // mapped element is `{ min; max } | null` with *required* keys, and a
+      // predicate narrowing to the all-optional `AxisBounds` is not assignable
+      // to that, so the `null` survived into the returned `AxisBounds[]`.
+      .map((call): AxisBounds | null => {
         const option = call[0] as { xAxis?: { type?: string; min?: number; max?: number } };
         return option.xAxis && option.xAxis.type === "value"
           ? { min: option.xAxis.min, max: option.xAxis.max }
@@ -66,7 +70,7 @@ function valueXAxes(): AxisBounds[] {
 function valueYAxes(): AxisBounds[] {
   return charts.flatMap((chart) =>
     chart.setOption.mock.calls
-      .map((call) => {
+      .map((call): AxisBounds | null => {
         const option = call[0] as { yAxis?: { type?: string; min?: number; max?: number } };
         return option.yAxis && option.yAxis.type === "value"
           ? { min: option.yAxis.min, max: option.yAxis.max }
@@ -112,11 +116,14 @@ function sectorMapResponse(body: Record<string, unknown>): Response {
 describe("PositionsTab", () => {
   beforeEach(() => {
     charts.length = 0;
+    // Double cast on purpose: `FakeChart` implements the three methods this
+    // suite reads, not the 60-plus-field `ECharts` instance `init` promises, and
+    // a single `as` between unrelated types is a compile error.
     vi.mocked(echarts.init).mockImplementation((() => {
       const chart: FakeChart = { setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn(), group: "" };
       charts.push(chart);
       return chart;
-    }) as typeof echarts.init);
+    }) as unknown as typeof echarts.init);
   });
 
   afterEach(() => {

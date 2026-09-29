@@ -137,7 +137,7 @@ function runLoad(type: "init" | "forward"): void {
       // here would let the wiring pass while the period it set was never used.
       period: h.period as never,
       symbol: { ticker: h.ticker, pricePrecision: 2, volumePrecision: 0 },
-      callback: (data, more) => {
+      callback: (data, _more) => {
         const bars = (Array.isArray(data) ? data : [data]) as KLineData[];
         // Captured *inside* the delivery: the 昨收 line's `calc` runs here, so a
         // base written after this call would not reach the line until some later

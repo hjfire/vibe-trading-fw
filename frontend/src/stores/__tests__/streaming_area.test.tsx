@@ -107,9 +107,14 @@ describe("StreamingArea — DOM stability during state transitions", () => {
   it("no insertBefore error during rapid reasoning→text→tools transition", () => {
     const errors: Error[] = [];
     const originalInsertBefore = Node.prototype.insertBefore;
-    Node.prototype.insertBefore = function (...args: Parameters<typeof originalInsertBefore>) {
+    // Written with the DOM's own generic signature: the record-args version
+    // widened `node` to `Node` and returned `Node`, which no longer satisfies
+    // `insertBefore<T>(node: T, child): T` now that this file is type-checked.
+    Node.prototype.insertBefore = function <T extends Node>(this: Node, node: T, child: Node | null): T {
       try {
-        return originalInsertBefore.apply(this, args);
+        // `.call` erases the generic; the DOM contract is that the inserted
+        // node comes back, which is exactly the `T` this stub must return.
+        return originalInsertBefore.call(this, node, child) as T;
       } catch (e) {
         errors.push(e as Error);
         throw e;

@@ -26,6 +26,14 @@ function run(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
   return {
     id: "auckland-scan",
     prompt: "pre-open scan of NZX names",
+    // Every required field is spelled out here, including the ones this page
+    // does not render. A `Partial<ScheduledRun>` spread cannot supply a key the
+    // base object never had, so the omitted ones used to leak out of the
+    // fixture as `undefined` at runtime while the signature promised `string`.
+    title: "",
+    source_type: "prompt",
+    playbook_slug: null,
+    end_at: null,
     schedule: "30 23 * * 1-5",
     next_run_at: 1_790_000_000_000,
     status: "pending",
@@ -38,9 +46,13 @@ function run(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
     timezone: "Pacific/Auckland",
     delivery_channel: null,
     delivery_target: null,
+    delivery_target_ref: null,
+    delivery_target_label: null,
     delivery_status: "none",
     delivery_error: null,
     delivery_updated_at: null,
+    delivery_attempts: 0,
+    delivery_provider_message_id: null,
     last_verdict: null,
     ...overrides,
   };

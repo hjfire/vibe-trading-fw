@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Compare } from "../Compare";
-import type { RunData } from "@/lib/api";
+import type { BacktestMetrics, RunData } from "@/lib/api";
 
 const apiMock = vi.hoisted(() => ({
   listRuns: vi.fn(),
@@ -19,6 +19,24 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+// The page under test reads `total_return` and nothing else, but `metrics` is a
+// closed record on the wire: a one-key literal is a fixture lying about the
+// shape the component would actually receive. The other numbers are fixed and
+// deliberately distinct from any `total_return` used below — the page renders
+// every metric as a percentage, so an `annual_return` that copies `total_return`
+// makes `getByText("30.00%")` match two rows, and it throws on multiple hits.
+function metrics(total_return: number): BacktestMetrics {
+  return {
+    final_value: 13_000,
+    total_return,
+    annual_return: 0.07,
+    max_drawdown: -0.12,
+    sharpe: 1.4,
+    win_rate: 0.55,
+    trade_count: 31,
+  };
 }
 
 const runs = [
@@ -50,13 +68,13 @@ describe("Compare page", () => {
     fireEvent.change(selectors[0], { target: { value: "new" } });
 
     await act(async () => {
-      newRequest.resolve({ status: "success", run_id: "new", metrics: { total_return: 0.3 } });
+      newRequest.resolve({ status: "success", run_id: "new", metrics: metrics(0.3) });
       await newRequest.promise;
     });
     expect(await screen.findByText("30.00%")).toBeInTheDocument();
 
     await act(async () => {
-      oldRequest.resolve({ status: "success", run_id: "old", metrics: { total_return: 0.1 } });
+      oldRequest.resolve({ status: "success", run_id: "old", metrics: metrics(0.1) });
       await oldRequest.promise;
     });
 
@@ -88,7 +106,7 @@ describe("Compare page", () => {
     expect(screen.queryByText("Select two runs to compare their metrics.")).not.toBeInTheDocument();
 
     await act(async () => {
-      newRequest.resolve({ status: "success", run_id: "new", metrics: { total_return: 0.2 } });
+      newRequest.resolve({ status: "success", run_id: "new", metrics: metrics(0.2) });
       await newRequest.promise;
     });
     expect(await screen.findByText("20.00%")).toBeInTheDocument();

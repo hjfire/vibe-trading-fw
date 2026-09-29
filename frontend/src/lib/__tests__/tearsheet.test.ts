@@ -34,7 +34,10 @@ describe("normalizeEquitySeries", () => {
   });
 
   it("drops rows with non-finite equity or missing time", () => {
-    const rows = [
+    // Typed as the loose CSV rows the normalizer is documented to accept: the
+    // row without `timestamp` is the point of the case, and an unannotated
+    // literal infers it as `timestamp?: undefined`, which is neither shape.
+    const rows: Array<Record<string, string>> = [
       { timestamp: "2024-01-01", equity: "100", drawdown: "0" },
       { timestamp: "2024-01-02", equity: "abc", drawdown: "0" },
       { timestamp: "2024-01-03", equity: "Infinity", drawdown: "0" },

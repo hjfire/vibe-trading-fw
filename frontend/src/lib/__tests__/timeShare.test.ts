@@ -16,7 +16,6 @@ import {
   averagePriceSeries,
   changeRatio,
   changeTone,
-  ensureTimeShareIndicator,
   fitBarSpace,
   fitOffsetRight,
   formatChangePct,
