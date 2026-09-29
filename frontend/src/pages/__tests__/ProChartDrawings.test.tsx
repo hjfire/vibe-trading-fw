@@ -1353,9 +1353,13 @@ describe("/pro-chart 画线导出、导入与分享链接", () => {
     await flush();
 
     fireEvent.click(screen.getByRole("button", { name: "复制画线分享链接" }));
-    await flush();
-    expect(screen.getByText(/剪贴板用不了/)).toBeTruthy();
-    const box = screen.getByLabelText("画线分享链接") as HTMLInputElement;
+    // The link goes through a real CompressionStream (gzipString), so the notice
+    // lands an unbounded number of event-loop ticks after the click. A fixed
+    // flush() drains it on a warm machine but not on CI's cold, loaded workers,
+    // where getByText then misses the text. Poll for it instead of assuming a
+    // tick budget.
+    expect(await screen.findByText(/剪贴板用不了/)).toBeTruthy();
+    const box = (await screen.findByLabelText("画线分享链接")) as HTMLInputElement;
     expect(box.readOnly).toBe(true);
     expect(box.value).toContain("?d=");
   });

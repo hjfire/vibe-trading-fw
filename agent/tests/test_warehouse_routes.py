@@ -305,7 +305,11 @@ def test_audit_surfaces_suspected_halts_without_calling_them_failures(wh: Path) 
 def test_audit_marks_a_hand_edited_partition_dirty(wh: Path) -> None:
     """The row-level checks are the page's only claim of evidence, so they run."""
     path = next(wh.rglob("data.parquet"))
-    frame = pd.read_parquet(path)
+    # Read through the store's own DuckDB reader, not pd.read_parquet: the
+    # parquet engine is a project dependency, and pyarrow/fastparquet are not
+    # guaranteed on every interpreter CI pins (they lag new Python versions).
+    # Every other test in this module reads partitions via `store` too.
+    frame = store._read_partition(path)
     frame.loc[frame["symbol"] == _PEER, "close"] = 0.0
     store._write_partition(path, frame, interval="1D", root=wh)
 
