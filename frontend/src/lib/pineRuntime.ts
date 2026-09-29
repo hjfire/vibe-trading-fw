@@ -50,6 +50,15 @@ const HIST_CAP = 40000;
 const OP_LIMIT = 2.5e7;
 const LOOP_CAP = 5000;
 
+/**
+ * Thrown by `break`/`continue` and caught by the nearest enclosing loop. It is
+ * a control signal, not an error, so it must never reach the per-bar catch in
+ * runBody (which would turn it into an abort).
+ */
+class ControlFlow {
+  constructor(readonly kind: "break" | "continue") {}
+}
+
 /** Sources selectable through `input.source()`. */
 const SOURCE_KEYS = ["close", "open", "high", "low", "volume", "hl2", "hlc3", "ohlc4"];
 
@@ -300,6 +309,11 @@ export class PineRuntime {
       for (const s of body) this.exec(s);
       return true;
     } catch (err) {
+      if (err instanceof ControlFlow) {
+        // A break/continue that escaped every loop is a script bug, not a
+        // feature gap; report it plainly instead of the generic abort text.
+        err = new PineError(`${err.kind} 只能用在 for 循环内部`);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (!this.warnSeen.has(msg)) {
         this.warns.unshift(`第 ${this.bi + 1} 根K线处中断：${msg}`);
@@ -396,6 +410,10 @@ export class PineRuntime {
       case "forin":
         this.execForIn(s);
         return;
+      case "break":
+        throw new ControlFlow("break");
+      case "continue":
+        throw new ControlFlow("continue");
     }
   }
 
@@ -419,7 +437,19 @@ export class PineRuntime {
           break;
         }
         (this.env.get(key) as Series).cur = k;
-        for (const inner of s.body) this.exec(inner);
+        let stop = false;
+        for (const inner of s.body) {
+          try {
+            this.exec(inner);
+          } catch (e) {
+            if (e instanceof ControlFlow) {
+              stop = e.kind === "break";
+              break;
+            }
+            throw e;
+          }
+        }
+        if (stop) break;
       }
     } finally {
       if (saved) this.env.set(key, saved);
@@ -445,7 +475,19 @@ export class PineRuntime {
           break;
         }
         (this.env.get(key) as Series).cur = el;
-        for (const inner of s.body) this.exec(inner);
+        let stop = false;
+        for (const inner of s.body) {
+          try {
+            this.exec(inner);
+          } catch (e) {
+            if (e instanceof ControlFlow) {
+              stop = e.kind === "break";
+              break;
+            }
+            throw e;
+          }
+        }
+        if (stop) break;
       }
     } finally {
       if (saved) this.env.set(key, saved);

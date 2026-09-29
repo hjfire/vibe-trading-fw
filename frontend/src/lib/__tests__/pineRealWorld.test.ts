@@ -469,3 +469,49 @@ describe("nested ta.* call sites", () => {
     expect(rsi.every((v) => v >= 0 && v <= 100)).toBe(true);
   });
 });
+
+/**
+ * Phase 1b cheap corpus blockers: `time()` (bar timestamp + session form),
+ * `log.*` console no-ops, and `break`/`continue` loop control. Each of these
+ * flipped a real downloaded script from an abort to a clean run.
+ */
+describe("time(), log.*, and loop control", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("time() returns the current bar timestamp and feeds date parts", () => {
+    const a = run(head + "plot(time(), \"t\")\nplot(dayofmonth(time()), \"dom\")");
+    // Bars are seeded at 1700000000000 + i*86400000 (see makeBars).
+    expect(line(a, "t")!.values[0]).toBe(1700000000000);
+    expect(line(a, "t")!.values[5]).toBe(1700000000000 + 5 * 86400000);
+    // A full 24h session always contains the bar; an empty one never does.
+    const s = run(
+      head +
+        "plot(nz(time(timeframe.period, \"0000-2400\")), \"in\")\n" +
+        "plot(nz(time(timeframe.period, \"0000-0000\")), \"out\")",
+    );
+    expect(line(s, "in")!.values[0]).toBe(1700000000000);
+    expect(line(s, "out")!.values[0]).toBe(0); // na → nz → 0, so the bar is out of session
+  });
+
+  it("treats log.* console calls as value-neutral no-ops", () => {
+    const a = run(
+      head +
+        'log.info("hi")\n' +
+        "log.debug(str.tostring(close))\n" +
+        'log.warning("w")\n' +
+        'log.error("e")\n' +
+        'plot(close, "c")',
+    );
+    expect(line(a, "c")!.values[10]).toBeCloseTo(BARS[10].close, 6);
+  });
+
+  it("honours break and continue inside for loops", () => {
+    // break at i==5 → sum of 0..4 = 10; the loop stops before 5.
+    const b = run(head + "s = 0.0\nfor i = 0 to 9\n    if i == 5\n        break\n    s += i\nplot(s, \"s\")");
+    expect(line(b, "s")!.values[10]).toBe(10);
+    // continue skips even i → counts the five odd values 1,3,5,7,9.
+    const c = run(head + "cnt = 0\nfor i = 0 to 9\n    if i % 2 == 0\n        continue\n    cnt += 1\nplot(cnt, \"c\")");
+    expect(line(c, "c")!.values[10]).toBe(5);
+  });
+});

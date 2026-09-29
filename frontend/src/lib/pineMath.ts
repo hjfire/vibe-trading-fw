@@ -67,6 +67,37 @@ function datePart(args: Arg[], c: BuiltinCtx, pick: (d: Date) => number): number
   return pick(new Date(t));
 }
 
+/** "HHMM"/"HMM" → minutes since midnight (2400 is allowed and means 1440). */
+function toMin(hhmm: string): number {
+  const s = hhmm.trim().padStart(4, "0");
+  return Number(s.slice(0, s.length - 2)) * 60 + Number(s.slice(-2));
+}
+
+/**
+ * Whether a bar timestamp falls inside a Pine session string such as
+ * "1000-1300,1600-2000,2400-0700:23456". Day digits follow Pine's convention
+ * (1=Sunday … 7=Saturday), so ":23456" is Monday–Friday. Matching is done in
+ * UTC and the optional timezone argument is not applied — an accepted
+ * approximation because session output only drives background shading here,
+ * which the renderer does not draw.
+ */
+function inSession(t: number, session: string): boolean {
+  if (Number.isNaN(t) || !Number.isFinite(t)) return false;
+  const d = new Date(t);
+  const dow = d.getUTCDay() + 1;
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+  for (const part of session.split(",")) {
+    const [range, dayPart] = part.split(":");
+    if (dayPart && !dayPart.includes(String(dow))) continue;
+    const m = /^(\d{3,4})-(\d{3,4})$/.exec(range.trim());
+    if (!m) continue;
+    const a = toMin(m[1]);
+    const b = toMin(m[2]);
+    if (a <= b ? mins >= a && mins < b : mins >= a || mins < b) return true;
+  }
+  return false;
+}
+
 export const MISC: Record<string, Builtin> = {
   /* ------------------------------------------------------------- math.* */
   "math.abs": (args, c) => Math.abs(n(args, c, 0)),
@@ -332,6 +363,23 @@ export const MISC: Record<string, Builtin> = {
     const s = Math.trunc(numArg(args, c, 5, 0, "second"));
     return Date.UTC(y, mo, d, h, mi, s);
   },
+  // `time()` and `time(timeframe)` return the current bar's timestamp; the
+  // session form `time(timeframe, session[, tz])` returns that timestamp when
+  // the bar is in-session and na otherwise (matches TradingView's contract).
+  time: (args, c) => {
+    const t = c.bars.time[c.bi] ?? NA;
+    if (args.length <= 1) return t;
+    const session = text(args, c, 1, "");
+    if (!session) return t;
+    return inSession(t, session) ? t : NA;
+  },
+  // Console logging has no effect on plotted values; accept the call and do
+  // nothing so a script that debugs with log.info() is not rejected.
+  "log.info": () => sentinel("void"),
+  "log.warning": () => sentinel("void"),
+  "log.error": () => sentinel("void"),
+  "log.debug": () => sentinel("void"),
+  "log.none": () => sentinel("void"),
   "timeframe.in_seconds": (args, c) => {
     const tf = text(args, c, 0, "D");
     const m = /^(\d+)([MWDH])?$/.exec(tf.toUpperCase());

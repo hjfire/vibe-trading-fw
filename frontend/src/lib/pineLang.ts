@@ -199,6 +199,8 @@ export type Stmt =
   | { k: "if"; arms: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[] | null; line: number }
   | { k: "for"; varName: string; from: Expr; to: Expr; step: Expr | null; body: Stmt[]; line: number }
   | { k: "forin"; varName: string; source: Expr; body: Stmt[]; line: number }
+  | { k: "break"; line: number }
+  | { k: "continue"; line: number }
   | {
       k: "fn";
       name: string;
@@ -426,6 +428,15 @@ export class PineParser {
       throw new PineError(`第 ${head.line} 行："else" 必须紧跟在 "if" 块之后`);
     }
     if (t.kind === "ident" && t.value === "for") return this.parseFor(indent);
+    // Loop-control statements. They carry no expression; the runtime signals a
+    // break/continue by throwing a control-flow marker that execFor catches.
+    if (t.kind === "ident" && (t.value === "break" || t.value === "continue")) {
+      const line = t.line;
+      const isBreak = t.value === "break";
+      this.next();
+      this.endOfStmt();
+      return isBreak ? { k: "break", line } : { k: "continue", line };
+    }
 
     // `var` / type annotations are optional prefixes of a declaration.
     let persist = false;
