@@ -425,3 +425,90 @@ describe("bitwise operators (缺陷 K — & | << >> ~, fft.pine radix-2)", () =>
     expect(lastPlotted(src)).toBe(1); // 001 -> 100
   });
 });
+
+describe("matrix.* namespace (缺陷 L — new/get/set/rows/columns/copy/mult, mlp.pine)", () => {
+  const H6 = "//@version=6\nindicator(\"t\")\n";
+  const one = (body: string) => lastPlotted(`${H6}${body}`);
+
+  it("new(rows, cols, init) fills every cell; rows/columns read the shape", () => {
+    const src =
+      `m = matrix.new<float>(2, 3, 5.0)\n` +
+      `plot((matrix.rows(m) == 2 and matrix.columns(m) == 3 and matrix.get(m, 1, 2) == 5) ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("new(rows, cols) with no initial leaves cells na", () => {
+    const src =
+      `m = matrix.new<float>(2, 2)\n` +
+      `plot(na(matrix.get(m, 0, 0)) ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("set/get round-trips a cell in place", () => {
+    const src =
+      `m = matrix.new<float>(2, 2, 0.0)\n` +
+      `matrix.set(m, 1, 0, 7)\n` +
+      `plot(matrix.get(m, 1, 0) == 7 ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("mult is the exact 2x2 product [[1,2],[3,4]] x [[5,6],[7,8]] = [[19,22],[43,50]]", () => {
+    const src =
+      `a = matrix.new<float>(2, 2, 0.0)\n` +
+      `matrix.set(a, 0, 0, 1)\nmatrix.set(a, 0, 1, 2)\nmatrix.set(a, 1, 0, 3)\nmatrix.set(a, 1, 1, 4)\n` +
+      `b = matrix.new<float>(2, 2, 0.0)\n` +
+      `matrix.set(b, 0, 0, 5)\nmatrix.set(b, 0, 1, 6)\nmatrix.set(b, 1, 0, 7)\nmatrix.set(b, 1, 1, 8)\n` +
+      `r = matrix.mult(a, b)\n` +
+      `plot((matrix.get(r, 0, 0) == 19 and matrix.get(r, 0, 1) == 22 and matrix.get(r, 1, 0) == 43 and matrix.get(r, 1, 1) == 50) ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("mult of a 1xK row vector by a KxM matrix gives 1xM (forward-pass shape)", () => {
+    // x = [1,2,3] (1x3) times W (3x2) = [[1,0],[0,1],[1,1]] -> [1*1+2*0+3*1, 1*0+2*1+3*1] = [4, 5].
+    const src =
+      `x = matrix.new<float>(1, 3, 0.0)\n` +
+      `matrix.set(x, 0, 0, 1)\nmatrix.set(x, 0, 1, 2)\nmatrix.set(x, 0, 2, 3)\n` +
+      `w = matrix.new<float>(3, 2, 0.0)\n` +
+      `matrix.set(w, 0, 0, 1)\nmatrix.set(w, 1, 1, 1)\nmatrix.set(w, 2, 0, 1)\nmatrix.set(w, 2, 1, 1)\n` +
+      `z = matrix.mult(x, w)\n` +
+      `plot((matrix.rows(z) == 1 and matrix.columns(z) == 2 and matrix.get(z, 0, 0) == 4 and matrix.get(z, 0, 1) == 5) ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("copy is an independent snapshot (mutating the copy leaves the source)", () => {
+    const src =
+      `m = matrix.new<float>(1, 1, 1.0)\n` +
+      `c = matrix.copy(m)\n` +
+      `matrix.set(c, 0, 0, 9)\n` +
+      `plot((matrix.get(m, 0, 0) == 1 and matrix.get(c, 0, 0) == 9) ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("UDT record with a matrix field: default-name capture, .new(), field := and read", () => {
+    // `matrix<float> m = na` — the field name is `m`, not the trailing `na`.
+    const src =
+      `type Holder\n` +
+      `    matrix<float> m = na\n` +
+      `var Holder h = na\n` +
+      `h := Holder.new()\n` +
+      `h.m := matrix.new<float>(1, 2, 3.0)\n` +
+      `plot(matrix.get(h.m, 0, 1) == 3 ? 1 : 0)\n`;
+    expect(one(src)).toBe(1);
+  });
+
+  it("method(Type this) defines a callable and mutates nothing but its result", () => {
+    // Receiver-sugar head (`method doubleIt(matrix<float> this) =>`) is called
+    // by bare name; the loop rebuilds a doubled matrix.
+    const src =
+      `${H6}method doubleIt(matrix<float> this) =>\n` +
+      `    r = matrix.new<float>(matrix.rows(this), matrix.columns(this))\n` +
+      `    for i = 0 to matrix.rows(this) - 1\n` +
+      `        for j = 0 to matrix.columns(this) - 1\n` +
+      `            matrix.set(r, i, j, matrix.get(this, i, j) * 2)\n` +
+      `    r\n` +
+      `a = matrix.new<float>(1, 2, 5.0)\n` +
+      `b = doubleIt(a)\n` +
+      `plot((matrix.get(b, 0, 0) == 10 and matrix.get(b, 0, 1) == 10 and matrix.get(a, 0, 0) == 5) ? 1 : 0)\n`;
+    expect(lastPlotted(src)).toBe(1);
+  });
+});

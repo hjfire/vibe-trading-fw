@@ -76,6 +76,19 @@ const CONTINUE_START = new Set([
   "+", "-", "*", "/", "%", "^", "?", ":", "<", ">", "<=", ">=", "==", "!=", "<>",
   "and", "or", "to", "by",
 ]);
+/**
+ * Block-header keywords. When a physical line BEGINS with one of these, its
+ * indented successor is the block BODY, not a wrapped operand of the header
+ * condition — so an arithmetic-leading next line (`-1.0`, `+x`, …) must NOT be
+ * folded into the header. This is the one case the bidirectional implicit-wrap
+ * rule over-merges: `if cond` / `else` … followed by a negative-literal body.
+ * A logical/relational leading op (`and volume > 0`) is still allowed to fold,
+ * because a block body never begins with `and`/`or`/`<`, only a wrapped
+ * condition does.
+ */
+const BLOCK_HEADER_WORDS = new Set(["if", "else", "for", "while", "switch"]);
+/** Operator-starts that are far more likely a block body than a condition wrap. */
+const ARITH_START = new Set(["+", "-", "*", "/", "%"]);
 
 export function tokenizePine(src: string): Tok[] {
   const out: Tok[] = [];
@@ -119,7 +132,18 @@ export function tokenizePine(src: string): Tok[] {
       const last = out[out.length - 1];
       const trailingContinues = !!last && (last.kind === "op" || last.kind === "ident") &&
         CONTINUE_END.has(last.value);
-      const leadingContinues = CONTINUE_START.has(nextLineStartOperator(i + 1));
+      const nextOp = nextLineStartOperator(i + 1);
+      let leadingContinues = CONTINUE_START.has(nextOp);
+      if (leadingContinues) {
+        // A header line's deeper successor is a block body, not a wrap, when it
+        // opens with an arithmetic operator. Find this line's first token.
+        let lineStart = "";
+        for (let p = out.length - 1; p >= 0; p--) {
+          if (out[p].kind === "nl") break;
+          lineStart = out[p].value;
+        }
+        if (BLOCK_HEADER_WORDS.has(lineStart) && ARITH_START.has(nextOp)) leadingContinues = false;
+      }
       if (depth === 0 && !trailingContinues && !leadingContinues) push("nl", "\n", 0);
       line++;
       i++;
@@ -295,8 +319,10 @@ const KEYWORDS = new Set(["if", "else", "for", "to", "by", "while", "switch", "v
  */
 const SOFT_KEYWORDS = new Set(["type"]);
 
-/** Prefixes that only introduce a user-defined function. */
-const FN_KEYWORDS = new Set(["def", "function"]);
+/** Prefixes that only introduce a user-defined function. `method` is Pine v6's
+ *  receiver-sugar keyword: `method name(Type this, …) =>` parses as a plain
+ *  function whose first parameter is the receiver, so it shares this prefix. */
+const FN_KEYWORDS = new Set(["def", "function", "method"]);
 
 export class PineParser {
   private pos = 0;
@@ -553,6 +579,21 @@ export class PineParser {
     let persist = persistIn;
     for (;;) {
       this.dropTypeWords();
+      // A leading user-defined type name in declaration position (`var matrices
+      // w = na`) is an annotation the built-in dropTypeWords pass cannot see
+      // (UDT names are not in TYPE_WORDS). Drop one such leading identifier when
+      // it introduces a `Type name = …` declaration, mirroring the typed-parameter
+      // handling, so `w` (not `matrices`) becomes the declared variable. The `=`
+      // guard is essential: Pine lexes `and`/`or`/`not` as identifiers, so a bare
+      // `ident ident` could be `annualize and …` (an expression), not an annotation.
+      if (
+        this.peek().kind === "ident" &&
+        this.tk[this.pos + 1]?.kind === "ident" &&
+        this.tk[this.pos + 2]?.kind === "op" &&
+        this.tk[this.pos + 2]?.value === "="
+      ) {
+        this.next();
+      }
       const cur = this.peek();
       const line = cur.line;
       if (cur.kind === "op" && cur.value === "[" && this.looksLikeTupleDecl()) {
@@ -816,13 +857,18 @@ export class PineParser {
     for (;;) {
       const first = this.skipNl();
       if (first.kind === "eof" || first.col <= indent) break;
-      // Consume the whole field line; the LAST identifier is the field name
-      // (`array<float> f1` → f1, `float f2` → f2). Generics never reach here.
+      // Consume the whole field line; the field NAME is the LAST identifier
+      // BEFORE an optional `= default` (`array<float> f1` → f1, `matrix<float>
+      // l0 = na` → l0, not the default expression's trailing `na`). Generics
+      // like `<float>` contribute their element type word, which the name-before
+      // `-equals` rule still correctly ignores because `l0` follows it.
       let lastIdent = "";
+      let seenDefault = false;
       for (;;) {
         const tk = this.peek();
         if (tk.kind === "nl" || tk.kind === "eof") break;
-        if (tk.kind === "ident") lastIdent = tk.value;
+        if (tk.kind === "op" && (tk.value === "=" || tk.value === ":=")) seenDefault = true;
+        if (tk.kind === "ident" && !seenDefault) lastIdent = tk.value;
         this.next();
       }
       if (lastIdent) fieldNames.push(lastIdent);

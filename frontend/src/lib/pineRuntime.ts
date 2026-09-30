@@ -23,6 +23,7 @@ import { TA } from "./pineTa";
 import { MISC, assertUnsupported, isDecorativeName, resolveBareConstant } from "./pineMath";
 import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
 import { MAP_CTOR, MAP_OPS } from "./pineMap";
+import { MATRIX_CTOR, MATRIX_OPS } from "./pineMatrix";
 import { OrderSim, estimateTick } from "./pineOrders";
 import { inferTimeframeMs, resampleUp, tfToMs } from "./pineResample";
 import {
@@ -469,6 +470,14 @@ export class PineRuntime {
         const value = this.val(s.value);
         this.target = prev;
         this.lastValue = value;
+        // `obj.field := v` for a UDT record mutates the record **in place**. Pine
+        // passes records by reference, so the write must be visible through every
+        // alias (the caller's record, a reassignment target, a method receiver) —
+        // a standalone `obj.field` slot would only be readable under that exact
+        // dotted name and break once the record is passed to another function.
+        // A dotted name whose base is not a record keeps the legacy slot write.
+        const dot = s.name.indexOf(".");
+        if (dot > 0 && this.setUdtField(s.name.slice(0, dot), s.name.slice(dot + 1), value)) return;
         this.write(this.vkey(s.name), value, false);
         return;
       }
@@ -650,6 +659,24 @@ export class PineRuntime {
       }
     }
     return [sentinel(`udt:${typeName}`), ...values];
+  }
+
+  /**
+   * `obj.field := v` for a UDT record: locate the base's record (a `V[]` tagged
+   * `@udt:<type>`) and write the field slot in place. Returns true when a record
+   * field was mutated (the caller then skips the standalone-slot write), false
+   * when the base is not a record so the assignment is a normal variable store.
+   */
+  private setUdtField(base: string, field: string, value: V): boolean {
+    if (!this.lookup(base)) return false;
+    const rec = this.readSeries(base);
+    if (!Array.isArray(rec) || typeof rec[0] !== "string" || !rec[0].startsWith("@udt:")) return false;
+    const fields = this.types.get(rec[0].slice("@udt:".length));
+    if (!fields) return false;
+    const idx = fields.indexOf(field);
+    if (idx < 0) return false;
+    (rec as V[])[idx + 1] = value;
+    return true;
   }
 
   private callFn(fn: FnStmt, args: Arg[], cid: number): V {
@@ -1220,6 +1247,10 @@ export class PineRuntime {
     // Free-form map call `map.put(m, k, v)`; the target map (an interleaved
     // `V[]`) comes first. Method-form is intentionally not routed (see pineMap).
     if (name.startsWith("map.")) return this.runMap(name.slice("map.".length), args);
+        // Free-form matrix call `matrix.set(m, r, c, v)`; the target matrix (an
+        // array-of-row `V[]`) comes first. Method-form is intentionally not routed
+        // (see pineMatrix).
+        if (name.startsWith("matrix.")) return this.runMatrix(name.slice("matrix.".length), args);
     const misc = MISC[name];
     if (misc) return misc(args, this.ctx);
     if (!name.includes(".")) {
@@ -1297,6 +1328,26 @@ export class PineRuntime {
     if (!Array.isArray(first)) {
       throw new PineError(`map.${method}() 的第一个参数必须是 map 变量`);
     }
+    return fn(first, vals.slice(1), this.ctx);
+  }
+
+  /**
+   * Free-form `matrix.<op>(m, …)` only: the target matrix is the first value (an
+   * array-of-row `V[]`); a constructor (`matrix.new`/`matrix.new<float>`, generics
+   * already stripped by the parser) takes no target. `matrix.mult(a, b)` passes
+   * both matrices positionally — `a` is the target, `b` the first param.
+   */
+  private runMatrix(method: string, args: Arg[]): V {
+    const vals = args.map((a) => this.val(a.value));
+    if (MATRIX_CTOR[method]) return MATRIX_CTOR[method](vals);
+    const fn = MATRIX_OPS[method];
+    if (!fn) {
+      throw new PineError(`暂不支持 matrix.${method}()。可用：${Object.keys(MATRIX_OPS).join(" ")}`);
+    }
+    const first = vals[0];
+    // An uninitialized matrix field (`matrix<float> l9 = na`) is na, not a matrix
+    // value; return na so the caller's math propagates rather than aborting.
+    if (!Array.isArray(first)) return NA;
     return fn(first, vals.slice(1), this.ctx);
   }
 

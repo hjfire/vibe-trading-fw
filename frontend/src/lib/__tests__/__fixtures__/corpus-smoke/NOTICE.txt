@@ -134,10 +134,10 @@ on the comma separator and are pinned byte-for-byte (SHA-checked) as a gate:
     v6/oscillators/smi.pine          (commodity channel, comma decls)
     v6/numerics/jerk.pine            (comma-joined `:=` reassignments)
 
-The three remaining v6 compile errors are NOT pinned. Once the array.join and
-bitwise gaps were closed (defects J and K), each residual is either a broken
-source TradingView also rejects, or a large deferred namespace — never a
-contorted parser bending to make one file green:
+The two remaining v6 compile errors are NOT pinned. Once the array.join,
+bitwise, and matrix gaps were closed (defects J, K and L), each residual is a
+broken source TradingView also rejects — never a contorted parser bending to
+make one file green:
 
   - `apo.pine` omits a comma between two `var` decls on one line (`= na var
     float ...`) — invalid Pine, so it stays honestly red.
@@ -148,10 +148,10 @@ contorted parser bending to make one file green:
     exists in Pine Script"), and none of the other 619 corpus scripts writes
     it — so fft is a broken source TradingView also rejects, left red rather
     than bending the parser to accept non-Pine syntax.
-  - `mlp.pine` IS valid Pine (untyped `compressToRange(float x, ...) =>` heads)
-    but needs the entire `matrix.*` namespace (new/get/set/rows/columns/copy/
-    mult) plus a `type matrices` UDT — a genuine but large singleton gap whose
-    real fix is a new matrix module, deferred to its own increment.
+
+`mlp.pine` was the third residual and is now OK (defect L): it is valid Pine and
+only lacked the `matrix.*` namespace plus a `type matrices` UDT with matrix
+fields; both are implemented and reconciled, lifting v6 from 97.6% to 97.8%.
 
 defect K (v6 bitwise operators) — `& | << >> ~` were unrecognised characters
 (`无法识别的字符 "|"`). They are valid Pine v6 operators, so the lexer now
@@ -166,6 +166,38 @@ is unconfirmed, so inventing it would be speculation. pineBuiltins.test.ts pins
 exact integer results for every operator plus two precedence discriminators and
 a radix-2 bitReverse loop — the honest reconciliation, since the only corpus
 file that uses bitwise (fft) is itself broken for a different reason.
+
+defect L (v6 matrix namespace + UDT integration) — `mlp.pine` (a self-training
+perceptron) is the only corpus user of `matrix.*` and of a UDT holding matrix
+fields. Four real gaps stood between it and `ok`, all fixed and reconciled:
+
+  - A new `pineMatrix.ts` (7 ops: `new`/`get`/`set`/`rows`/`columns`/`copy`/
+    `mult`) routes free-form like `map.*`. A matrix reuses the `V[]` value type
+    as an array-of-row-`V[]`s, so `readSeries` hands the live array back by
+    reference and `matrix.set` mutates in place across bars and aliases.
+  - `obj.field := v` on a UDT record used to write a standalone dotted slot that
+    only read back under that exact name; the record's own field stayed `na`, so
+    a matrix passed to another function vanished. Now it mutates the `@udt:`
+    record slot in place (Pine passes records by reference).
+  - `type` field lines captured the LAST identifier as the name, so a defaulted
+    field `matrix<float> l0 = na` got the name `na`. Fixed to the last identifier
+    BEFORE `=`.
+  - A UDT name in declaration position (`var matrices w = na`) is not a built-in
+    TYPE_WORD, so `w` was trailing junk; and v6 `method name(Type this) =>` heads
+    were unrecognised. Both handled — and the `Type name = …` drop is guarded by
+    the following `=` so it never eats an operator-keyword line like
+    `annualize and …` (Pine lexes `and`/`or`/`not` as identifiers).
+  - mlp's final blocker was the bidirectional line-continuation rule folding a
+    `-1.0` ELSE-branch body into the `if` condition (`x <= -20.0` newline `-1.0`
+    merged into one expression). Now a block-header line (`if`/`else`/`for`/
+    `while`/`switch`) whose next line opens with an ARITHMETIC operator does not
+    merge — the successor is a block body, not a wrapped operand. Logical/relational
+    wraps (`and volume > 0`) and assignment wraps (`q = 2` / `+ 3`) are untouched.
+
+pineBuiltins.test.ts pins exact 2x2 and 1xK·KxM products, dimension reads, na
+default cells, in-place set/get, copy independence, the record-by-reference field
+write, and a `method`-head transform — the numeric reconciliation, since the
+acceptance bar (mlp → ok) only proves it runs, not that the math is right.
 
 Two more real v6 built-in gaps (defects H and I) then cleared six runtime
 aborts, lifting v6 from 96.1% to 97.6% with everget held at 88.6%:
