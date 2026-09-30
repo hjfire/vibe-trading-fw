@@ -17,7 +17,13 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", ".."); // frontend/
-const OUT_DIR = join(ROOT, "src", "lib", "__tests__", "__fixtures__", "corpus");
+// Default target is the v3/v4 everget corpus; a second source (e.g. the v6
+// mihakralj corpus) is fetched by pointing CORPUS_MANIFEST at its manifest and
+// CORPUS_OUT at a sibling fixtures dir, so the bulk measurements stay separable.
+const MANIFEST_NAME = process.env.CORPUS_MANIFEST || "pine-community.manifest.json";
+const OUT_DIR = process.env.CORPUS_OUT
+  ? resolve(ROOT, process.env.CORPUS_OUT)
+  : join(ROOT, "src", "lib", "__tests__", "__fixtures__", "corpus");
 const CONCURRENCY = 8;
 const RAW_BASE = "https://raw.githubusercontent.com";
 
@@ -53,7 +59,7 @@ async function download(repo, branch, path) {
 
 async function main() {
   const manifest = JSON.parse(
-    (await readFile(join(HERE, "pine-community.manifest.json"), "utf8")).replace(/^\uFEFF/, ""),
+    (await readFile(join(HERE, MANIFEST_NAME), "utf8")).replace(/^\uFEFF/, ""),
   );
   const { repo, branch, files } = manifest;
   console.log(`Fetching ${files.length} files from ${repo}@${branch} ...`);

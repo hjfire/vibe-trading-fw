@@ -24,7 +24,8 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 41-file slice covers the categories
+(it is external, changeful content). This 47-file slice (41 everget v3/v4 + 6
+from the v6 corpus below) covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
 src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
@@ -89,6 +90,45 @@ which TradingView also rejects, or are a plotting-less unit-test harness that
 needs array methods beyond the current subset (`array.join`). Leaving them red
 is the honest outcome — implementing a builtin only to watch a broken script
 emit a plausible-but-wrong number would be worse than an accurate error.
+
+Second source: Pine v6 (mihakralj)
+----------------------------------
+The everget set is all v3/v4, so to surface modern-syntax gaps a second,
+local-only corpus was added: 410 standalone v6 indicators copied VERBATIM from
+
+    mihakralj/pinescript   (branch: main)
+
+Author: mihakralj, MIT-licensed (per-file MIT header preserved); fetched by the
+same script via CORPUS_MANIFEST=pine-community-v6.manifest.json into
+__fixtures__/corpus-v6/. Measured by pineCorpusReport with PINE_CORPUS_DIR.
+The engine passes 96.1% of them (394/410) — v6 typed function signatures, array
+<T> generics, switch, and request.security already work.
+
+The biggest v6 gap closed (defect G) is the comma STATEMENT SEPARATOR: Pine
+lets several statements share one line when separated by a top-level comma
+(`sum1 += a, sum2 += b`). The parser's `=` declaration form already handled
+this, but compound (`+= -=`), `:=` reassignment, and bare call statements did
+not — `endOfStmt` rejected the trailing comma as "extra content". Unifying all
+assignment/expression forms in pineLang.parseAssignOrExprList flipped 15 v6
+scripts from compile_error to ok (92.4% -> 96.1%) with everget unchanged at
+88.6% (everget has zero compile_errors, so no passing line ever reached that
+comma path — the regression is provably contained). These six v6 scripts lean
+on the comma separator and are pinned byte-for-byte (SHA-checked) as a gate:
+
+    v6/statistics/correlation.pine   (var + `+=`/`-=` accumulators, request.security)
+    v6/statistics/beta.pine          (comma-joined compound accumulators)
+    v6/statistics/zscore.pine        (comma-joined var decls)
+    v6/oscillators/trix.pine         (triple-EMA, comma `var` list)
+    v6/oscillators/smi.pine          (commodity channel, comma decls)
+    v6/numerics/jerk.pine            (comma-joined `:=` reassignments)
+
+The three remaining v6 compile errors are NOT pinned and are NOT the comma gap:
+`apo.pine` omits a comma between two `var` decls on one line (`= na var float
+...`) — invalid Pine that TradingView also rejects, so it stays honestly red;
+`mlp.pine` puts a USER-DEFINED type (`matrices`) in declaration type position
+and leans on `matrix.*`; `fft.pine` uses v6 bitwise operators (`<< >> | &`).
+Those last two are genuine but singleton v6 feature gaps, deferred to a later
+increment rather than contorted to make one file green.
 
 The remaining `no_output` scripts are likewise NOT pinned, and not because the
 currently-unsupported drawing is trivially fixable: the highlighters only emit

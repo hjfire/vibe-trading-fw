@@ -19,8 +19,11 @@ import type { KLineData } from "klinecharts";
  * constructs it uses, so the output doubles as a prioritised engine backlog.
  */
 
-const CORPUS_DIR = resolve(process.cwd(), "src/lib/__tests__/__fixtures__/corpus");
-const MANIFEST = resolve(process.cwd(), "scripts/corpus/pine-community.manifest.json");
+// Default measures the v3/v4 everget corpus; PINE_CORPUS_DIR / PINE_CORPUS_MANIFEST
+// repoint it at a second local corpus (e.g. the v6 mihakralj set) so a fresh
+// source's failure profile can be measured without disturbing the baseline.
+const CORPUS_DIR = resolve(process.cwd(), process.env.PINE_CORPUS_DIR || "src/lib/__tests__/__fixtures__/corpus");
+const MANIFEST = resolve(process.cwd(), process.env.PINE_CORPUS_MANIFEST || "scripts/corpus/pine-community.manifest.json");
 
 function makeBars(n: number): KLineData[] {
   let seed = 11;

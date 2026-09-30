@@ -524,84 +524,77 @@ export class PineParser {
       return isBreak ? { k: "break", line } : { k: "continue", line };
     }
 
-    // `var` / type annotations are optional prefixes of a declaration.
+    // `var` / type prefixes and the whole assignment/expression statement
+    // family accept Pine's comma statement separator (`a = 1, b += 2, c := 3`),
+    // so an entire same-line statement list is parsed here and returned as an
+    // array when it has more than one segment.
     let persist = false;
-    if (t.kind === "ident" && t.value === "var") {
-      this.next();
-      persist = true;
-      this.dropTypeWords();
-    } else {
-      this.dropTypeWords();
-    }
+    if (this.isIdent("var")) { this.next(); persist = true; }
+    return this.parseAssignOrExprList(persist);
+  }
 
-    const cur = this.peek();
-    // Tuple declaration: `[a, b] = expr`. A bare `[a, b]` is an array literal
-    // instead — that is how a function body returns two values in Pine v6.
-    if (cur.kind === "op" && cur.value === "[" && this.looksLikeTupleDecl()) {
+  /**
+   * Parse one or more assignment/expression statements sharing a single logical
+   * line separated by top-level commas — Pine's v5/v6 statement separator
+   * (`sum1 -= a, sum2 -= b`). Commas inside an expression (call args, list or
+   * tuple literals) are consumed by parseExpr and never reach the loop tail, so
+   * only genuine same-line statement continuations drive it. The `=`/tuple forms
+   * were already comma-aware; this unifies the compound / `:=` / bare-expression
+   * forms with them.
+   */
+  private parseAssignOrExprList(persistIn: boolean): Stmt | Stmt[] {
+    const out: Stmt[] = [];
+    let persist = persistIn;
+    for (;;) {
+      this.dropTypeWords();
+      const cur = this.peek();
       const line = cur.line;
-      this.next();
-      const names: string[] = [];
-      do {
-        const n = this.peek();
-        if (n.kind !== "ident") throw new PineError(`第 ${n.line} 行：解构赋值只支持变量名`);
-        // A trailing `_` placeholder (`[_, b] = ...`) is still a real binding.
+      if (cur.kind === "op" && cur.value === "[" && this.looksLikeTupleDecl()) {
+        // Tuple declaration `[a, b] = expr`; a bare `[a, b]` is an array literal.
         this.next();
-        names.push(n.value);
-      } while (this.eatOp(","));
-      this.expectOp("]");
-      this.expectOp("=");
-      const value = this.parseExpr();
-      this.endOfStmt();
-      return { k: "decl", names, value, persist, line };
-    }
-
-    if (cur.kind === "ident") {
-      const after = this.tk[this.pos + 1];
-      if (after?.kind === "op" && after.value === "=") {
-        // `a = 1` and the comma-parallel form `var a = 0, var b = 0.0, ...`.
-        const decls: Stmt[] = [];
-        for (;;) {
-          const nm = this.peek();
-          if (nm.kind !== "ident") break;
-          this.next(); // name
+        const names: string[] = [];
+        do {
+          const n = this.peek();
+          if (n.kind !== "ident") throw new PineError(`第 ${n.line} 行：解构赋值只支持变量名`);
+          this.next();
+          names.push(n.value);
+        } while (this.eatOp(","));
+        this.expectOp("]");
+        this.expectOp("=");
+        out.push({ k: "decl", names, value: this.parseExpr(), persist, line });
+      } else if (cur.kind === "ident") {
+        const after = this.tk[this.pos + 1];
+        if (after?.kind === "op" && after.value === "=") {
+          const nm = this.next();
           this.expectOp("=");
-          const value = this.parseExpr();
-          decls.push({ k: "decl", names: [nm.value], value, persist, line: nm.line });
-          if (this.isOp(",")) {
-            this.next(); // ","
-            this.skipNl();
-            if (this.isIdent("var")) { this.next(); persist = true; }
-            this.dropTypeWords();
-            continue;
-          }
-          break;
+          out.push({ k: "decl", names: [nm.value], value: this.parseExpr(), persist, line });
+        } else if (after?.kind === "op" && COMPOUND_OPS.has(after.value)) {
+          // `cnt += 1` desugars to `cnt := cnt + 1` (reassignment semantics).
+          const name = this.next().value;
+          const core = this.next().value.slice(0, -1); // "+=" -> "+"
+          const rhs = this.parseExpr();
+          const value: Expr = { k: "bin", op: core, a: { k: "id", name, line }, b: rhs, line };
+          out.push({ k: "assign", name, value, line });
+        } else if (after?.kind === "op" && after.value === ":=") {
+          const name = this.next().value;
+          this.next(); // ":="
+          out.push({ k: "assign", name, value: this.parseExpr(), line });
+        } else {
+          const expr = this.parseExpr();
+          out.push({ k: "expr", value: expr, line: expr.line });
         }
-        this.endOfStmt();
-        return decls.length === 1 ? decls[0] : decls;
+      } else {
+        // `name(...)` on its own line is a statement (plot/strategy/fill/...).
+        const expr = this.parseExpr();
+        out.push({ k: "expr", value: expr, line: expr.line });
       }
-      if (after?.kind === "op" && COMPOUND_OPS.has(after.value)) {
-        // `cnt += 1` desugars to `cnt := cnt + 1` (reassignment semantics).
-        const name = this.next().value;
-        const opTok = this.next(); // "+=" etc
-        const core = opTok.value.slice(0, -1); // "+=" -> "+"
-        const rhs = this.parseExpr();
-        this.endOfStmt();
-        const value: Expr = { k: "bin", op: core, a: { k: "id", name, line: cur.line }, b: rhs, line: cur.line };
-        return { k: "assign", name, value, line: cur.line };
-      }
-      if (after?.kind === "op" && after.value === ":=") {
-        const name = this.next().value;
-        this.next(); // ":="
-        const value = this.parseExpr();
-        this.endOfStmt();
-        return { k: "assign", name, value, line: cur.line };
-      }
+      if (!this.isOp(",")) break;
+      this.next(); // ","
+      this.skipNl();
+      if (this.isIdent("var")) { this.next(); persist = true; }
     }
-
-    const expr = this.parseExpr();
     this.endOfStmt();
-    // `name(...)` on its own line is a statement (plot/strategy/fill/...).
-    return { k: "expr", value: expr, line: expr.line };
+    return out.length === 1 ? out[0] : out;
   }
 
   private dropTypeWords(): void {

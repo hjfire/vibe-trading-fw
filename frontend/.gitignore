@@ -4,4 +4,7 @@ dist
 # Community Pine corpus: bulk set is fetched on demand by
 # scripts/corpus/fetchPineCorpus.mjs and is external / changeful, so it stays
 # local. The curated smoke slice under __fixtures__/corpus-smoke/ IS committed.
+# Multiple bulk sources live side by side: corpus/ (v3/v4 everget) and
+# corpus-v6/ (v6 mihakralj); both are external and stay local.
 src/lib/__tests__/__fixtures__/corpus/
+src/lib/__tests__/__fixtures__/corpus-v6/

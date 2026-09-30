@@ -223,6 +223,40 @@ describe("highestbars / lowestbars (缺陷 F — same one-arg overload as highes
   });
 });
 
+describe("comma statement separator (缺陷 G — v5/v6 same-line statements)", () => {
+  // mihakralj v6 corpus leans on `a += x, b += y` / `a := x, b := y` / two call
+  // statements sharing a line. Before the fix every such line was a compile
+  // error (`endOfStmt` choked on the top-level comma); now each segment runs as
+  // its own statement. Asserted on concrete last-bar values, not "it parses".
+  const H6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("compound assignments split by a comma both apply (y += 3, y += 4 -> 7)", () => {
+    const src = `${H6}var float y = 0.0\nif barstate.islast\n    y += 3.0, y += 4.0\nplot(y)\n`;
+    expect(lastPlotted(src)).toBeCloseTo(7, 10);
+  });
+
+  it("a `:=` reassignment and a compound share one line (z := 2, z += 5 -> 7)", () => {
+    const src = `${H6}var float z = 0.0\nif barstate.islast\n    z := 2.0, z += 5.0\nplot(z)\n`;
+    expect(lastPlotted(src)).toBeCloseTo(7, 10);
+  });
+
+  it("comma-separated call statements each become a plot line", () => {
+    const a = artifact(`${H6}x = 1.0, w = x + 1.0\nplot(x), plot(w)\n`);
+    expect(a.result.lines.length).toBe(2);
+    expect(a.result.lines[0].values[0]).toBeCloseTo(1, 10);
+    expect(a.result.lines[1].values[0]).toBeCloseTo(2, 10);
+  });
+
+  it("the apo `var x = a, var y = b` form (with the source's missing comma added) compiles", () => {
+    // apo.pine itself is left honestly red: line 18 omits a comma between two
+    // `var` decls (`= na var float ...`), which is not valid Pine. This is the
+    // corrected form, proving the engine handles the well-formed comma-var list.
+    const a = artifact(`${H6}var bool warmup = true, var float result = warmup ? 9.0 : na\nplot(result)\n`);
+    expect(a.abort ?? "").toBe("");
+    expect(lastPlotted(`${H6}var bool warmup = true, var float result = warmup ? 9.0 : na\nplot(result)\n`)).toBeCloseTo(9, 10);
+  });
+});
+
 describe("input() kind detection (缺陷 B / C / E)", () => {
   it("type=input.source binds to the live series, not a bar-0 pinned constant", () => {
     const s = lineValues(`${H4}src = input(defval = close, type = input.source, title = "S")\nplot(src)`);
