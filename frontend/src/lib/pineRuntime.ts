@@ -893,7 +893,11 @@ export class PineRuntime {
     if (name.startsWith("input")) return this.doInput(name, args, node.cid);
     if (name.startsWith("strategy.")) {
       const handled = this.sim.call(name, args, this.ctx);
-      if (handled) return handled;
+      // sim.call returns `undefined` only to say "not mine"; a real result can
+      // legitimately be falsy (a trade-list accessor yielding na/0), so test
+      // for undefined rather than truthiness or those values fall through and
+      // get mis-reported as an unimplemented function.
+      if (handled !== undefined) return handled;
     }
     if (name.startsWith("ta.")) {
       const fn = TA[name.slice(3)];

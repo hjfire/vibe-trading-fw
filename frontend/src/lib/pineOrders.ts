@@ -184,6 +184,13 @@ export class OrderSim {
   /** @returns undefined when `name` is not an order call the sim knows. */
   call(name: string, args: Arg[], c: BuiltinCtx): V | undefined {
     const nothing = sentinel("void");
+    // Trade-list accessors (`strategy.opentrades.entry_bar_index(i)`,
+    // `strategy.closedtrades.profit(i)`, …) are method calls, not property
+    // reads, so they are handled here rather than in readVar.
+    const otv = this.openTradeAccessor(name, args, c);
+    if (otv !== undefined) return otv;
+    const ctv = this.closedTradeAccessor(name, args, c);
+    if (ctv !== undefined) return ctv;
     switch (name) {
       case "strategy.entry": {
         const id = strArg(args, c, 0, "entry", "id", "name");
@@ -356,6 +363,66 @@ export class OrderSim {
         return 0.0066;
       case "strategy.commission.percent":
         return 0.05;
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * `strategy.opentrades.<m>(i)` accessors over the currently-open positions
+   * (ordered by insertion). Out-of-range index → na; unknown accessor →
+   * undefined (so the caller falls through to the generic unsupported error).
+   */
+  private openTradeAccessor(name: string, args: Arg[], c: BuiltinCtx): V | undefined {
+    const m = /^strategy\.opentrades\.([a-z_]+)$/.exec(name);
+    if (!m) return undefined;
+    const i = Math.trunc(numArg(args, c, 0, 0));
+    const open = [...this.pos.values()];
+    const p = i >= 0 && i < open.length ? open[i] : undefined;
+    if (!p) return NA;
+    switch (m[1]) {
+      case "entry_bar_index":
+        return p.entryBar;
+      case "entry_price":
+        return p.avg;
+      case "entry_time":
+        return p.entryTime;
+      case "size":
+        return p.dir * p.qty;
+      case "id":
+        return p.id;
+      default:
+        return undefined;
+    }
+  }
+
+  /** `strategy.closedtrades.<m>(i)` accessors over settled trades. Same rules. */
+  private closedTradeAccessor(name: string, args: Arg[], c: BuiltinCtx): V | undefined {
+    const m = /^strategy\.closedtrades\.([a-z_]+)$/.exec(name);
+    if (!m) return undefined;
+    const i = Math.trunc(numArg(args, c, 0, 0));
+    const t = i >= 0 && i < this.trades.length ? this.trades[i] : undefined;
+    if (!t) return NA;
+    switch (m[1]) {
+      case "entry_bar_index":
+        return t.entryBar;
+      case "exit_bar_index":
+        return t.exitBar;
+      case "entry_price":
+        return t.entryPrice;
+      case "exit_price":
+        return t.exitPrice;
+      case "entry_time":
+        return t.entryTime;
+      case "exit_time":
+        return t.exitTime;
+      case "profit":
+        return t.pnl;
+      case "size":
+      case "trade_size":
+        return t.qty;
+      case "return":
+        return t.retPct;
       default:
         return undefined;
     }

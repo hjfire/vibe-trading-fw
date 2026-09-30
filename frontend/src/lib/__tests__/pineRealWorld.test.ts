@@ -795,3 +795,41 @@ describe("Pine maps (map.*)", () => {
     expect(line(a, "sz0")!.values[10]).toBe(0);
   });
 });
+
+describe("Pine strategy trade-list accessors", () => {
+  const head = "//@version=5\nstrategy(\"t\", initial_capital=10000)\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("exposes an open trade via strategy.opentrades.entry_bar_index(i)", () => {
+    const a = run(
+      head +
+        "if bar_index == 5\n    strategy.entry(\"L\", strategy.long)\n" +
+        "if bar_index == 20\n    strategy.close(\"L\")\n" +
+        "plot(strategy.opentrades, \"ot\")\n" +
+        "plot(strategy.opentrades > 0 ? strategy.opentrades.entry_bar_index(0) : na, \"obi\")",
+    );
+    const ot = line(a, "ot")!.values;
+    expect(ot.some((v) => v === 1)).toBe(true); // exactly one open trade mid-window
+    expect(ot[0]).toBe(0); // flat before entry
+    expect(ot[250]).toBe(0); // flat again after close
+    const obi = line(a, "obi")!.values;
+    const shown = obi.filter((v) => Number.isFinite(v));
+    expect(shown.length).toBeGreaterThan(0); // entry_bar_index resolved every open bar
+    expect(shown[0]).toBeGreaterThanOrEqual(5); // filled at/after the bar-5 entry
+  });
+
+  it("exposes a settled trade via strategy.closedtrades.profit(i)", () => {
+    const a = run(
+      head +
+        "if bar_index == 5\n    strategy.entry(\"L\", strategy.long)\n" +
+        "if bar_index == 20\n    strategy.close(\"L\")\n" +
+        "plot(strategy.closedtrades, \"ct\")\n" +
+        "plot(strategy.closedtrades > 0 ? strategy.closedtrades.profit(strategy.closedtrades - 1) : na, \"cp\")\n" +
+        "plot(nz(strategy.closedtrades.profit(5000)), \"oob\")",
+    );
+    const cp = line(a, "cp")!.values;
+    const settled = cp.filter((v) => Number.isFinite(v));
+    expect(settled.length).toBeGreaterThan(0); // profit(i) resolved once the trade closed
+    expect(line(a, "oob")!.values[10]).toBe(0); // out-of-range index → na → nz → 0 (no throw)
+  });
+});
