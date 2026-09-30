@@ -107,6 +107,13 @@ function lastPlotted(src: string): number {
   return last ?? NaN;
 }
 
+/** Full value series of the `li`-th plot line. */
+function lineValues(src: string, li = 0): number[] {
+  const a = artifact(src);
+  if (a.abort) throw new Error(`运行中断：${a.abort}`);
+  return a.result.lines[li]?.values ?? [];
+}
+
 describe("trig / math built-ins via the full engine", () => {
   it("asin/atan match JS math and the 2*asin(1)=PI idiom", () => {
     expect(lastPlotted("plot(asin(0.5))")).toBeCloseTo(Math.asin(0.5), 8);
@@ -146,5 +153,95 @@ describe("faithful, not a loosening", () => {
 
   it("a bare colour name does not shadow a user variable of the same name", () => {
     expect(lastPlotted("red = 42\nplot(red)\n")).toBeCloseTo(42, 8);
+  });
+});
+
+/* ---------------------------------------------- corpus pass-rate push (Track D) */
+
+const H4 = "//@version=4\nstudy(\"t\")\n";
+const HIGH = BARS.map((b) => b.high);
+const LOW = BARS.map((b) => b.low);
+const CLOSE = BARS.map((b) => b.close);
+const rollMax = (arr: number[], n: number) =>
+  arr.map((_, i) => Math.max(...arr.slice(Math.max(0, i - n + 1), i + 1)));
+const rollMin = (arr: number[], n: number) =>
+  arr.map((_, i) => Math.min(...arr.slice(Math.max(0, i - n + 1), i + 1)));
+const eqSeries = (a: number[], b: number[]) => {
+  expect(a.length).toBe(b.length);
+  for (let i = 0; i < a.length; i++) {
+    if (Number.isNaN(a[i]) || Number.isNaN(b[i])) expect(a[i]).toBe(b[i]);
+    else expect(a[i]).toBeCloseTo(b[i], 10);
+  }
+};
+
+describe("highest / lowest (缺陷 A)", () => {
+  it("one-arg highest(length) uses high and equals the two-arg form", () => {
+    const n = 5;
+    const one = lineValues(`${H4}plot(highest(${n}))`);
+    const two = lineValues(`${H4}plot(highest(high, ${n}))`);
+    eqSeries(one, two);
+    eqSeries(one, rollMax(HIGH, n));
+  });
+
+  it("one-arg lowest(length) uses low; two-arg takes the given source", () => {
+    const n = 5;
+    eqSeries(lineValues(`${H4}plot(lowest(${n}))`), rollMin(LOW, n));
+    eqSeries(lineValues(`${H4}plot(lowest(close, ${n}))`), rollMin(CLOSE, n));
+  });
+});
+
+describe("input() kind detection (缺陷 B / C / E)", () => {
+  it("type=input.source binds to the live series, not a bar-0 pinned constant", () => {
+    const s = lineValues(`${H4}src = input(defval = close, type = input.source, title = "S")\nplot(src)`);
+    // Must equal close per bar (varies), not be the constant close[0].
+    expect(s[10]).toBeCloseTo(CLOSE[10], 8);
+    expect(Math.abs(s[10] - CLOSE[0])).toBeGreaterThan(1e-6);
+    eqSeries(s, CLOSE);
+  });
+
+  it("numeric enum (type=input.integer + numeric options) stays a number", () => {
+    const p = lineValues(
+      `${H4}poles = input(defval = 4, type = input.integer, options = [1, 2, 3, 4], title = "P")\nplot(poles)`,
+    );
+    expect(p.every((v) => v === 4)).toBe(true); // finite numeric 4, not na/string
+  });
+
+  it("bare string enum (defval + string options) resolves as a string for ==", () => {
+    const q = lineValues(
+      `${H4}m = input(defval = "SMA", options = ["EMA", "SMA", "LM"], title = "M")\nplot(m == "SMA" ? 1 : 0)`,
+    );
+    expect(q.every((v) => v === 1)).toBe(true);
+  });
+});
+
+describe("stateful builtins keep per-call-site history (缺陷 D)", () => {
+  // A helper wrapping a rolling builtin, called twice on different sources, must
+  // behave exactly like two independent direct calls — before the fix both calls
+  // shared one window keyed by the helper body's AST node, silently cross-
+  // polluting (and blanking scripts like hampel_filter via na cascades).
+  const pnr = (src: number[], n: number) => {
+    const w = [...src];
+    return w.map((_, i) => {
+      if (i < n - 1) return NaN;
+      const win = w.slice(i - n + 1, i + 1);
+      const s = [...win].sort((a, b) => a - b);
+      return s[Math.max(0, Math.min(s.length - 1, Math.ceil(0.5 * s.length) - 1))];
+    });
+  };
+  it("_m(close) and _m(high) each equal their direct call, and differ from each other", () => {
+    const n = 14;
+    const two = lineValues(
+      `${H4}_m(x, k) => percentile_nearest_rank(x, k, 50)\na = _m(close, ${n})\nb = _m(high, ${n})\nplot(a)\nplot(b)`,
+    );
+    const oneA = lineValues(`${H4}_m(x, k) => percentile_nearest_rank(x, k, 50)\nplot(_m(close, ${n}))`);
+    const oneB = lineValues(`${H4}_m(x, k) => percentile_nearest_rank(x, k, 50)\nplot(_m(high, ${n}))`);
+    const second = lineValues(
+      `${H4}_m(x, k) => percentile_nearest_rank(x, k, 50)\na = _m(close, ${n})\nb = _m(high, ${n})\nplot(a)\nplot(b)`,
+      1,
+    );
+    eqSeries(two, oneA); // site 1 (close) == its own single call
+    eqSeries(second, oneB); // site 2 (high) == its own single call
+    const direct = pnr(CLOSE, n);
+    eqSeries(two, direct); // and matches a hand-computed median window
   });
 });

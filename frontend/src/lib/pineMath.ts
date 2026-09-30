@@ -345,8 +345,11 @@ export const MISC: Record<string, Builtin> = {
     }
     return MISC["math.sum"](args, c);
   },
-  highest: (args, c) => foldNums(args, c, Math.max),
-  lowest: (args, c) => foldNums(args, c, Math.min),
+  // Bare `highest`/`lowest` are deliberately NOT registered here: in Pine they
+  // are the *rolling* `ta.highest`/`ta.lowest`, never an elementwise max/min of
+  // the arguments (that job belongs to `max`/`min`/`price.max`/`price.min`
+  // below). Leaving them un-registered lets `callFunction` fall through to the
+  // TA table, which also honours the v3 `highest(length)` one-arg form.
   "price.min": (args, c) => foldNums(args, c, Math.min),
   "price.max": (args, c) => foldNums(args, c, Math.max),
   // Bare `min/max/avg` are also called without a namespace in older ports.

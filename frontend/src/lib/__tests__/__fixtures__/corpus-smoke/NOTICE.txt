@@ -24,7 +24,7 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 35-file slice covers the categories
+(it is external, changeful content). This 41-file slice covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
 src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
@@ -64,9 +64,38 @@ are hand-checked against deterministic bars by pineSeries.test.ts:
     statistics/roi_return_on_investment.pine       (valuewhen)
     statistics/ytd_year_to_date_percent_return.pine (valuewhen)
 
+The slice grew from 35 to 41 after closing five more real engine gaps that left
+these otherwise-complete indicators plotting nothing but na. Each is now
+numerically cross-checked against deterministic bars by pineBuiltins.test.ts
+(single-vs-two-arg `highest`/`lowest`, `input(..., type=source)` binding to the
+live series, string- and numeric-`options=` enums, and per-call-site isolation
+of stateful builtins inside a user helper called twice):
+
+    movings/fractal_adaptive_moving_average.pine    (one-arg highest/lowest)
+    volatility/gopalakrishnan_range_index.pine      (one-arg highest/lowest)
+    movings/vidya_variable_index_dynamic_average.pine (input source + numeric enum)
+    bands_and_channels/stoller_average_range_channels.pine (string enum input)
+    oscillators/center_of_gravity_oscillator.pine    (string enum input)
+    movings/hampel_filter.pine                       (per-call-site builtin state)
+
+(gaussian_filter.pine, pinned earlier, was silently broken by the first pass of
+the string-enum fix — a numeric `options=[1,2,3,4]` input was mis-routed to the
+string branch and blanked its `plot`. The type/defval/options string-ness check
+now keeps numeric enums numeric, so the committed gate caught the regression.)
+
 The nine scripts still failing are NOT engine gaps we papered over: they
 reference variables never declared anywhere (`n`, `period`, `accdist`, `pvt`),
 which TradingView also rejects, or are a plotting-less unit-test harness that
 needs array methods beyond the current subset (`array.join`). Leaving them red
 is the honest outcome — implementing a builtin only to watch a broken script
 emit a plausible-but-wrong number would be worse than an accurate error.
+
+The remaining `no_output` scripts are likewise NOT pinned, and not because the
+currently-unsupported drawing is trivially fixable: the highlighters only emit
+`bgcolor`, the research/statistics helpers redraw chart types or fill a `table`
+(the primitive plot/markers the engine intentionally ignores), and `supertrend`
+feeds a `ta.atr` warmup `na` into a `var int dir` accumulator whose only escape
+requires `dir == 1` / `dir == -1` — under faithful Pine `na` propagation `dir`
+stays `na`, which is what the engine does. Bending the logical/ternary `na` rules
+to resurrect that accumulator would be inventing non-standard semantics with
+blast radius across every other script, so it is left honestly red.

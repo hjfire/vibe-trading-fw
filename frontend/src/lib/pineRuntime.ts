@@ -175,6 +175,16 @@ export class PineRuntime {
    */
   private scope = "";
   private fnDepth = 0;
+  /**
+   * Chain of user-function call-site ids the current evaluation runs inside
+   * ("" at global scope, `f<cid>` one level in, `<outer>>f<cid>` nested). A
+   * builtin's rolling state is keyed by its *body* AST cid, which is shared by
+   * every invocation of the function it lives in — so a helper called twice
+   * (e.g. `_median(x)` for both the centre and the MAD) would silently share
+   * one window. TradingView keeps rolling state per call site, so we fold this
+   * path into the state key to give each invocation its own.
+   */
+  private callPath = "";
   /** Value of the last statement run, which is how a block body returns. */
   private lastValue: V = NA;
 
@@ -249,7 +259,7 @@ export class PineRuntime {
       },
       val: (e: Expr) => self.val(e),
       state: <T extends object>(init: () => T, sub = "") => {
-        const key = `${self.ctxCid}#${sub}`;
+        const key = `${self.ctxCid}@${self.callPath}#${sub}`;
         let hit = this.states.get(key) as T | undefined;
         if (!hit) {
           hit = init();
@@ -647,6 +657,7 @@ export class PineRuntime {
       throw new PineError(`函数 "${fn.name}" 递归超过 ${FN_DEPTH_CAP} 层，请检查是否无限递归`);
     }
     const outer = this.scope;
+    const outerPath = this.callPath;
     const bound: V[] = [];
     for (let i = 0; i < fn.params.length; i++) {
       const hit = argAt(args, i, fn.params[i].name);
@@ -656,6 +667,7 @@ export class PineRuntime {
     let out: V = NA;
     try {
       this.scope = `f${cid}`;
+      this.callPath = outerPath ? `${outerPath}>f${cid}` : `f${cid}`;
       for (let i = 0; i < fn.params.length; i++) this.write(this.vkey(fn.params[i].name), bound[i], false);
       if (!Array.isArray(fn.body)) {
         out = this.val(fn.body);
@@ -668,6 +680,7 @@ export class PineRuntime {
       }
     } finally {
       this.scope = outer;
+      this.callPath = outerPath;
       this.fnDepth -= 1;
     }
     return out;
@@ -1472,6 +1485,26 @@ export class PineRuntime {
     const suffix = name === "input" ? "" : name.slice("input.".length);
     const defExpr = argAt(args, 0, "defval", "value", "source", "initial", "defvalue");
     const titleExpr = argAt(args, 1, "title", "label", "name");
+    // v3/v4 declare a source input as `input(..., type=source, defval=close)` or
+    // `type=input.source`, not the v5 `input.source()` method. Read the `type=`
+    // argument so these bind to the live source series instead of falling into
+    // the scalar branch (which pins the value to `defval`'s bar-0 number).
+    const typeExpr = args.find((a) => a.name === "type")?.value;
+    const typeHint = typeExpr && typeExpr.k === "id" ? typeExpr.name : "";
+    // A bare `input(defval="SMA", options=["EMA","SMA",…])` (v3) is a string
+    // enum even without the `input.string` suffix; without this it fell into
+    // the scalar branch and `asNum("SMA")` pinned it to na. But `options=`
+    // alone is *not* enough: numeric enums like
+    // `input(type=input.integer, options=[1,2,3,4])` must stay in the scalar
+    // (int/float) branch or their value degrades to a string and `plot(x)`
+    // goes blank. The kind check below keys off the string-ness of type/defval/
+    // options, not merely the presence of `options=`.
+    const hasOptions = args.some((a) => a.name === "options");
+    const isSourceInput =
+      suffix === "source" ||
+      typeHint === "source" ||
+      typeHint.endsWith(".source") ||
+      (this.target || "").toLowerCase() === "source";
     let idx = this.inputByCid.get(cid);
     if (idx === undefined) {
       idx = this.inputs.length;
@@ -1487,7 +1520,25 @@ export class PineRuntime {
       const min = numOrUndef(numArg(args, c, NAMED_ONLY, NA, "minval"));
       const max = numOrUndef(numArg(args, c, NAMED_ONLY, NA, "maxval"));
       const step = numOrUndef(numArg(args, c, NAMED_ONLY, NA, "step"));
-      if (suffix === "source" || (this.target || "").toLowerCase() === "source") {
+      // Decide string-vs-numeric enum from the *type hint* and the *string-ness*
+      // of the defval / option list, so `type=input.integer` numeric enums stay
+      // numbers while `input("SMA", options=[…])` string enums go to "other".
+      const tn = typeHint.toLowerCase().replace(/^input\./, "");
+      const typeIsNumeric = tn === "int" || tn === "integer" || tn === "float" || tn === "double";
+      const typeIsString = tn === "string" || tn === "session" || tn === "symbol" || tn === "time";
+      const optExprKind = args.find((a) => a.name === "options")?.value;
+      const optListKind = optExprKind ? this.val(optExprKind) : [];
+      const optsAreStrings =
+        Array.isArray(optListKind) && optListKind.some((x) => typeof x === "string" && !x.startsWith("@"));
+      const defIsString = !!defExpr && defExpr.k === "str";
+      const isStringEnum =
+        suffix === "string" ||
+        suffix === "session" ||
+        suffix === "symbol" ||
+        suffix === "time" ||
+        typeIsString ||
+        (hasOptions && !typeIsNumeric && (optsAreStrings || defIsString));
+      if (isSourceInput) {
         input.kind = "source";
         input.def = -1;
         input.options = SOURCE_KEYS.slice();
@@ -1497,7 +1548,7 @@ export class PineRuntime {
         input.min = 0;
         input.max = 1;
         input.step = 1;
-      } else if (suffix === "string" || suffix === "session" || suffix === "symbol" || suffix === "time") {
+      } else if (isStringEnum) {
         const optExpr = args.find((a) => a.name === "options")?.value;
         const list = optExpr ? this.val(optExpr) : [];
         const opts = Array.isArray(list) ? list.map((x) => asStr(x)) : [];

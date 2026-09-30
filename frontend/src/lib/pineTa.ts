@@ -423,8 +423,25 @@ export const TA: Record<string, Builtin> = {
       c.state(() => ({ win: [] }) as Win),
     ),
 
-  highest: (args, c) => highestStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.highest"), c.state(() => ({ win: [] }) as Win)),
-  lowest: (args, c) => lowestStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.lowest"), c.state(() => ({ win: [] }) as Win)),
+  // Pine overloads: `highest(source, length)` and `highest(length)`. With a lone
+  // argument that argument is the lookback and the source is the chart high
+  // (`lowest` → low); with two, arg 0 is the source. Confirmed against the
+  // v4/v5 reference: "One arg version: x is a length. Algorithm uses high as a
+  // source series." v3 community scripts lean on `highest(length)` everywhere.
+  highest: (args, c) => {
+    const namedSrc = args.some((a) => a.name === "source" || a.name === "src" || a.name === "x");
+    const hasSource = namedSrc || positional(args).length >= 2;
+    const src = hasSource ? srcOf(args, c) : c.bars.high[c.bi];
+    const len = lenOf(args, c, hasSource ? 1 : 0, 14, "ta.highest");
+    return highestStep(src, len, c.state(() => ({ win: [] }) as Win));
+  },
+  lowest: (args, c) => {
+    const namedSrc = args.some((a) => a.name === "source" || a.name === "src" || a.name === "x");
+    const hasSource = namedSrc || positional(args).length >= 2;
+    const src = hasSource ? srcOf(args, c) : c.bars.low[c.bi];
+    const len = lenOf(args, c, hasSource ? 1 : 0, 14, "ta.lowest");
+    return lowestStep(src, len, c.state(() => ({ win: [] }) as Win));
+  },
 
   highestbars: (args, c) => barOffset(args, c, "max"),
   lowestbars: (args, c) => barOffset(args, c, "min"),
