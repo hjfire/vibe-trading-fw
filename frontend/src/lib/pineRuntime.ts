@@ -33,6 +33,7 @@ import {
   asNum,
   asStr,
   flagArg,
+  isNa,
   isTrue,
   numArg,
   resolveColor,
@@ -1010,6 +1011,13 @@ export class PineRuntime {
             return idx >= 0 ? (rec as V[])[idx + 1] : NA;
           }
         }
+        // A declared base whose value is `na` makes `base.field` na, not an
+        // undeclared abort. Real order-block / FVG / swing indicators read a
+        // record off a still-growing array (`s = array.get(arr, i); s.isHigh`),
+        // so on the early bars `s` is legitimately na — TradingView yields na
+        // there, and only a genuinely unknown base (a real typo'd name, or a
+        // non-object value) should still throw honestly below.
+        if (isNa(rec)) return NA;
       }
     }
     // Bare v2/v3 constants (unprefixed colour names, short style/location

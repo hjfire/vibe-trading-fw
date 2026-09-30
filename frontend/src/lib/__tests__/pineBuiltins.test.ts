@@ -818,3 +818,39 @@ describe("DRAW_CAP bounds a runaway drawing loop (third-corpus stress)", () => {
     expect(boxes).toHaveLength(4000);
   });
 });
+
+/**
+ * Real order-block / FVG / swing indicators (e.g. Kalki ICT SmartMoney Pro, the
+ * biggest box/line producer in the third corpus) read a record off a still-
+ * growing array: `s = array.get(arr, i)` then `s.isHigh`. On the early bars the
+ * element is na, so `s.isHigh` used to throw "undeclared identifier" and abort
+ * the whole indicator. TradingView yields na there; the fix returns na for a
+ * declared-but-na base so the script runs and its drawings get recorded.
+ */
+describe("field access on an na UDT base yields na, not an undeclared abort", () => {
+  const V6 = "//@version=6\nindicator(\"t\", overlay=true)\n";
+
+  it("`base.field` on an explicitly na base is na every bar (no abort)", () => {
+    const src = V6 + "type Point\n    float x = 0\n    float y = 0\nvar Point q = na\nplot(q.x)\n";
+    const a = artifact(src); // throws on compile error; must not abort
+    expect(a.abort).toBeFalsy();
+    // A plot that is na on every bar yields no finite line — the run survives
+    // instead of aborting, which is the whole point of the fix.
+    expect(produced(src)).toBe(false);
+    expect(lineValues(src)).toHaveLength(0);
+  });
+
+  it("a record read off a growing array is na before the push, then resolves the field", () => {
+    const src =
+      V6 +
+      "type Point\n    float x = 0\n    float y = 0\n" +
+      "var arr = array.new<Point>()\n" +
+      "if bar_index == 20\n    array.push(arr, Point.new(9, 8))\n" +
+      "q = array.get(arr, 0)\nplot(q.x)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    const vals = lineValues(src);
+    expect(Number.isNaN(vals[0])).toBe(true); // bars 0..19: array empty, q is na
+    expect(vals[25]).toBe(9); // after the bar-20 push: q.x resolves through the record
+  });
+});
