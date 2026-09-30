@@ -36,11 +36,20 @@ function makeBars(n: number): KLineData[] {
     const open = price;
     const close = open * (1 + (rand() - 0.48) * 0.06);
     price = close;
+    // Independent, varying wicks. The old `high=max(o,c)*1.01 / low=min(o,c)*0.99`
+    // tied every bar's high/low to its adjacent closes (open = prev close), which
+    // makes a strict local extremum in the high/low series mathematically
+    // impossible — so pivot / fractal / zigzag indicators (e.g. Williams Fractals,
+    // TTM Scalper) could never fire and were MIS-MEASURED as `no_output` even
+    // though the engine handles them correctly. Real candles swing their wicks
+    // independently, letting those signals appear so they classify honestly.
+    const high = Math.max(open, close) * (1 + 0.002 + rand() * 0.02);
+    const low = Math.min(open, close) * (1 - 0.002 - rand() * 0.02);
     return {
       timestamp: 1700000000000 + i * 86_400_000,
       open,
-      high: Math.max(open, close) * 1.01,
-      low: Math.min(open, close) * 0.99,
+      high,
+      low,
       close,
       volume: 800 + Math.floor(rand() * 1200),
       turnover: 0,
