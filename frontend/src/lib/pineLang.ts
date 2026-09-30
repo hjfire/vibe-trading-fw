@@ -50,7 +50,13 @@ const NUM_RE = /^(\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)([eE][+-]?\d+)?/;
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6})(?![0-9a-fA-F])/;
 /** Multi-char operators, longest first so `>=` never lexes as `>` + `=`. */
 const OPS_MULTI = [":=", "==", "!=", "<>", ">=", "<=", "&&", "||", "=>", "+=", "-=", "*=", "/=", "%="];
-const OPS_SINGLE = "+-*/%^<>=,()[]{}:?.!~";
+/**
+ * Bitwise `&` and `|` are Pine v6 operators. They live only here (as single
+ * ops) — `<<`/`>>` are NOT merged into OPS_MULTI so nested generic closings
+ * (`array<map<int, float>>`) keep lexing as separate `>` tokens; the parser
+ * reassembles adjacent `<`/`>` into a shift only in expression context.
+ */
+const OPS_SINGLE = "+-*/%^<>=,()[]{}:?.!~&|";
 /** `x op= y` is Pine shorthand for `x := x op y`. */
 const COMPOUND_OPS = new Set(["+=", "-=", "*=", "/=", "%="]);
 /** A trailing operator/comma means the statement continues on the next line. */
@@ -895,12 +901,42 @@ export class PineParser {
   }
 
   private parseAnd(): Expr {
-    let a = this.parseComparison();
+    let a = this.parseBitOr();
     for (;;) {
       const t = this.peek();
       if ((t.kind === "op" && t.value === "&&") || (t.kind === "ident" && t.value === "and")) {
         this.next();
-        a = { k: "bin", op: "and", a, b: this.parseComparison(), line: t.line };
+        a = { k: "bin", op: "and", a, b: this.parseBitOr(), line: t.line };
+        continue;
+      }
+      break;
+    }
+    return a;
+  }
+
+  /** Bitwise OR binds looser than AND, tighter than logical `and` (C-like). */
+  private parseBitOr(): Expr {
+    let a = this.parseBitAnd();
+    for (;;) {
+      const t = this.peek();
+      if (t.kind === "op" && t.value === "|") {
+        this.next();
+        a = { k: "bin", op: "|", a, b: this.parseBitAnd(), line: t.line };
+        continue;
+      }
+      break;
+    }
+    return a;
+  }
+
+  /** Bitwise AND binds looser than comparison, tighter than bitwise OR. */
+  private parseBitAnd(): Expr {
+    let a = this.parseComparison();
+    for (;;) {
+      const t = this.peek();
+      if (t.kind === "op" && t.value === "&") {
+        this.next();
+        a = { k: "bin", op: "&", a, b: this.parseComparison(), line: t.line };
         continue;
       }
       break;
@@ -909,15 +945,42 @@ export class PineParser {
   }
 
   private parseComparison(): Expr {
-    const a = this.parseAdditive();
+    const a = this.parseShift();
     const t = this.peek();
     if (t.kind === "op") {
       const raw = t.value;
       const op = raw === "<>" ? "!=" : raw;
       if ([">", "<", ">=", "<=", "==", "!="].includes(op)) {
         this.next();
-        return { k: "bin", op, a, b: this.parseAdditive(), line: t.line };
+        return { k: "bin", op, a, b: this.parseShift(), line: t.line };
       }
+    }
+    return a;
+  }
+
+  /**
+   * `<<`/`>>` sit between additive and comparison. The lexer keeps `<`/`>` as
+   * single tokens (so nested generics stay lexable), so a shift is recognised
+   * here as two adjacent identical operator tokens. A lone `>`/`<` comparison
+   * never matches because its second token is an operand, not another `<`/`>`.
+   */
+  private parseShift(): Expr {
+    let a = this.parseAdditive();
+    for (;;) {
+      const t = this.peek();
+      if (this.isOp(">", 0) && this.isOp(">", 1)) {
+        this.next();
+        this.next();
+        a = { k: "bin", op: ">>", a, b: this.parseAdditive(), line: t.line };
+        continue;
+      }
+      if (this.isOp("<", 0) && this.isOp("<", 1)) {
+        this.next();
+        this.next();
+        a = { k: "bin", op: "<<", a, b: this.parseAdditive(), line: t.line };
+        continue;
+      }
+      break;
     }
     return a;
   }
@@ -962,7 +1025,7 @@ export class PineParser {
 
   private parseUnary(): Expr {
     const t = this.peek();
-    if (t.kind === "op" && (t.value === "-" || t.value === "+" || t.value === "!")) {
+    if (t.kind === "op" && (t.value === "-" || t.value === "+" || t.value === "!" || t.value === "~")) {
       this.next();
       return { k: "un", op: t.value === "!" ? "not" : t.value, a: this.parseUnary(), line: t.line };
     }

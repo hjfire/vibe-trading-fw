@@ -134,13 +134,38 @@ on the comma separator and are pinned byte-for-byte (SHA-checked) as a gate:
     v6/oscillators/smi.pine          (commodity channel, comma decls)
     v6/numerics/jerk.pine            (comma-joined `:=` reassignments)
 
-The three remaining v6 compile errors are NOT pinned and are NOT the comma gap:
-`apo.pine` omits a comma between two `var` decls on one line (`= na var float
-...`) — invalid Pine that TradingView also rejects, so it stays honestly red;
-`mlp.pine` puts a USER-DEFINED type (`matrices`) in declaration type position
-and leans on `matrix.*`; `fft.pine` uses v6 bitwise operators (`<< >> | &`).
-Those last two are genuine but singleton v6 feature gaps, deferred to a later
-increment rather than contorted to make one file green.
+The three remaining v6 compile errors are NOT pinned. Once the array.join and
+bitwise gaps were closed (defects J and K), each residual is either a broken
+source TradingView also rejects, or a large deferred namespace — never a
+contorted parser bending to make one file green:
+
+  - `apo.pine` omits a comma between two `var` decls on one line (`= na var
+    float ...`) — invalid Pine, so it stays honestly red.
+  - `fft.pine` first failed on v6 bitwise operators, now fixed (defect K); its
+    NEXT error is C-style return-type-prefixed function defs (`int ilog2(int n)
+    =>`, `void fft_inplace(...) =>`). Pine's function grammar is `name(params)
+    =>` with NO return-type prefix (TV type-system docs: "no 'void' keyword
+    exists in Pine Script"), and none of the other 619 corpus scripts writes
+    it — so fft is a broken source TradingView also rejects, left red rather
+    than bending the parser to accept non-Pine syntax.
+  - `mlp.pine` IS valid Pine (untyped `compressToRange(float x, ...) =>` heads)
+    but needs the entire `matrix.*` namespace (new/get/set/rows/columns/copy/
+    mult) plus a `type matrices` UDT — a genuine but large singleton gap whose
+    real fix is a new matrix module, deferred to its own increment.
+
+defect K (v6 bitwise operators) — `& | << >> ~` were unrecognised characters
+(`无法识别的字符 "|"`). They are valid Pine v6 operators, so the lexer now
+accepts `&`/`|` as single ops and `~` as unary, and the parser reassembles
+adjacent `<`/`>` into `<<`/`>>` at expression level — deliberately NOT merging
+them into the multi-char token table so nested generic closings
+(`array<array<float>>`) keep lexing as separate `>` tokens. Precedence is the
+C-like order (shift below additive, `&`/`|` below comparison above logical
+`and`/`or`); operands truncate to int with na propagation. Bitwise XOR (`^^`) is
+left out: Pine's `^` is exponentiation here and the authoritative `^^` precedence
+is unconfirmed, so inventing it would be speculation. pineBuiltins.test.ts pins
+exact integer results for every operator plus two precedence discriminators and
+a radix-2 bitReverse loop — the honest reconciliation, since the only corpus
+file that uses bitwise (fft) is itself broken for a different reason.
 
 Two more real v6 built-in gaps (defects H and I) then cleared six runtime
 aborts, lifting v6 from 96.1% to 97.6% with everget held at 88.6%:

@@ -724,6 +724,7 @@ export class PineRuntime {
           return Number.isNaN(v) ? NA : v === 0 ? 1 : 0;
         }
         const v = asNum(this.val(e.a));
+        if (e.op === "~") return Number.isNaN(v) ? NA : ~Math.trunc(v);
         return e.op === "-" ? -v : v;
       }
       case "tern": {
@@ -924,6 +925,16 @@ export class PineRuntime {
         return x === y ? 1 : 0;
       case "!=":
         return x !== y ? 1 : 0;
+      // Bitwise operators act on integer operands (Pine truncates to int).
+      // JS bitwise is 32-bit signed; sufficient for index/bit-level uses.
+      case "&":
+        return Math.trunc(x) & Math.trunc(y);
+      case "|":
+        return Math.trunc(x) | Math.trunc(y);
+      case "<<":
+        return Math.trunc(x) << Math.trunc(y);
+      case ">>":
+        return Math.trunc(x) >> Math.trunc(y);
       default:
         throw new PineError(`不支持的运算符 "${op}"`);
     }

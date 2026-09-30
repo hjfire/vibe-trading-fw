@@ -380,3 +380,48 @@ describe("array.join (缺陷 J — concatenate elements to a string, separator b
     expect(lastPlotted(`${full}plot(array.join(a, "+", 2) == "3+4" ? 1 : 0)\n`)).toBe(1);
   });
 });
+
+describe("bitwise operators (缺陷 K — & | << >> ~, fft.pine radix-2)", () => {
+  const H6 = "//@version=6\nindicator(\"t\")\n";
+  // Assert on the boolean RESULT of a concrete equality, so each case pins the
+  // exact integer the operator produces (not "it parses").
+  const one = (expr: string) => lastPlotted(`${H6}plot((${expr}) ? 1 : 0)\n`);
+
+  it("AND / OR yield exact integers", () => {
+    expect(one("(6 & 3) == 2")).toBe(1); // 110 & 011 = 010
+    expect(one("(6 | 3) == 7")).toBe(1); // 110 | 011 = 111
+  });
+
+  it("left / right shift moves bits", () => {
+    expect(one("(5 << 2) == 20")).toBe(1);
+    expect(one("(20 >> 2) == 5")).toBe(1);
+  });
+
+  it("unary bitwise NOT is -(n+1)", () => {
+    expect(one("(~5) == -6")).toBe(1);
+  });
+
+  it("precedence: additive binds tighter than shift (2 << 1 + 1 = 8, not 5)", () => {
+    expect(one("2 << 1 + 1 == 8")).toBe(1);
+  });
+
+  it("precedence: comparison binds tighter than bitwise AND (2 & 1 == 1 = 0)", () => {
+    // C-like: & is looser than ==, so this is 2 & (1 == 1) = 2 & 1 = 0, not the
+    // (2 & 1) == 1 = 1 a too-tight & would give.
+    expect(one("(2 & 1 == 1) == 0")).toBe(1);
+  });
+
+  it("bitReverse loop reproduces the radix-2 permutation (1, bits=3 -> 4)", () => {
+    // Same body as fft.pine's helper, written in the valid Pine head form
+    // (`name(params) =>`, no C-style return-type prefix): r := (r << 1) | (x & 1).
+    const src =
+      `${H6}bitReverse(x, bits) =>\n` +
+      `    int r = 0\n` +
+      `    for i = 0 to bits - 1\n` +
+      `        r := (r << 1) | (x & 1)\n` +
+      `        x := x >> 1\n` +
+      `    r\n` +
+      `plot(bitReverse(1, 3) == 4 ? 1 : 0)\n`;
+    expect(lastPlotted(src)).toBe(1); // 001 -> 100
+  });
+});
