@@ -797,3 +797,24 @@ describe("drawing channel is decorative: not counted, never aborting", () => {
     expect(produced(src)).toBe(true); // the numeric plot survives
   });
 });
+
+/**
+ * The third corpus (17 real box/table/line-dense SMC scripts pulled via the
+ * unauthenticated + Code-Search paths) topped out at ~51 live objects on 600
+ * bars, so no organic script ever reaches DRAW_CAP. The cap is a defence
+ * against a runaway `*.new`-per-bar-without-delete, so the only honest way to
+ * verify it actually fires is a synthetic that clearly exceeds it: the recorder
+ * must stop exactly at 4000 and warn, not leak 4100 handles nor crash.
+ */
+describe("DRAW_CAP bounds a runaway drawing loop (third-corpus stress)", () => {
+  it("4100 un-deleted box.new calls cap at exactly 4000, no abort", () => {
+    const src =
+      "//@version=6\nindicator(\"t\", overlay=true)\n" +
+      "box.new(left=bar_index, top=high, right=bar_index + 1, bottom=low)\n";
+    const out = compilePine(src, makeBars(4100), {});
+    if ("error" in out) throw new Error(`编译失败：${out.error}`);
+    expect(out.abort).toBeFalsy();
+    const boxes = out.result.drawings.filter((d) => d.kind === "box");
+    expect(boxes).toHaveLength(4000);
+  });
+});
