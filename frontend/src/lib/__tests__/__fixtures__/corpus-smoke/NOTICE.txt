@@ -1,0 +1,31 @@
+Community Pine corpus — smoke regression slice
+=============================================
+
+Provenance
+----------
+Every .pine file under this folder (and the larger local-only set that
+frontend/scripts/corpus/fetchPineCorpus.mjs downloads into
+src/lib/__tests__/__fixtures__/corpus/) is copied VERBATIM from the public
+repository:
+
+    everget/tradingview-pinescript-indicators   (branch: master)
+
+Author: Alex Orekhov (everget). These are real TradingView indicators written
+by someone else — that is exactly why they are used here: compatibility
+acceptance has to run on code we did not author, not only on our own scripts.
+
+License
+-------
+The upstream scripts are distributed under GPL-3.0; each file keeps its own
+original copyright + license header intact. They are committed here purely as
+test fixtures for open-source compatibility acceptance, with attribution
+preserved. This project's own source remains separately licensed.
+
+Why a curated slice is committed
+--------------------------------
+The full corpus (210 files) is fetched locally on demand and is NOT committed
+(it is external, changeful content). This 18-file slice covers the categories
+that currently pass (bands_and_channels / movings / oscillators / statistics /
+trailing_stops / volatility / volume / highlighters) and is pinned by
+src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
+change that stops compiling/running one of them must fail the build.
