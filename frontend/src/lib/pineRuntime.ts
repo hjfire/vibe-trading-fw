@@ -763,7 +763,15 @@ export class PineRuntime {
           return 0;
       }
     }
-    if (ENUM_NS.test(name)) return sentinel(name);
+    if (ENUM_NS.test(name)) {
+      // `timeframe.*` are zero-arg builtins (period / isdaily / in_seconds …),
+      // not enum constants like color.red or barmerge.lookahead_on that the
+      // guard below is meant for. Resolve them through MISC so a bare
+      // `timeframe.isintraday` yields a real 0/1 instead of a sentinel string.
+      const tf = MISC[name];
+      if (name.startsWith("timeframe.") && tf) return tf([], this.ctx);
+      return sentinel(name);
+    }
     if (SERIES_NAMES.has(name)) return this.builtinAt(name, this.bi);
     if (this.lookup(name)) return this.readSeries(name);
     // Zero-arg builtins are sometimes read as plain names (`timenow`, `timeframe.period`).

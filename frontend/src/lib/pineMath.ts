@@ -25,6 +25,7 @@ import {
   type BuiltinCtx,
   type V,
 } from "./pineTypes";
+import { inferTimeframeMs, periodStringFromMs, DAY_MS, MIN_MS, WEEK_MS } from "./pineResample";
 
 /** Numeric view of argument slot `i` (evaluated lazily through the ctx). */
 function n(args: Arg[], c: BuiltinCtx, i: number, def = NA): number {
@@ -389,15 +390,32 @@ export const MISC: Record<string, Builtin> = {
     const per: Record<string, number> = { M: 60000, H: 3600000, D: 86400000, W: 604800000 };
     return k * per[unit];
   },
+  // `timeframe.*` are derived from the loaded bars' own timestamps (median
+  // inter-bar gap) rather than a hardcoded "daily" guess, so imported MTF
+  // scripts see the real chart period. `in_seconds` keeps its legacy
+  // explicit-string parsing (bare number => days) that existing callers rely
+  // on; only the *no-arg* reads of the chart timeframe are inferred here.
   "timeframe.change": () => 0,
-  "timeframe.isseconds": () => 1,
-  "timeframe.isminutes": () => 0,
-  "timeframe.isdaily": () => 1,
-  "timeframe.isweekly": () => 0,
-  "timeframe.ismonthly": () => 0,
-  "timeframe.isintraday": () => 0,
-  "timeframe.period": () => "D",
-  "timeframe.multiplier": () => "1",
+  "timeframe.isseconds": (_a, c) => (inferTimeframeMs(c.bars) < MIN_MS ? 1 : 0),
+  "timeframe.isminutes": (_a, c) => {
+    const ms = inferTimeframeMs(c.bars);
+    return ms >= MIN_MS && ms < DAY_MS ? 1 : 0;
+  },
+  "timeframe.isdaily": (_a, c) => {
+    const ms = inferTimeframeMs(c.bars);
+    return ms >= DAY_MS && ms < WEEK_MS ? 1 : 0;
+  },
+  "timeframe.isweekly": (_a, c) => {
+    const ms = inferTimeframeMs(c.bars);
+    return ms >= WEEK_MS && ms < 30 * DAY_MS ? 1 : 0;
+  },
+  "timeframe.ismonthly": (_a, c) => (inferTimeframeMs(c.bars) >= 30 * DAY_MS ? 1 : 0),
+  "timeframe.isintraday": (_a, c) => (inferTimeframeMs(c.bars) < DAY_MS ? 1 : 0),
+  "timeframe.period": (_a, c) => periodStringFromMs(inferTimeframeMs(c.bars)),
+  "timeframe.multiplier": (_a, c) => {
+    const m = /^(\d+)/.exec(periodStringFromMs(inferTimeframeMs(c.bars)));
+    return m ? m[1] : "1";
+  },
   "timeframe.offset": () => "GMT+8",
 
   /* --------------------------------------------- tolerated but no numeric value */
