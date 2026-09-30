@@ -214,6 +214,33 @@ export const MISC: Record<string, Builtin> = {
   },
   "math.todegrees": (args, c) => (n(args, c, 0) * 180) / Math.PI,
   "math.toradians": (args, c) => (n(args, c, 0) * Math.PI) / 180,
+  // Trig takes/returns radians (matches Pine). Inverse-domain violations are na
+  // rather than a silent NaN from JS, so asin(2) reads as na the way TV does.
+  "math.sin": (args, c) => Math.sin(n(args, c, 0)),
+  "math.cos": (args, c) => Math.cos(n(args, c, 0)),
+  "math.tan": (args, c) => Math.tan(n(args, c, 0)),
+  "math.asin": (args, c) => {
+    const x = n(args, c, 0);
+    return x >= -1 && x <= 1 ? Math.asin(x) : NA;
+  },
+  "math.acos": (args, c) => {
+    const x = n(args, c, 0);
+    return x >= -1 && x <= 1 ? Math.acos(x) : NA;
+  },
+  "math.atan": (args, c) => Math.atan(n(args, c, 0)),
+  "math.atan2": (args, c) => Math.atan2(n(args, c, 0), n(args, c, 1)),
+  "math.sinh": (args, c) => Math.sinh(n(args, c, 0)),
+  "math.cosh": (args, c) => Math.cosh(n(args, c, 0)),
+  "math.tanh": (args, c) => Math.tanh(n(args, c, 0)),
+  "math.asinh": (args, c) => Math.asinh(n(args, c, 0)),
+  "math.acosh": (args, c) => {
+    const x = n(args, c, 0);
+    return x >= 1 ? Math.acosh(x) : NA;
+  },
+  "math.atanh": (args, c) => {
+    const x = n(args, c, 0);
+    return x > -1 && x < 1 ? Math.atanh(x) : NA;
+  },
   "math.pi": () => Math.PI,
   "math.e": () => Math.E,
   "math.random": (_args, c) => {
@@ -312,7 +339,11 @@ export const MISC: Record<string, Builtin> = {
   // Transparency is dropped, but the base colour must survive as the value it
   // already is (a `@color.x` sentinel or a `#rrggbb` literal) — flattening it to
   // text here made `color.new(color.green, 90)` render the palette default.
+  // `color.new(color, transp)` and its legacy v2/v3 form `color(color, transp)`
+  // are the same thing here: transparency is dropped, the base colour survives
+  // unchanged so `color(white, 100)` / `color(#ffd966, 84)` keep plotting.
   "color.new": (args, c) => (args[0] ? c.val(args[0].value) : sentinel("color.gray")),
+  color: (args, c) => (args[0] ? c.val(args[0].value) : sentinel("color.gray")),
   "color.rgb": () => sentinel("color.custom"),
   "color.tir": () => sentinel("color.custom"),
   "color.from_gradient": (_args, c) => {
@@ -343,7 +374,7 @@ export const MISC: Record<string, Builtin> = {
 
   /* ------------------------------------------------------- date & time */
   dayofmonth: (args, c) => datePart(args, c, (d) => d.getUTCDate()),
-  dayofweek: (args, c) => datePart(args, c, (d) => (d.getUTCDay() === 0 ? 7 : d.getUTCDay() + 1)),
+  dayofweek: (args, c) => datePart(args, c, (d) => d.getUTCDay() + 1),
   month: (args, c) => datePart(args, c, (d) => d.getUTCMonth() + 1),
   year: (args, c) => datePart(args, c, (d) => d.getUTCFullYear()),
   hour: (args, c) => datePart(args, c, (d) => d.getUTCHours()),
@@ -444,9 +475,51 @@ const MATH_ALIASES: Record<string, string> = {
   stdev: "math.stdev",
   variance: "math.variance",
   dev: "math.dev",
+  sin: "math.sin",
+  cos: "math.cos",
+  tan: "math.tan",
+  asin: "math.asin",
+  acos: "math.acos",
+  atan: "math.atan",
 };
 for (const [alias, target] of Object.entries(MATH_ALIASES)) {
   MISC[alias] = MISC[target];
+}
+
+/**
+ * Bare v2/v3 constants still seen in the wild. Early Pine (and the many
+ * `@version=3` scripts the corpus is full of) wrote unprefixed colour names
+ * (`red`, `white`, …) and short style/location keywords (`dotted`, `abovebar`,
+ * …) instead of the modern `color.red` / `plot.style_dotted` forms. These are
+ * enum-style constants that never change a plotted number, so they resolve to
+ * the SAME sentinel the dotted modern form produces — mapping them is faithful,
+ * not a loosening (a genuinely undefined name still throws in readIdent).
+ */
+const BARE_CONSTANTS: Record<string, V> = (() => {
+  const t: Record<string, V> = {};
+  for (const c of [
+    "aqua", "black", "blue", "fuchsia", "gray", "grey", "green", "lime", "maroon",
+    "navy", "olive", "orange", "purple", "red", "silver", "teal", "transparent",
+    "white", "yellow",
+  ])
+    t[c] = sentinel(`color.${c}`);
+  for (const s of [
+    "solid", "dotted", "dashed", "line", "histogram", "areabr", "cross", "circle", "square",
+    "arrowup", "arrowdown", "labelup", "labeldown", "triangleup", "triangledown",
+  ])
+    t[s] = sentinel(`plot.style_${s}`);
+  for (const l of ["abovebar", "belowbar", "absolute", "top", "bottom"]) t[l] = sentinel(`location.${l}`);
+  // `dayofweek` members are 1=Sunday..7=Saturday, matching the dayofweek() builtin.
+  Object.assign(t, {
+    "dayofweek.sunday": 1, "dayofweek.monday": 2, "dayofweek.tuesday": 3,
+    "dayofweek.wednesday": 4, "dayofweek.thursday": 5, "dayofweek.friday": 6, "dayofweek.saturday": 7,
+  });
+  return t;
+})();
+
+/** Resolve an unprefixed v2/v3 constant, or `undefined` if `name` isn't one. */
+export function resolveBareConstant(name: string): V | undefined {
+  return Object.prototype.hasOwnProperty.call(BARE_CONSTANTS, name) ? BARE_CONSTANTS[name] : undefined;
 }
 
 /** Names that exist only as decorative no-ops (never numeric). */

@@ -24,8 +24,17 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 18-file slice covers the categories
+(it is external, changeful content). This 26-file slice covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
 src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
 change that stops compiling/running one of them must fail the build.
+
+The slice was widened from 18 to 26 alongside the legacy-builtin work, so the
+gate now also pins the constructs those engine gaps used to reject: trig (`asin`
+/ `atan` in gaussian_filter, ehlers_mesa_adaptive_moving_averages), `linreg`
+(least_squares_moving_average), `percentrank` (stochastic_connors_rsi),
+`percentile_nearest_rank` + legacy `color(...)` + bare colour globals
+(interquartile_range_bands, negative_volume_index), a bare v2 style constant
+(percent_volume), and legacy unprefixed `security(...)` MTF
+(dividends_per_share_dps_yearly).

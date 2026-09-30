@@ -20,7 +20,7 @@
 
 import { PineError, parsePine, type Arg, type Expr, type Stmt } from "./pineLang";
 import { TA } from "./pineTa";
-import { MISC, assertUnsupported, isDecorativeName } from "./pineMath";
+import { MISC, assertUnsupported, isDecorativeName, resolveBareConstant } from "./pineMath";
 import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
 import { MAP_CTOR, MAP_OPS } from "./pineMap";
 import { OrderSim, estimateTick } from "./pineOrders";
@@ -77,6 +77,22 @@ const SOURCE_KEYS = ["close", "open", "high", "low", "volume", "hl2", "hlc3", "o
 const SERIES_NAMES = new Set([
   "open", "high", "low", "close", "volume", "hl2", "hlc3", "ohlc4", "time", "timenow",
 ]);
+
+/**
+ * Date builtins readable through history (`year[1]`, `month[2]`, …). Values
+ * match the pineMath zero-arg functions so `year == year[0]` holds; dayofweek
+ * is 1=Sunday..7=Saturday. Not in SERIES_NAMES so a user variable that happens
+ * to be named `year` is still read as the variable on a bare access.
+ */
+const DATE_FIELD: Record<string, (d: Date) => number> = {
+  year: (d) => d.getUTCFullYear(),
+  month: (d) => d.getUTCMonth() + 1,
+  dayofmonth: (d) => d.getUTCDate(),
+  dayofweek: (d) => d.getUTCDay() + 1,
+  hour: (d) => d.getUTCHours(),
+  minute: (d) => d.getUTCMinutes(),
+  second: (d) => d.getUTCSeconds(),
+};
 
 /** Bare reads that are enum values rather than functions (`color.red`, …). */
 const ENUM_NS =
@@ -303,6 +319,15 @@ export class PineRuntime {
     if (SERIES_NAMES.has(name)) {
       const i = this.bi - k;
       return i < 0 ? NA : this.builtinAt(name, i);
+    }
+    // Date builtins are zero-arg functions, but scripts still ask for their
+    // history (`year[1]`, `dayofweek[back]`). Derive the value from the target
+    // bar's own timestamp rather than throwing — this path used to abort.
+    if (DATE_FIELD[name]) {
+      const i = this.bi - k;
+      if (i < 0) return NA;
+      const t = this.activeBars.time[i];
+      return Number.isFinite(t) ? DATE_FIELD[name](new Date(t)) : NA;
     }
     const s = this.lookup(name);
     if (!s) throw new PineError(`未定义的变量 "${name}"，无法取历史值`);
@@ -829,6 +854,12 @@ export class PineRuntime {
         }
       }
     }
+    // Bare v2/v3 constants (unprefixed colour names, short style/location
+    // keywords, `dayofweek.monday`, …) resolve to their enum sentinel. Checked
+    // last so a real user variable of the same name (looked up above) still wins
+    // and a genuinely undefined name still throws honestly.
+    const bareConst = resolveBareConstant(name);
+    if (bareConst !== undefined) return bareConst;
     throw new PineError(`未定义的变量 "${name}"。已声明的变量：${this.declaredNames()}`);
   }
 
@@ -1098,6 +1129,10 @@ export class PineRuntime {
     // `request.*` decorative no-op) below.
     if (name === "request.security") return this.doSecurity(node);
     if (name === "request.security_lower_tf") return this.doSecurityLowerTf(node);
+    // Legacy v2/v3 `security(tickerid, period, expression)` has the SAME first
+    // three positional arguments as `request.security`, so route it to the one
+    // cross-timeframe implementation rather than duplicating the semantics.
+    if (name === "security") return this.doSecurity(node);
 
     switch (name) {
       case "indicator":

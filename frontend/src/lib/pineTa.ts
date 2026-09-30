@@ -60,6 +60,63 @@ export function sumStep(src: number, n: number, st: Win): number {
   return st.win.reduce((a, b) => a + b, 0);
 }
 
+/**
+ * `ta.percentrank(source, length)` — relative percentile of the newest value
+ * within the lookback. TradingView's documented convention counts values less
+ * than or equal to the current one, so the newest value itself is always
+ * included and the result lands in (0, 100]. Warm-up (a window shorter than
+ * `length`) and NaN sources read as na rather than a partial answer.
+ */
+export function percentrankStep(src: number, n: number, st: Win): number {
+  push(st, src, n);
+  if (!full(st, n) || Number.isNaN(src)) return NA;
+  let le = 0;
+  for (const v of st.win) if (!Number.isNaN(v) && v <= src) le++;
+  return (le / n) * 100;
+}
+
+/**
+ * `ta.linreg(source, length, offset)` — the value of the least-squares line fit
+ * over the window, evaluated at `x = length - 1 + offset` (x=0 is the oldest
+ * bar). offset defaults to 0, so the newest bar yields the trend value there.
+ */
+export function linregStep(src: number, n: number, offset: number, st: Win): number {
+  push(st, src, n);
+  if (!full(st, n)) return NA;
+  let sx = 0;
+  let sy = 0;
+  let sxx = 0;
+  let sxy = 0;
+  for (let i = 0; i < n; i++) {
+    const y = st.win[i];
+    if (Number.isNaN(y)) return NA;
+    sx += i;
+    sy += y;
+    sxx += i * i;
+    sxy += i * y;
+  }
+  const denom = n * sxx - sx * sx;
+  if (denom === 0) return NA;
+  const slope = (n * sxy - sx * sy) / denom;
+  const intercept = (sy - slope * sx) / n;
+  return intercept + slope * (n - 1 + offset);
+}
+
+/**
+ * `ta.percentile_nearest_rank(source, length, percentage)` — legacy v2 nearest-
+ * rank percentile: the smallest window value whose rank reaches the requested
+ * percentage, i.e. `sorted[ceil(pct/100 * length) - 1]`.
+ */
+export function percentileNearestRankStep(src: number, n: number, pct: number, st: Win): number {
+  push(st, src, n);
+  if (!full(st, n)) return NA;
+  const vals = st.win.filter((v) => !Number.isNaN(v));
+  if (vals.length < n) return NA;
+  const sorted = vals.slice().sort((a, b) => a - b);
+  const k = Math.max(1, Math.min(n, Math.ceil((pct / 100) * n)));
+  return sorted[k - 1];
+}
+
 export function wmaStep(src: number, n: number, st: Win): number {
   push(st, src, n);
   if (!full(st, n)) return NA;
@@ -328,6 +385,23 @@ export const TA: Record<string, Builtin> = {
   },
 
   roc: (args, c) => rocStep(srcOf(args, c), lenOf(args, c, 1, 9, "ta.roc"), c.state(() => ({ win: [] }) as Win)),
+
+  percentrank: (args, c) =>
+    percentrankStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.percentrank"), c.state(() => ({ win: [] }) as Win)),
+  linreg: (args, c) =>
+    linregStep(
+      srcOf(args, c),
+      lenOf(args, c, 1, 14, "ta.linreg"),
+      Math.trunc(numArg(args, c, 2, 0, "offset")),
+      c.state(() => ({ win: [] }) as Win),
+    ),
+  percentile_nearest_rank: (args, c) =>
+    percentileNearestRankStep(
+      srcOf(args, c),
+      lenOf(args, c, 1, 14, "ta.percentile_nearest_rank"),
+      numArg(args, c, 2, 50, "percentage", "pct"),
+      c.state(() => ({ win: [] }) as Win),
+    ),
 
   highest: (args, c) => highestStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.highest"), c.state(() => ({ win: [] }) as Win)),
   lowest: (args, c) => lowestStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.lowest"), c.state(() => ({ win: [] }) as Win)),

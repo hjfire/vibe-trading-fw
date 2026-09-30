@@ -174,5 +174,5 @@ suite("community Pine corpus pass-rate (measurement)", () => {
     );
     // Full report lands next to the corpus (local-only, gitignored).
     writeFileSync(resolve(CORPUS_DIR, "_pass-rate.json"), JSON.stringify(report, null, 2), "utf8");
-  });
+  }, 120_000); // runs every real script through the engine; give it room under parallel load
 });
