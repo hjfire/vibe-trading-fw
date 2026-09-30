@@ -666,6 +666,32 @@ describe("Pine user-defined types (type / .new / field access)", () => {
   });
 });
 
+describe("Pine soft keywords (type as identifier)", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("accepts `type` as a function parameter name and reads it", () => {
+    const a = run(
+      head +
+        "pick(type) =>\n    switch type\n        \"a\" => 10\n        => 99\n" +
+        "plot(pick(\"a\"), \"pa\")\nplot(pick(\"z\"), \"pz\")",
+    );
+    expect(line(a, "pa")!.values[10]).toBe(10); // param `type` used as switch subject
+    expect(line(a, "pz")!.values[10]).toBe(99);
+  });
+
+  it("still declares a `type Name` UDT while also using `type` as a variable", () => {
+    const a = run(
+      head +
+        "type T\n    float v\n" +
+        "x = T.new(7.0)\n" +
+        "addend(type) =>\n    x.v + type\n" +
+        "plot(addend(3.0), \"p\")",
+    );
+    expect(line(a, "p")!.values[10]).toBe(10); // UDT decl + `type` soft ident coexist
+  });
+});
+
 describe("Pine maps (map.*)", () => {
   const head = "//@version=5\nindicator(\"t\")\n";
   const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);

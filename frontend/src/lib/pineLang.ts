@@ -237,6 +237,14 @@ const TYPE_WORDS = new Set([
 /** Statement keywords that are never variable names. */
 const KEYWORDS = new Set(["if", "else", "for", "to", "by", "while", "switch", "var", "type"]);
 
+/**
+ * Contextual (soft) keywords. `type` is a real keyword only at the head of a
+ * `type Name` declaration (handled in parseStatement); everywhere else Pine
+ * lets it be an ordinary identifier — e.g. a parameter named `type`. Everything
+ * else in KEYWORDS is reserved outright.
+ */
+const SOFT_KEYWORDS = new Set(["type"]);
+
 /** Prefixes that only introduce a user-defined function. */
 const FN_KEYWORDS = new Set(["def", "function"]);
 
@@ -919,7 +927,7 @@ export class PineParser {
       return { k: "arr", items, line: t.line };
     }
     if (t.kind === "ident") {
-      if (KEYWORDS.has(t.value)) {
+      if (KEYWORDS.has(t.value) && !SOFT_KEYWORDS.has(t.value)) {
         throw new PineError(`第 ${t.line} 行："${t.value}" 是关键字，不能这样使用`);
       }
       this.next();
