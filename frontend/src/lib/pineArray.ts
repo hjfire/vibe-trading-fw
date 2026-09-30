@@ -137,6 +137,22 @@ export const ARRAY_OPS: Record<string, ArrayOp> = {
   },
   concat: (arr, p) => (Array.isArray(p[0]) ? arr.concat(p[0] as V[]) : arr.slice()),
   copy: (arr) => arr.slice(),
+  // `array.join(id, separator, index_from?, index_to?)` → string. Concatenates
+  // the elements (each rendered with `asStr`) with `separator` inserted only
+  // *between* them, never leading/trailing (TV: "the specified separator only
+  // between each element string"). `index_from` (default 0) and `index_to`
+  // (default na → through the end, exclusive) narrow the joined subset, the
+  // same half-open range `slice`/`fill` use. Returns the new string; the
+  // source array is untouched.
+  join: (arr, p) => {
+    const sep = p.length >= 1 ? asStr(p[0]) : "";
+    const from = p.length >= 2 ? Math.max(0, idx(p[1])) : 0;
+    const toRaw = p.length >= 3 ? idx(p[2]) : -1;
+    const to = toRaw < 0 ? arr.length : Math.min(toRaw, arr.length);
+    const parts: string[] = [];
+    for (let i = from; i < to; i += 1) parts.push(asStr(arr[i]));
+    return parts.join(sep);
+  },
   sum: (arr) => {
     const v = nums(arr);
     return v.length ? v.reduce((a, b) => a + b, 0) : NA;

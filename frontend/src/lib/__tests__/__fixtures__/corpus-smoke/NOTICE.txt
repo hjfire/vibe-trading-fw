@@ -84,12 +84,24 @@ the string-enum fix — a numeric `options=[1,2,3,4]` input was mis-routed to th
 string branch and blanked its `plot`. The type/defval/options string-ness check
 now keeps numeric enums numeric, so the committed gate caught the regression.)
 
-The nine scripts still failing are NOT engine gaps we papered over: they
+The eight scripts still aborting are NOT engine gaps we papered over: they
 reference variables never declared anywhere (`n`, `period`, `accdist`, `pvt`),
-which TradingView also rejects, or are a plotting-less unit-test harness that
-needs array methods beyond the current subset (`array.join`). Leaving them red
-is the honest outcome — implementing a builtin only to watch a broken script
-emit a plausible-but-wrong number would be worse than an accurate error.
+which TradingView also rejects. Leaving them red is the honest outcome —
+implementing a builtin only to watch a broken script emit a plausible-but-wrong
+number would be worse than an accurate error.
+
+Defect J closed one more real gap: `array.join(id, separator, index_from?,
+index_to?)` was missing from ARRAY_OPS (it concatenates the elements with the
+separator inserted only *between* them, an exclusive `[from, to)` subset when
+indices are given, `index_to` default running to the end). This cleared
+`utils/unit_testing_framework.pine`, which called it and aborted; everget
+runtime_abort fell 9 -> 8 (88.6% held — ok unchanged). It now runs to
+completion but plots nothing (it is a label/table-only unit-test harness), so it
+moved to `no_output`, NOT into the pinned slice: the smoke gate asserts a real
+plotting output, and a script that faithfully produces none must not be faked
+into the green set. Verified against exact TV strings by pineBuiltins.test.ts
+(separator between-only, empty separator, integer elements rendered without
+`.0`, and the exclusive index subset `join(a, "", 1, 3) == "23"`).
 
 Second source: Pine v6 (mihakralj)
 ----------------------------------

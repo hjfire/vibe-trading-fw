@@ -352,3 +352,31 @@ describe("array.fill (缺陷 I — whole-array seed and ranged fill)", () => {
     expect(lastPlotted(src)).toBeCloseTo(2, 10);
   });
 });
+
+describe("array.join (缺陷 J — concatenate elements to a string, separator between only)", () => {
+  const H6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("joins a string array with the separator only between elements", () => {
+    // "x-y-z": separator sits between, never leading or trailing.
+    const src = `${H6}a = array.from("x", "y", "z")\nplot(array.join(a, "-") == "x-y-z" ? 1 : 0)\n`;
+    expect(lastPlotted(src)).toBe(1);
+  });
+
+  it("empty separator concatenates with no gap (default form)", () => {
+    const src = `${H6}a = array.from("ab", "cd")\nplot(array.join(a, "") == "abcd" ? 1 : 0)\n`;
+    expect(lastPlotted(src)).toBe(1);
+  });
+
+  it("numeric elements render as Pine strings (integer without .0)", () => {
+    const src = `${H6}a = array.from(1, 2, 3)\nplot(array.join(a, ",") == "1,2,3" ? 1 : 0)\n`;
+    expect(lastPlotted(src)).toBe(1);
+  });
+
+  it("honors index_from / index_to as an exclusive joined subset", () => {
+    // ["1","2","3","4"] -> join [1,3) with "" -> "2" + "3" = "23".
+    const full = `${H6}a = array.from("1", "2", "3", "4")\n`;
+    expect(lastPlotted(`${full}plot(array.join(a, "", 1, 3) == "23" ? 1 : 0)\n`)).toBe(1);
+    // index_to omitted (na) runs to the end: join [2,end) with "+" -> "3+4".
+    expect(lastPlotted(`${full}plot(array.join(a, "+", 2) == "3+4" ? 1 : 0)\n`)).toBe(1);
+  });
+});
