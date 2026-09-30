@@ -112,6 +112,8 @@ export class OrderSim {
   private pending: Order[] = [];
   private readonly trades: PineTrade[] = [];
   private readonly equity: number[] = [];
+  /** Net direction held during each bar (+1/-1/0), index-aligned with bars. */
+  private readonly held: number[] = [];
 
   constructor(
     private readonly bars: PineBars,
@@ -177,6 +179,13 @@ export class OrderSim {
     this.bi = i;
     if (this.ordersOnClose) this.processPending(i, "close");
     this.equity[i] = this.markEquity(i);
+    // Direction held *during* bar i: beginBar already filled last bar's orders
+    // (unless orders fill on close, which was just processed), so the live book
+    // right here is what the strategy is carrying through this bar. Hedged or
+    // pyramided books net to the sign of the summed sides.
+    let net = 0;
+    for (const p of this.pos.values()) net += p.dir;
+    this.held[i] = Math.sign(net);
   }
 
   /* ------------------------------------------------------------- order API */
@@ -634,6 +643,7 @@ export class OrderSim {
       defaultQtyValue: this.qtyValue,
       ordersOnClose: this.ordersOnClose,
       equity: this.equity.slice(0, b.list.length),
+      positions: this.held.slice(0, b.list.length),
       trades: this.trades.slice(),
       openSide: openSide === undefined ? "flat" : openSide === 1 ? "long" : "short",
       openEntries: this.pos.size,

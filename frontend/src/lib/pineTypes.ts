@@ -182,6 +182,16 @@ export interface PineReport {
   ordersOnClose: boolean;
   /** Equity sampled per bar, index-aligned with the bar list. */
   equity: number[];
+  /**
+   * Net direction the strategy actually holds during each bar, index-aligned
+   * with the bar list: `+1` long, `-1` short, `0` flat (hedged books net to
+   * the sign of the summed sides). This is the *held* state — the fill has
+   * already happened — so a consumer that executes on the next bar must
+   * forward-shift it by one to recover the decision made at each bar's close
+   * (the backend lookup bridge does exactly this). Exported so a Pine
+   * strategy can drive the production backtest without re-implementing Pine.
+   */
+  positions: number[];
   trades: PineTrade[];
   openSide: "long" | "short" | "flat";
   openEntries: number;
