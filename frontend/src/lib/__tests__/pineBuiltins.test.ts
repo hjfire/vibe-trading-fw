@@ -854,3 +854,49 @@ describe("field access on an na UDT base yields na, not an undeclared abort", ()
     expect(vals[25]).toBe(9); // after the bar-20 push: q.x resolves through the record
   });
 });
+
+/**
+ * UDT methods declared in a `type` body (`float area() => x*y`) and called as
+ * `obj.area()`. Before this the method line was swallowed as a field and the
+ * call silently yielded nothing. The runtime binds the record as the implicit
+ * receiver (`this` + each field name) and runs the body like a function.
+ */
+describe("UDT methods on a record run with the record as implicit receiver", () => {
+  const V6 = "//@version=6\nindicator(\"t\", overlay=true)\n";
+
+  it("an inline accessor reads bare field names off the receiver", () => {
+    const src =
+      V6 +
+      "type Box\n    float x\n    float y\n    float area() => x * y\n" +
+      "b = Box.new(3, 4)\nplot(b.area())\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    expect(lineValues(src).slice(0, 3)).toEqual([12, 12, 12]);
+  });
+
+  it("a method can use the explicit `this.field` receiver form", () => {
+    const src =
+      V6 + "type Point\n    float x\n    float dbl() => this.x * 2\n" + "p = Point.new(5)\nplot(p.dbl())\n";
+    expect(artifact(src).abort).toBeFalsy();
+    expect(lineValues(src)[0]).toBe(10);
+  });
+
+  it("a block method with a param mutates a field and persists it via write-back", () => {
+    const src =
+      V6 +
+      "type Counter\n    int n\n    int bump(int k) =>\n        n := n + k\n        n\n" +
+      "var Counter c = Counter.new(0)\nplot(c.bump(1))\n";
+    expect(artifact(src).abort).toBeFalsy();
+    // Each bar bumps the shared record by 1 — proves both the block body and
+    // that the mutated field is written back into the persisted record.
+    expect(lineValues(src).slice(0, 5)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("a method body still sees script series like bar_index", () => {
+    const src =
+      V6 + "type T\n    int off\n    int at() => bar_index + off\n" + "t = T.new(100)\nplot(t.at())\n";
+    const vals = lineValues(src);
+    expect(vals[0]).toBe(100);
+    expect(vals[2]).toBe(102);
+  });
+});

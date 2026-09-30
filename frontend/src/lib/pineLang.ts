@@ -279,7 +279,22 @@ export type Stmt =
   | { k: "decl"; names: string[]; value: Expr; persist: boolean; line: number }
   | { k: "assign"; name: string; value: Expr; line: number }
   | { k: "expr"; value: Expr; line: number }
-  | { k: "type"; name: string; fieldNames: string[]; line: number }
+  | {
+      k: "type";
+      name: string;
+      fieldNames: string[];
+      /** Methods declared in the type body (`float area() => x*y`). Carried in
+       *  the same shape as a function so the runtime can bind the implicit
+       *  receiver (the record) and run the body on `obj.method(...)` calls. */
+      methods: {
+        k: "fn";
+        name: string;
+        params: { name: string; def: Expr | null }[];
+        body: Expr | Stmt[];
+        line: number;
+      }[];
+      line: number;
+    }
   | { k: "if"; arms: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[] | null; line: number }
   | { k: "for"; varName: string; from: Expr; to: Expr; step: Expr | null; body: Stmt[]; line: number }
   | { k: "forin"; varName: string; source: Expr; body: Stmt[]; line: number }
@@ -854,9 +869,16 @@ export class PineParser {
     }
     this.endOfStmt();
     const fieldNames: string[] = [];
+    const methods: Extract<Stmt, { k: "type" }>["methods"] = [];
     for (;;) {
       const first = this.skipNl();
       if (first.kind === "eof" || first.col <= indent) break;
+      // A method line (`float area() => x*y`) carries a parameter list; a field
+      // line never does, so the `ident (` test cleanly separates them.
+      if (this.isMethodLine()) {
+        methods.push(this.parseTypeMethod(indent));
+        continue;
+      }
       // Consume the whole field line; the field NAME is the LAST identifier
       // BEFORE an optional `= default` (`array<float> f1` → f1, `matrix<float>
       // l0 = na` → l0, not the default expression's trailing `na`). Generics
@@ -873,7 +895,65 @@ export class PineParser {
       }
       if (lastIdent) fieldNames.push(lastIdent);
     }
-    return { k: "type", name: nameTok.value, fieldNames, line };
+    return { k: "type", name: nameTok.value, fieldNames, methods, line };
+  }
+
+  /** A type-body line is a method (not a field) when an identifier is directly
+   *  followed by `(` — fields never carry a parameter list. A `=` before any
+   *  such `(` means it is a field with a default, not a method. */
+  private isMethodLine(): boolean {
+    for (let p = this.pos; p < this.tk.length; p++) {
+      const t = this.tk[p];
+      if (t.kind === "nl" || t.kind === "eof") return false;
+      if (t.kind === "op" && (t.value === "=" || t.value === ":=")) return false;
+      if (
+        t.kind === "ident" &&
+        this.tk[p + 1]?.kind === "op" &&
+        this.tk[p + 1].value === "("
+      )
+        return true;
+    }
+    return false;
+  }
+
+  /** Parse one method declaration inside a `type` body. The shape mirrors
+   *  parseFn (params + inline `=> expr` or `=>` block), so the runtime can run
+   *  the body the same way; the receiver is implicit (bound by the caller). */
+  private parseTypeMethod(indent: number): Extract<Stmt, { k: "type" }>["methods"][number] {
+    // Drop an optional return-type annotation: built-in words (`float`/`int`…)
+    // via dropTypeWords, and a user-type name (`Box next(`) via the ident-ident
+    // rule, leaving the method name.
+    this.dropTypeWords();
+    while (this.peek().kind === "ident" && this.tk[this.pos + 1]?.kind === "ident") this.next();
+    const nameTok = this.next();
+    if (nameTok.kind !== "ident") {
+      throw new PineError(`第 ${nameTok.line} 行：方法名只能是标识符`);
+    }
+    this.expectOp("(");
+    const params: { name: string; def: Expr | null }[] = [];
+    if (!this.isOp(")")) {
+      do {
+        this.skipNl();
+        this.dropTypeWords();
+        while (this.peek().kind === "ident" && this.tk[this.pos + 1]?.kind === "ident") this.next();
+        const pt = this.peek();
+        if (pt.kind !== "ident") {
+          throw new PineError(`第 ${pt.line} 行：方法参数只能是名字（可带默认值，如 m(k = 1)）`);
+        }
+        this.next();
+        const def = this.eatOp("=") ? this.parseExpr() : null;
+        params.push({ name: pt.value, def });
+      } while (this.eatOp(","));
+    }
+    this.expectOp(")");
+    this.expectOp("=>");
+    const rest = this.peek();
+    if (rest.kind === "nl" || rest.kind === "eof") {
+      return { k: "fn", name: nameTok.value, params, body: this.parseChildBlock(indent), line: nameTok.line };
+    }
+    const body = this.parseExpr();
+    this.endOfStmt();
+    return { k: "fn", name: nameTok.value, params, body, line: nameTok.line };
   }
 
   /** `while cond` + an indented block — mirrors parseFor's body handling. */

@@ -245,6 +245,9 @@ export class PineRuntime {
   private readonly fns = new Map<string, FnStmt>();
   /** Registered UDT (`type Name`) field layouts, name → field names in order. */
   private readonly types = new Map<string, string[]>();
+  /** UDT methods, typeName → methodName → definition. `obj.m(...)` looks the
+   *  receiver's type up here and runs `m` with the record bound as `this`. */
+  private readonly typeMethods = new Map<string, Map<string, FnStmt>>();
   /**
    * Current variable scope. "" is the script's global scope; a call site of a
    * user function gets `f<cid>`, because in Pine each call site keeps its own
@@ -599,6 +602,11 @@ export class PineRuntime {
         // A record type declaration: register the field layout once. The value
         // model is a positional `V[]` tagged with `@udt:<name>`, built by `.new`.
         this.types.set(s.name, s.fieldNames);
+        if (s.methods && s.methods.length) {
+          const m = new Map<string, FnStmt>();
+          for (const fn of s.methods) m.set(fn.name, fn);
+          this.typeMethods.set(s.name, m);
+        }
         this.lastValue = sentinel("void");
         return;
       }
@@ -818,6 +826,69 @@ export class PineRuntime {
           this.exec(st);
           out = this.lastValue;
         }
+      }
+    } finally {
+      this.scope = outer;
+      this.callPath = outerPath;
+      this.fnDepth -= 1;
+    }
+    return out;
+  }
+
+  /** The live `@udt:`-tagged record held by a variable, or undefined when the
+   *  name is not declared or its value is not a record. */
+  private udtReceiver(name: string): V[] | undefined {
+    const s = this.lookup(name);
+    if (!s) return undefined;
+    const v = s.cur;
+    if (Array.isArray(v) && typeof v[0] === "string" && v[0].startsWith("@udt:")) return v as V[];
+    return undefined;
+  }
+
+  /**
+   * Run a UDT method with the record as the implicit receiver. The record is
+   * bound as `this` (so `this.field` reads/writes reuse the existing @udt
+   * accessors) and every field name is bound to its current value (so a bare
+   * `field` inside the body resolves to the receiver). After the body, fields
+   * that were reassigned locally are written back into the shared record so
+   * `x := x + 1` style methods persist; declared params are excluded from the
+   * write-back so a same-named parameter never corrupts a field slot.
+   */
+  private callMethod(fn: FnStmt, rec: V[], args: Arg[], cid: number): V {
+    if (this.fnDepth >= FN_DEPTH_CAP) {
+      throw new PineError(`方法 "${fn.name}" 递归超过 ${FN_DEPTH_CAP} 层，请检查是否无限递归`);
+    }
+    const outer = this.scope;
+    const outerPath = this.callPath;
+    const typeName = String(rec[0]).slice("@udt:".length);
+    const fields = this.types.get(typeName) ?? [];
+    const bound: V[] = [];
+    for (let i = 0; i < fn.params.length; i++) {
+      const hit = argAt(args, i, fn.params[i].name);
+      bound.push(hit ? this.val(hit) : fn.params[i].def ? this.val(fn.params[i].def as Expr) : NA);
+    }
+    const params = new Set(fn.params.map((p) => p.name));
+    this.fnDepth += 1;
+    let out: V = NA;
+    try {
+      this.scope = `f${cid}`;
+      this.callPath = outerPath ? `${outerPath}>f${cid}` : `f${cid}`;
+      this.write(this.vkey("this"), rec, false);
+      for (let i = 0; i < fields.length; i++) this.write(this.vkey(fields[i]), (rec as V[])[i + 1], false);
+      for (let i = 0; i < fn.params.length; i++) this.write(this.vkey(fn.params[i].name), bound[i], false);
+      if (!Array.isArray(fn.body)) {
+        out = this.val(fn.body);
+      } else {
+        for (const st of fn.body) {
+          this.lastValue = NA;
+          this.exec(st);
+          out = this.lastValue;
+        }
+      }
+      for (let i = 0; i < fields.length; i++) {
+        if (params.has(fields[i])) continue;
+        const s = this.lookup(fields[i]);
+        if (s && s.live) (rec as V[])[i + 1] = s.cur;
       }
     } finally {
       this.scope = outer;
@@ -1444,6 +1515,20 @@ export class PineRuntime {
     // Method-style calls on a tracked variable (`lbl.set_text(…)`) can only be
     // no-ops here; say so instead of guessing a type for the name.
     const head = name.split(".")[0];
+    // A real UDT method call `obj.area()` on a `@udt:` record binds the record
+    // as the implicit receiver and runs the registered body. This must precede
+    // the array-method / object-var fallbacks so a genuine method is never
+    // silently warned away.
+    if (head && !head.includes(".")) {
+      const method2 = name.slice(head.length + 1);
+      if (method2 && !method2.includes(".")) {
+        const rec = this.udtReceiver(head);
+        if (rec) {
+          const mfn = this.typeMethods.get(String(rec[0]).slice("@udt:".length))?.get(method2);
+          if (mfn) return this.callMethod(mfn, rec, args, node.cid);
+        }
+      }
+    }
     // `buf.push(v)` / `arr.size()` on an array variable route to the array
     // library with the variable's live array as the target. Only a value that
     // really is a `V[]` counts, so decorative object vars still warn below.
