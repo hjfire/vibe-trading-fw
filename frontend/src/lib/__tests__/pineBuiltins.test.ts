@@ -512,3 +512,100 @@ describe("matrix.* namespace (缺陷 L — new/get/set/rows/columns/copy/mult, m
     expect(lastPlotted(src)).toBe(1);
   });
 });
+
+/* ------------------------------------------ defect M: v6 "booleans cannot be na" */
+
+describe("v6 comparison-with-na resolves to false, pre-v6 stays na (缺陷 M)", () => {
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+  const V5 = "//@version=5\nindicator(\"t\")\n";
+  // `d` is na only on the first bar (close - close[1]); the rest are real.
+  const w = V6 + "d = close - close[1]\nplot(d > 0 ? 1 : 0)\n";
+  const v5w = V5 + "d = close - close[1]\nplot(d > 0 ? 1 : 0)\n";
+
+  it("v6: na > x is false, so the warmup bar takes the else branch (draws 0)", () => {
+    expect(lineValues(w)[0]).toBe(0);
+  });
+
+  it("v5: na > x stays na, so the ternary blanks the warmup bar (unchanged)", () => {
+    expect(Number.isNaN(lineValues(v5w)[0])).toBe(true);
+  });
+
+  it("v6: arithmetic against na is still na (gate is scoped to comparisons only)", () => {
+    expect(Number.isNaN(lineValues(V6 + "d = close - close[1]\nplot(d + 1)\n")[0])).toBe(true);
+  });
+
+  it("v6: a na warmup comparison no longer poisons a `var` accumulator (CMO)", () => {
+    // Chande momentum shape: up = diff > 0 ? diff : 0.0; var acc += up. In v6
+    // bar 0 gives up=0.0 so acc stays finite; produced() must be true.
+    const cmoish =
+      V6 + "var float acc = 0.0\nd = close - close[1]\nu = d > 0 ? d : 0.0\nacc += u\nplot(acc)\n";
+    expect(produced(cmoish)).toBe(true);
+    expect(lineValues(cmoish)[0]).toBe(0);
+  });
+
+  it("v5: the same accumulator still na-propagates and blanks (faithful, not loosened)", () => {
+    // The v5 warmup na-poisons the accumulator bar-for-bar, exactly as TradingView
+    // v5 would. We fixed the v6 rule only; this proves v5 semantics are intact.
+    const v5acc =
+      V5 + "var float acc = 0.0\nd = close - close[1]\nu = d > 0 ? d : 0.0\nacc += u\nplot(acc)\n";
+    expect(produced(v5acc)).toBe(false);
+  });
+});
+
+/* --------- defect N: legacy v3/v4 bare series, hlcc4 source, recursive declaration */
+
+describe("legacy bare series / hlcc4 / recursive declaration (缺陷 N)", () => {
+  const V3 = "//@version=3\nstudy(\"t\")\n";
+  const V4 = "//@version=4\nstudy(\"t\")\n";
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+  const tail = (a: number[]) => a[a.length - 1];
+  const B = BARS as { high: number; low: number; close: number; volume: number }[];
+
+  it("hlcc4 = (h + l + c + c)/4 and the corrected hlc3 = (h + l + c)/3", () => {
+    const b = B[B.length - 1];
+    expect(tail(lineValues(V6 + "plot(hlcc4)\n"))).toBeCloseTo((b.high + b.low + b.close + b.close) / 4, 10);
+    expect(tail(lineValues(V6 + "plot(hlc3)\n"))).toBeCloseTo((b.high + b.low + b.close) / 3, 10);
+  });
+
+  it("v3 `n` is the bar index (replaced by bar_index in v4)", () => {
+    expect(tail(lineValues(V3 + "plot(n)\n"))).toBe(B.length - 1);
+    expect(tail(lineValues(V3 + "plot(n - bar_index)\n"))).toBe(0);
+  });
+
+  it("v3 bare `accdist` equals the cumulative A/D line (hand-summed CLV * volume)", () => {
+    let acc = 0;
+    for (const b of B) {
+      const span = b.high - b.low;
+      if (span !== 0) acc += ((2 * b.close - b.high - b.low) / span) * b.volume;
+    }
+    expect(tail(lineValues(V3 + "plot(accdist)\n"))).toBeCloseTo(acc, 4);
+  });
+
+  it("v4 bare `pvt` equals cumulative (percent change) * volume", () => {
+    let acc = 0;
+    for (let i = 1; i < B.length; i++) {
+      acc += ((B[i].close - B[i - 1].close) / B[i - 1].close) * B[i].volume;
+    }
+    expect(tail(lineValues(V4 + "plot(pvt)\n"))).toBeCloseTo(acc, 4);
+  });
+
+  it("a legacy bare name is still overridable by a user variable of the same name", () => {
+    // Scope lookup runs before the legacy fallback, so a script naming its own
+    // `accdist` wins — the fallback only fills genuinely undefined bare names.
+    expect(tail(lineValues(V3 + "accdist = 7\nplot(accdist)\n"))).toBe(7);
+  });
+
+  it("a recursive series declaration `float x = f(x[1])` seeds at na, not abort", () => {
+    // Ehlers-filter idiom: bar 0 has no ji[1] -> nz -> 0, so ji[0]=1 then +1/bar.
+    const vals = lineValues(V6 + "float ji = nz(ji[1]) + 1\nplot(ji)\n");
+    expect(vals[0]).toBe(1);
+    expect(tail(vals)).toBe(BARS.length);
+  });
+
+  it("a genuine offset-0 self-reference still aborts (faithful, not loosened)", () => {
+    // `float x = x + 1` reads its own *current* value, which Pine rejects as an
+    // undeclared identifier; only the history-offset form is allowed to seed na.
+    const out = compilePine(V6 + "float x = x + 1\nplot(x)\n", BARS, {});
+    expect("error" in out ? true : Boolean(out.abort)).toBe(true);
+  });
+});

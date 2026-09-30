@@ -886,6 +886,20 @@ export const TA: Record<string, Builtin> = {
     return st.acc;
   },
 
+  pvt: (args, c) => {
+    // Price Volume Trend: cumulative (percent price change) x volume. TradingView
+    // seeds bar 0 at 0 (no prior close), then adds each bar's signed turn.
+    const src = args.length ? srcOf(args, c) : c.bars.close[c.bi];
+    const volArg = argAt(args, 1, "volume");
+    const vol = volArg ? asNum(c.val(volArg)) : c.bars.volume[c.bi];
+    const st = c.state(() => ({ prev: NA, acc: 0 })) as { prev: number; acc: number };
+    if (!Number.isNaN(st.prev) && !Number.isNaN(src) && !Number.isNaN(vol) && st.prev !== 0) {
+      st.acc += ((src - st.prev) / st.prev) * vol;
+    }
+    st.prev = src;
+    return st.acc;
+  },
+
   ad: (_args, c) => {
     const b = c.bars;
     const i = c.bi;

@@ -73,11 +73,26 @@ class ControlFlow {
 }
 
 /** Sources selectable through `input.source()`. */
-const SOURCE_KEYS = ["close", "open", "high", "low", "volume", "hl2", "hlc3", "ohlc4"];
+const SOURCE_KEYS = ["close", "open", "high", "low", "volume", "hl2", "hlc3", "hlcc4", "ohlc4"];
 
 const SERIES_NAMES = new Set([
-  "open", "high", "low", "close", "volume", "hl2", "hlc3", "ohlc4", "time", "timenow",
+  "open", "high", "low", "close", "volume", "hl2", "hlc3", "hlcc4", "ohlc4", "time", "timenow",
 ]);
+
+/**
+ * v3/v4 series built-ins that became `ta.*` functions in v5 (per TradingView's
+ * v4→v5 migration guide). Community scripts still read them as bare names, so
+ * for `ver <= 4` an undefined bare identifier resolves through the matching
+ * `ta.*` state machine. User variables of the same name win (this is consulted
+ * only after scope lookup fails), and v5/v6 never see these as globals.
+ */
+const LEGACY_SERIES: Record<string, string> = {
+  accdist: "ad",
+  pvt: "pvt",
+  obv: "obv",
+  nvi: "nvi",
+  pvi: "pvi",
+};
 
 /**
  * Date builtins readable through history (`year[1]`, `month[2]`, …). Values
@@ -215,6 +230,21 @@ export class PineRuntime {
   >();
   private ops = 0;
   private histCap = HIST_CAP;
+  /**
+   * vkey set of names currently mid-declaration. Lets `float x = f(x[1])` — the
+   * recursive-series idiom (Ehlers filters) — read its own prior-bar history as
+   * na on bar 0 instead of aborting on "undefined". Cleared as soon as the
+   * initializer finishes; a bare offset-0 self-reference still aborts, matching
+   * TradingView, because only `readBack` (history) consults this set.
+   */
+  private readonly pending = new Set<string>();
+  /** Per-bar memo so a bare legacy series (`accdist`/`pvt`/…) advances its
+   *  accumulator once per bar even when read many times in the same bar. */
+  private readonly legacyMemo = new Map<string, number>();
+  /** Stable synthetic call-site id per legacy name so its `ta.*` rolling state
+   *  key is identical across bars (the accumulator must not reset). */
+  private readonly legacyCids = new Map<string, number>();
+  private legacyCidSeq = 1_000_000;
   /** Variable the interpreter is assigning into, for auto-generated titles. */
   private target: string | null = null;
 
@@ -230,8 +260,15 @@ export class PineRuntime {
   /* order simulation (only active for strategy() scripts) */
   private readonly sim: OrderSim;
 
+  /** `//@version=N` dialect number. Drives the v6 "booleans cannot be na" rule
+   *  in `binary()`; defaults to a modern 5 when the header is absent so pre-v6
+   *  na-propagation (warmup blanking) is preserved for unversioned snippets. */
+  private readonly ver: number;
+
   constructor(src: string, private readonly bars: PineBars, opts: PineRunOptions = {}) {
     this.activeBars = this.bars;
+    const m = /@version\s*=\s*(\d+)/.exec(src);
+    this.ver = m ? Number(m[1]) : 5;
     this.stmts = parsePine(src);
     // Hoist function definitions: real scripts open with `if … f(...)` before
     // the `f(x) =>` line, and per-bar execution must not depend on order.
@@ -341,7 +378,12 @@ export class PineRuntime {
       return Number.isFinite(t) ? DATE_FIELD[name](new Date(t)) : NA;
     }
     const s = this.lookup(name);
-    if (!s) throw new PineError(`未定义的变量 "${name}"，无法取历史值`);
+    if (!s) {
+      // Reading a series' own history inside its own declaration (`float x = f(x[1])`)
+      // is na on the first bar, not an undefined-variable abort.
+      if (this.pending.has(this.vkey(name))) return NA;
+      throw new PineError(`未定义的变量 "${name}"，无法取历史值`);
+    }
     const idx = s.hist.length - k;
     return idx < 0 ? NA : s.hist[idx];
   }
@@ -363,7 +405,9 @@ export class PineRuntime {
       case "hl2":
         return (b.high[i] + b.low[i]) / 2;
       case "hlc3":
-        return (b.high[i] + b.low[i] * 2) / 3;
+        return (b.high[i] + b.low[i] + b.close[i]) / 3;
+      case "hlcc4":
+        return (b.high[i] + b.low[i] + b.close[i] + b.close[i]) / 4;
       case "ohlc4":
         return (b.open[i] + b.high[i] + b.low[i] + b.close[i]) / 4;
       case "timenow":
@@ -409,6 +453,7 @@ export class PineRuntime {
   }
 
   private beginBar(): void {
+    this.legacyMemo.clear();
     for (const s of this.env.values()) {
       if (s.persist) continue;
       s.cur = NA;
@@ -448,7 +493,15 @@ export class PineRuntime {
       case "decl": {
         const prev = this.target;
         this.target = s.names[0];
-        const value = this.val(s.value);
+        // Allow the initializer to read the declared series' own history
+        // (`float ji = f(ji[1])`) as na before the slot exists on bar 0.
+        for (const n of s.names) this.pending.add(this.vkey(n));
+        let value: V;
+        try {
+          value = this.val(s.value);
+        } finally {
+          for (const n of s.names) this.pending.delete(this.vkey(n));
+        }
         this.target = prev;
         this.lastValue = value;
         for (let i = 0; i < s.names.length; i++) {
@@ -755,7 +808,11 @@ export class PineRuntime {
         return e.op === "-" ? -v : v;
       }
       case "tern": {
-        // `na ? a : b` is na in Pine — a blank plot, not the else branch.
+        // `na ? a : b` is na in Pine — a blank plot, not the else branch. This
+        // warmup blanking is load-bearing for pre-v6 scripts (`rsi > 70 ? 1 : 0`
+        // must not draw 0 while rsi is na). v6 changed the *comparison*, not the
+        // ternary: see `binary()`, where `na > x` yields false so this sees a
+        // real false and takes the else branch.
         const cond = asNum(this.val(e.c));
         if (Number.isNaN(cond)) return NA;
         return cond !== 0 ? this.val(e.a) : this.val(e.b);
@@ -901,6 +958,29 @@ export class PineRuntime {
     // and a genuinely undefined name still throws honestly.
     const bareConst = resolveBareConstant(name);
     if (bareConst !== undefined) return bareConst;
+    // Legacy pre-v5 bare names: `n` was the v3 bar-index (replaced by bar_index
+    // in v4), and `accdist`/`pvt`/`obv`/`nvi`/`pvi` were bare series built-ins
+    // (moved under `ta.` in v5). Consulted last so a real user variable of the
+    // same name still wins; gated by version so v5/v6 keep honest aborts.
+    if (this.ver <= 3 && name === "n") return this.bi;
+    if (this.ver <= 4) {
+      const taKey = LEGACY_SERIES[name];
+      if (taKey) {
+        const memo = this.legacyMemo.get(name);
+        if (memo !== undefined) return memo;
+        let cid = this.legacyCids.get(name);
+        if (cid === undefined) {
+          cid = this.legacyCidSeq++;
+          this.legacyCids.set(name, cid);
+        }
+        const savedCid = this.ctxCid;
+        this.ctxCid = cid;
+        const v = asNum(TA[taKey]([], this.ctx));
+        this.ctxCid = savedCid;
+        this.legacyMemo.set(name, v);
+        return v;
+      }
+    }
     throw new PineError(`未定义的变量 "${name}"。已声明的变量：${this.declaredNames()}`);
   }
 
@@ -926,7 +1006,27 @@ export class PineRuntime {
     const x = asNum(a);
     const y = asNum(b);
     // Comparisons against na stay na, so a plot goes blank instead of drawing 0.
-    if (Number.isNaN(x) || Number.isNaN(y)) return NA;
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      // v6 "booleans cannot be na": a comparison with an unknown operand is a
+      // definite false/true, not na, so warmup bars resolve through the ternary
+      // instead of blanking (Chande momentum's `diff > 0 ? diff : 0.0` at bar 0
+      // must yield 0.0, not na, or a `var` accumulator poisons forever). This is
+      // scoped to v6 so pre-v6 warmup blanking is untouched; arithmetic is n/a.
+      if (this.ver >= 6) {
+        switch (op) {
+          case ">":
+          case "<":
+          case ">=":
+          case "<=":
+          case "==":
+            return 0;
+          case "!=":
+          case "<>":
+            return 1;
+        }
+      }
+      return NA;
+    }
     switch (op) {
       case "+":
         return x + y;
@@ -1663,7 +1763,9 @@ export class PineRuntime {
       case "hl2":
         return (b.high[i] + b.low[i]) / 2;
       case "hlc3":
-        return (b.high[i] + b.low[i] * 2) / 3;
+        return (b.high[i] + b.low[i] + b.close[i]) / 3;
+      case "hlcc4":
+        return (b.high[i] + b.low[i] + b.close[i] + b.close[i]) / 4;
       case "ohlc4":
         return (b.open[i] + b.high[i] + b.low[i] + b.close[i]) / 4;
       default:
