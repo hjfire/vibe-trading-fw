@@ -1055,8 +1055,16 @@ function pivotStep(args: Arg[], c: BuiltinCtx, kind: "high" | "low"): number {
 }
 
 function barOffset(args: Arg[], c: BuiltinCtx, dir: "max" | "min"): number {
-  const src = srcOf(args, c);
-  const n = lenOf(args, c, 1, 14, `ta.${dir}bars`);
+  // Pine overloads, same one-arg shape as `highest`/`lowest`: `highestbars(source,
+  // length)` and `highestbars(length)`. With a lone argument that argument is the
+  // lookback and the chart series is the source (`highestbars` → high, `lowestbars`
+  // → low). Reading arg 0 as the source unconditionally made `highestbars(len)`
+  // treat the length as a flat series and fall back to a 14 window — silently
+  // wrong offsets for scripts like halftrend that call `ta.highestbars(amplitude)`.
+  const namedSrc = args.some((a) => a.name === "source" || a.name === "src" || a.name === "x");
+  const hasSource = namedSrc || positional(args).length >= 2;
+  const src = hasSource ? srcOf(args, c) : dir === "max" ? c.bars.high[c.bi] : c.bars.low[c.bi];
+  const n = lenOf(args, c, hasSource ? 1 : 0, 14, `ta.${dir}bars`);
   const st = c.state(() => ({ win: [] }) as Win);
   push(st, src, n);
   let best = NA;

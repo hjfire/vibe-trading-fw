@@ -190,6 +190,39 @@ describe("highest / lowest (缺陷 A)", () => {
   });
 });
 
+describe("highestbars / lowestbars (缺陷 F — same one-arg overload as highest/lowest)", () => {
+  // halftrend.pine (a pinned smoke-gate script) leans on ta.highestbars(len) /
+  // ta.lowestbars(len); before the fix those read `len` as the source and a flat
+  // 14 window, silently corrupting its derived line while still plotting finite.
+  it("one-arg highestbars(length) uses high and equals the two-arg form", () => {
+    const n = 5;
+    eqSeries(
+      lineValues(`${H4}plot(ta.highestbars(${n}))`),
+      lineValues(`${H4}plot(ta.highestbars(high, ${n}))`),
+    );
+    eqSeries(
+      lineValues(`${H4}plot(ta.lowestbars(${n}))`),
+      lineValues(`${H4}plot(ta.lowestbars(low, ${n}))`),
+    );
+  });
+
+  it("the returned offset is the bars-ago index of the window peak (ties -> most recent)", () => {
+    const n = 5;
+    const exp = HIGH.map((_, i) => {
+      const start = Math.max(0, i - n + 1);
+      let best = -Infinity;
+      let at = start;
+      for (let j = start; j <= i; j++)
+        if (HIGH[j] >= best) {
+          best = HIGH[j];
+          at = j;
+        }
+      return at - i; // <= 0
+    });
+    eqSeries(lineValues(`${H4}plot(ta.highestbars(${n}))`), exp);
+  });
+});
+
 describe("input() kind detection (缺陷 B / C / E)", () => {
   it("type=input.source binds to the live series, not a bar-0 pinned constant", () => {
     const s = lineValues(`${H4}src = input(defval = close, type = input.source, title = "S")\nplot(src)`);
