@@ -373,6 +373,26 @@ export const TA: Record<string, Builtin> = {
     return out;
   },
 
+  /**
+   * `ta.valuewhen(condition, source, occurrence)` — the value `source` had on
+   * the bar where `condition` was true for the `occurrence`-th most recent time
+   * (0 = latest, counting backwards; TV doc: "returns the value of the source
+   * series on the bar of the nth most recent occurrence of condition"). We keep
+   * the `source` samples captured on every true bar in a per-call-site event
+   * list and read `occurrence` back from the end; before enough occurrences
+   * exist (or for a negative occurrence) the answer is na, matching TV.
+   */
+  valuewhen: (args, c) => {
+    const st = c.state(() => ({ ev: [] as V[] }) as { ev: V[] });
+    const condE = argAt(args, 0, "condition");
+    const srcE = argAt(args, 1, "source", "src");
+    const cond = condE ? isTrue(c.val(condE)) : false;
+    if (cond) st.ev.push(srcE ? c.val(srcE) : NA);
+    const occ = Math.round(numArg(args, c, 2, 0, "occurrence"));
+    const idx = st.ev.length - 1 - occ;
+    return Number.isFinite(occ) && occ >= 0 && idx >= 0 ? st.ev[idx] : NA;
+  },
+
   cum: (args, c) => cumStep(srcOf(args, c), c.state(() => ({ prev: NA }) as Prev)),
 
   mom: (args, c) => {

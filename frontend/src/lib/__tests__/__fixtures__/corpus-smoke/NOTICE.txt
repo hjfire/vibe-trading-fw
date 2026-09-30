@@ -24,7 +24,7 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 32-file slice covers the categories
+(it is external, changeful content). This 35-file slice covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
 src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
@@ -53,3 +53,20 @@ equivalent single-line expression by pineContinuation.test.ts:
     movings/henderson_weighted_moving_average.pine
     oscillators/rainbow_oscillator.pine
     statistics/z_score.pine
+
+The slice grew from 32 to 35 with two real Pine built-ins added to close the
+corpus runtime_abort backlog — `ta.valuewhen(condition, source, occurrence)` and
+`offset(series, n)` (the right-shift series helper, distinct from plot's
+cosmetic `offset=`). These three scripts exercise them and their folded values
+are hand-checked against deterministic bars by pineSeries.test.ts:
+
+    oscillators/gator_oscillator.pine              (offset)
+    statistics/roi_return_on_investment.pine       (valuewhen)
+    statistics/ytd_year_to_date_percent_return.pine (valuewhen)
+
+The nine scripts still failing are NOT engine gaps we papered over: they
+reference variables never declared anywhere (`n`, `period`, `accdist`, `pvt`),
+which TradingView also rejects, or are a plotting-less unit-test harness that
+needs array methods beyond the current subset (`array.join`). Leaving them red
+is the honest outcome — implementing a builtin only to watch a broken script
+emit a plausible-but-wrong number would be worse than an accurate error.

@@ -264,6 +264,24 @@ export const MISC: Record<string, Builtin> = {
     st.last = v;
     return v;
   },
+  /**
+   * `offset(series, n)` — TradingView's right-shift: the value `series` had `n`
+   * bars ago, returned as a series usable inside other expressions (unlike the
+   * cosmetic `offset=` argument of `plot()`, which only moves the drawing). The
+   * built-in shifts only to the right, so a negative `n` or a read past the
+   * available history is out of range and yields na. Sample the argument once
+   * per bar into a per-call-site history so `offset(rma(x, L), 8)` reproduces
+   * the same delayed series TV draws.
+   */
+  offset: (args, c) => {
+    const st = c.state(() => ({ hist: [] as V[] }) as { hist: V[] });
+    st.hist.push(args[0] ? c.val(args[0].value) : NA);
+    const k = Math.round(numArg(args, c, 1, 0, "offset", "shift"));
+    if (!Number.isFinite(k) || k < 0) return NA;
+    const idx = st.hist.length - 1 - k;
+    return idx >= 0 ? st.hist[idx] : NA;
+  },
+
   flip: (args, c) => (n(args, c, 0) === 0 ? 1 : 0),
   iff: (args, c) => {
     // iff(cond, a, b) — the function form of the ternary, still seen in ports.
