@@ -709,6 +709,24 @@ describe("drawing channel: bgcolor / barcolor / label / line / box records (2c)"
     expect(boxes).toHaveLength(B.length);
   });
 
+  it("a time-anchored x folds onto the nearest bar index (drawings stay in bar/price space)", () => {
+    // Real community scripts pass `time` (epoch millis) as a label/line x, not
+    // only bar_index. The renderer anchors on dataIndex, so a raw timestamp
+    // would land past the last bar and never show — the recording layer must
+    // fold it back onto its bar. One label per bar at (time, close).
+    const ls = labels(V6 + 'label.new(time, close, "x")\n');
+    expect(ls).toHaveLength(B.length);
+    expect(ls[0].bar).toBe(0);
+    expect(ls[5].bar).toBe(5);
+    expect(ls[B.length - 1].bar).toBe(B.length - 1);
+    // A bar_index int is left untouched (the small-int path, not the ≥1e9 path).
+    const li = drawingsOf(V6 + "line.new(x1=0, y1=100, x2=10, y2=200)\n").filter(
+      (d) => d.kind === "line",
+    )[0] as Extract<PineDrawing, { kind: "line" }>;
+    expect(li.x1).toBe(0);
+    expect(li.x2).toBe(10);
+  });
+
   it("fill(p1, p2, color) records a band between the two plots' values", () => {
     const fs = fills(V6 + "p1 = plot(close)\np2 = plot(open)\nfill(p1, p2, color.blue)\n");
     expect(fs).toHaveLength(1);

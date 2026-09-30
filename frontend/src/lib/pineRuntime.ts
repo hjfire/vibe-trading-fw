@@ -1718,6 +1718,41 @@ export class PineRuntime {
     return Number.isNaN(n) ? undefined : n;
   }
 
+  /**
+   * Normalise a drawing **x**-coordinate to a bar index so `PineResult.drawings`
+   * really is in bar-index / price space (the contract `pineDrawings.ts` relies
+   * on: it anchors each figure on `dataIndex`). Pine lets label/line/box x-args
+   * be EITHER a `bar_index` (0..len-1, sometimes a fractional forward/back
+   * offset) OR a `time` (epoch millis) — real community scripts routinely pass
+   * `time`. A raw timestamp stored as `dataIndex` (~1.7e12) would land far past
+   * the last bar and render invisibly, so fold any timestamp onto its nearest
+   * bar. Bar indices never reach 1e9, so that threshold cleanly separates the
+   * two without disturbing fractional `bar_index` offsets. Y is a price and is
+   * left untouched.
+   */
+  private xToBar(n: number): number {
+    if (n < 1e9) return n; // already a bar_index (possibly a fractional offset)
+    const times = this.bars.time;
+    const len = times.length;
+    if (len === 0) return n;
+    // Timestamps ascend with the bars: binary-search the closest one to `n`.
+    let lo = 0;
+    let hi = len - 1;
+    let best = 0;
+    let bestDiff = Math.abs((times[0] ?? 0) - n);
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const diff = Math.abs((times[mid] ?? 0) - n);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = mid;
+      }
+      if (n < (times[mid] ?? 0)) hi = mid - 1;
+      else lo = mid + 1;
+    }
+    return best;
+  }
+
   /** `bgcolor(color, title, transp)` — remember this bar's background. */
   private doBgColor(args: Arg[]): V {
     try {
@@ -1955,14 +1990,14 @@ export class PineRuntime {
       if (o.deleted) continue;
       if (o.type === "label") {
         if (o.x !== undefined && o.y !== undefined)
-          out.push({ kind: "label", bar: Math.round(o.x), price: o.y, text: o.text ?? "", bg: o.bg, fg: o.fg });
+          out.push({ kind: "label", bar: Math.round(this.xToBar(o.x)), price: o.y, text: o.text ?? "", bg: o.bg, fg: o.fg });
       } else if (o.type === "line") {
         if (o.x !== undefined && o.y !== undefined && o.x2 !== undefined && o.y2 !== undefined)
           out.push({
             kind: "line",
-            x1: Math.round(o.x),
+            x1: Math.round(this.xToBar(o.x)),
             y1: o.y,
-            x2: Math.round(o.x2),
+            x2: Math.round(this.xToBar(o.x2)),
             y2: o.y2,
             color: o.color,
             width: o.width,
@@ -1972,9 +2007,9 @@ export class PineRuntime {
         if (o.x !== undefined && o.y !== undefined && o.x2 !== undefined && o.y2 !== undefined)
           out.push({
             kind: "box",
-            x1: Math.round(o.x),
+            x1: Math.round(this.xToBar(o.x)),
             y1: o.y,
-            x2: Math.round(o.x2),
+            x2: Math.round(this.xToBar(o.x2)),
             y2: o.y2,
             border: o.color,
             bg: o.bg,

@@ -107,6 +107,9 @@ function withAlpha(hex: string | undefined, alpha: number): string {
  * Anchor one drawing point in `dataIndex`/value space. `dataIndex` is the bar
  * index the interpreter already worked in, and the chart resolves x from it
  * directly, so no bar→timestamp conversion is needed (and it survives a scroll).
+ * The recording layer guarantees this: it folds any x the script passed as a
+ * `time` (epoch millis) back onto its nearest bar index (`pineRuntime.xToBar`),
+ * so a `bar` here is always a real index, never a stray timestamp.
  */
 function pt(bar: number, value: number) {
   return { dataIndex: Math.max(0, Math.round(bar)), value };
