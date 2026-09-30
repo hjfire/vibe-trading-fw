@@ -139,3 +139,64 @@ describe("timeframe.* builtins see the inferred chart period", () => {
     expect(line(out, "intraday")!.values[0]).toBe(0);
   });
 });
+
+describe("request.security (higher timeframe)", () => {
+  // 72 hourly bars from the epoch => three clean UTC days (24 bars each).
+  // close[i] = 10.5 + i, open[i] = 10 + i, so daily-bucket closes are 33.5 /
+  // 57.5 / 81.5 and opens are 10 / 34 / 58 — everything below is hand-checked.
+  const hourly = bars(72, HOUR, 0);
+  const head = "//@version=5\nindicator(\"mtf\")\n";
+  const plot = (code: string, name: string): number[] => {
+    const out = compilePine(head + code, hourly);
+    if (!("result" in out)) throw new Error(`编译失败：${JSON.stringify(out)}`);
+    const l = out.result.lines.find((x) => x.name === name);
+    if (!l) throw new Error(`缺少绘图 ${name}`);
+    return l.values;
+  };
+
+  it("aligns a daily close to the last completed bar under lookahead_off", () => {
+    const v = plot('plot(request.security(syminfo.tickerid, "D", close), "p")', "p");
+    expect(Number.isNaN(v[0])).toBe(true); // day 0: no completed daily bar yet
+    expect(v[24]).toBe(33.5); // day 1 sees day 0's close
+    expect(v[48]).toBe(57.5); // day 2 sees day 1's close
+    expect(v[71]).toBe(57.5); // constant across the whole forming day
+  });
+
+  it("reads the forming daily bar under lookahead_on (repaint)", () => {
+    const v = plot(
+      'plot(request.security(syminfo.tickerid, "D", close, lookahead=barmerge.lookahead_on), "p")',
+      "p",
+    );
+    expect(v[0]).toBe(33.5); // day 0's own (future) close is visible
+    expect(v[24]).toBe(57.5); // day 1's own close
+  });
+
+  it("supports a tuple of expressions via destructuring", () => {
+    const code =
+      '[a, b] = request.security(syminfo.tickerid, "D", [close, open])\n' +
+      'plot(a, "a")\nplot(b, "b")';
+    const a = plot(code, "a");
+    const b = plot(code, "b");
+    expect(a[24]).toBe(33.5); // daily close, day 0
+    expect(b[24]).toBe(10); // daily open, day 0
+    expect(Number.isNaN(a[0])).toBe(true);
+  });
+
+  it("recurses ta.* independently on the daily series", () => {
+    // Daily closes 33.5/57.5/81.5 => sma(2) is na/45.5/69.5 on the daily axis.
+    const v = plot('plot(request.security(syminfo.tickerid, "D", ta.sma(close, 2)), "p")', "p");
+    expect(Number.isNaN(v[24])).toBe(true); // day 1 reads daily sma[0] = na
+    expect(v[48]).toBeCloseTo(45.5, 6); // day 2 reads daily sma[1]
+    // And the daily sma must NOT equal the hourly sma (proof it ran on the
+    // resampled bars, not the chart): hourly sma(2) at bar 48 = (57.5+58.5)/2.
+    const h = plot('plot(ta.sma(close, 2), "hh")', "hh");
+    expect(h[48]).toBeCloseTo(58.0, 6);
+  });
+
+  it("passes a same-timeframe request through to the chart", () => {
+    // "60" == the hourly chart period, so there is nothing to resample up to.
+    const v = plot('plot(request.security(syminfo.tickerid, "60", close), "p")', "p");
+    expect(v[0]).toBe(10.5); // current close, not an aligned daily value
+    expect(v[24]).toBe(34.5);
+  });
+});

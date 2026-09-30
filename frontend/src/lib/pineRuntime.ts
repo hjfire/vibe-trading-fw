@@ -24,6 +24,7 @@ import { MISC, assertUnsupported, isDecorativeName } from "./pineMath";
 import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
 import { MAP_CTOR, MAP_OPS } from "./pineMap";
 import { OrderSim, estimateTick } from "./pineOrders";
+import { resampleUp, tfToMs } from "./pineResample";
 import {
   NA,
   NAMED_ONLY,
@@ -155,6 +156,21 @@ export class PineRuntime {
 
   private bi = -1;
   private ctxCid = 0;
+  /**
+   * The bar array the *expression evaluator* currently reads (builtins, ta.*,
+   * history). Identical to `bars` except while a `request.security` call runs
+   * its expression across a higher-timeframe series, when it is temporarily
+   * swapped to the resampled bars. Statement/plot building always runs on the
+   * chart `bars`, so only the pure-evaluation reads go through this.
+   */
+  private activeBars: PineBars;
+  /** Cache of `request.security` higher-timeframe series, keyed by call site. */
+  private readonly secCache = new Map<
+    string,
+    { chartToHtf: Int32Array; subs: V[][]; tuple: boolean }
+  >();
+  /** Guards against a nested request.security re-entering the swap path. */
+  private inSecurity = false;
   private ops = 0;
   private histCap = HIST_CAP;
   /** Variable the interpreter is assigning into, for auto-generated titles. */
@@ -173,6 +189,7 @@ export class PineRuntime {
   private readonly sim: OrderSim;
 
   constructor(src: string, private readonly bars: PineBars, opts: PineRunOptions = {}) {
+    this.activeBars = this.bars;
     this.stmts = parsePine(src);
     // Hoist function definitions: real scripts open with `if … f(...)` before
     // the `f(x) =>` line, and per-bar execution must not depend on order.
@@ -193,9 +210,11 @@ export class PineRuntime {
         return self.bi;
       },
       get len() {
-        return self.bars.list.length;
+        return self.activeBars.list.length;
       },
-      bars,
+      get bars() {
+        return self.activeBars;
+      },
       val: (e: Expr) => self.val(e),
       state: <T extends object>(init: () => T, sub = "") => {
         const key = `${self.ctxCid}#${sub}`;
@@ -276,7 +295,7 @@ export class PineRuntime {
   }
 
   private builtinAt(name: string, i: number): V {
-    const b = this.bars;
+    const b = this.activeBars;
     if (i < 0 || i >= b.list.length) return NA;
     switch (name) {
       case "open":
@@ -737,7 +756,7 @@ export class PineRuntime {
       case "barindex":
         return this.bi;
       case "last_bar_index":
-        return this.bars.list.length - 1;
+        return this.activeBars.list.length - 1;
       case "math.pi":
         return Math.PI;
       case "math.e":
@@ -752,7 +771,7 @@ export class PineRuntime {
     if (name.startsWith("barstate.")) {
       switch (name) {
         case "barstate.islast":
-          return this.bi === this.bars.list.length - 1 ? 1 : 0;
+          return this.bi === this.activeBars.list.length - 1 ? 1 : 0;
         case "barstate.isfirst":
           return this.bi === 0 ? 1 : 0;
         case "barstate.isconfirmed":
@@ -850,6 +869,142 @@ export class PineRuntime {
     }
   }
 
+  /* ------------------------------------------------- multi-timeframe (MTF) */
+
+  /**
+   * Evaluate `expr` independently on every bar of `htf`, returning one value
+   * per higher-timeframe bar. Reuses the real `val()` / `ta.*` machinery by
+   * pointing the evaluator's bar cursor at `htf` for the duration: ta.*
+   * recursion stays correct because each source call site carries a distinct
+   * cid, and scalar user variables resolve to their chart-frame value. The
+   * interpreter's cursor is always restored, so the surrounding chart bar is
+   * untouched.
+   */
+  private evalOnBars(expr: Expr, htf: PineBars): V[] {
+    const savedBars = this.activeBars;
+    const savedBi = this.bi;
+    const savedIn = this.inSecurity;
+    this.activeBars = htf;
+    this.inSecurity = true;
+    const out: V[] = new Array(htf.list.length);
+    try {
+      for (let i = 0; i < htf.list.length; i++) {
+        this.bi = i;
+        out[i] = this.val(expr);
+      }
+    } finally {
+      this.activeBars = savedBars;
+      this.bi = savedBi;
+      this.inSecurity = savedIn;
+    }
+    return out;
+  }
+
+  /**
+   * Whether `e` reads a user-declared variable or calls a user function.
+   * Scalars (length parameters) are correct under MTF — they just resolve to
+   * their chart-frame value — but a variable that is itself a series is only
+   * approximated, since we do not re-run its definition on the other
+   * timeframe. Used purely to warn honestly, never to change the result.
+   */
+  private referencesUserVar(e: Expr): boolean {
+    const walkExpr = (n: Expr): boolean => {
+      switch (n.k) {
+        case "num":
+        case "str":
+          return false;
+        case "id":
+          return this.lookup(n.name) !== undefined;
+        case "arr":
+          return n.items.some(walkExpr);
+        case "idx":
+          return walkExpr(n.base) || (n.off ? walkExpr(n.off) : false);
+        case "call":
+          if (this.fns.has(n.name)) return true;
+          return n.args.some((a) => walkExpr(a.value));
+        case "bin":
+          return walkExpr(n.a) || walkExpr(n.b);
+        case "un":
+          return walkExpr(n.a);
+        case "tern":
+          return walkExpr(n.a) || walkExpr(n.b) || walkExpr(n.c);
+        case "switch": {
+          if (n.subject && walkExpr(n.subject)) return true;
+          const bodyBad = (b: Expr | Stmt[]) => Array.isArray(b) || walkExpr(b);
+          if (n.cases.some((c) => walkExpr(c.test) || bodyBad(c.body))) return true;
+          return n.defaultBody ? bodyBad(n.defaultBody) : false;
+        }
+        case "ifexpr": {
+          const bodyBad = (b: Expr | Stmt[]) => Array.isArray(b) || walkExpr(b);
+          if (n.arms.some((a) => walkExpr(a.cond) || bodyBad(a.body))) return true;
+          return n.elseBody ? bodyBad(n.elseBody) : false;
+        }
+        default:
+          return true;
+      }
+    };
+    return walkExpr(e);
+  }
+
+  /**
+   * `request.security(symbol, timeframe, expression[, gaps, lookahead, …])`:
+   * evaluate `expression` on a higher timeframe and read it back onto the
+   * chart, aligned to the last completed HTF bar (or the forming one under
+   * `lookahead=barmerge.lookahead_on`). The per-call-site HTF series is
+   * computed once and cached. Cross-symbol requests are computed on the
+   * chart's own instrument (single-instrument runtime).
+   */
+  private doSecurity(node: Extract<Expr, { k: "call" }>): V {
+    const args = node.args;
+    const exExpr = argAt(args, 2, "expression");
+    if (!exExpr) return NA;
+    const evalOnChart = () => this.val(exExpr);
+
+    const tfExpr = argAt(args, 1, "timeframe");
+    const tfStr = tfExpr ? asStr(this.val(tfExpr)) : "";
+    const targetMs = tfToMs(tfStr);
+    // A nested request.security (inside a higher-timeframe expression) or an
+    // unparseable timeframe can't be resampled — evaluate on the chart frame.
+    if (this.inSecurity || !Number.isFinite(targetMs)) return evalOnChart();
+
+    const laExpr = argAt(args, 4, "lookahead");
+    const lookahead = laExpr ? asStr(this.val(laExpr)).includes("lookahead_on") : false;
+
+    const tuple = exExpr.k === "arr";
+    const parts = tuple ? (exExpr as Extract<Expr, { k: "arr" }>).items : [exExpr];
+    const key = `${node.cid}#${tfStr}#${tuple ? "t" + parts.length : "s"}`;
+
+    let cached = this.secCache.get(key);
+    if (!cached) {
+      const rs = resampleUp(this.bars, targetMs);
+      if (!rs) return evalOnChart(); // same / lower timeframe, not a rollup
+      if (this.referencesUserVar(exExpr)) {
+        this.warn(
+          "request.security 表达式引用了用户变量：标量（如长度参数）结果正确，若该变量本身是序列则为近似值（未在其定义周期上重跑）。",
+        );
+      }
+      try {
+        const subs = parts.map((p) => this.evalOnBars(p, rs.htf));
+        cached = { chartToHtf: rs.chartToHtf, subs, tuple };
+        this.secCache.set(key, cached);
+      } catch (err) {
+        // A cross-timeframe re-evaluation must never be *worse* than the old
+        // decorative no-op: on any failure fall back to the chart-frame value
+        // and report honestly rather than aborting the whole script.
+        this.warn(
+          `request.security 跨周期求值失败，退回当前周期近似：${err instanceof Error ? err.message : String(err)}`,
+        );
+        return evalOnChart();
+      }
+    }
+
+    const h = cached.chartToHtf[this.bi] ?? 0;
+    const src = lookahead ? h : h - 1; // lookahead_off: last completed HTF bar
+    const pick = (s: V[]): V => (src < 0 || src >= s.length ? NA : s[src]);
+    if (cached.tuple) return cached.subs.map(pick);
+    return pick(cached.subs[0]);
+  }
+
   /* --------------------------------------------------------------- dispatch */
 
   private dispatch(node: Extract<Expr, { k: "call" }>): V {
@@ -861,6 +1016,11 @@ export class PineRuntime {
     // defines `rsi_len(...)`-style helpers must call its own code.
     const user = this.fns.get(name);
     if (user) return this.callFn(user, args, node.cid);
+
+    // Multi-timeframe requests are resolved against resampled higher-timeframe
+    // bars, so they must be intercepted before the generic routing (and the
+    // `request.*` decorative no-op) below.
+    if (name === "request.security") return this.doSecurity(node);
 
     switch (name) {
       case "indicator":
