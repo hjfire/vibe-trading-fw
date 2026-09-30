@@ -279,13 +279,19 @@ to resurrect that accumulator would be inventing non-standard semantics with
 blast radius across every other script, so it is left honestly red.
 
 Update (2c, drawing fidelity): the pure-drawing primitives above are no longer
-silently dropped. `bgcolor`/`barcolor`/`label`/`box`/`line`/`table` are now
+silently dropped. `bgcolor`/`barcolor`/`label`/`box`/`line`/`table`/`fill` are now
 *recorded* into `PineResult.drawings` (bar-index/price space) and rendered as
 KLineChart overlays (a dedicated `pineDrawings.ts` registers `registerOverlay`
 templates and reuses the object system — never the position-losing indicator
-text figure). This is deliberately cosmetic: the `produced` gate still counts
-only finite plot lines / markers / hlines, so these scripts stay classified
-`no_output` and the pass-rate is byte-for-byte unchanged by 2c (everget 91.9%,
-v6 98.3% on a fresh re-run). Recording + rendering them neither fabricates
-numeric output nor moves them off the honest-red list; their fidelity is only
-everifiable by eye in a browser against TradingView.
+text figure). `fill(p1, p2, color)` is built at build() from the two plots'
+finished values into a single polygon overlay. This is deliberately cosmetic:
+the `produced` gate still counts only finite plot lines / markers / hlines, so
+these scripts stay classified `no_output` and the pass-rate is byte-for-byte
+unchanged by 2c (everget 91.9%, v6 98.3% on a fresh re-run). Recording +
+rendering them neither fabricates numeric output nor moves them off the
+honest-red list. Browser verification against TradingView surfaced two KLineChart
+v10 limits — overlays sit on a canvas always ABOVE the candles and the candle
+view has no per-bar colour hook — so `bgcolor` is a faint top tint (alpha capped
+0.12, not a true background) and `barcolor` is a body-covering approximation (not
+a recoloured built-in candle); `fill` is likewise capped (alpha 0.35). These are
+documented in pineDrawings.ts and remain only fully verifiable by eye.

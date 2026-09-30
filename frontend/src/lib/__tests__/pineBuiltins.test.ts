@@ -634,6 +634,8 @@ describe("drawing channel: bgcolor / barcolor / label / line / box records (2c)"
     drawingsOf(src).filter((d) => d.kind === "bar") as Extract<PineDrawing, { kind: "bar" }>[];
   const labels = (src: string) =>
     drawingsOf(src).filter((d) => d.kind === "label") as Extract<PineDrawing, { kind: "label" }>[];
+  const fills = (src: string) =>
+    drawingsOf(src).filter((d) => d.kind === "fill") as Extract<PineDrawing, { kind: "fill" }>[];
 
   it("bgcolor merges a solid wash into one run across every bar", () => {
     const runs = bg(V6 + "bgcolor(color.red)\n");
@@ -705,6 +707,35 @@ describe("drawing channel: bgcolor / barcolor / label / line / box records (2c)"
       (d) => d.kind === "box",
     );
     expect(boxes).toHaveLength(B.length);
+  });
+
+  it("fill(p1, p2, color) records a band between the two plots' values", () => {
+    const fs = fills(V6 + "p1 = plot(close)\np2 = plot(open)\nfill(p1, p2, color.blue)\n");
+    expect(fs).toHaveLength(1);
+    const f = fs[0];
+    expect(f.color).toBe("#2962ff");
+    // close and open are finite from bar 0 → one point per bar, top=close, bottom=open.
+    expect(f.pts).toHaveLength(B.length);
+    expect(f.pts[0].bar).toBe(0);
+    expect(f.pts[0].top).toBeCloseTo(B[0].close, 10);
+    expect(f.pts[0].bottom).toBeCloseTo(B[0].open, 10);
+    expect(f.pts[f.pts.length - 1].bar).toBe(B.length - 1);
+  });
+
+  it("fill drops bars where either line is na (an MA warmup)", () => {
+    const f = fills(V6 + "ma = ta.sma(close, 5)\np1 = plot(ma)\np2 = plot(close)\nfill(p1, p2, color.red)\n")[0];
+    // ta.sma(close,5) is na for bars 0..3 → the band starts at bar 4.
+    expect(f.pts[0].bar).toBe(4);
+    expect(f.pts.every((p) => p.bar >= 4)).toBe(true);
+    expect(f.pts).toHaveLength(B.length - 4);
+  });
+
+  it("fill with a non-plot / undefined reference is swallowed, not aborted", () => {
+    const src = V6 + "plot(close)\nfill(undefined_abc, close, color.red)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    expect(produced(src)).toBe(true); // the numeric plot survives
+    expect(fills(src)).toHaveLength(0);
   });
 });
 

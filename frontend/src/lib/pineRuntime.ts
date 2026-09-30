@@ -217,6 +217,13 @@ export class PineRuntime {
   private readonly drawObjs = new Map<number, DrawObj>();
   private drawIdSeq = 1;
   private drawCapWarned = false;
+  /**
+   * `fill(plot1, plot2, color)` references — the pair of plot cids to shade
+   * between, recorded once per pair. The polygon is built at `build()` from the
+   * two lines' finished value arrays (a per-bar call can't see the whole series).
+   */
+  private readonly fills: { cidA: number; cidB: number; color: string; alpha: number }[] = [];
+  private readonly fillSeen = new Set<string>();
   /** Resolutions requested by `request.security_lower_tf`, for the mount layer. */
   private readonly lowerTfSeen = new Set<number>();
 
@@ -1351,8 +1358,7 @@ export class PineRuntime {
       case "hline":
         return this.doHline(args);
       case "fill":
-        this.warn("fill() 的渐变填充暂未渲染，只显示两条边界线");
-        return nothing;
+        return this.doFill(args);
       case "bgcolor":
         return this.doBgColor(args);
       case "barcolor":
@@ -1741,6 +1747,41 @@ export class PineRuntime {
     return sentinel("void");
   }
 
+  /** Extract the plot id from a `plot()` sentinel reference (`@plot:<cid>`). */
+  private plotCid(v: V): number | undefined {
+    if (typeof v === "string" && v.startsWith("@plot:")) {
+      const n = Number.parseInt(v.slice("@plot:".length), 10);
+      return Number.isNaN(n) ? undefined : n;
+    }
+    return undefined;
+  }
+
+  /**
+   * `fill(plot1, plot2, color, …)` — record the pair of plots to shade between.
+   * The polygon is built at `build()` from the two lines' finished values, so a
+   * per-bar call only registers the reference (and colour) once. Decorative: a
+   * bad reference must never abort the numeric run.
+   */
+  private doFill(args: Arg[]): V {
+    try {
+      const a = argAt(args, 0, "plot1", "p1");
+      const b = argAt(args, 1, "plot2", "p2");
+      if (!a || !b) return sentinel("void");
+      const cidA = this.plotCid(this.val(a));
+      const cidB = this.plotCid(this.val(b));
+      if (cidA === undefined || cidB === undefined) return sentinel("void");
+      const key = cidA <= cidB ? `${cidA}:${cidB}` : `${cidB}:${cidA}`;
+      if (this.fillSeen.has(key)) return sentinel("void");
+      const col = this.colArg(args, 2, "color");
+      if (!col) return sentinel("void");
+      this.fillSeen.add(key);
+      this.fills.push({ cidA, cidB, color: col, alpha: 1 });
+    } catch {
+      // Decorative; never abort the run over a fill.
+    }
+    return sentinel("void");
+  }
+
   /**
    * Route a `label.*`/`box.*`/`line.*`/`table.*` call. `.new` mints a fresh
    * handle and returns it; every other method mutates the object its first
@@ -1946,6 +1987,23 @@ export class PineRuntime {
         }
         out.push({ kind: "table", corner: o.corner ?? 0, cells });
       }
+    }
+    // Fill bands between two plots, built from the finished line values. A bar is
+    // only included when BOTH lines are finite there, so warmup `na` doesn't drag
+    // the polygon to the axis.
+    for (const f of this.fills) {
+      const la = this.lineByCid.get(f.cidA);
+      const lb = this.lineByCid.get(f.cidB);
+      if (!la || !lb) continue;
+      const n = Math.min(la.values.length, lb.values.length);
+      const pts: { bar: number; top: number; bottom: number }[] = [];
+      for (let i = 0; i < n; i++) {
+        const va = la.values[i];
+        const vb = lb.values[i];
+        if (Number.isNaN(va) || Number.isNaN(vb)) continue;
+        pts.push({ bar: i, top: va, bottom: vb });
+      }
+      if (pts.length >= 2) out.push({ kind: "fill", color: f.color, alpha: f.alpha, pts });
     }
     return out;
   }

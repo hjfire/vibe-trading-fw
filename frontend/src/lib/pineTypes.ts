@@ -222,7 +222,7 @@ export interface PineReport {
  * (the runtime never knows the chart's real timestamps; the render layer maps
  * `bar` → a bar's timestamp from the loaded data list). These are recorded so
  * a chart can approximate TradingView's `bgcolor`/`barcolor`/`label`/`box`/
- * `line`/`table` on top of KLineChart's overlay system.
+ * `line`/`table`/`fill` on top of KLineChart's overlay system.
  *
  * They are deliberately kept OUT of the `produced` pass-rate metric: a script
  * that only draws these still counts as `no_output`. Rendering is a visual
@@ -259,6 +259,16 @@ export type PineDrawing =
       kind: "table";
       corner: number;
       cells: { row: number; col: number; text: string; bg?: string; fg?: string }[];
+    }
+  | {
+      // `fill(plot1, plot2, color)` — a band between two plots. `pts` carries one
+      // entry per bar where BOTH lines are finite (warmup `na` bars are dropped so
+      // the polygon doesn't collapse to the axis); `top`/`bottom` are the two
+      // lines' values at that bar.
+      kind: "fill";
+      color: string;
+      alpha: number;
+      pts: { bar: number; top: number; bottom: number }[];
     };
 
 export interface PineResult {

@@ -4,8 +4,8 @@ import type { PineDrawing } from "./pineTypes";
 /**
  * Overlay rendering for the Pine drawing channel (2c).
  *
- * The interpreter records `bgcolor`/`barcolor`/`label`/`box`/`line`/`table` into
- * `PineResult.drawings` (bar-index / price space). Here those are turned into
+ * The interpreter records `bgcolor`/`barcolor`/`label`/`box`/`line`/`table`/`fill`
+ * into `PineResult.drawings` (bar-index / price space). Here those are turned into
  * KLineChart **overlays** — the object system, not indicator `text` figures,
  * because (memory aac3e542) the indicator text primitive shares one `figure.key`
  * for placement and content and loses its position, whereas an overlay figure is
@@ -19,6 +19,20 @@ import type { PineDrawing } from "./pineTypes";
  *  - every drawing is `lock`ed + `ignoreEvent`, so a script-owned decoration can
  *    never be dragged or deleted by the user and never joins the persisted
  *    drawing bank — it is re-derived from the script on every mount.
+ *
+ * Known deviation (verified against TradingView, 2026-09): KLineChart v10 draws
+ * overlays on a separate canvas that is always ABOVE the candles, and its candle
+ * view has no per-bar colour hook (colour comes only from global styles + the
+ * up/down comparison). So:
+ *  - `bgcolor` cannot be painted *behind* the candles the way TradingView does.
+ *    It is rendered as a faint top tint with its final alpha capped to
+ *    `BG_MAX_ALPHA` so the candles stay clearly readable — an approximation, not
+ *    a true background layer.
+ *  - `barcolor` cannot recolour the built-in candle body. It is approximated by
+ *    painting a same-colour body (open→close) + wick (high→low) on top of the
+ *    real candle, which reads as a recoloured bar.
+ * Faithful rendering of either would require replacing the core candle layer,
+ * which is off-limits for the production chart.
  */
 
 /** Registered-overlay names, kept private so nothing else mounts them by hand. */
@@ -29,6 +43,7 @@ const NAME = {
   line: "pineLine",
   box: "pineBox",
   table: "pineTable",
+  fill: "pineFill",
 } as const;
 
 /** Data handed to a template through `overlay.extendData`. */
@@ -39,6 +54,10 @@ interface BgData {
 interface BarData {
   color: string;
   alpha: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
 }
 interface LabelData {
   text: string;
@@ -58,8 +77,21 @@ interface TableData {
   corner: number;
   cells: { row: number; col: number; text: string; bg?: string; fg?: string }[];
 }
+interface FillData {
+  color: string;
+  alpha: number;
+  bottoms: number[];
+}
 
 const FALLBACK = "#9e9e9e";
+
+/** KLineChart v10 has no layer below the candles, so bgcolor is capped to a faint
+ *  top tint (see header) — the candles must stay clearly readable through it. */
+const BG_MAX_ALPHA = 0.12;
+
+/** A fill band also sits above the candles (no below-candle layer), so cap its
+ *  opacity too — Pine transparency via `color.new(c, t)` isn't captured. */
+const FILL_MAX_ALPHA = 0.35;
 
 /** "#rrggbb" + alpha → "rgba(r,g,b,a)"; anything else passes through. */
 function withAlpha(hex: string | undefined, alpha: number): string {
@@ -82,7 +114,7 @@ function pt(bar: number, value: number) {
 
 let registered = false;
 
-/** Register the six Pine overlay templates once per process. Idempotent. */
+/** Register the seven Pine overlay templates once per process. Idempotent. */
 function ensureRegistered(): void {
   if (registered) return;
   registered = true;
@@ -103,7 +135,7 @@ function ensureRegistered(): void {
           type: "rect",
           ignoreEvent: true,
           attrs: { x: x0, y: 0, width: Math.max(1, x1 - x0), height: bounding.height },
-          styles: { style: "fill", color: withAlpha(d.color, d.alpha) },
+          styles: { style: "fill", color: withAlpha(d.color, Math.min(d.alpha, BG_MAX_ALPHA)) },
         },
       ];
     },
@@ -115,16 +147,33 @@ function ensureRegistered(): void {
     needDefaultPointFigure: false,
     needDefaultXAxisFigure: false,
     needDefaultYAxisFigure: false,
-    createPointFigures: ({ coordinates, overlay }) => {
-      if (coordinates.length < 2) return [];
+    createPointFigures: ({ coordinates, chart, yAxis, overlay }) => {
+      if (coordinates.length < 1 || !yAxis) return [];
       const d = overlay.extendData as BarData;
-      // A recoloured candle reads as a thick vertical spine over its range.
+      // No per-bar colour hook on the candle view: paint a same-colour body
+      // (open→close) + wick (high→low) on top of the real candle so it reads as
+      // a recoloured bar (approximation; see the header note).
+      const x = coordinates[0].x;
+      const color = withAlpha(d.color, d.alpha);
+      const barW = Math.max(1, chart.getBarSpace().bar);
+      const highY = yAxis.convertToPixel(d.high);
+      const lowY = yAxis.convertToPixel(d.low);
+      const openY = yAxis.convertToPixel(d.open);
+      const closeY = yAxis.convertToPixel(d.close);
+      const bodyTop = Math.min(openY, closeY);
+      const bodyH = Math.max(1, Math.abs(closeY - openY));
       return [
         {
           type: "line",
           ignoreEvent: true,
-          attrs: { coordinates: [coordinates[0], coordinates[1]] },
-          styles: { style: "solid", size: 3, color: withAlpha(d.color, d.alpha) },
+          attrs: { coordinates: [{ x, y: highY }, { x, y: lowY }] },
+          styles: { style: "solid", size: 1, color },
+        },
+        {
+          type: "rect",
+          ignoreEvent: true,
+          attrs: { x: x - barW / 2, y: bodyTop, width: barW, height: bodyH },
+          styles: { style: "fill", color },
         },
       ];
     },
@@ -220,6 +269,37 @@ function ensureRegistered(): void {
     needDefaultYAxisFigure: false,
     createPointFigures: ({ bounding, overlay }) => buildTableFigures(overlay.extendData as TableData, bounding.width, bounding.height),
   });
+
+  registerOverlay({
+    name: NAME.fill,
+    totalStep: 2,
+    needDefaultPointFigure: false,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: ({ coordinates, yAxis, overlay }) => {
+      if (coordinates.length < 2 || !yAxis) return [];
+      const d = overlay.extendData as FillData;
+      // Each point anchors one bar's x and the TOP line's y (the chart already
+      // mapped point.value→pixel). Walk forward along the top, then back along
+      // the bottom (converted from the paired value) to close the polygon.
+      const poly: { x: number; y: number }[] = [];
+      for (let i = 0; i < coordinates.length; i++) poly.push({ x: coordinates[i].x, y: coordinates[i].y });
+      for (let i = coordinates.length - 1; i >= 0; i--) {
+        const bv = d.bottoms[i];
+        if (bv === undefined) continue;
+        poly.push({ x: coordinates[i].x, y: yAxis.convertToPixel(bv) });
+      }
+      if (poly.length < 3) return [];
+      return [
+        {
+          type: "polygon",
+          ignoreEvent: true,
+          attrs: { coordinates: poly },
+          styles: { style: "fill", color: withAlpha(d.color, Math.min(d.alpha, FILL_MAX_ALPHA)) },
+        },
+      ];
+    },
+  });
 }
 
 const CELL_W = 72;
@@ -294,7 +374,7 @@ function toCreate(name: string, points: { dataIndex: number; value: number }[], 
 /**
  * Paint the recorded drawings onto `chart` under `groupId`, replacing whatever
  * the same script drew before. Bar indices map straight to `dataIndex`, so the
- * bars list is only consulted for a candle's high/low/close (bg / barcolor).
+ * bars list is only consulted for a candle's open/high/low/close (bg / barcolor).
  * Drawings land in `paneId` — the pane the owning indicator occupies, since a
  * TradingView `bgcolor` fills that study's own pane, not always the candles.
  */
@@ -330,7 +410,7 @@ export function applyPineDrawings(
     } else if (d.kind === "bar") {
       const bb = barAt(d.bar);
       if (!bb) continue;
-      creates.push(toCreate(NAME.bar, [pt(d.bar, bb.high), pt(d.bar, bb.low)], { color: d.color, alpha: d.alpha } satisfies BarData, 1, groupId, paneId));
+      creates.push(toCreate(NAME.bar, [pt(d.bar, bb.high), pt(d.bar, bb.low)], { color: d.color, alpha: d.alpha, open: bb.open, high: bb.high, low: bb.low, close: bb.close } satisfies BarData, 1, groupId, paneId));
     } else if (d.kind === "label") {
       creates.push(toCreate(NAME.label, [pt(d.bar, d.price)], { text: d.text, fg: d.fg, bg: d.bg } satisfies LabelData, 3, groupId, paneId));
     } else if (d.kind === "line") {
@@ -340,6 +420,12 @@ export function applyPineDrawings(
     } else if (d.kind === "table") {
       // A corner-anchored overlay still needs one valid anchor point.
       creates.push(toCreate(NAME.table, [pt(0, barAt(0)?.close ?? 0)], { corner: d.corner, cells: d.cells } satisfies TableData, 4, groupId, paneId));
+    } else if (d.kind === "fill") {
+      // One point per valid bar (x + top-line y); the bottom edge is carried in
+      // extendData and converted to pixels inside the template.
+      const pts = d.pts.map((p) => pt(p.bar, p.top));
+      const bottoms = d.pts.map((p) => p.bottom);
+      creates.push(toCreate(NAME.fill, pts, { color: d.color, alpha: d.alpha, bottoms } satisfies FillData, 0, groupId, paneId));
     }
   }
 
