@@ -58,6 +58,18 @@ const CONTINUE_END = new Set([
   "=", ":=", "+", "-", "*", "/", "%", "^", "<", ">", "<=", ">=", "==", "!=", "<>",
   "and", "or", "not", "to", "by", "?", ":", ",", "(", "[",
 ]);
+/**
+ * A *leading* operator on the next line also continues the statement. Pine's
+ * implicit-wrap rule is bidirectional (TV: put the operator at the end of the
+ * line *or* the start of the next), and no valid Pine statement begins with one
+ * of these, so an over-indented operator line can only be a continuation. The
+ * assignment ops (`=`, `:=`, `=>`) are deliberately absent — those start a new
+ * binding, never a wrapped operand.
+ */
+const CONTINUE_START = new Set([
+  "+", "-", "*", "/", "%", "^", "?", ":", "<", ">", "<=", ">=", "==", "!=", "<>",
+  "and", "or", "to", "by",
+]);
 
 export function tokenizePine(src: string): Tok[] {
   const out: Tok[] = [];
@@ -68,16 +80,41 @@ export function tokenizePine(src: string): Tok[] {
   const push = (kind: TokKind, value: string, atCol: number) =>
     out.push({ kind, value, line, col: atCol });
 
+  /**
+   * Pure lookahead (never mutates `i`/`line`): the operator/keyword that opens
+   * the next non-blank, non-comment line, or "" at EOF. Used only to decide
+   * whether a newline is a wrapped-continuation boundary.
+   */
+  const nextLineStartOperator = (from: number): string => {
+    let j = from;
+    for (;;) {
+      while (j < src.length && (src[j] === " " || src[j] === "\t" || src[j] === "\r" || src[j] === "\n")) j++;
+      if (j >= src.length) return "";
+      if (src[j] === "/" && src[j + 1] === "/") { while (j < src.length && src[j] !== "\n") j++; continue; }
+      if (src[j] === "/" && src[j + 1] === "*") { const e = src.indexOf("*/", j + 2); if (e < 0) return ""; j = e + 2; continue; }
+      break;
+    }
+    const multi = OPS_MULTI.find((op) => src.startsWith(op, j));
+    if (multi) return multi;
+    const word = /^[A-Za-z_]\w*/.exec(src.slice(j));
+    if (word) return word[0]; // ident/keyword: only and/or/not/to/by can be in CONTINUE_START
+    return OPS_SINGLE.includes(src[j]) ? src[j] : "";
+  };
+
   while (i < src.length) {
     const c = src[i];
     if (c === "\n") {
-      // Inside brackets a newline is plain whitespace; after a trailing
-      // operator the statement continues, so no newline token either.
+      // Inside brackets a newline is plain whitespace; a statement also wraps
+      // when the previous line ends with an operator (`CONTINUE_END`) or the
+      // next line begins with one (`CONTINUE_START`). Suppressing the newline
+      // keeps the wrapped operands on one logical line so the precedence-tested
+      // expression parser sees the identical token stream as the single-line
+      // form -- that equivalence is what makes the merge numerically safe.
       const last = out[out.length - 1];
-      // A trailing operator, comma or open bracket means the statement runs on.
-      const continues = !!last && (last.kind === "op" || last.kind === "ident") &&
+      const trailingContinues = !!last && (last.kind === "op" || last.kind === "ident") &&
         CONTINUE_END.has(last.value);
-      if (depth === 0 && !continues) push("nl", "\n", 0);
+      const leadingContinues = CONTINUE_START.has(nextLineStartOperator(i + 1));
+      if (depth === 0 && !trailingContinues && !leadingContinues) push("nl", "\n", 0);
       line++;
       i++;
       col = 0;

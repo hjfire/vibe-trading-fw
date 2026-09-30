@@ -24,7 +24,7 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 26-file slice covers the categories
+(it is external, changeful content). This 32-file slice covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
 src/lib/__tests__/pineCorpusSmoke.test.ts as a permanent regression: any engine
@@ -38,3 +38,18 @@ gate now also pins the constructs those engine gaps used to reject: trig (`asin`
 (interquartile_range_bands, negative_volume_index), a bare v2 style constant
 (percent_volume), and legacy unprefixed `security(...)` MTF
 (dividends_per_share_dps_yearly).
+
+The slice was widened again from 26 to 32 alongside the multi-line expression
+continuation work (the lexer now also treats a line that OPENS with an operator
+`? : + - * / % ^ < > == != <> and or to by` as a wrapped continuation). These
+six scripts lean on that rule — folded ternaries and operator-led arithmetic
+across lines inside recursive digital filters — so they lock the merge against a
+future regression, and the folded form is proven byte-for-byte identical to the
+equivalent single-line expression by pineContinuation.test.ts:
+
+    movings/butterworth_filter.pine
+    movings/ehlers_super_smoother_filter.pine
+    movings/fibonacci_weighted_moving_average.pine
+    movings/henderson_weighted_moving_average.pine
+    oscillators/rainbow_oscillator.pine
+    statistics/z_score.pine
