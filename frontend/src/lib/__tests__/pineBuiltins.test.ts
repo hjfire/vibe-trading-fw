@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { compilePine } from "../pineScript";
 import { percentrankStep, linregStep, percentileNearestRankStep } from "../pineTa";
+import type { PineDrawing } from "../pineTypes";
 import type { KLineData } from "klinecharts";
 
 /**
@@ -607,5 +608,125 @@ describe("legacy bare series / hlcc4 / recursive declaration (缺陷 N)", () => 
     // undeclared identifier; only the history-offset form is allowed to seed na.
     const out = compilePine(V6 + "float x = x + 1\nplot(x)\n", BARS, {});
     expect("error" in out ? true : Boolean(out.abort)).toBe(true);
+  });
+});
+
+/* ------------------------------------------------- drawing channel (2c) */
+
+/**
+ * The decorative drawing channel: `bgcolor`/`barcolor`/`label`/`line`/`box` are
+ * now *recorded* (previously warn+noop) into `PineResult.drawings`, in bar / price
+ * space, for the overlay renderer. These tests pin the RECORDING layer only —
+ * pixel fidelity is browser-verified, never a pass-rate metric.
+ */
+describe("drawing channel: bgcolor / barcolor / label / line / box records (2c)", () => {
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+  const B = BARS as { high: number; low: number; open: number; close: number }[];
+
+  function drawingsOf(src: string): PineDrawing[] {
+    const a = artifact(src);
+    if (a.abort) throw new Error(`运行中断：${a.abort}`);
+    return a.result.drawings;
+  }
+  const bg = (src: string) =>
+    drawingsOf(src).filter((d) => d.kind === "bg") as Extract<PineDrawing, { kind: "bg" }>[];
+  const bar = (src: string) =>
+    drawingsOf(src).filter((d) => d.kind === "bar") as Extract<PineDrawing, { kind: "bar" }>[];
+  const labels = (src: string) =>
+    drawingsOf(src).filter((d) => d.kind === "label") as Extract<PineDrawing, { kind: "label" }>[];
+
+  it("bgcolor merges a solid wash into one run across every bar", () => {
+    const runs = bg(V6 + "bgcolor(color.red)\n");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].color).toBe("#ef5350");
+    expect(runs[0].alpha).toBe(1);
+    expect(runs[0].startBar).toBe(0);
+    expect(runs[0].endBar).toBe(B.length - 1);
+  });
+
+  it("a colour change breaks the run; transp maps to alpha", () => {
+    const runs = bg(V6 + "bgcolor(bar_index < 3 ? color.red : color.green)\n");
+    expect(runs).toHaveLength(2);
+    expect(runs[0].color).toBe("#ef5350");
+    expect(runs[0].endBar).toBe(2);
+    expect(runs[1].color).toBe("#26a69a");
+    expect(runs[1].startBar).toBe(3);
+    // transp=50 → alpha 0.5.
+    const t = bg(V6 + "bgcolor(color.blue, transp=50)\n");
+    expect(t[0].color).toBe("#2962ff");
+    expect(t[0].alpha).toBeCloseTo(0.5, 10);
+  });
+
+  it("transparent / na colours record nothing", () => {
+    expect(bg(V6 + "bgcolor(color.transparent)\n")).toHaveLength(0);
+    expect(bg(V6 + "bgcolor(na)\n")).toHaveLength(0);
+  });
+
+  it("barcolor records one entry per bar (never merged)", () => {
+    const entries = bar(V6 + "barcolor(color.green)\n");
+    expect(entries).toHaveLength(B.length);
+    expect(entries[0].bar).toBe(0);
+    expect(entries[entries.length - 1].bar).toBe(B.length - 1);
+  });
+
+  it("a var label mutated through set_xy / set_text emits only its final state", () => {
+    const src =
+      V6 +
+      'var label l = label.new(bar_index, na, "init")\n' +
+      "label.set_xy(l, bar_index, close)\n" +
+      'label.set_text(l, "final")\n';
+    const ls = labels(src);
+    expect(ls).toHaveLength(1); // the persisted object, not one per bar
+    expect(ls[0].bar).toBe(B.length - 1);
+    expect(ls[0].price).toBeCloseTo(B[B.length - 1].close, 10);
+    expect(ls[0].text).toBe("final");
+  });
+
+  it("a label whose y is never placed is skipped; label.delete drops it", () => {
+    expect(labels(V6 + 'label.new(bar_index, na, "x")\n')).toHaveLength(0);
+    expect(labels(V6 + 'l = label.new(bar_index, close, "x")\nlabel.delete(l)\n')).toHaveLength(0);
+  });
+
+  it("line.new records both endpoints with the resolved colour", () => {
+    const ls = drawingsOf(V6 + "line.new(x1=0, y1=100, x2=10, y2=200, color=color.red, width=3)\n").filter(
+      (d) => d.kind === "line",
+    ) as Extract<PineDrawing, { kind: "line" }>[];
+    expect(ls.length).toBeGreaterThan(0);
+    expect(ls[0].x1).toBe(0);
+    expect(ls[0].y1).toBe(100);
+    expect(ls[0].x2).toBe(10);
+    expect(ls[0].y2).toBe(200);
+    expect(ls[0].color).toBe("#ef5350");
+    expect(ls[0].width).toBe(3);
+  });
+
+  it("box.new records its rectangle bounds", () => {
+    const boxes = drawingsOf(V6 + "box.new(left=bar_index, top=high, right=bar_index + 1, bottom=low)\n").filter(
+      (d) => d.kind === "box",
+    );
+    expect(boxes).toHaveLength(B.length);
+  });
+});
+
+/**
+ * The two faithfulness guarantees that keep 2c from being a disguised metric
+ * loosening: drawings never feed `produced`, and evaluating drawing args must
+ * never abort an otherwise-numeric run (the channel used to skip arg eval).
+ */
+describe("drawing channel is decorative: not counted, never aborting", () => {
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("a pure-drawing script has drawings yet is NOT counted as produced", () => {
+    const src = V6 + 'bgcolor(color.red)\nlabel.new(bar_index, close, "hi")\n';
+    const a = artifact(src);
+    expect(a.result.drawings.length).toBeGreaterThan(0);
+    expect(produced(src)).toBe(false); // lines/markers gate is unchanged
+  });
+
+  it("a drawing referencing an undefined variable is swallowed, not aborted", () => {
+    const src = V6 + 'plot(close)\nlabel.new(undefined_var_xyz, close, "x")\n';
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    expect(produced(src)).toBe(true); // the numeric plot survives
   });
 });

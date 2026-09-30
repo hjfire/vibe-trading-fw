@@ -1,6 +1,7 @@
 import { registerIndicator, type Chart, type IndicatorFigureStyle, type KLineData } from "klinecharts";
 import { compilePine, isPineSource, type PineArtifact, type PineFigure } from "./pineScript";
 import { toBars, type PineBars } from "./pineTypes";
+import { applyPineDrawings, clearPineDrawings, pineGroupId } from "./pineDrawings";
 import {
   INTERVAL_MS,
   fetchKline,
@@ -1044,13 +1045,20 @@ function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) 
     },
   });
   chart.removeIndicator({ name });
+  const paneId = overlay
+    ? "candle_pane"
+    : // A named pane, not the library's random one: a drawing banked against
+      // `sub:UCI_x` is still there after a reload (⑲, see paneLayout.ts).
+      subPaneIdOf(name);
   if (overlay) {
     chart.createIndicator({ name, paneId: "candle_pane" }, true);
   } else {
-    // A named pane, not the library's random one: a drawing banked against
-    // `sub:UCI_x` is still there after a reload (⑲, see paneLayout.ts).
-    chart.createIndicator({ name, paneId: subPaneIdOf(name) });
+    chart.createIndicator({ name, paneId });
   }
+  // Decorative drawings (bgcolor/barcolor/label/box/line/table) live in the same
+  // pane as their study, on the overlay object system — never a plot line, so
+  // they leave the `produced` pass-rate gate untouched (2c).
+  applyPineDrawings(chart, first.result.drawings, bars, pineGroupId(id), paneId);
   publishArtifact(id, first);
   if (note) for (const w of first.result.warnings.slice(0, 6)) note(w);
   // The script asked for sub-bar detail but none was injected yet: fetch a
@@ -1200,6 +1208,7 @@ function applyVectorIndicator(chart: Chart, spec: ApplySpec): string | null {
 /** Remove a user formula from the chart (registration itself stays harmlessly). */
 export function removeUserIndicator(chart: Chart, id: string): void {
   chart.removeIndicator({ name: indicatorName(id) });
+  clearPineDrawings(chart, pineGroupId(id));
   publishArtifact(id, null);
 }
 

@@ -263,20 +263,24 @@ describe("pine plotting output", () => {
     expect(a.result.bars).toBeLessThan(120);
   });
 
-  it("degrades decorative APIs to warnings while keeping the numbers", () => {
+  it("records decorative APIs as drawings while keeping the numbers", () => {
     const a = run(
       [
         '//@version=5',
         'indicator("deco", overlay=true)',
         "plot(close, \"c\")",
-        "bgcolor(color.new(color.red, 90))",
+        "bgcolor(color.red)",
         "if close > open",
         "    label.new(bar_index, high, \"x\")",
       ].join("\n"),
     );
-    const text = a.result.warnings.join("\n");
-    expect(text).toContain("bgcolor");
-    expect(text).toContain("label.new");
+    // 2c: bgcolor/label are now *recorded* into the drawing channel, no longer
+    // warn+nooped away. But recording them must never fabricate a plot line —
+    // the numeric output is still exactly the one `plot(close, "c")` asked for.
+    const kinds = a.result.drawings.map((d) => d.kind);
+    expect(kinds).toContain("bg");
+    expect(kinds).toContain("label");
+    expect(a.result.lines.map((l) => l.name)).toEqual(["c"]);
     expect(last(seriesOf(a, "c"))).toBeCloseTo(CLOSES[119], 10);
   });
 

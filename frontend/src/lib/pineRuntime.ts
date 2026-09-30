@@ -44,6 +44,7 @@ import {
   type PineLine,
   type PineMarker,
   type PineResult,
+  type PineDrawing,
   type PlotStyle,
   type V,
 } from "./pineTypes";
@@ -62,6 +63,9 @@ function switchEq(a: V, b: V): boolean {
 const HIST_CAP = 40000;
 const OP_LIMIT = 2.5e7;
 const LOOP_CAP = 5000;
+/** Ceiling on live drawing objects, so a per-bar `.new` without `.delete`
+ *  cannot grow the overlay list without bound. */
+const DRAW_CAP = 4000;
 
 /**
  * Thrown by `break`/`continue` and caught by the nearest enclosing loop. It is
@@ -93,6 +97,29 @@ const LEGACY_SERIES: Record<string, string> = {
   nvi: "nvi",
   pvi: "pvi",
 };
+
+/**
+ * A live Pine drawing object (label/line/box/table), keyed by its handle.
+ * Coordinates are bar indices / axis prices; `na` becomes `undefined` so the
+ * renderer knows that axis was never placed. Mutated in place by the `set_*`
+ * family; `.deleted` objects are dropped when the result is built.
+ */
+interface DrawObj {
+  type: "label" | "line" | "box" | "table";
+  x?: number;
+  y?: number;
+  x2?: number;
+  y2?: number;
+  text?: string;
+  bg?: string;
+  fg?: string;
+  color?: string;
+  width?: number;
+  dashed?: boolean;
+  corner?: number;
+  cells?: Map<string, { text: string; bg?: string; fg?: string }>;
+  deleted?: boolean;
+}
 
 /**
  * Date builtins readable through history (`year[1]`, `month[2]`, …). Values
@@ -172,6 +199,24 @@ export class PineRuntime {
   private readonly inputByCid = new Map<number, number>();
   private readonly warns: string[] = [];
   private readonly warnSeen = new Set<string>();
+  /**
+   * Drawing primitives that are per-bar background/candle colours, indexed by
+   * bar. `bgcolor`/`barcolor` are called once per bar (often under a condition,
+   * so a bar may be unset → transparent). Merged into runs at `build()`.
+   */
+  private readonly bgColor: (string | undefined)[] = [];
+  private readonly bgAlpha: number[] = [];
+  private readonly barColor: (string | undefined)[] = [];
+  private readonly barAlpha: number[] = [];
+  /**
+   * Live `label`/`line`/`box`/`table` objects by handle id. Pine creates these
+   * once (usually a `var`) and mutates them through `label.set_*` etc, so the
+   * final visible state is whatever the last bar left them in — hence a single
+   * instance-level store, never reset per bar.
+   */
+  private readonly drawObjs = new Map<number, DrawObj>();
+  private drawIdSeq = 1;
+  private drawCapWarned = false;
   /** Resolutions requested by `request.security_lower_tf`, for the mount layer. */
   private readonly lowerTfSeen = new Set<number>();
 
@@ -1309,11 +1354,9 @@ export class PineRuntime {
         this.warn("fill() 的渐变填充暂未渲染，只显示两条边界线");
         return nothing;
       case "bgcolor":
-        this.warn("bgcolor() 背景色暂未渲染");
-        return nothing;
+        return this.doBgColor(args);
       case "barcolor":
-        this.warn("barcolor() K线着色暂未渲染");
-        return nothing;
+        return this.doBarColor(args);
       case "alertcondition":
       case "alert":
         this.warn(`${name}() 提醒在前端不起作用，已忽略`);
@@ -1351,6 +1394,18 @@ export class PineRuntime {
         // array-of-row `V[]`) comes first. Method-form is intentionally not routed
         // (see pineMatrix).
         if (name.startsWith("matrix.")) return this.runMatrix(name.slice("matrix.".length), args);
+    // Drawing primitives that carry a persistent object handle (created once,
+    // mutated through set_*, drawn on the final state). Intercepted before the
+    // decorative no-op so label/box/line/table actually reach the `drawings`
+    // channel; still returns a value that never feeds `produced`.
+    if (
+      name.startsWith("label.") ||
+      name.startsWith("box.") ||
+      name.startsWith("line.") ||
+      name.startsWith("table.")
+    ) {
+      return this.runDrawing(name, args);
+    }
     const misc = MISC[name];
     if (misc) return misc(args, this.ctx);
     if (!name.includes(".")) {
@@ -1640,6 +1695,261 @@ export class PineRuntime {
     return sentinel("void");
   }
 
+  /* --------------------------------------------------------------- drawings */
+
+  /** Resolve a colour argument to CSS; `transparent`/unresolved → undefined. */
+  private colArg(args: Arg[], index: number, ...names: string[]): string | undefined {
+    const e = argAt(args, index, ...names);
+    if (!e) return undefined;
+    return resolveColor(this.val(e)) || undefined;
+  }
+
+  /** A coordinate argument as a bar index / price; `na`/absent → undefined. */
+  private coordArg(args: Arg[], index: number, ...names: string[]): number | undefined {
+    const e = argAt(args, index, ...names);
+    if (!e) return undefined;
+    const n = asNum(this.val(e));
+    return Number.isNaN(n) ? undefined : n;
+  }
+
+  /** `bgcolor(color, title, transp)` — remember this bar's background. */
+  private doBgColor(args: Arg[]): V {
+    try {
+      const col = this.colArg(args, 0, "color");
+      if (col) {
+        const transp = numArg(args, this.ctx, 2, 0, "transp");
+        this.bgColor[this.bi] = col;
+        this.bgAlpha[this.bi] = Math.max(0, Math.min(1, 1 - transp / 100));
+      }
+    } catch {
+      // Decorative: an unreadable colour must never abort a numeric run.
+    }
+    return sentinel("void");
+  }
+
+  /** `barcolor(color, title, offset)` — remember this bar's candle colour. */
+  private doBarColor(args: Arg[]): V {
+    try {
+      const col = this.colArg(args, 0, "color");
+      if (col) {
+        this.barColor[this.bi] = col;
+        this.barAlpha[this.bi] = 1;
+      }
+    } catch {
+      // Decorative; never break the run.
+    }
+    return sentinel("void");
+  }
+
+  /**
+   * Route a `label.*`/`box.*`/`line.*`/`table.*` call. `.new` mints a fresh
+   * handle and returns it; every other method mutates the object its first
+   * argument names. The handle is a plain integer, so storing it in a `var` or
+   * an array and round-tripping through `set_*` works exactly like TradingView.
+   */
+  private runDrawing(name: string, args: Arg[]): V {
+    // Drawing primitives are decorative: their arguments are only ever used to
+    // place a shape, never to feed a value back into the numeric run. But now
+    // that we *evaluate* those arguments (previously `isDecorativeName`
+    // early-returned without touching them), a bad reference inside
+    // `label.new(x=<undefined>, …)` would throw and `runBody` would turn it
+    // into an abort — silently regressing a previously-ok script. Swallow every
+    // such error so the drawing channel can never break the numeric run.
+    try {
+      const dot = name.indexOf(".");
+      const head = name.slice(0, dot) as DrawObj["type"];
+      const op = name.slice(dot + 1);
+      if (op === "new") return this.createDraw(head, args);
+      const hExpr = argAt(args, 0, "id");
+      const handle = hExpr ? Math.trunc(asNum(this.val(hExpr))) : NaN;
+      const obj = Number.isNaN(handle) ? undefined : this.drawObjs.get(handle);
+      if (!obj || obj.deleted) return sentinel("void");
+      this.applyDrawOp(obj, op, args);
+      if (obj.deleted) this.drawObjs.delete(handle);
+    } catch {
+      // Decorative; never abort the run over a drawing.
+    }
+    return sentinel("void");
+  }
+
+  private createDraw(type: DrawObj["type"], args: Arg[]): V {
+    if (this.drawObjs.size >= DRAW_CAP) {
+      if (!this.drawCapWarned) {
+        this.warn(`绘图对象超过 ${DRAW_CAP} 个上限，其余已忽略（可能是每根K线新建而未删除）`);
+        this.drawCapWarned = true;
+      }
+      return sentinel("void");
+    }
+    const c = this.ctx;
+    const o: DrawObj = { type };
+    if (type === "label") {
+      o.x = this.coordArg(args, 0, "x");
+      o.y = this.coordArg(args, 1, "y");
+      const t = argAt(args, 2, "text");
+      o.text = t ? asStr(this.val(t)) : "";
+      o.bg = this.colArg(args, 3, "color");
+      o.fg = this.colArg(args, 4, "textcolor", "fg_color", "text_color");
+    } else if (type === "line") {
+      o.x = this.coordArg(args, 0, "x1");
+      o.y = this.coordArg(args, 1, "y1");
+      o.x2 = this.coordArg(args, 2, "x2");
+      o.y2 = this.coordArg(args, 3, "y2");
+      o.color = this.colArg(args, 6, "color");
+      o.width = Math.trunc(numArg(args, c, 7, 1, "width"));
+      const st = argAt(args, 8, "style");
+      o.dashed = st ? /dash|dot/i.test(asStr(this.val(st))) : false;
+    } else if (type === "box") {
+      o.x = this.coordArg(args, 0, "left");
+      o.y = this.coordArg(args, 1, "top");
+      o.x2 = this.coordArg(args, 2, "right");
+      o.y2 = this.coordArg(args, 3, "bottom");
+      o.color = this.colArg(args, 4, "border_color");
+      o.bg = this.colArg(args, 5, "bg_color");
+    } else if (type === "table") {
+      o.corner = Math.trunc(numArg(args, c, 2, 0, "position"));
+      o.cells = new Map();
+    }
+    const id = this.drawIdSeq++;
+    this.drawObjs.set(id, o);
+    return id;
+  }
+
+  /** Apply one `set_*`/`delete`/`cell` mutation to a drawing object. */
+  private applyDrawOp(o: DrawObj, op: string, args: Arg[]): void {
+    const c = this.ctx;
+    switch (op) {
+      case "delete":
+        o.deleted = true;
+        return;
+      case "set_text": {
+        const e = argAt(args, 1, "text");
+        if (e) o.text = asStr(this.val(e));
+        return;
+      }
+      case "set_x":
+      case "set_x1":
+      case "set_left":
+        o.x = this.coordArg(args, 1, "x", "x1", "left");
+        return;
+      case "set_y":
+      case "set_y1":
+      case "set_top":
+        o.y = this.coordArg(args, 1, "y", "y1", "top");
+        return;
+      case "set_x2":
+      case "set_right":
+        o.x2 = this.coordArg(args, 1, "x2", "right");
+        return;
+      case "set_y2":
+      case "set_bottom":
+        o.y2 = this.coordArg(args, 1, "y2", "bottom");
+        return;
+      case "set_xy":
+      case "set_xy1":
+        o.x = this.coordArg(args, 1, "x", "x1");
+        o.y = this.coordArg(args, 2, "y", "y1");
+        return;
+      case "set_xy2":
+        o.x2 = this.coordArg(args, 1, "x2");
+        o.y2 = this.coordArg(args, 2, "y2");
+        return;
+      case "set_color":
+        if (o.type === "label") o.bg = this.colArg(args, 1, "color");
+        else o.color = this.colArg(args, 1, "color");
+        return;
+      case "set_border_color":
+        o.color = this.colArg(args, 1, "border_color");
+        return;
+      case "set_bg_color":
+        o.bg = this.colArg(args, 1, "bg_color");
+        return;
+      case "set_text_color":
+      case "set_textcolor":
+        o.fg = this.colArg(args, 1, "text_color", "textcolor");
+        return;
+      case "set_width":
+        o.width = Math.trunc(numArg(args, c, 1, o.width ?? 1, "width"));
+        return;
+      case "set_style": {
+        const e = argAt(args, 1, "style");
+        o.dashed = e ? /dash|dot/i.test(asStr(this.val(e))) : o.dashed;
+        return;
+      }
+      case "cell": {
+        if (!o.cells) return;
+        const col = Math.trunc(numArg(args, c, 1, 0, "column"));
+        const row = Math.trunc(numArg(args, c, 2, 0, "row"));
+        const te = argAt(args, 3, "text");
+        o.cells.set(`${row},${col}`, {
+          text: te ? asStr(this.val(te)) : "",
+          bg: this.colArg(args, 7, "bg_color"),
+          fg: this.colArg(args, 4, "text_color"),
+        });
+        return;
+      }
+      default:
+        // Unknown accessor (`label.get_text`, …): harmless read, ignore.
+        return;
+    }
+  }
+
+  /** Flatten per-bar colour arrays + live objects into the drawing channel. */
+  private emitDrawings(): PineDrawing[] {
+    const out: PineDrawing[] = [];
+    // Merge consecutive bars that share a background colour into one rect run.
+    for (let i = 0; i < this.bgColor.length; i++) {
+      const col = this.bgColor[i];
+      if (!col) continue;
+      const a = this.bgAlpha[i];
+      let j = i;
+      while (j + 1 < this.bgColor.length && this.bgColor[j + 1] === col && this.bgAlpha[j + 1] === a) j++;
+      out.push({ kind: "bg", color: col, alpha: a, startBar: i, endBar: j });
+      i = j;
+    }
+    for (let b = 0; b < this.barColor.length; b++) {
+      const col = this.barColor[b];
+      if (col) out.push({ kind: "bar", color: col, alpha: this.barAlpha[b] ?? 1, bar: b });
+    }
+    for (const o of this.drawObjs.values()) {
+      if (o.deleted) continue;
+      if (o.type === "label") {
+        if (o.x !== undefined && o.y !== undefined)
+          out.push({ kind: "label", bar: Math.round(o.x), price: o.y, text: o.text ?? "", bg: o.bg, fg: o.fg });
+      } else if (o.type === "line") {
+        if (o.x !== undefined && o.y !== undefined && o.x2 !== undefined && o.y2 !== undefined)
+          out.push({
+            kind: "line",
+            x1: Math.round(o.x),
+            y1: o.y,
+            x2: Math.round(o.x2),
+            y2: o.y2,
+            color: o.color,
+            width: o.width,
+            dashed: o.dashed,
+          });
+      } else if (o.type === "box") {
+        if (o.x !== undefined && o.y !== undefined && o.x2 !== undefined && o.y2 !== undefined)
+          out.push({
+            kind: "box",
+            x1: Math.round(o.x),
+            y1: o.y,
+            x2: Math.round(o.x2),
+            y2: o.y2,
+            border: o.color,
+            bg: o.bg,
+          });
+      } else if (o.type === "table" && o.cells && o.cells.size) {
+        const cells: { row: number; col: number; text: string; bg?: string; fg?: string }[] = [];
+        for (const [k, v] of o.cells) {
+          const [r, cl] = k.split(",");
+          cells.push({ row: Number(r), col: Number(cl), text: v.text, bg: v.bg, fg: v.fg });
+        }
+        out.push({ kind: "table", corner: o.corner ?? 0, cells });
+      }
+    }
+    return out;
+  }
+
   /* ----------------------------------------------------------------- inputs */
 
   private doInput(name: string, args: Arg[], cid: number): V {
@@ -1789,6 +2099,7 @@ export class PineRuntime {
       lines: keep,
       markers: this.markers.filter((m) => m.values.some((v) => !Number.isNaN(v))),
       hlines: this.hlines.slice(),
+      drawings: this.emitDrawings(),
       warnings: this.warns.slice(),
       bars: this.bi < 0 ? 0 : this.bi + 1,
     };

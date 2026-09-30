@@ -152,19 +152,36 @@ describe("dialect dispatch", () => {
       {
         id: "w4",
         label: "x",
-        code: '//@version=5\nindicator("deco")\nplot(close, "c")\nbgcolor(color.red)\n',
+        code: '//@version=5\nindicator("deco")\nplot(close, "c")\nalertcondition(close > open, "t", "warm")\n',
         params: [],
         kind: "pane",
       },
       (m) => notes.push(m),
     );
     expect(err).toBeNull();
-    expect(notes.join(" ")).toContain("bgcolor");
+    expect(notes.join(" ")).toContain("alertcondition");
     // ⑲: pane mounts carry the stable `sub:<name>` pane id, not a fresh random one.
     expect(chart.createIndicator).toHaveBeenCalledWith({
       name: indicatorName("w4"),
       paneId: `sub:${indicatorName("w4")}`,
     });
+  });
+
+  it("mounts a drawing-bearing script even when the chart has no overlay layer", () => {
+    // 2c: the fakeChart here stubs neither createOverlay nor registerOverlay.
+    // Rendering must degrade to "no shapes painted" and never break the numeric
+    // mount, while the drawings still reach the artifact for a real chart.
+    const chart = fakeChart();
+    const err = applyUserIndicator(chart as never, {
+      id: "wd",
+      label: "x",
+      code: '//@version=5\nindicator("d", overlay=true)\nplot(close, "c")\nbgcolor(color.red)\nlabel.new(bar_index, high, "hi")\n',
+      params: [],
+      kind: "pane",
+    });
+    expect(err).toBeNull();
+    expect(chart.createIndicator).toHaveBeenCalled();
+    expect(getPineArtifact("wd")?.result.drawings.length).toBeGreaterThan(0);
   });
 });
 

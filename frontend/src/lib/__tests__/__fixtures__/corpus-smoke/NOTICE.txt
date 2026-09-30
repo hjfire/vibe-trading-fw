@@ -277,3 +277,15 @@ requires `dir == 1` / `dir == -1` — under faithful Pine `na` propagation `dir`
 stays `na`, which is what the engine does. Bending the logical/ternary `na` rules
 to resurrect that accumulator would be inventing non-standard semantics with
 blast radius across every other script, so it is left honestly red.
+
+Update (2c, drawing fidelity): the pure-drawing primitives above are no longer
+silently dropped. `bgcolor`/`barcolor`/`label`/`box`/`line`/`table` are now
+*recorded* into `PineResult.drawings` (bar-index/price space) and rendered as
+KLineChart overlays (a dedicated `pineDrawings.ts` registers `registerOverlay`
+templates and reuses the object system — never the position-losing indicator
+text figure). This is deliberately cosmetic: the `produced` gate still counts
+only finite plot lines / markers / hlines, so these scripts stay classified
+`no_output` and the pass-rate is byte-for-byte unchanged by 2c (everget 91.9%,
+v6 98.3% on a fresh re-run). Recording + rendering them neither fabricates
+numeric output nor moves them off the honest-red list; their fidelity is only
+everifiable by eye in a browser against TradingView.

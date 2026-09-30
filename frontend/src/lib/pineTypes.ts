@@ -215,6 +215,52 @@ export interface PineReport {
   avgLoss: number;
 }
 
+/* ---------------------------------------------------------- drawing objects */
+
+/**
+ * A captured Pine drawing primitive, expressed in **bar-index / price** space
+ * (the runtime never knows the chart's real timestamps; the render layer maps
+ * `bar` → a bar's timestamp from the loaded data list). These are recorded so
+ * a chart can approximate TradingView's `bgcolor`/`barcolor`/`label`/`box`/
+ * `line`/`table` on top of KLineChart's overlay system.
+ *
+ * They are deliberately kept OUT of the `produced` pass-rate metric: a script
+ * that only draws these still counts as `no_output`. Rendering is a visual
+ * nicety, never a correctness signal, so this channel cannot inflate a green.
+ *
+ * `bar`/`x1`/`x2` are integer bar indices; `price`/`y1`/`y2` are axis values.
+ * Colours are resolved CSS (`#rrggbb`); `alpha` is opacity in 0..1 (from Pine
+ * `transp`, 0=opaque). A `na` coordinate means the script never placed the
+ * object on that axis and the renderer must skip it.
+ */
+export type PineDrawing =
+  | { kind: "bg"; color: string; alpha: number; startBar: number; endBar: number }
+  | { kind: "bar"; color: string; alpha: number; bar: number }
+  | {
+      kind: "label";
+      bar: number;
+      price: number;
+      text: string;
+      bg?: string;
+      fg?: string;
+    }
+  | { kind: "box"; x1: number; y1: number; x2: number; y2: number; border?: string; bg?: string }
+  | {
+      kind: "line";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      color?: string;
+      width?: number;
+      dashed?: boolean;
+    }
+  | {
+      kind: "table";
+      corner: number;
+      cells: { row: number; col: number; text: string; bg?: string; fg?: string }[];
+    };
+
 export interface PineResult {
   /** "indicator" | "strategy" from the header call. */
   scriptKind: "indicator" | "strategy";
@@ -228,6 +274,12 @@ export interface PineResult {
   lines: PineLine[];
   markers: PineMarker[];
   hlines: { price: number; title: string; color?: string; style?: string }[];
+  /**
+   * Captured `bgcolor`/`barcolor`/`label`/`box`/`line`/`table` primitives, in
+   * bar-index/price space. Empty for scripts that draw none of these. Never
+   * counted by the pass-rate `produced` metric — see {@link PineDrawing}.
+   */
+  drawings: PineDrawing[];
   report?: PineReport;
   /** Honest list of what was skipped — never silently swallowed. */
   warnings: string[];
