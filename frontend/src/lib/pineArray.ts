@@ -62,6 +62,19 @@ export const ARRAY_OPS: Record<string, ArrayOp> = {
     if (i >= 0 && i < arr.length) arr[i] = p[1] ?? NA;
     return VOID;
   },
+  // `array.fill(a, value, index_from?, index_to?)` — set a run of elements to a
+  // single value. With no indices it fills the whole array (the seeding idiom
+  // RGMA / ZLEMA / Stoch use: `array.fill(buf, source)` to prime every stage at
+  // once); `index_from` (default 0) and `index_to` (default na → through the end,
+  // exclusive) narrow the run. Mutates in place and returns void, like `set`.
+  fill: (arr, p) => {
+    const value = (p.length >= 1 ? p[0] : NA) as V;
+    const from = p.length >= 2 ? Math.max(0, idx(p[1])) : 0;
+    const toRaw = p.length >= 3 ? idx(p[2]) : -1;
+    const to = toRaw < 0 ? arr.length : Math.min(toRaw, arr.length);
+    for (let i = from; i < to; i += 1) arr[i] = value;
+    return VOID;
+  },
   push: (arr, p) => {
     arr.push(p[0] ?? NA);
     return VOID;

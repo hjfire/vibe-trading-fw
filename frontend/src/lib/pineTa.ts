@@ -395,6 +395,13 @@ export const TA: Record<string, Builtin> = {
 
   cum: (args, c) => cumStep(srcOf(args, c), c.state(() => ({ prev: NA }) as Prev)),
 
+  // `ta.sum(source, length)` — the rolling sum behind several indicators
+  // (Theil's U, WMAPE, WRMSE all call it on squared-error series). The sumStep
+  // primitive already exists and is used by MFI/Chande below; this just exposes
+  // it under the documented ta.sum name so those scripts stop aborting.
+  sum: (args, c) =>
+    sumStep(srcOf(args, c), lenOf(args, c, 1, 14, "ta.sum"), c.state(() => ({ win: [] }) as Win)),
+
   mom: (args, c) => {
     const src = srcOf(args, c);
     const n = lenOf(args, c, 1, 14, "ta.mom");

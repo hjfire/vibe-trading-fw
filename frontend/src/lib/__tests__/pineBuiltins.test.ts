@@ -312,3 +312,43 @@ describe("stateful builtins keep per-call-site history (缺陷 D)", () => {
     eqSeries(two, direct); // and matches a hand-computed median window
   });
 });
+
+describe("ta.sum (缺陷 H — documented rolling sum whose primitive already existed)", () => {
+  // sumStep was already internal (used by MFI/Chande) but never surfaced as
+  // ta.sum, so Theil's U / WMAPE / WRMSE aborted. ta.sum(source, length) is the
+  // rolling sum with the same full-window warmup as ta.sma (na until length).
+  const rollSum = (arr: number[], n: number) =>
+    arr.map((_, i) => (i < n - 1 ? NaN : arr.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0)));
+
+  it("ta.sum(close, 5) equals the hand-computed rolling window sum", () => {
+    eqSeries(lineValues(`${H4}plot(ta.sum(close, 5))`), rollSum(CLOSE, 5));
+  });
+
+  it("ta.sum equals ta.sma * length on the same source (cross-builtin check)", () => {
+    const n = 7;
+    eqSeries(
+      lineValues(`${H4}plot(ta.sum(high, ${n}))`),
+      lineValues(`${H4}plot(ta.sma(high, ${n}) * ${n})`),
+    );
+  });
+});
+
+describe("array.fill (缺陷 I — whole-array seed and ranged fill)", () => {
+  const H6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("array.fill(buf, value) with no indices primes every element (RGMA/ZLEMA idiom)", () => {
+    // Four na slots overwritten each bar with the live close, so array.sum is
+    // 4*close per bar — proves the fill used the current-bar value AND hit all
+    // four positions, not just index 0.
+    const s = lineValues(
+      `${H6}var a = array.new_float(4, na)\narray.fill(a, close)\nplot(array.sum(a))\n`,
+    );
+    eqSeries(s, CLOSE.map((c) => 4 * c));
+  });
+
+  it("array.fill honors index_from / index_to as an exclusive run", () => {
+    // [0,0,0] -> fill indices [1,3) with 1.0 -> [0,1,1]; sum = 2, every bar.
+    const src = `${H6}var a = array.new_float(3, 0.0)\narray.fill(a, 1.0, 1, 3)\nplot(array.sum(a))\n`;
+    expect(lastPlotted(src)).toBeCloseTo(2, 10);
+  });
+});

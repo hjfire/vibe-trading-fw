@@ -24,7 +24,7 @@ preserved. This project's own source remains separately licensed.
 Why a curated slice is committed
 --------------------------------
 The full corpus (210 files) is fetched locally on demand and is NOT committed
-(it is external, changeful content). This 47-file slice (41 everget v3/v4 + 6
+(it is external, changeful content). This 53-file slice (41 everget v3/v4 + 12
 from the v6 corpus below) covers the categories
 that currently pass (bands_and_channels / movings / oscillators / statistics /
 trailing_stops / volatility / volume / highlighters) and is pinned by
@@ -101,7 +101,7 @@ local-only corpus was added: 410 standalone v6 indicators copied VERBATIM from
 Author: mihakralj, MIT-licensed (per-file MIT header preserved); fetched by the
 same script via CORPUS_MANIFEST=pine-community-v6.manifest.json into
 __fixtures__/corpus-v6/. Measured by pineCorpusReport with PINE_CORPUS_DIR.
-The engine passes 96.1% of them (394/410) — v6 typed function signatures, array
+The engine passes 97.6% of them (400/410) — v6 typed function signatures, array
 <T> generics, switch, and request.security already work.
 
 The biggest v6 gap closed (defect G) is the comma STATEMENT SEPARATOR: Pine
@@ -129,6 +129,36 @@ The three remaining v6 compile errors are NOT pinned and are NOT the comma gap:
 and leans on `matrix.*`; `fft.pine` uses v6 bitwise operators (`<< >> | &`).
 Those last two are genuine but singleton v6 feature gaps, deferred to a later
 increment rather than contorted to make one file green.
+
+Two more real v6 built-in gaps (defects H and I) then cleared six runtime
+aborts, lifting v6 from 96.1% to 97.6% with everget held at 88.6%:
+
+  - `ta.sum(source, length)` was never wired into the ta.* table even though
+    the rolling-sum primitive (`sumStep`) already existed internally (used by
+    MFI / Chande). Theil's U / WMAPE / WRMSE aborts were only a missing name.
+  - `array.fill(a, value, index_from?, index_to?)` was missing entirely; the
+    documented behaviour is whole-array fill when no index is given (the seeding
+    idiom RGMA / ZLEMA / Stoch use), and a `[from, to)` run otherwise. Added to
+    ARRAY_OPS so both the free (`array.fill(buf, x)`) and method (`buf.fill(x)`)
+    forms route through it.
+
+Both are numerically cross-checked by pineBuiltins.test.ts (ta.sum equals a
+hand-summed window and equals `ta.sma * length`; array.fill seeds all slots and
+honors the exclusive index range). These six v6 scripts lean on them and are
+pinned byte-for-byte (SHA-checked) as a gate:
+
+    v6/errors/theilu.pine           (ta.sum over squared-error series)
+    v6/errors/wmape.pine            (ta.sum)
+    v6/errors/wrmse.pine            (ta.sum)
+    v6/oscillators/stoch.pine       (array.fill whole-buffer seed)
+    v6/trends_IIR/rgma.pine         (array.fill seed + array.set)
+    v6/trends_IIR/zltema.pine       (array.fill seed)
+
+The three remaining v6 runtime aborts are NOT pinned: `cfb.pine` references an
+undeclared `hlccN`, `sam.pine` an undeclared `ji` (both are broken sources
+TradingView also rejects), and `hurst.pine` trips the engine's compute-budget
+guard on its nested loops — a performance limit, not a semantic gap. None is
+fixed by inventing behavior.
 
 The remaining `no_output` scripts are likewise NOT pinned, and not because the
 currently-unsupported drawing is trivially fixable: the highlighters only emit
