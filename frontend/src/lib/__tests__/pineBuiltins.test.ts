@@ -709,6 +709,24 @@ describe("drawing channel: bgcolor / barcolor / label / line / box records (2c)"
     expect(boxes).toHaveLength(B.length);
   });
 
+  it("a drawing style/extend constant reads as a value, never an undeclared abort", () => {
+    // Community SMC/FVG scripts pass flat enum constants (line.style_solid,
+    // extend.right, box.line_solid, label.style_label_down, table.position_*)
+    // as arguments and sometimes as bare reads. Before ENUM_NS widened to
+    // line/box/table/extend these threw "undeclared identifier" and aborted the
+    // whole indicator before it ever reached the recorder. The drawing recorder
+    // understands the sentinel, so such a script must now record and not abort.
+    const src =
+      V6 +
+      "style = line.style_solid\n" +
+      "ext = extend.right\n" +
+      "line.new(x1=0, y1=100, x2=10, y2=200, style=style, extend=ext)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    const ls = drawingsOf(src).filter((d) => d.kind === "line");
+    expect(ls.length).toBeGreaterThan(0);
+  });
+
   it("a time-anchored x folds onto the nearest bar index (drawings stay in bar/price space)", () => {
     // Real community scripts pass `time` (epoch millis) as a label/line x, not
     // only bar_index. The renderer anchors on dataIndex, so a raw timestamp

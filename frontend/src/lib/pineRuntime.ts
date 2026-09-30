@@ -137,9 +137,17 @@ const DATE_FIELD: Record<string, (d: Date) => number> = {
   second: (d) => d.getUTCSeconds(),
 };
 
-/** Bare reads that are enum values rather than functions (`color.red`, …). */
+/** Bare reads that are enum values rather than functions (`color.red`, …).
+ *  Drawing-style constants are flat identifiers whose dot is part of the name
+ *  (`line.style_solid`, `box.line_solid`, `label.style_label_down`,
+ *  `extend.right`, `table.position_top_left`), so those namespaces must be
+ *  listed here too — otherwise a plain read throws "undeclared identifier"
+ *  and aborts a whole order-block / FVG indicator that only passed a style
+ *  constant. Their `*.new` / `*.set_*` CALLS are routed separately (runDrawing),
+ *  so widening this set turns those crashes into the harmless sentinel the
+ *  drawing recorder already understands. */
 const ENUM_NS =
-  /^(color|location|plot|plotstyle|shape|circle|double|arrow|label|flag|square|cross|xcross|hline|order|position|trend|scale|text|chart|price_range|switch|syminfo|timeframe|duration|efl|format|ticksize|strategy|session|input|math|alert|display|size|barmerge|fontface|xloc|embed)\./;
+  /^(color|location|plot|plotstyle|shape|circle|double|arrow|label|flag|square|cross|xcross|hline|order|position|trend|scale|text|chart|price_range|switch|syminfo|timeframe|duration|efl|format|ticksize|strategy|session|input|math|alert|display|size|barmerge|fontface|xloc|embed|line|linefill|box|table|extend)\./;
 
 /** Memoized `ta.*` name list for error messages. */
 let TA_LIST = "";
