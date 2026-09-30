@@ -24,7 +24,7 @@ import { MISC, assertUnsupported, isDecorativeName } from "./pineMath";
 import { ARRAY_CTOR, ARRAY_METHODS, ARRAY_OPS } from "./pineArray";
 import { MAP_CTOR, MAP_OPS } from "./pineMap";
 import { OrderSim, estimateTick } from "./pineOrders";
-import { resampleUp, tfToMs } from "./pineResample";
+import { inferTimeframeMs, resampleUp, tfToMs } from "./pineResample";
 import {
   NA,
   NAMED_ONLY,
@@ -112,6 +112,12 @@ export interface PineRunOptions {
   opLimit?: number;
   /** Re-throw script errors instead of reporting them as warnings. */
   strict?: boolean;
+  /**
+   * Bars FINER than the chart, enabling `request.security_lower_tf`. Without
+   * it there is no way to synthesize sub-bar detail, so that call returns an
+   * empty array (scripts guard it with `array.size(..) > 0`).
+   */
+  lowerBars?: PineBars;
 }
 
 function numOrUndef(x: number): number | undefined {
@@ -171,6 +177,13 @@ export class PineRuntime {
   >();
   /** Guards against a nested request.security re-entering the swap path. */
   private inSecurity = false;
+  /** Optional finer-than-chart bars backing `request.security_lower_tf`. */
+  private readonly lowerBars: PineBars | undefined;
+  /** Per-call-site cache of the lower-timeframe series + chart-bar slice bounds. */
+  private readonly ltfCache = new Map<
+    string,
+    { lowerSeries: V[]; bounds: { s: number; e: number }[] }
+  >();
   private ops = 0;
   private histCap = HIST_CAP;
   /** Variable the interpreter is assigning into, for auto-generated titles. */
@@ -197,6 +210,7 @@ export class PineRuntime {
     this.params = opts.params ?? [];
     this.opLimit = opts.opLimit ?? OP_LIMIT;
     this.strict = !!opts.strict;
+    this.lowerBars = opts.lowerBars;
     this.tick = estimateTick(bars);
     this.sim = new OrderSim(
       bars,
@@ -1005,6 +1019,58 @@ export class PineRuntime {
     return pick(cached.subs[0]);
   }
 
+  /**
+   * `request.security_lower_tf(symbol, timeframe, expression)`: the array of
+   * `expression` values taken from every sub-bar that falls inside the current
+   * chart bar. Requires finer-than-chart bars supplied via `RunOptions.lowerBars`
+   * — real sub-bar detail cannot be synthesized from the chart. Without them,
+   * returns an empty array (TradingView's own guard idiom `array.size(x) > 0`
+   * then skips cleanly), which is an honest degrade rather than a fabricated
+   * intra-bar path.
+   */
+  private doSecurityLowerTf(node: Extract<Expr, { k: "call" }>): V {
+    const exExpr = argAt(node.args, 2, "expression");
+    if (!exExpr) return [];
+    if (!this.lowerBars || this.lowerBars.list.length === 0) {
+      this.warn(
+        "request.security_lower_tf 需要比图表更细的子K线数据（RunOptions.lowerBars）；未提供时返回空数组。",
+      );
+      return [];
+    }
+    const key = `${node.cid}`;
+    let c = this.ltfCache.get(key);
+    if (!c) {
+      try {
+        // Evaluate the expression across the whole sub-bar series once, then
+        // slice the window that belongs to each chart bar (both ascending in
+        // time, so a single forward scan finds every boundary).
+        const lowerSeries = this.evalOnBars(exExpr, this.lowerBars);
+        const chartMs = inferTimeframeMs(this.bars);
+        const bounds: { s: number; e: number }[] = new Array(this.bars.list.length);
+        let j = 0;
+        for (let bi = 0; bi < this.bars.list.length; bi++) {
+          const t0 = this.bars.time[bi];
+          const t1 = t0 + chartMs;
+          while (j < this.lowerBars.list.length && this.lowerBars.time[j] < t0) j++;
+          const s = j;
+          while (j < this.lowerBars.list.length && this.lowerBars.time[j] < t1) j++;
+          bounds[bi] = { s, e: j };
+        }
+        c = { lowerSeries, bounds };
+        this.ltfCache.set(key, c);
+      } catch (err) {
+        this.warn(
+          `request.security_lower_tf 求值失败，返回空数组：${err instanceof Error ? err.message : String(err)}`,
+        );
+        return [];
+      }
+    }
+    const bnd = c.bounds[this.bi];
+    const out: V[] = [];
+    for (let k = bnd.s; k < bnd.e; k++) out.push(c.lowerSeries[k]);
+    return out;
+  }
+
   /* --------------------------------------------------------------- dispatch */
 
   private dispatch(node: Extract<Expr, { k: "call" }>): V {
@@ -1021,6 +1087,7 @@ export class PineRuntime {
     // bars, so they must be intercepted before the generic routing (and the
     // `request.*` decorative no-op) below.
     if (name === "request.security") return this.doSecurity(node);
+    if (name === "request.security_lower_tf") return this.doSecurityLowerTf(node);
 
     switch (name) {
       case "indicator":

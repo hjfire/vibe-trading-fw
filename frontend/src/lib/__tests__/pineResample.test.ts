@@ -200,3 +200,39 @@ describe("request.security (higher timeframe)", () => {
     expect(v[24]).toBe(34.5);
   });
 });
+
+describe("request.security_lower_tf (sub-bar array)", () => {
+  const head = "//@version=5\nindicator(\"ltf\")\n";
+  const vals = (code: string, name: string, lowerBars?: KLineData[]): number[] => {
+    const chart = bars(3, HOUR, 0); // three hourly bars at 0 / 1h / 2h
+    const out = compilePine(head + code, chart, lowerBars ? { lowerBars: toBars(lowerBars) } : {});
+    if (!("result" in out)) throw new Error(`编译失败：${JSON.stringify(out)}`);
+    const l = out.result.lines.find((x) => x.name === name);
+    if (!l) throw new Error(`缺少绘图 ${name}`);
+    return l.values;
+  };
+
+  it("returns an empty array (guarded, no crash) when no sub-bar data exists", () => {
+    const sz = vals(
+      'sub = request.security_lower_tf(syminfo.tickerid, "1", close)\nplot(array.size(sub), "sz")',
+      "sz",
+    );
+    expect(sz[0]).toBe(0); // array.size()==0 => scripts skip their guard cleanly
+    expect(sz[2]).toBe(0);
+  });
+
+  it("collects every sub-bar value inside each chart bar", () => {
+    const lower = bars(180, MIN, 0); // 60 minute bars per hour
+    const code =
+      'sub = request.security_lower_tf(syminfo.tickerid, "1", close)\n' +
+      'plot(array.size(sub), "sz")\n' +
+      'plot(array.get(sub, 0), "first")';
+    const sz = vals(code, "sz", lower);
+    const first = vals(code, "first", lower);
+    expect(sz).toEqual([60, 60, 60]); // full hour of minute bars per chart bar
+    // close[i] = 10.5 + i, so the first sub-bar of each hour is 10.5 / 70.5 / 130.5.
+    expect(first[0]).toBe(10.5);
+    expect(first[1]).toBe(70.5);
+    expect(first[2]).toBe(130.5);
+  });
+});
