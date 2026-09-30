@@ -18,6 +18,7 @@ import {
 } from "../indicatorLang";
 import type { ApplySpec } from "../indicatorLang";
 import { compilePine } from "../pineScript";
+import { toBars } from "../pineTypes";
 import { FORMULA_TEMPLATES } from "../indicatorTemplates";
 import { SCRIPT_LIBRARY } from "../scriptLibrary";
 import type { KLineData } from "klinecharts";
@@ -287,5 +288,62 @@ describe("两套引擎口径一致", () => {
     expect(vec[79].LOW).toBeCloseTo(mean - 2 * sigma, 10);
     expect(up[79]).toBeCloseTo(mean + 2 * sigma, 10);
     expect(low[79]).toBeCloseTo(mean - 2 * sigma, 10);
+  });
+});
+
+describe("request.security_lower_tf injection channel (ApplySpec.lowerBars)", () => {
+  it("threads the fetched sub-bars into the mounted script so the array is populated", () => {
+    // BARS is a daily chart (86_400_000 spacing). Two sub-bars live inside every
+    // chart bar, one hour apart from its open, so array.size() must read 2.
+    const lower = toBars(
+      BARS.flatMap((b) => [
+        { ...b, timestamp: b.timestamp } as KLineData,
+        { ...b, timestamp: b.timestamp + 3_600_000 } as KLineData,
+      ]),
+    );
+    const code = [
+      "//@version=5",
+      'indicator("ltf")',
+      'sub = request.security_lower_tf(syminfo.tickerid, "1", close)',
+      'plot(array.size(sub), "sz")',
+    ].join("\n");
+    const chart = fakeChart();
+    expect(
+      applyUserIndicator(chart as never, {
+        id: "wltf",
+        label: "x",
+        code,
+        params: [],
+        kind: "pane",
+        lowerBars: lower,
+      }),
+    ).toBeNull();
+    const reg = registered[registered.length - 1] as {
+      calc: (data: KLineData[], indicator: { calcParams: number[] }) => Array<Record<string, number | undefined>>;
+      figures: Array<{ key: string }>;
+    };
+    const key = reg.figures[0].key;
+    const rows = reg.calc(BARS, { calcParams: [] });
+    expect(rows[10][key]).toBe(2); // the sub-bars reached the engine through the channel
+  });
+
+  it("degrades to an empty array when the channel is left unfed", () => {
+    const code = [
+      "//@version=5",
+      'indicator("ltf")',
+      'sub = request.security_lower_tf(syminfo.tickerid, "1", close)',
+      'plot(array.size(sub), "sz")',
+    ].join("\n");
+    const chart = fakeChart();
+    expect(
+      applyUserIndicator(chart as never, { id: "wltf2", label: "x", code, params: [], kind: "pane" }),
+    ).toBeNull();
+    const reg = registered[registered.length - 1] as {
+      calc: (data: KLineData[], indicator: { calcParams: number[] }) => Array<Record<string, number | undefined>>;
+      figures: Array<{ key: string }>;
+    };
+    const key = reg.figures[0].key;
+    const rows = reg.calc(BARS, { calcParams: [] });
+    expect(rows[10][key]).toBe(0); // no lowerBars => the guard sees size 0 and skips
   });
 });

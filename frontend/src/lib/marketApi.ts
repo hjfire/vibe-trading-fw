@@ -89,6 +89,61 @@ export const RESOLUTION_BY_INTERVAL: Record<IntervalKey, string> = {
   "1M": "M",
 };
 
+/**
+ * Millisecond span of each toolbar period. Monthly is a 30-day block, matching
+ * `periodStringFromMs`/`tfToMs` in `pineResample` so the two ends of the
+ * period<->ms mapping agree on what "M" costs.
+ */
+export const INTERVAL_MS: Record<IntervalKey, number> = {
+  "1m": 60_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "30m": 1_800_000,
+  "60m": 3_600_000,
+  "1D": 86_400_000,
+  "1W": 604_800_000,
+  "1M": 30 * 86_400_000,
+};
+
+/**
+ * Pick a supported period strictly finer than the chart's own, to back
+ * `request.security_lower_tf`. The runtime cannot synthesize sub-bar detail
+ * from coarse candles, so a producer has to fetch a lower series on its own —
+ * and only a period this page can actually request is useful (Phase 5b MTF.4's
+ * "有则传" injection channel stays honest: it is fed only what we can really get).
+ *
+ * When the script named a timeframe (`requestedMs`, from `tfToMs`), choose the
+ * supported key nearest it that is still finer than the chart; otherwise fall
+ * back to the finest period. Returns `null` when the chart is already the
+ * finest we can fetch (a 1-minute chart has no lower sub-bar here) or when the
+ * request is not actually a lower timeframe — the caller then passes no
+ * `lowerBars`, and the builtin degrades to an empty array as before.
+ */
+export function pickLowerInterval(
+  chartKey: IntervalKey,
+  requestedMs?: number,
+): IntervalKey | null {
+  const chartMs = INTERVAL_MS[chartKey];
+  const finer = (Object.keys(INTERVAL_MS) as IntervalKey[])
+    .filter((k) => INTERVAL_MS[k] < chartMs)
+    .sort((a, b) => INTERVAL_MS[a] - INTERVAL_MS[b]);
+  if (finer.length === 0) return null;
+  if (requestedMs !== undefined && Number.isFinite(requestedMs)) {
+    if (requestedMs >= chartMs) return null; // not lower than the chart after all
+    let best = finer[0];
+    let bestErr = Math.abs(INTERVAL_MS[best] - requestedMs);
+    for (const k of finer) {
+      const err = Math.abs(INTERVAL_MS[k] - requestedMs);
+      if (err < bestErr) {
+        best = k;
+        bestErr = err;
+      }
+    }
+    return best;
+  }
+  return finer[0]; // finest available
+}
+
 /** The columnar part of a `/history` answer, protocol-shaped. */
 export interface UdfHistoryColumns {
   /** Bar times, unix **seconds** — the protocol's unit, not the page's. */

@@ -11,11 +11,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   INTERVALS,
+  INTERVAL_MS,
   intervalToPeriod,
   isCalendarInterval,
   periodToInterval,
+  pickLowerInterval,
   type IntervalKey,
 } from "../marketApi";
+import { tfToMs } from "../pineResample";
 
 const ALL_KEYS: IntervalKey[] = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"];
 
@@ -75,5 +78,38 @@ describe("isCalendarInterval", () => {
     // path and arrive as daily bars.
     const coarse = INTERVALS.filter((i) => isCalendarInterval(i.key)).map((i) => i.key);
     expect(coarse).toEqual(["1D", "1W", "1M"]);
+  });
+});
+
+describe("pickLowerInterval (request.security_lower_tf feed)", () => {
+  it("orders the period table finest to coarsest", () => {
+    const keys = Object.keys(INTERVAL_MS) as IntervalKey[];
+    for (let i = 1; i < keys.length; i++) {
+      expect(INTERVAL_MS[keys[i]]).toBeGreaterThan(INTERVAL_MS[keys[i - 1]]);
+    }
+  });
+
+  it("gives a daily chart its 1-minute floor when the script names no timeframe", () => {
+    expect(pickLowerInterval("1D")).toBe("1m");
+    expect(pickLowerInterval("1W")).toBe("1m");
+  });
+
+  it("honours a lower timeframe the script actually asked for", () => {
+    expect(pickLowerInterval("1D", tfToMs("60"))).toBe("60m");
+    expect(pickLowerInterval("1D", tfToMs("15"))).toBe("15m");
+    expect(pickLowerInterval("1W", tfToMs("D"))).toBe("1D");
+    expect(pickLowerInterval("60m", tfToMs("5"))).toBe("5m");
+  });
+
+  it("snaps an unsupported request to the nearest fetchable lower period", () => {
+    // 90 minutes has no button; the nearest available below a daily chart is
+    // the 60m key, not the 30m one.
+    expect(pickLowerInterval("1D", 90 * 60_000)).toBe("60m");
+  });
+
+  it("returns null when there is nothing lower to fetch", () => {
+    expect(pickLowerInterval("1m")).toBeNull(); // already the finest
+    expect(pickLowerInterval("5m", tfToMs("1D"))).toBeNull(); // asked coarser than the chart
+    expect(pickLowerInterval("60m", tfToMs("60"))).toBeNull(); // same as the chart
   });
 });

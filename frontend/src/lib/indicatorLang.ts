@@ -1,5 +1,6 @@
 import { registerIndicator, type Chart, type IndicatorFigureStyle, type KLineData } from "klinecharts";
 import { compilePine, isPineSource, type PineArtifact, type PineFigure } from "./pineScript";
+import type { PineBars } from "./pineTypes";
 import { subPaneIdOf } from "./paneLayout";
 
 /**
@@ -914,6 +915,14 @@ export interface ApplySpec {
   code: string;
   params: number[];
   kind: "overlay" | "pane";
+  /**
+   * Finer-than-chart bars backing `request.security_lower_tf` (Phase 5b MTF.4's
+   * injection channel). Absent by default: a script that calls it then degrades
+   * to an empty array, exactly as before this plumbing existed. A producer that
+   * really fetched a lower series (see `pickLowerInterval` + `fetchKline`) can
+   * populate it so those scripts compute over genuine sub-bars.
+   */
+  lowerBars?: PineBars;
 }
 
 /** Which engine a piece of source text belongs to. */
@@ -989,7 +998,8 @@ function toKcfFigure(f: PineFigure) {
  */
 function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) => void): string | null {
   const bars = chart.getDataList();
-  const first = compilePine(spec.code, bars, { params: spec.params });
+  const lowerBars = spec.lowerBars;
+  const first = compilePine(spec.code, bars, { params: spec.params, lowerBars });
   if ("error" in first) return `Pine 脚本错误：${first.error}`;
   // Half a script is worse than none: everything after the abort is missing.
   if (first.abort) return `Pine 脚本错误：${first.abort}`;
@@ -1014,7 +1024,7 @@ function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) 
     calc: (dataList, indicator) => {
       try {
         const p = (indicator.calcParams ?? defaultParams).map((v) => Number(v));
-        const out = compilePine(code, dataList, { params: p });
+        const out = compilePine(code, dataList, { params: p, lowerBars });
         if ("error" in out) {
           publishArtifact(id, null);
           return dataList.map(() => ({}));
