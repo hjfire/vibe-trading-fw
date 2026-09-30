@@ -1,6 +1,12 @@
 import { registerIndicator, type Chart, type IndicatorFigureStyle, type KLineData } from "klinecharts";
 import { compilePine, isPineSource, type PineArtifact, type PineFigure } from "./pineScript";
-import type { PineBars } from "./pineTypes";
+import { toBars, type PineBars } from "./pineTypes";
+import {
+  INTERVAL_MS,
+  fetchKline,
+  periodToInterval,
+  pickLowerInterval,
+} from "./marketApi";
 import { subPaneIdOf } from "./paneLayout";
 
 /**
@@ -1047,7 +1053,72 @@ function applyPineIndicator(chart: Chart, spec: ApplySpec, note?: (msg: string) 
   }
   publishArtifact(id, first);
   if (note) for (const w of first.result.warnings.slice(0, 6)) note(w);
+  // The script asked for sub-bar detail but none was injected yet: fetch a
+  // genuinely finer series from the bar feed and re-run. Fire-and-forget — the
+  // first (degraded) result already painted, and the refit replaces it when the
+  // lower bars land, exactly like TradingView filling an MTF pane after load.
+  if (!spec.lowerBars && first.result.lowerTfMs && first.result.lowerTfMs.length) {
+    void feedLowerBars(chart, spec, first.result.lowerTfMs, note);
+  }
   return null;
+}
+
+/**
+ * In-flight guard: one (script, symbol, chart-period, lower-period) sub-bar
+ * fetch at a time, so a re-render or a slider drag cannot stampede the feed.
+ */
+const ltfFeeds = new Set<string>();
+
+/**
+ * Producer for `request.security_lower_tf` (Phase 5b MTF.5). The chart only
+ * carries its own period and sub-bar detail cannot be synthesized from it, so
+ * we fetch a strictly-finer series for the same instrument over the visible
+ * window and re-apply the script with it as `lowerBars`.
+ *
+ * Everything degrades honestly: no symbol/period on the chart, no fetchable
+ * lower period, or a failed/empty request all leave the script on its existing
+ * empty-array behaviour — never a crash, never a fabricated intra-bar path.
+ */
+async function feedLowerBars(
+  chart: Chart,
+  spec: ApplySpec,
+  requestedMsList: number[],
+  note?: (msg: string) => void,
+): Promise<void> {
+  const getSymbol = chart.getSymbol;
+  const getPeriod = chart.getPeriod;
+  if (typeof getSymbol !== "function" || typeof getPeriod !== "function") return;
+  const ticker = getSymbol.call(chart)?.ticker;
+  const period = getPeriod.call(chart);
+  if (!ticker || !period) return;
+  const chartIv = periodToInterval(period);
+  // A single lowerBars series backs the whole chart, so serve the finest
+  // requested resolution (the common case is one lower timeframe per script).
+  const lowerIv = pickLowerInterval(chartIv, Math.min(...requestedMsList));
+  if (!lowerIv) return;
+  const bars = chart.getDataList();
+  if (bars.length < 2) return;
+  const first = bars[0].timestamp ?? 0;
+  const last = bars[bars.length - 1].timestamp ?? 0;
+  const lowerMs = INTERVAL_MS[lowerIv];
+  // Bound the pull: a coarse chart asking for minutes over years would be a
+  // huge request, so beyond the cap we only cover the newest part of the window
+  // and older chart bars keep their empty (guarded) sub-bar arrays.
+  const count = Math.min(9000, Math.ceil((last - first) / lowerMs) + 2);
+  const key = `${spec.id}|${ticker}|${chartIv}|${lowerIv}`;
+  if (ltfFeeds.has(key)) return;
+  ltfFeeds.add(key);
+  try {
+    const res = await fetchKline({ symbol: ticker, interval: lowerIv, count, before: last + lowerMs });
+    if (res.bars.length > 0) {
+      applyUserIndicator(chart, { ...spec, lowerBars: toBars(res.bars) }, note);
+    }
+  } catch {
+    // A failed sub-bar fetch is not an error to the user: the script already
+    // rendered on its honest empty-array degradation, and stays there.
+  } finally {
+    ltfFeeds.delete(key);
+  }
 }
 
 /**

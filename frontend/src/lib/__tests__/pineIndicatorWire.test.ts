@@ -6,6 +6,15 @@ vi.mock("klinecharts", () => ({
   registerIndicator: (spec: Record<string, unknown>) => registered.push(spec),
 }));
 
+// The MTF.5 producer fetches sub-bars through fetchKline; stub just that one
+// function and keep the rest of marketApi (periodToInterval / pickLowerInterval
+// / INTERVAL_MS) real so the interval-selection logic is genuinely exercised.
+const { fetchKlineMock } = vi.hoisted(() => ({ fetchKlineMock: vi.fn() }));
+vi.mock("../marketApi", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, fetchKline: fetchKlineMock };
+});
+
 import {
   applyUserIndicator,
   compileFormula,
@@ -345,5 +354,84 @@ describe("request.security_lower_tf injection channel (ApplySpec.lowerBars)", ()
     const key = reg.figures[0].key;
     const rows = reg.calc(BARS, { calcParams: [] });
     expect(rows[10][key]).toBe(0); // no lowerBars => the guard sees size 0 and skips
+  });
+});
+
+describe("request.security_lower_tf producer (MTF.5 auto-fetch)", () => {
+  const DAY = 86_400_000;
+  const daily: KLineData[] = Array.from({ length: 6 }, (_, i) => ({
+    timestamp: 1_700_000_000_000 + i * DAY,
+    open: 10 + i,
+    high: 11 + i,
+    low: 9 + i,
+    close: 10.5 + i,
+    volume: 100,
+    turnover: 0,
+  }));
+  // Three one-minute sub-bars live inside each daily bar.
+  const minuteBars: KLineData[] = daily.flatMap((b) =>
+    [0, 1, 2].map((k) => ({ ...b, timestamp: b.timestamp + k * 60_000 })),
+  );
+  const chartWithFeed = () => ({
+    getDataList: () => daily,
+    removeIndicator: vi.fn(),
+    createIndicator: vi.fn(),
+    getSymbol: () => ({ ticker: "0700.HK" }),
+    getPeriod: () => ({ type: "day", span: 1 }),
+  });
+  const code = [
+    "//@version=5",
+    'indicator("ltf")',
+    'sub = request.security_lower_tf(syminfo.tickerid, "1", close)',
+    'plot(array.size(sub), "sz")',
+  ].join("\n");
+
+  afterEach(() => fetchKlineMock.mockReset());
+
+  it("records the requested lower timeframe so the mount layer can act on it", () => {
+    const out = compilePine(code, daily);
+    if (!("result" in out)) throw new Error("编译失败");
+    expect(out.result.lowerTfMs).toEqual([60_000]); // "1" => one minute
+  });
+
+  it("fetches a finer series and re-applies the script with real sub-bars", async () => {
+    fetchKlineMock.mockResolvedValue({
+      status: "ok",
+      symbol: "0700.HK",
+      interval: "1m",
+      source: "futu",
+      bars: minuteBars,
+    });
+    const chart = chartWithFeed();
+    expect(
+      applyUserIndicator(chart as never, { id: "p1", label: "x", code, params: [], kind: "pane" }),
+    ).toBeNull();
+    // The first paint is the degraded one; the producer then fetches + re-applies.
+    await vi.waitFor(() => expect(registered.length).toBeGreaterThanOrEqual(2));
+    expect(fetchKlineMock).toHaveBeenCalledTimes(1);
+    const args = fetchKlineMock.mock.calls[0][0] as {
+      symbol: string;
+      interval: string;
+      before: number;
+    };
+    expect(args.symbol).toBe("0700.HK");
+    expect(args.interval).toBe("1m");
+    expect(args.before).toBe(daily[5].timestamp + 60_000);
+    const reg = registered[registered.length - 1] as {
+      calc: (d: KLineData[], i: { calcParams: number[] }) => Array<Record<string, number | undefined>>;
+      figures: Array<{ key: string }>;
+    };
+    const rows = reg.calc(daily, { calcParams: [] });
+    expect(rows[3][reg.figures[0].key]).toBe(3); // three real sub-bars per day
+  });
+
+  it("stays degraded and never fetches when the chart cannot name its symbol", async () => {
+    const chart = fakeChart(); // no getSymbol / getPeriod
+    expect(
+      applyUserIndicator(chart as never, { id: "p2", label: "x", code, params: [], kind: "pane" }),
+    ).toBeNull();
+    await Promise.resolve();
+    expect(fetchKlineMock).not.toHaveBeenCalled();
+    expect(registered.length).toBe(1); // only the degraded first apply
   });
 });

@@ -223,6 +223,13 @@ export interface PineResult {
   warnings: string[];
   /** Number of bars the script actually walked. */
   bars: number;
+  /**
+   * Lower-timeframe resolutions (in ms) that `request.security_lower_tf` asked
+   * for during this run, deduped. The mount layer uses it to know a script
+   * needs sub-bar `lowerBars` and at what resolution to fetch them (Phase 5b
+   * MTF.5 producer); absent when the script never calls it.
+   */
+  lowerTfMs?: number[];
 }
 
 /** Bar data the runtime needs beyond OHLCV. */

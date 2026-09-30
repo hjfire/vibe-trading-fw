@@ -140,6 +140,8 @@ export class PineRuntime {
   private readonly inputByCid = new Map<number, number>();
   private readonly warns: string[] = [];
   private readonly warnSeen = new Set<string>();
+  /** Resolutions requested by `request.security_lower_tf`, for the mount layer. */
+  private readonly lowerTfSeen = new Set<number>();
 
   private readonly params: number[];
   private readonly opLimit: number;
@@ -1029,6 +1031,14 @@ export class PineRuntime {
    * intra-bar path.
    */
   private doSecurityLowerTf(node: Extract<Expr, { k: "call" }>): V {
+    // Record the resolution the script asked for even when we have no sub-bars
+    // to serve it: the mount layer reads `lowerTfMs` to decide whether (and at
+    // what period) to fetch `lowerBars` and re-run the script.
+    const tfExpr = argAt(node.args, 1, "timeframe");
+    if (tfExpr) {
+      const ms = tfToMs(asStr(this.val(tfExpr)));
+      if (Number.isFinite(ms)) this.lowerTfSeen.add(ms);
+    }
     const exExpr = argAt(node.args, 2, "expression");
     if (!exExpr) return [];
     if (!this.lowerBars || this.lowerBars.list.length === 0) {
@@ -1533,6 +1543,7 @@ export class PineRuntime {
       bars: this.bi < 0 ? 0 : this.bi + 1,
     };
     if (this.precision !== undefined) result.precision = this.precision;
+    if (this.lowerTfSeen.size) result.lowerTfMs = [...this.lowerTfSeen];
     if (this.kind === "strategy") result.report = this.sim.report();
     return result;
   }
