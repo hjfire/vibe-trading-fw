@@ -677,10 +677,22 @@ export class PineRuntime {
         if (body === null) return NA;
         return Array.isArray(body) ? this.runBlock(body) : this.val(body);
       }
+      case "ifexpr": {
+        // `if cond` as a value: first arm whose guard is true yields its body
+        // (an inline expression or an indented block), else the trailing
+        // `else` body, else na. A na guard counts as false (Pine semantics).
+        for (const arm of e.arms) {
+          if (isTrue(this.val(arm.cond))) {
+            return Array.isArray(arm.body) ? this.runBlock(arm.body) : this.val(arm.body);
+          }
+        }
+        if (e.elseBody === null) return NA;
+        return Array.isArray(e.elseBody) ? this.runBlock(e.elseBody) : this.val(e.elseBody);
+      }
     }
   }
 
-  /** Run a statement block and return its last value (switch clause bodies). */
+  /** Run a statement block and return its last value (switch / if-expression bodies). */
   private runBlock(body: Stmt[]): V {
     let out: V = NA;
     for (const st of body) {

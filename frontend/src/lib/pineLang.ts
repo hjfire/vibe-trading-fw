@@ -199,6 +199,13 @@ export type Expr =
       /** The `=> body` clause with no test (evaluated when nothing matched). */
       defaultBody: Expr | Stmt[] | null;
       line: number;
+    }
+  | {
+      k: "ifexpr";
+      /** `if cond` / `else if cond` arms; each body is an inline `then` expr or an indented block. */
+      arms: { cond: Expr; body: Expr | Stmt[] }[];
+      elseBody: Expr | Stmt[] | null;
+      line: number;
     };
 
 export type Stmt =
@@ -251,6 +258,12 @@ const FN_KEYWORDS = new Set(["def", "function"]);
 export class PineParser {
   private pos = 0;
   private cid = 0;
+  /**
+   * Indent of the statement currently being parsed (set in parseStatement). An
+   * if-expression on an assignment RHS (`x = if …`) uses it as the reference
+   * column: its bodies must indent past it and its `else` clauses realign to it.
+   */
+  private stmtIndent = 0;
 
   constructor(private readonly tk: Tok[]) {}
 
@@ -431,6 +444,7 @@ export class PineParser {
   private parseStatement(): Stmt | Stmt[] | null {
     const head = this.peek();
     const indent = this.indentHere();
+    this.stmtIndent = indent;
     const t = this.peek();
 
     // A UDT declaration `type Name` + indented field lines. `type` followed by
@@ -698,6 +712,58 @@ export class PineParser {
     return { tok: this.tk[p], at: p };
   }
 
+  /* ---------------------------------------------------------- if-expression */
+
+  /**
+   * `if cond` used as a VALUE (an assignment RHS or a return expression), which
+   * Pine allows alongside the statement form. Each arm's body is an indented
+   * block (value = its last statement) or, defensively, an inline expression;
+   * `else if` / a trailing `else` arms realign to the enclosing statement's
+   * indent (this.stmtIndent). Mirrors parseSwitch's pure-lookahead + rewind so
+   * an enclosing `x = if …` declaration still sees its line break.
+   */
+  private parseIfExpr(): Expr {
+    const line = this.next().line; // consume "if"
+    const base = this.stmtIndent; // column the bodies outdent from / `else` aligns to
+    const arms: { cond: Expr; body: Expr | Stmt[] }[] = [];
+    let elseBody: Expr | Stmt[] | null = null;
+    for (;;) {
+      const cond = this.parseExpr();
+      arms.push({ cond, body: this.parseIfExprBody(base) });
+      const ahead = this.peekMeaningful(this.pos);
+      if (ahead.tok.kind === "ident" && ahead.tok.value === "else" && ahead.tok.col >= base) {
+        this.pos = ahead.at; // jump onto the `else` (past newlines)
+        this.next(); // consume "else"
+        const nt = this.peek();
+        if (nt.kind === "ident" && nt.value === "if") {
+          this.next(); // consume "if"; the loop parses its cond + body
+          continue;
+        }
+        elseBody = this.parseIfExprBody(base);
+        break;
+      }
+      break;
+    }
+    // A block body leaves `this.pos` on the dedented next statement (newlines
+    // already consumed). Rewind onto that newline so an enclosing `x = if …`
+    // declaration still sees a line break in endOfStmt().
+    const cur = this.peek();
+    if (cur.kind !== "nl" && cur.kind !== "eof" && this.tk[this.pos - 1]?.kind === "nl") this.pos--;
+    return { k: "ifexpr", arms, elseBody, line };
+  }
+
+  /** If-expression arm body: an indented block of statements, or an inline value. */
+  private parseIfExprBody(base: number): Expr | Stmt[] {
+    const t = this.peek();
+    if (!(t.kind === "nl" || t.kind === "eof")) return this.parseExpr();
+    const first = this.skipNl();
+    if (first.kind === "eof" || first.col <= base) {
+      this.pos--; // empty body: leave the dedented token for the caller
+      return { k: "num", v: NaN, line: first.line };
+    }
+    return this.parseStatements(first.col);
+  }
+
   /**
    * `type Name` + an indented block of `<Type> field` lines. Field value TYPES
    * are compile-time annotations; the runtime record is positional (fields in
@@ -896,6 +962,7 @@ export class PineParser {
   private parsePrimary(): Expr {
     const t = this.peek();
     if (t.kind === "ident" && t.value === "switch") return this.parseSwitch();
+    if (t.kind === "ident" && t.value === "if") return this.parseIfExpr();
     if (t.kind === "num") {
       this.next();
       const v = Number(t.value);

@@ -606,6 +606,55 @@ describe("Pine switch", () => {
   });
 });
 
+describe("Pine if-expressions (x = if … else if … else)", () => {
+  const head = "//@version=5\nindicator(\"t\")\n";
+  const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
+
+  it("evaluates the first true arm of an if / else-if chain", () => {
+    const a = run(
+      head +
+        "v = if close < 0\n    11\nelse if close > 0\n    22\nelse\n    33\nplot(v, \"a\")",
+    );
+    expect(line(a, "a")!.values[10]).toBe(22); // first arm false, second true
+  });
+
+  it("falls back to the trailing else arm", () => {
+    const a = run(
+      head +
+        "v = if close < 0\n    11\nelse if close > high\n    22\nelse\n    33\nplot(v, \"b\")",
+    );
+    expect(line(a, "b")!.values[10]).toBe(33); // both guards false → else
+  });
+
+  it("yields na on bars where no arm matches and there is no else", () => {
+    // `close > open` varies per bar on the random walk: matched bars give 5,
+    // unmatched bars (no else arm) give na, so the line is kept but sparse.
+    const a = run(head + "v = if close > open\n    5\nplot(v, \"half\")");
+    const vals = line(a, "half")!.values;
+    expect(vals.some((v) => v === 5)).toBe(true);
+    expect(vals.some((v) => Number.isNaN(v))).toBe(true);
+  });
+
+  it("returns the last statement of an indented block body", () => {
+    const a = run(
+      head +
+        "v = if close > 0\n    x = 5\n    x + 100\nelse\n    -1\nplot(v, \"blk\")",
+    );
+    expect(line(a, "blk")!.values[10]).toBe(105); // block body: x=5 then x+100
+  });
+
+  it("works on a typed declaration RHS (int dir = if …) like the corpus", () => {
+    // Mirrors the Kijun-arrow form in file 16: `int _cur = if a > 0 / 1 / else if a < 0 / -1`.
+    const a = run(
+      head +
+        "kijun = close\nint dir = if kijun - kijun[1] > 0\n    1\nelse if kijun - kijun[1] < 0\n    -1\nvar hold = 0\nplot(dir, \"dir\")\nplot(hold, \"hold\")",
+    );
+    const d = line(a, "dir")!.values[10];
+    expect(d === 1 || d === -1).toBe(true); // ran as an int-typed if-expression
+    expect(line(a, "hold")!.values[10]).toBe(0); // following statement still parses at col 0
+  });
+});
+
 describe("Pine user-defined types (type / .new / field access)", () => {
   const head = "//@version=5\nindicator(\"t\")\n";
   const line = (a: ReturnType<typeof run>, n: string) => a.result.lines.find((l) => l.name === n);
