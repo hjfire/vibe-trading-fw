@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -2206,4 +2207,61 @@ def test_an_unresolvable_upstream_raises_instead_of_passing(tmp_path, monkeypatc
 def test_no_fork_commit_touches_an_upstream_owned_file():
     offenders = [p for p in changed_vs_upstream() if UPSTREAM_OWNED.match(p)]
     assert offenders == [], f"upstream-owned files modified by fork commits: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# line-ending pin for the published tree (M2 precondition)
+# ---------------------------------------------------------------------------
+
+
+def test_repowiki_tree_is_pinned_to_lf():
+    """core.autocrlf=true on this machine turns every checked-out page body into
+    CRLF, and `body_sha` hashes those bytes — one clone would read all 426 ledger
+    rows as `ledger-void`. The root .gitattributes belongs to upstream, so the
+    tracked tree carries its own (a deeper attributes file wins)."""
+    attr = REAL_REPO / "repowiki" / ".gitattributes"
+    assert attr.is_file(), "M2 must pin line endings inside its own tree"
+    assert "* text=auto eol=lf" in attr.read_text(encoding="utf-8")
+    proc = subprocess.run(
+        # core.quotepath is on by default here, which renders this CJK probe path
+        # octal-escaped inside quotes; the flag only affects that display, never
+        # the resolution being asserted. Same flag, same reason as the
+        # zero-upstream helper above.
+        ["git", "-C", str(REAL_REPO), "-c", "core.quotepath=off", "check-attr",
+         "text", "eol", "--", "repowiki/topics/\u524d\u7aef\u5e94\u7528/x.md"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.stdout.strip().endswith("repowiki/topics/\u524d\u7aef\u5e94\u7528/x.md: eol: lf")
+
+
+def test_autocrlf_pinning_is_what_saves_the_body_bytes(tmp_path):
+    """Not a claim about git's docs — a round trip in a throwaway repo, with the
+    control branch proving the hazard is real on this platform."""
+    def build(with_attr: bool) -> bytes:
+        repo = tmp_path / ("pinned" if with_attr else "loose")
+        repo.mkdir()
+        _git(repo, "init", "-b", "main")
+        _git(repo, "config", "user.email", "t@example.com")      # repo-local, never global
+        _git(repo, "config", "user.name", "T")
+        _git(repo, "config", "core.autocrlf", "true")
+        tree = repo / "repowiki"
+        tree.mkdir()
+        if with_attr:
+            (tree / ".gitattributes").write_text("* text=auto eol=lf\n", encoding="utf-8")
+        page = tree / "topics"
+        page.mkdir()
+        src = "# \u6807\u9898\n\n\u6b63\u6587 LF \u4e00\u81f4\u6027\u3002\n"
+        (page / "\u9875.md").write_bytes(src.encode("utf-8"))
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "seed")
+        (page / "\u9875.md").unlink()
+        _git(repo, "checkout", "--", ".")
+        return (page / "\u9875.md").read_bytes()
+
+    pinned, loose = build(True), build(False)
+    assert b"\r\n" not in pinned, pinned
+    if sys.platform == "win32":
+        # The canary: if the control also comes back LF, autocrlf did not run and
+        # the assertion above proves nothing (this repo's HARNESS-BLIND category).
+        assert b"\r\n" in loose, f"control lost the hazard: {loose[:40]!r}"
 

@@ -1,0 +1,7 @@
+# Line endings are part of this tree's contract, not a style preference.
+# `wiki_drift.body_sha()` hashes the prose bytes and the 426 ledger rows store
+# that hash, so a `core.autocrlf=true` checkout that rewrote LF as CRLF would
+# read every stamped page as `ledger-void` at once. The repository root's
+# .gitattributes is upstream's to add; a deeper attributes file wins, so the
+# published tree pins itself.
+* text=auto eol=lf
