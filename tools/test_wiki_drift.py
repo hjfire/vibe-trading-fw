@@ -2948,3 +2948,89 @@ def test_seed_stops_on_a_missing_export_ledger(tmp_path, monkeypatch, capsys):
     assert "ledger missing from the export" in err, err
     assert not (target / "ledger.jsonl").exists()
 
+
+# ---------------------------------------------------------------------------
+# tree_baseline: the tree-wide fallback that retires the mandatory --baseline
+# ---------------------------------------------------------------------------
+
+
+def test_tree_baseline_is_the_modal_page_verified_at(repo_wired):
+    """The fallback the tree agrees on. Ignoring `vouch` here is deliberate: that
+    gate decides whether a page's own stamp may *outrank* its ledger row, while this
+    value is only the tree-wide fallback for pages with no per-page claim — which,
+    right after seeding, is every page, and their `verified_at` is this same commit."""
+    # A majority needs pages to hold one. The shared `repo_tree` fixture ships
+    # exactly one topic page and 77 repo-layout cases read that shape, so the extra
+    # pages are created by the cases that need them, never by editing the fixture;
+    # these fixtures are function-scoped, so this writes a throwaway tmp dir.
+    for name in ("页二.md", "页三.md"):
+        (repo_wired["content"] / "前端应用" / name).write_text(
+            f"# {name[:-3]}\n\n## 简介\n", encoding="utf-8"
+        )
+    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
+    assert len(pages) >= 3, "a mode over a single page is not a mode"
+    wiki_drift.update_frontmatter(pages[0], verified_at="a" * 40, vouch="applied-only")
+    wiki_drift.update_frontmatter(pages[1], verified_at="a" * 40, vouch="applied-only")
+    wiki_drift.update_frontmatter(pages[2], verified_at="b" * 40, vouch="all")
+    assert wiki_drift.tree_baseline() == "a" * 40
+
+
+def test_tree_baseline_is_deterministic_under_a_tie(repo_wired):
+    """A tie must not fall out of filesystem walk order (spec §5.3's determinism
+    requirement applies to every derived value, not just INDEX.md)."""
+    for name in ("页二.md", "页三.md"):
+        (repo_wired["content"] / "前端应用" / name).write_text(
+            f"# {name[:-3]}\n\n## 简介\n", encoding="utf-8"
+        )
+    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
+    assert len(pages) >= 3, "a tie needs three single-vote stamps to tie on"
+    # Name order deliberately disagrees with revision order: the alphabetically first
+    # page carries the lexicographically last stamp, which is exactly the answer a
+    # first-walked-page tie-break would return instead of the one taken by revision.
+    for page, rev in zip(pages, ["c" * 40, "a" * 40, "b" * 40]):
+        wiki_drift.update_frontmatter(page, verified_at=rev)
+    first = wiki_drift.tree_baseline()
+    pages.reverse()
+    assert first == "a" * 40 == wiki_drift.tree_baseline()
+
+
+def test_tree_baseline_ignores_non_hex_and_missing_blocks(repo_wired):
+    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
+    # One page whose frontmatter carries a non-commit marker, one with no frontmatter
+    # at all: both branches of the skip get an inhabitant, so neither stays green by
+    # never having been reached.
+    (repo_wired["content"] / "前端应用" / "无块.md").write_text("# 无块\n", encoding="utf-8")
+    wiki_drift.update_frontmatter(pages[0], verified_at="Q0DeR-MaG1C")
+    assert wiki_drift.tree_baseline() is None, "no IDE metadata in the repo layout"
+
+
+def test_report_without_a_baseline_works_after_seeding(repo_wired, capsys):
+    """M2's whole point: the baseline travels with the pages, so `report` needs no
+    40-hex incantation once the tree is seeded."""
+    # Non-vacuity, measured on the same tree one statement earlier: unsed, this root
+    # has no metadata file either, so the 0 below can only come from the page stamps.
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report", "--json"]) == 2
+    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
+    for page in pages:
+        wiki_drift.update_frontmatter(page, verified_at=repo_wired["base"], vouch="applied-only")
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report", "--json"]) == 0
+    # And the human-readable run says where the number came from: `tree`, not a
+    # `--baseline` nobody passed.
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report"]) == 0
+    assert f"baseline  {repo_wired['base']}  (tree: modal page verified_at)" in (
+        capsys.readouterr().out
+    )
+
+
+def test_ide_layout_still_falls_back_to_metadata(wired):
+    """The 77+120 existing cases run against the IDE fixture, whose pages carry no
+    frontmatter. Falling back keeps `test_unreachable_metadata_baseline_*` honest
+    instead of silently repointing it."""
+    assert wiki_drift.tree_baseline() == wired["base"]
+    # And the ordering that bounds that fallback: the moment a page on this very tree
+    # carries a stamp, the page wins and the metadata stops being read. Without the
+    # second half the fallback could quietly outrank a real claim.
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, verified_at="a" * 40)
+    assert wiki_drift.tree_baseline() == "a" * 40
+

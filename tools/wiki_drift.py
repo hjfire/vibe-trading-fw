@@ -66,6 +66,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -348,6 +349,37 @@ def metadata_baseline(meta_path: "Path | None" = None) -> str | None:
     if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit.lower()):
         return None
     return commit
+
+
+def tree_baseline() -> str | None:
+    """The commit the current tree agrees it was generated at.
+
+    Modal page `verified_at` over `CONTENT`, ties broken by the revision itself so
+    the answer cannot depend on walk order; falls back to the IDE metadata while an
+    IDE-layout root is what is being read. `frontmatter_baseline()` gates on `vouch`
+    because a page's stamp must not outrank its own ledger row; this value is the
+    opposite case — the tree-wide fallback for pages that have no per-page claim.
+
+    Keeping `metadata_baseline()` as the last resort is a deliberate deviation from
+    spec §6, which asked for that call path to be deleted: a page stamp always wins,
+    so only a tree with no usable per-page stamp reaches it, and that is exactly the
+    IDE-layout root the pre-M1 cases run on. Dropping the fallback would have
+    repointed `test_unreachable_metadata_baseline_asks_for_an_override`, the guard
+    that a missing baseline is an error rather than a guess. M2's README and the
+    archive both have to record this, so it is not a silent difference.
+    """
+    counts: Counter[str] = Counter()
+    if CONTENT.is_dir():
+        for page in CONTENT.rglob("*.md"):
+            fm = read_frontmatter(page)
+            if not fm:
+                continue
+            rev = str(fm.get("verified_at") or "").strip().lower()
+            if HEX40_RE.match(rev):
+                counts[rev] += 1
+    if counts:
+        return min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    return metadata_baseline()
 
 
 def sha256(path: Path) -> str:
@@ -1780,7 +1812,7 @@ def cmd_reanchor(args: argparse.Namespace) -> int:
         )
         return 2
     pages = collect_pages(args.page)
-    fallback = args.baseline or metadata_baseline()
+    fallback = args.baseline or tree_baseline()
     if fallback and not rev_reachable(fallback):
         print(f"note: baseline {fallback} unreachable, using the files' final text only", file=sys.stderr)
         fallback = None
@@ -1936,7 +1968,7 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
     if not (REPO / ".git").exists():
         print(f"{REPO} is not a git repository", file=sys.stderr)
         return 2
-    fallback = args.baseline or metadata_baseline()
+    fallback = args.baseline or tree_baseline()
     if not fallback:
         print(
             "wiki baseline commit unavailable — pass --baseline <sha> "
@@ -2016,7 +2048,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     )
     s = payload["summary"]
     print(f"HEAD      {payload['head']}")
-    print(f"baseline  {payload['metadata_baseline']}  (wiki snapshot, read-only)")
+    provenance = "--baseline" if args.baseline else "tree"
+    print(f"baseline  {payload['metadata_baseline']}  ({provenance}: modal page verified_at)")
     print(
         f"pages     {s['pages']} total | needs update {s['needs_update']} | clean {s['clean']} "
         f"(ledger {s['reconciled']}, void {s['ledger_void']}, partial {s['partial']})"
@@ -2051,7 +2084,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
         return 2
 
     head = git("rev-parse", "HEAD").strip()
-    fallback = args.baseline or metadata_baseline()
+    fallback = args.baseline or tree_baseline()
     drivers, broken = recorded_drivers(page, rel, fallback)
     prior = load_ledger().get(rel)
     entry = {
