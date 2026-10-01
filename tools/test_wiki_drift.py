@@ -1503,3 +1503,61 @@ def test_a_cite_past_the_end_keeps_its_own_label(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[tall.py:1-120](file://src/tall.py#L1-L600)" in page.read_text(encoding="utf-8")
     assert "1 cite(s) left as printed: their target is past the end" in out
+
+
+# ---------------------------------------------------------------------------
+# fork-owned trademark guard over repowiki/**
+# ---------------------------------------------------------------------------
+#
+# Upstream's gate (b) greps the *filesystem*, so it polices repowiki/** the moment
+# that tree is tracked — and the tree is a publication, so the literal must not
+# appear in it. This guard exists because that same gate is ALSO permanently red
+# locally (defect ⑫: it scans the .qoder/ export that git excludes), which would
+# bury a new hit in existing noise until CI blocked the push. The needle is
+# assembled at runtime: a contiguous literal here would trip the gate this
+# enforces, and `grep -v "$SELF"` exempts only the gate script itself.
+TM_NEEDLE = "".join(["wor", "ld", "quant"])
+TM_RE = re.compile(TM_NEEDLE, re.IGNORECASE)
+TM_SUFFIXES = {".md", ".html", ".json", ".py", ".txt", ".yml", ".yaml"}
+REAL_REPO = Path(__file__).resolve().parents[1]
+
+
+def scan_trademark(root: Path) -> list[tuple[str, int]]:
+    """Every (posix-relative-path, line-number) under root carrying the literal."""
+    hits: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in TM_SUFFIXES:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for n, line in enumerate(text.splitlines(), 1):
+            if TM_RE.search(line):
+                hits.append((path.relative_to(root).as_posix(), n))
+    return hits
+
+
+def test_tm_guard_catches_a_planted_hit(tmp_path):
+    (tmp_path / "topics").mkdir()
+    (tmp_path / "topics" / "x.md").write_text(
+        f"# 标题\n禁止 {TM_NEEDLE} 出现在发布物里\n", encoding="utf-8"
+    )
+    assert scan_trademark(tmp_path) == [("topics/x.md", 2)]
+
+
+def test_guard_sees_a_cjk_named_page(wired):
+    """Canary for the real tree's file naming: the scan must resolve CJK paths."""
+    planted = wired["content"] / "命中页.md"
+    planted.write_text(f"{TM_NEEDLE}\n", encoding="utf-8")
+    assert scan_trademark(wired["wiki"]) == [("zh/content/命中页.md", 1)]
+
+
+def test_this_test_file_does_not_contain_the_literal():
+    text = Path(__file__).read_text(encoding="utf-8")
+    assert TM_NEEDLE not in text.lower()
+
+
+def test_shipped_wiki_tree_is_trademark_clean():
+    tree = REAL_REPO / "repowiki"
+    assert tree.is_dir(), "repowiki/ must exist from M1 onward"
+    scanned = [p for p in tree.rglob("*") if p.is_file()]
+    assert scanned, "guard must not pass on an empty tree"
+    assert scan_trademark(tree) == []
