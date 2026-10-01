@@ -2978,20 +2978,55 @@ def test_tree_baseline_is_the_modal_page_verified_at(repo_wired):
 def test_tree_baseline_is_deterministic_under_a_tie(repo_wired):
     """A tie must not fall out of filesystem walk order (spec §5.3's determinism
     requirement applies to every derived value, not just INDEX.md)."""
-    for name in ("页二.md", "页三.md"):
-        (repo_wired["content"] / "前端应用" / name).write_text(
-            f"# {name[:-3]}\n\n## 简介\n", encoding="utf-8"
-        )
-    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
-    assert len(pages) >= 3, "a tie needs three single-vote stamps to tie on"
-    # Name order deliberately disagrees with revision order: the alphabetically first
-    # page carries the lexicographically last stamp, which is exactly the answer a
-    # first-walked-page tie-break would return instead of the one taken by revision.
-    for page, rev in zip(pages, ["c" * 40, "a" * 40, "b" * 40]):
-        wiki_drift.update_frontmatter(page, verified_at=rev)
+    page_dir = repo_wired["content"] / "前端应用"
+    topics = repo_wired["wiki"] / "topics"
+
+    def page_stamps() -> dict[str, str]:
+        """The stamped pages as they sit on disk right now, name -> revision.
+        `tree_baseline()` re-reads the disk on every call, so the only way to change
+        its inputs is to change the disk."""
+        out: dict[str, str] = {}
+        for path in topics.rglob("*.md"):
+            fm = wiki_drift.read_frontmatter(path)
+            if fm and fm.get("verified_at"):
+                out[path.name] = str(fm["verified_at"])
+        return out
+
+    # Three single-vote stamps over three votes: that is the tie. A majority needs
+    # pages to hold one and the shared `repo_tree` fixture ships exactly one topic page
+    # (77 repo-layout cases read that shape), so these cases create their own pages and
+    # never edit the fixture; the ASCII names exist so the rename below can invert the
+    # order the walk enumerates them in. The fixture's own page stays unstamped — an
+    # absent frontmatter casts no vote either way.
+    for name, rev in (("tie-1.md", "c"), ("tie-2.md", "a"), ("tie-3.md", "b")):
+        (page_dir / name).write_text(f"# {name[:-3]}\n\n## 简介\n", encoding="utf-8")
+        wiki_drift.update_frontmatter(page_dir / name, verified_at=rev * 40)
+
+    layout1 = page_stamps()
+    assert sorted(layout1) == ["tie-1.md", "tie-2.md", "tie-3.md"], layout1
+    # Name order deliberately disagrees with revision order: the page a name-ordered
+    # walk meets first carries the lexicographically LAST stamp, which is exactly the
+    # answer a walk-order tie-break returns instead of the one taken by revision.
+    assert layout1["tie-1.md"] == "c" * 40
     first = wiki_drift.tree_baseline()
-    pages.reverse()
-    assert first == "a" * 40 == wiki_drift.tree_baseline()
+    assert first == "a" * 40 == min(layout1.values()), "ties break by revision, not order"
+
+    # And now change what the walk actually sees: renaming inverts the on-disk name
+    # order, so the first page met carries `b` instead of `c`. A tie-break that reads
+    # insertion/walk order has to flip between the two calls; the revision tie-break
+    # answers `a` in both, and in either name direction.
+    for old, new in (
+        ("tie-1.md", "zzz-c.md"),
+        ("tie-2.md", "yyy-a.md"),
+        ("tie-3.md", "xxx-b.md"),
+    ):
+        (page_dir / old).rename(page_dir / new)
+    layout2 = page_stamps()
+    assert sorted(layout2) == ["xxx-b.md", "yyy-a.md", "zzz-c.md"], (
+        f"the rename must invert the on-disk order, not no-op it: {layout2}"
+    )
+    assert layout2["xxx-b.md"] == "b" * 40
+    assert wiki_drift.tree_baseline() == first == "a" * 40
 
 
 def test_tree_baseline_ignores_non_hex_and_missing_blocks(repo_wired):
@@ -3022,6 +3057,25 @@ def test_report_without_a_baseline_works_after_seeding(repo_wired, capsys):
     )
 
 
+def test_report_labels_an_operator_override_as_an_override(repo_wired, capsys):
+    """Provenance has to name the value's real source, and here there is no room for
+    the label to hedge: this root has no page stamps and no IDE metadata, so the only
+    thing that can lift the run out of exit 2 is `--baseline`. A line still claiming
+    `modal page verified_at` is not loose wording on this tree, it is false — the tree
+    is empty of stamps by the assertion above."""
+    pages = sorted((repo_wired["wiki"] / "topics").rglob("*.md"))
+    assert pages and all(not wiki_drift.read_frontmatter(p) for p in pages)
+    assert wiki_drift.tree_baseline() is None, "nothing in the tree to fall back on"
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report"]) == 2
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report",
+                 "--baseline", repo_wired["base"]]) == 0
+    out = capsys.readouterr().out
+    assert f"baseline  {repo_wired['base']}  (--baseline override (operator-supplied))" in out
+    # The whole point of the branch: an override is by definition not the page stamp,
+    # so the old label's suffix must be gone rather than merely preceded by a name.
+    assert "modal page verified_at" not in out, out
+
+
 def test_ide_layout_still_falls_back_to_metadata(wired):
     """The 77+120 existing cases run against the IDE fixture, whose pages carry no
     frontmatter. Falling back keeps `test_unreachable_metadata_baseline_*` honest
@@ -3033,4 +3087,19 @@ def test_ide_layout_still_falls_back_to_metadata(wired):
     page = wired["content"] / "前端应用" / "模块说明.md"
     wiki_drift.update_frontmatter(page, verified_at="a" * 40)
     assert wiki_drift.tree_baseline() == "a" * 40
+
+
+def test_report_labels_the_metadata_fallthrough(wired, capsys):
+    """The other false half of the old label. On an IDE-layout root no page carries a
+    stamp, so `tree_baseline()` reached its last resort and the printed number came out
+    of `repowiki-metadata.json` — while the line went on crediting a modal page stamp
+    that does not exist on this tree. Same fixture and same report path as
+    `test_report_writes_json_and_markdown`, read through the human printer."""
+    pages = sorted(wired["content"].rglob("*.md"))
+    assert pages and all(not wiki_drift.read_frontmatter(p) for p in pages)
+    assert wiki_drift.tree_baseline() == metadata_baseline() == wired["base"]
+    assert main(["report"]) == 0
+    out = capsys.readouterr().out
+    assert f"baseline  {wired['base']}  (metadata: repowiki-metadata.json)" in out, out
+    assert "modal page verified_at" not in out, out
 

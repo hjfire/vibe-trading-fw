@@ -2048,8 +2048,21 @@ def cmd_report(args: argparse.Namespace) -> int:
     )
     s = payload["summary"]
     print(f"HEAD      {payload['head']}")
-    provenance = "--baseline" if args.baseline else "tree"
-    print(f"baseline  {payload['metadata_baseline']}  ({provenance}: modal page verified_at)")
+    # Name the value's actual source, not a story about it. The resolved fallback can
+    # come from three places and only one of them is the modal page stamp: an operator
+    # `--baseline` is by definition not that stamp, and a tree with no page stamps
+    # (`tree_baseline()`'s last resort, i.e. any IDE-layout root) is the metadata file
+    # talking. `metadata_baseline()` is one json read; a second `tree_baseline()` would
+    # re-walk the whole tree just to relabel a line. The comparison cannot mislabel a
+    # seeded repo-layout tree either: that root has no `zh/meta/repowiki-metadata.json`,
+    # so it returns `None`, and `None` is never a 40-hex page stamp.
+    if args.baseline:
+        source = "--baseline override (operator-supplied)"
+    elif metadata_baseline() == payload["metadata_baseline"]:
+        source = "metadata: repowiki-metadata.json"
+    else:
+        source = "tree: modal page verified_at"
+    print(f"baseline  {payload['metadata_baseline']}  ({source})")
     print(
         f"pages     {s['pages']} total | needs update {s['needs_update']} | clean {s['clean']} "
         f"(ledger {s['reconciled']}, void {s['ledger_void']}, partial {s['partial']})"
