@@ -3166,8 +3166,11 @@ def test_seed_does_not_touch_hand_authored_pages(tmp_path, monkeypatch):
 
 def test_readme_maps_every_seeded_name():
     """The tables are the only place a human learns that `modules/ci-gates/` used to
-    be `…/CI 流水线与安全门禁脚本/架构设计.md`. Guarded against drift both ways: a
-    slug in the table but not in the code, and a slug in the code but not the table."""
+    be `…/CI 流水线与安全门禁脚本/架构设计.md`. One-directional on purpose: every
+    slug/face/Chinese-name the CODE knows must appear in the README, so renaming a
+    value in wiki_drift.py without updating the table goes red. The reverse (a stale
+    row left in the table for a name already gone from the code) is NOT detected here
+    — that is a human cross-read, and the README says so rather than claiming more."""
     text = (REAL_REPO / "repowiki" / "README.md").read_text(encoding="utf-8")
     for slug in set(wiki_drift.MODULE_SLUGS.values()) | {"pine-engine"}:
         assert f"`{slug}`" in text or f"/{slug}" in text, slug

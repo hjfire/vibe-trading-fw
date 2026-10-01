@@ -50,9 +50,11 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki mark \
 `seed` 把 IDE 导出物搬进本树时改了两层名字：目录名换成 ASCII slug，中文面名换成英文
 文件名。导出物随后改名归档（见「归档位置」），git 里查不到旧名 —— 下面三张表是唯一还能
 把 `modules/ci-gates/architecture.md` 还原成
-`…/CI 流水线与安全门禁脚本/架构设计.md` 的地方，所以它必须跟着代码走：表由
-`tools/wiki_drift.py` 里的 `MODULE_SLUGS` / `FACE_NAMES` / `CARD_SLUGS` 三张常量表生成，
-`test_readme_maps_every_seeded_name` 双向对账（表里有、码里没有，或反过来，都红一条）。
+`…/CI 流水线与安全门禁脚本/架构设计.md` 的地方，所以它必须跟着代码走：下面三张表照抄
+`tools/wiki_drift.py` 里的 `MODULE_SLUGS` / `FACE_NAMES` / `CARD_SLUGS` 三张常量表（人工誊写，
+非生成）。`test_readme_maps_every_seeded_name` 只做**单向**对账——码里有的每个 slug/面名/中文
+名都必须在表里出现，所以改了 `wiki_drift.py` 却忘了同步这张表会红；反之（表里留了一行、码里
+已经没有那个名字）这条测不出来，属过期行，靠人工对读。
 名字换 ASCII 的理由：面是被脚本按文件名寻址的，而全角逗号写进**文件名**这件事在本仓咬过人。
 
 ### 面名映射表（每个模块 5 面）
@@ -121,8 +123,8 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki seed    # 默认 dry-run
 - `report` 不再强制 `--baseline`：基线自己回落到逐页 `verified_at` 的**众数**
   （`tree_baseline()`，平票由 commit 本身裁决，与 walk 顺序无关）。仍想指定就写
   `--baseline <40-hex>`，显式值优先于任何回落；取不到众数时它也是唯一出路。
-- `seed` 是一次性动作，默认 dry-run：只打印计数、改名清单与被改写页的名字，`--apply` 才写
-  盘。跑之前先按「归档位置」确认导出物已在盘上。
+- `seed` 是一次性动作，默认 dry-run：只打印计数与被改写页的名字（`reworded:` 那一行），
+  `--apply` 才写盘。跑之前先按「归档位置」确认导出物已在盘上。
 
 ## 页集口径（M2 冻结的决定，M3 要扩必须显式改判）
 
