@@ -2357,3 +2357,78 @@ def test_metadata_baseline_can_read_a_second_root(tmp_path):
     meta.write_text(json.dumps({"wiki_repo": {"last_commit_id": "b" * 40}}), encoding="utf-8")
     assert wiki_drift.metadata_baseline(meta) == "b" * 40
 
+
+# ---------------------------------------------------------------------------
+# M2 seeding: page planning (PagePlan / plan_topics / refs_from_text)
+# ---------------------------------------------------------------------------
+
+
+def _export(tmp_path: Path) -> Path:
+    """A throwaway legacy export: 2 topic pages with cites, plus `zh/meta` and
+    `update/ledger.jsonl`. Absolute, because a relative `--from` resolves against
+    `REPO`, and the seeds' `WIKI` is absolute for the same reason."""
+    wiki = tmp_path / "export"
+    content = wiki / "zh" / "content" / "前端应用"
+    content.mkdir(parents=True)
+    (content / "页一.md").write_text(
+        "# 页一\n\n<cite>\n**本文引用的文件**\n"
+        "- [a](file://src/mod.py#L1-L10)\n- [b](file://src/other.py)\n"
+        "- [a again](file://src/mod.py#L40-L50)\n</cite>\n\n## 简介\n\n正文\n",
+        encoding="utf-8",
+    )
+    (content / "页二.md").write_text("# 页二\n\n<cite>\n- [c](file://src/mod.py)\n</cite>\n", encoding="utf-8")
+    (wiki / "zh" / "meta").mkdir(parents=True)
+    update = wiki / "update"
+    update.mkdir(parents=True)
+    (update / "ledger.jsonl").write_text(
+        json.dumps({"page": "前端应用/页一.md", "head": "c" * 40,
+                    "sha_after": "d" * 64, "note": "n", "at": "t"}) + "\n",
+        encoding="utf-8",
+    )
+    return wiki
+
+
+def test_plan_topics_keys_are_the_ledger_primary_key(tmp_path, monkeypatch):
+    """The relative path must survive verbatim under `topics/`, CJK included: 426
+    ledger rows are keyed by exactly this string, so a rename here silently
+    un-stamps every page."""
+    wiki = tmp_path / "repowiki"
+    wiki.mkdir()
+    monkeypatch.setattr(wiki_drift, "WIKI", wiki)
+    plans = wiki_drift.plan_topics(_export(tmp_path), "a" * 40)
+    assert [p.label for p in plans] == [
+        "topics/前端应用/页一.md", "topics/前端应用/页二.md",
+    ]
+    assert plans[0].fm["page"] == "前端应用/页一.md", "`page` is relative to topics/"
+    assert plans[0].origin == "topic"
+    assert plans[0].target == wiki / "topics" / "前端应用" / "页一.md"
+
+
+def test_plan_topics_sources_are_deduped_sorted_repo_paths(tmp_path):
+    plans = wiki_drift.plan_topics(_export(tmp_path), "a" * 40)
+    # Two cites of one file -> one source; bare paths, not `file://` links, so
+    # `parse_refs` on the seeded page still counts the body and nothing else.
+    assert plans[0].fm["sources"] == ["src/mod.py", "src/other.py"]
+    assert plans[0].fm["verified_at"] == "a" * 40
+    assert plans[0].fm["anchors"] == "open"
+    assert plans[0].fm["vouch"] == "applied-only", "a move is not a re-reading"
+
+
+def test_plan_topics_rejects_an_export_page_with_frontmatter(tmp_path):
+    """Measured 0 such pages today. A surprise here must stop the seed rather than
+    nest two blocks: `split_frontmatter` would then hash a body that starts with a
+    stray `---`, and the ledger would call it a hand edit."""
+    wiki = _export(tmp_path)
+    (wiki / "zh" / "content" / "前端应用" / "页三.md").write_text(
+        "---\nkind: x\n---\n\n# 页三\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unexpected frontmatter"):
+        wiki_drift.plan_topics(wiki, "a" * 40)
+
+
+def test_parse_refs_and_refs_from_text_are_one_implementation(tmp_path, wired):
+    """Two codecs would drift. `sources` is only worth having if it is read the
+    same way the report reads cites."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    text = page.read_text(encoding="utf-8")
+    assert [r.path for r in wiki_drift.refs_from_text(text)] == [r.path for r in parse_refs(page)]
+

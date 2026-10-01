@@ -309,14 +309,23 @@ def parse_ref(raw: str) -> Ref | None:
     return Ref(path, start, end) if path else None
 
 
-def parse_refs(page: Path) -> list[Ref]:
-    text = page.read_text(encoding="utf-8", errors="replace")
+def refs_from_text(text: str) -> list[Ref]:
+    """Every `file://` cite in *text*, in document order.
+
+    The seed derives a page's `sources` from this and the report derives its cite
+    list from `parse_refs` below — one codec, or the frontmatter and the verdict can
+    disagree about what a page cites while both look green.
+    """
     refs = []
     for raw in REF_RE.findall(text):
         ref = parse_ref(raw)
         if ref is not None:
             refs.append(ref)
     return refs
+
+
+def parse_refs(page: Path) -> list[Ref]:
+    return refs_from_text(page.read_text(encoding="utf-8", errors="replace"))
 
 
 def metadata_baseline(meta_path: "Path | None" = None) -> str | None:
@@ -610,6 +619,92 @@ def stamp_frontmatter(
     return update_frontmatter(
         page, page=rel, verified_at=verified_at, anchors=anchors, vouch=vouch
     )
+
+
+# ---------------------------------------------------------------------------
+# M2 seeding: page planning
+# ---------------------------------------------------------------------------
+#
+# What the seed publishes is decided here, before a byte is written: the export's
+# topic pages (and, in Task 5, its knowledge layer) become `PagePlan`s, so a
+# source-side surprise raises during planning instead of half-way through the writes
+# — with page 300 already on disk and page 120's stamp already overwritten.
+
+
+@dataclass
+class PagePlan:
+    """One page the seed intends to publish. Built before anything is written, so a
+    source-side surprise raises during planning instead of half-way through 489
+    writes."""
+
+    target: Path
+    label: str          # path relative to WIKI, posix — what the tally prints
+    body: bytes         # prose bytes exactly as published, frontmatter excluded
+    fm: dict
+    origin: str         # topic | module | card
+    reworded: bool = False
+
+
+def strip_reword(rel: str, body: bytes) -> tuple[bytes, bool]:
+    """Apply the one published-prose exception, and refuse to apply it quietly."""
+    pair = REWORDS.get(rel)
+    if pair is None:
+        return body, False
+    old, new = pair[0].encode("utf-8"), pair[1].encode("utf-8")
+    if body.count(old) != 1:
+        raise RuntimeError(
+            f"reword for {rel}: expected the needle exactly once, found {body.count(old)}"
+        )
+    replaced = body.replace(old, new)
+    if replaced.count(b"\n") != body.count(b"\n"):
+        raise RuntimeError(f"reword for {rel} changed the line count")
+    return replaced, True
+
+
+def plan_topics(legacy: Path, snapshot: str) -> list[PagePlan]:
+    """Plan every page of the legacy export's `zh/content` tree as a `topics/` page.
+
+    Two invariants make this more than a copy, and both are about *not* changing
+    anything. The relative path is the ledger's primary key (426 rows, CJK included),
+    so `rel` is reused verbatim rather than re-slugged; and `body` is the export's own
+    bytes through `read_page_text`'s `newline=""` plus one `.encode("utf-8")` —
+    nothing else. `body_sha` hashes exactly those bytes, so a newline translation or a
+    renamed path here would silently read every existing stamp as `ledger-void`.
+
+    `fm["page"]` stays relative to `topics/` (no prefix) for the same reason: the
+    prefix is where the page lives, `page` is what the ledger calls it.
+    """
+    content = legacy / "zh" / "content"
+    if not content.is_dir():
+        raise RuntimeError(f"no export content tree at {content}")
+    plans: list[PagePlan] = []
+    for src in sorted(content.rglob("*.md")):
+        rel = str(src.relative_to(content)).replace("\\", "/")
+        fm, body = split_frontmatter(read_page_text(src))
+        # `is not None`, not truthiness: `split_frontmatter` returns {} for a block
+        # whose lines parse to nothing (a comment-only `---` fence), and that page is
+        # exactly the surprise this guard exists to catch. Measured 0 today.
+        if fm is not None:
+            raise RuntimeError(f"unexpected frontmatter in export page {rel}")
+        published, reworded = strip_reword(f"topics/{rel}", body.encode("utf-8"))
+        plans.append(PagePlan(
+            target=WIKI / "topics" / rel,
+            label=f"topics/{rel}",
+            body=published,
+            fm={
+                "page": rel,
+                "sources": sorted({r.path for r in refs_from_text(body)}),
+                "verified_at": snapshot,
+                "anchors": "open",
+                # Seeding moves bytes, it does not re-read cites: only a human
+                # `mark` may claim `all`, and a self-matching baseline would hide
+                # the 414 unfinished pages this whole contract surfaced.
+                "vouch": "applied-only",
+            },
+            origin="topic",
+            reworded=reworded,
+        ))
+    return plans
 
 
 # ---------------------------------------------------------------------------
