@@ -590,7 +590,7 @@ def test_render_markdown_lists_every_bucket(wired):
         "metadata_baseline": "b",
         "summary": {
             "pages": 2, "needs_update": 1, "clean": 1, "reconciled": 0, "ledger_void": 0,
-            "partial": 0,
+            "partial": 0, "no_frontmatter": 0, "frontmatter": 0,
             "distinct_refs": 4, "refs_changed": 1, "refs_broken": 1, "uncovered": 1,
         },
     }
@@ -598,6 +598,7 @@ def test_render_markdown_lists_every_bucket(wired):
     md = render_markdown(payload, reports, gaps, top=10)
     assert "a.md" in md and "src/gone.py" in md and "src/brand_new.py" in md
     assert "缺失 1" in md and "变更 1" in md
+    assert "缺 frontmatter 的页面：0" in md
 
 
 def test_render_markdown_says_all_clear_instead_of_hiding_the_table(wired):
@@ -605,13 +606,15 @@ def test_render_markdown_says_all_clear_instead_of_hiding_the_table(wired):
         "generated_at": "x", "head": "h", "metadata_baseline": "b",
         "summary": {
             "pages": 1, "needs_update": 0, "clean": 1, "reconciled": 0, "ledger_void": 0,
-            "partial": 0,
+            "partial": 0, "no_frontmatter": 1, "frontmatter": 0,
             "distinct_refs": 1, "refs_changed": 0, "refs_broken": 0, "uncovered": 0,
         },
     }
-    md = render_markdown(payload, [PageReport("a.md", "clean", "b", 1)], [], top=10)
+    md = render_markdown(payload, [PageReport("a.md", "clean", "b", 1, fm="missing")], [], top=10)
     assert "全部页面与当前代码一致" in md
     assert "无" in md
+    # A clean-looking tree where nobody seeded the pages must say so out loud.
+    assert "缺 frontmatter 的页面：1" in md
 
 
 # ---------------------------------------------------------------------------
@@ -1773,3 +1776,109 @@ def test_frontmatter_baseline_only_accepts_a_reachable_full_sha(tmp_path):
     assert len(good) == 40
     wiki_drift.update_frontmatter(page, verified_at=good)
     assert wiki_drift.frontmatter_baseline(page) == good
+
+
+# ---------------------------------------------------------------------------
+# per-page baseline beats the single global snapshot; missing frontmatter is loud
+# ---------------------------------------------------------------------------
+
+
+def _refs_for(wired):
+    return wiki_drift.make_changes_for()
+
+
+def test_frontmatter_baseline_wins_over_ledger_and_snapshot(wired):
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md", verified_at=wired["head"])
+    base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {}, wired["base"])
+    assert (base, tag) == (wired["head"], "frontmatter")
+
+
+def test_unreachable_frontmatter_rev_does_not_become_a_baseline(wired):
+    """A seeded page may name a commit a force-pushed sync GC'd. The snapshot stays
+    the honest base — a phantom baseline would freeze the page's drift at zero."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32)
+    base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {}, wired["base"])
+    assert (base, tag) == (wired["base"], "snapshot")
+
+
+def test_ledger_still_wins_over_the_snapshot(wired):
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    entry = wiki_drift.LedgerEntry(
+        page="前端应用/模块说明.md", head=wired["head"],
+        sha_after=wiki_drift.body_sha(page), note="", at="", cites="all",
+    )
+    base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {entry.page: entry}, wired["base"])
+    assert (base, tag) == (wired["head"], "reconciled")
+
+
+def test_partial_entry_still_does_not_move_the_baseline(wired):
+    """Contract ④: the discipline that made 414 hidden todos visible must survive
+    the frontmatter feature, on the ledger branch too."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    entry = wiki_drift.LedgerEntry(
+        page="前端应用/模块说明.md", head=wired["head"],
+        sha_after=wiki_drift.body_sha(page), note="", at="", partial=True, cites="applied-only",
+    )
+    base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {entry.page: entry}, wired["base"])
+    assert (base, tag) == (wired["base"], "partial")
+
+
+def test_missing_frontmatter_is_flagged_on_the_page_report(wired):
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    rep = audit_page(
+        page, "前端应用/模块说明.md", "snapshot", wired["base"],
+        _refs_for(wired), set(), set(),
+    )
+    assert rep.fm == "missing"
+    wiki_drift.update_frontmatter(page, verified_at=wired["base"])
+    rep = audit_page(
+        page, "前端应用/模块说明.md", "snapshot", wired["base"],
+        _refs_for(wired), set(), set(),
+    )
+    assert rep.fm == "present"
+
+
+def test_frontmatter_provenance_survives_a_clean_page(wired):
+    """A page whose baseline came from its own frontmatter and owes nothing reads
+    `frontmatter`, not `clean` — the report must keep saying where the base came from."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, verified_at=wired["head"])
+    rep = audit_page(
+        page, "前端应用/模块说明.md", "frontmatter", wired["head"],
+        _refs_for(wired), set(), set(),
+    )
+    assert rep.score == 0 and rep.state == "frontmatter"
+
+
+def test_recorded_drivers_are_measured_from_the_page_baseline(wired):
+    """Drivers must follow the same precedence, or a stamped page would list itself
+    as owing everything since the snapshot."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, verified_at=wired["head"])
+    stale, _broken = wiki_drift.recorded_drivers(page, "前端应用/模块说明.md", wired["base"])
+    assert stale == []
+
+
+def test_unreachable_page_baseline_falls_back_instead_of_claiming_no_drivers(wired):
+    """A GC'd `verified_at` must not read as `nothing owed`: recorded_drivers
+    returning ([], []) is how a stamp quietly becomes a clean page. The plan's
+    `frontmatter_baseline(page) or fallback` would have done exactly that."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32)
+    stale, _broken = wiki_drift.recorded_drivers(page, "前端应用/模块说明.md", wired["base"])
+    assert stale == ["src/mod.py"]
+
+
+def test_report_counts_pages_without_frontmatter(wired, capsys):
+    assert main(["report", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["no_frontmatter"] == 2
+    assert payload["summary"]["pages"] == 2
+
+
+def test_drift_md_names_the_missing_frontmatter(wired):
+    main(["report", "--top", "5"])
+    text = (wired["wiki"] / "update" / "DRIFT.md").read_text(encoding="utf-8")
+    assert "缺 frontmatter 的页面：2" in text

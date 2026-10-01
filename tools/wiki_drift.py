@@ -542,16 +542,19 @@ def effective_base(
 ) -> tuple[str, str]:
     """Per-page baseline plus a provenance tag.
 
-    A ledger entry only counts while the page's bytes still match what was
-    recorded: if they don't, the IDE regenerated the page (or someone edited it
-    outside this loop) and the claim to be current is void, so the page falls
-    back to the snapshot baseline rather than reporting a false green.
+    Precedence: the page's own ``verified_at`` > the ledger > the snapshot commit.
+    Frontmatter wins because it travels with the page in git (diffable, revertible)
+    while the snapshot is one global IDE value. A frontmatter rev that is no longer
+    reachable must NOT become a baseline, or a force-pushed sync would freeze the
+    page's drift measurement at a phantom commit.
 
-    A `partial` entry is a signed record of unfinished work — links fixed,
-    prose not yet re-derived — so it deliberately does *not* move the baseline:
-    the page keeps showing its open drivers instead of disappearing from the
-    queue.
+    The ledger branch keeps its old rules verbatim: a body-hash mismatch voids the
+    claim (``ledger-void``), and a ``partial`` entry deliberately does not move the
+    baseline — that is the discipline that surfaced 414 hidden todos.
     """
+    fm_rev = frontmatter_baseline(page)
+    if fm_rev and rev_reachable(fm_rev):
+        return fm_rev, "frontmatter"
     entry = ledger.get(rel)
     if entry and entry.head and entry.sha_after:
         if body_sha(page) != entry.sha_after:
@@ -571,9 +574,10 @@ def effective_base(
 @dataclass
 class PageReport:
     page: str
-    state: str  # clean | stale | broken | mixed | reconciled | ledger-void
+    state: str  # clean | stale | broken | mixed | reconciled | ledger-void | frontmatter
     base: str
     refs: int
+    fm: str = "present"  # present | missing — `missing` after seeding means a page was skipped
     stale: list[str] = field(default_factory=list)
     broken: list[str] = field(default_factory=list)
     anchors: list[str] = field(default_factory=list)
@@ -588,6 +592,7 @@ class PageReport:
             "state": self.state,
             "base": self.base,
             "refs": self.refs,
+            "fm": self.fm,
             "stale": self.stale,
             "broken": self.broken,
             "anchors": self.anchors,
@@ -660,6 +665,7 @@ def audit_page(
     refs = parse_refs(page)
     changes = changes_for(base)
     rep = PageReport(page=rel, state=tag, base=base, refs=len(refs))
+    rep.fm = "present" if read_frontmatter(page) else "missing"
     seen: set[str] = set()
     for ref in refs:
         if not (REPO / ref.path).exists():
@@ -677,7 +683,9 @@ def audit_page(
         if ref.path in changes or ref.path in dirty or ref.path in untracked:
             rep.stale.append(ref.path)
     if rep.score == 0:
-        rep.state = tag if tag in ("reconciled", "ledger-void", "partial") else "clean"
+        rep.state = (
+            tag if tag in ("reconciled", "ledger-void", "partial", "frontmatter") else "clean"
+        )
         return rep
     if rep.broken and (rep.stale or rep.anchors):
         rep.state = "mixed"
@@ -738,6 +746,8 @@ def render_markdown(payload: dict, reports: list[PageReport], gaps: list[Change]
         f"- 页面：共 {s['pages']}｜需更新 {s['needs_update']}｜已一致 {s['clean']}"
         f"（其中台账已对齐 {s['reconciled']}、台账失效 {s['ledger_void']}、只改了链接 {s['partial']}）",
         f"- 引用源文件：{s['distinct_refs']} 个｜自各页有效基线以来有变更 {s['refs_changed']}｜已不存在 {s['refs_broken']}",
+        f"- 缺 frontmatter 的页面：{s['no_frontmatter']}"
+        f"（播种之前应为全部；播种之后非零即漏播种）｜基线来自页自身的 {s['frontmatter']}",
         f"- 无任何页面引用的改动文件：{s['uncovered']}",
         "",
         "## 待更新页面（按问题引用数排序）",
@@ -1144,20 +1154,26 @@ def ref_base(ref: Ref, cite_base: str | None, entry: LedgerEntry | None) -> tupl
 
 
 def recorded_drivers(page: Path, rel: str, fallback: str | None) -> tuple[list[str], list[str]]:
-    """Cited files that changed since the snapshot baseline, plus cites that are gone.
+    """Cited files that changed since this page's own baseline, plus cites that are gone.
 
-    Drivers are measured against the snapshot, never against HEAD: a stamp claims
-    to cover the whole window since the wiki was generated, and diffing against
-    HEAD would come out empty by construction and prove nothing.
+    Drivers follow `effective_base`'s precedence — the page's ``verified_at``, then the
+    snapshot — and never HEAD: a stamp claims to cover the window the page actually
+    owes, and diffing against HEAD comes out empty by construction and proves nothing.
+
+    An unusable ``verified_at`` falls back to the snapshot instead of short-circuiting
+    to "no drivers": a phantom baseline would make the stamp look like a finished page.
     """
-    if not (fallback and rev_reachable(fallback)):
+    base = frontmatter_baseline(page)
+    if not (base and rev_reachable(base)):
+        base = fallback
+    if not (base and rev_reachable(base)):
         return [], []
     dirty, untracked = worktree_delta()
     rep = audit_page(
         page,
         rel,
         "reconciled",
-        fallback,
+        base,
         make_changes_for(),
         dirty,
         untracked,
@@ -1453,6 +1469,8 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
             "reconciled": sum(1 for r in reports if r.state == "reconciled"),
             "ledger_void": sum(1 for r in reports if r.state == "ledger-void"),
             "partial": sum(1 for r in reports if r.state == "partial"),
+            "no_frontmatter": sum(1 for r in reports if r.fm == "missing"),
+            "frontmatter": sum(1 for r in reports if r.state == "frontmatter"),
             "distinct_refs": len(all_refs),
             "refs_changed": sum(1 for p in all_refs if p in changes_at_snapshot or p in dirty or p in untracked),
             "refs_broken": sum(1 for p in all_refs if not (REPO / p).exists()),
