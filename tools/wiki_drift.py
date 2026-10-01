@@ -746,8 +746,22 @@ def plan_knowledge(
     page nobody seeds, and a slug with no dir is a published path pointing at
     nothing. Card dirs are told apart from module dirs by the absence of
     `_module.yaml`, which is what keeps the module *root* — the one dir that is a
-    module and sits at the top level — from being read as an unmapped card.
+    module and sits at the top level — from being read as an unmapped card. The same
+    marker, not `is_dir()`, is what the module *missing* direction compares against:
+    a mapped dir that lost its marker is no longer a module, and planning its 5 faces
+    anyway is precisely the "page nobody seeded" failure this rule forbids.
+
+    `fm["page"]` is the **prefixed** label (`modules/…`, `cards/…`) here, where
+    `plan_topics` writes the path relative to `topics/` — deliberate mirrors, because
+    the prefixed label is the ledger key for a module/card row; "unifying" the two
+    spellings would break every module/card lookup, not fix one.
     """
+    if not kb.is_dir():
+        # Before anything reads the tree: `rglob` on a missing path yields nothing
+        # and `iterdir` raises `FileNotFoundError`, so a wrong `--knowledge-root`
+        # would otherwise reach Task 6's seed as a traceback instead of the
+        # `RuntimeError` the CLI's exit-2 path prints.
+        raise RuntimeError(f"no knowledge tree at {kb}")
     modules = MODULE_SLUGS if modules is None else modules
     cards = CARD_SLUGS if cards is None else cards
     plans: list[PagePlan] = []
@@ -759,7 +773,10 @@ def plan_knowledge(
         raise RuntimeError(f"unmapped module dirs: {unmapped}")
     for dir_rel, slug in sorted(modules.items()):
         mod = kb / dir_rel
-        if not mod.is_dir():
+        # The marker, not `is_dir()`: `found_mods` is what "module" means here, so
+        # the two directions of the map compare against the same set. On the real
+        # export `found_mods == set(MODULE_SLUGS)`, so this cannot false-red today.
+        if dir_rel not in found_mods:
             raise RuntimeError(f"module dir missing: {dir_rel}")
         for face_src, face_dst in sorted(FACE_NAMES.items()):
             src = mod / face_src
@@ -773,6 +790,15 @@ def plan_knowledge(
                 raise RuntimeError(f"unexpected frontmatter in {dir_rel}/{face_src}")
             rel = f"modules/{slug}/{face_dst}"
             published, reworded = strip_reword(rel, body.encode("utf-8"))
+            # Byte fidelity, mirrored from `plan_topics`: a face has no frontmatter
+            # to drop (rejected just above), so the planned body *is* the file. The
+            # ledger keys the row by path and hashes these exact bytes, and
+            # `read_page_text`'s `errors="replace"` turns an invalid byte into
+            # U+FFFD — different bytes under the same key, voiding the row without a
+            # word of complaint. Only the un-reworded plans are byte-identical by
+            # construction, so the reworded one is checked by `strip_reword` alone.
+            if not reworded and published != src.read_bytes():
+                raise RuntimeError(f"planned body is not the export bytes for {rel}")
             plans.append(PagePlan(
                 target=WIKI / rel, label=rel, body=published, reworded=reworded,
                 fm={"page": rel, "sources": [], "verified_at": snapshot,
@@ -791,8 +817,23 @@ def plan_knowledge(
         src = kb / dir_name / f"{dir_name}.md"
         if not src.is_file():
             raise RuntimeError(f"card page missing: {dir_name}")
+        # Byte fidelity, card shape. The frontmatter block is dropped by design, so
+        # the plan's body can never equal the whole file; the strict decode is what
+        # remains of the guarantee — `read_page_text` replaces an invalid byte with
+        # U+FFFD and the IDE keys would then round-trip through the writer mangled.
+        try:
+            src.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"card {dir_name} is not valid UTF-8: {exc}") from exc
         fm, body = split_frontmatter(read_page_text(src))
-        extra = dict(fm or {})
+        # The card's mirror of the faces' hard guard, and its only evidence source:
+        # a lost or unparseable fence used to plan `sources: []` silently, shipping a
+        # page that claims no evidence base where the export claims eight files'
+        # worth, and regressing Task 2's foreign-key preservation to "0 keys
+        # preserved" with no raise. Measured today: all 9 cards carry a block.
+        if fm is None:
+            raise RuntimeError(f"card {dir_name} has no frontmatter")
+        extra = dict(fm)
         # Read, not popped: `sources` is the derived view (sorted, blank-stripped,
         # deduplicated) while `source_files` keeps shipping verbatim under the IDE's
         # own key — Task 2's foreign-key preservation exists so a card's metadata
@@ -814,6 +855,18 @@ def plan_knowledge(
                 **extra},
             origin="card",
         ))
+    labels = [p.label for p in plans]
+    if len(set(labels)) != len(labels):
+        # Both tables are keyed by the *source dir*, so nothing structural stops two
+        # dirs sharing one slug: the plan count stays right while two pages claim the
+        # same path and the same label, and any caller that indexes by label (a dict,
+        # the tally, the ledger) silently keeps one of them.
+        dupes = sorted({lbl for lbl in labels if labels.count(lbl) > 1})
+        raise RuntimeError(f"duplicate plan label: {dupes}")
+    if not plans:
+        # Empty tables are a call that planned nothing, not a clean run: the same
+        # shape `plan_topics` refuses for the same reason.
+        raise RuntimeError(f"no knowledge pages planned from {kb}")
     return plans
 
 

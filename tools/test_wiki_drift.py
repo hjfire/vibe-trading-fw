@@ -2479,9 +2479,12 @@ def _kb(tmp_path: Path, modules: list[str], cards: list[str]) -> Path:
     faces, and card dirs holding one self-named `.md`.
 
     Fake tables, never the real tree: `modules=`/`cards=` exist so these tests can
-    feed 2 modules and 1 card. A unit test that read `.qoder/repowiki/knowledge/`
-    would be invisible to CI and to anyone without the export, and Task 10 is the
-    one that runs against it for real.
+    feed 2 modules and 2 cards (a base given neither writes no tree root at all,
+    which is why the blocks that add a dir of their own pass `parents=True`). Every
+    card this writes carries `source_files` as a list; the real glossary does not
+    carry the key at all, so that case is built by hand where a test needs it. A unit
+    test that read `.qoder/repowiki/knowledge/` would be invisible to CI and to
+    anyone without the export, and Task 10 is the one that runs against it for real.
     """
     kb = tmp_path / "knowledge" / "zh"
     for m in modules:
@@ -2500,34 +2503,168 @@ def _kb(tmp_path: Path, modules: list[str], cards: list[str]) -> Path:
     return kb
 
 
-def test_plan_knowledge_maps_every_face_and_keeps_card_keys(tmp_path):
+def test_plan_knowledge_maps_every_face_and_keeps_card_keys(tmp_path, monkeypatch):
+    wiki = tmp_path / "repowiki"
+    wiki.mkdir()
+    monkeypatch.setattr(wiki_drift, "WIKI", wiki)
     kb = _kb(tmp_path, ["父", "父/子"], ["业务术语表"])
+    # A second card carrying `kind/name/slug/scope` but NO `source_files` — the real
+    # glossary's shape (measured: 8 of the 9 cards have the key, 1 does not). This is
+    # the fact behind "31 of 494 pages ship with empty `sources`" and nothing in the
+    # suite proved it: an empty evidence base publishes empty, never invented, while
+    # the IDE keys the card does carry still round-trip.
+    bare = kb / "卡片二"
+    bare.mkdir()
+    (bare / "卡片二.md").write_text(
+        "---\nkind: card\nname: 卡片二\nslug: two\nscope: repo\n---\n\n### 角色\n",
+        encoding="utf-8",
+    )
     # The second fake module is slugged `agent-backend`, not `ci-gates`: `REWORDS`
     # claims `modules/ci-gates/architecture.md`, and `strip_reword` demands the needle
     # exactly once on any label it owns — a stand-in dir with generic prose in that
     # slot raises instead of planning. Test 3 puts the needle there on purpose.
     plans = wiki_drift.plan_knowledge(
         kb, "a" * 40, modules={"父": "repo-root", "父/子": "agent-backend"},
-        cards={"业务术语表": "glossary"})
-    assert len(plans) == 11, "2 modules x 5 faces + 1 card"
+        cards={"业务术语表": "glossary", "卡片二": "card-two"})
+    assert len(plans) == 12, "2 modules x 5 faces + 2 cards"
     by_label = {p.label: p for p in plans}
-    assert by_label["modules/repo-root/overview.md"].fm["sources"] == []
+    # A plan count cannot see the *values* of the two tables: two source dirs mapped
+    # to one slug produce the right number of plans with two identical labels and two
+    # identical targets, and the dict above collapses the duplicate — so the
+    # surviving assertion would pass on the wrong page. `plan_knowledge` refuses a
+    # non-injective label set; this line is the test-side half of that refusal.
+    assert len(by_label) == len(plans), "labels are the ledger key: 12 distinct"
+    # Sampling, not spot-checking: every plan lands where its own label says, and
+    # the aggregation layer's half of the sources rule holds for all 30 faces, not
+    # just for the one page this test used to read.
+    for p in plans:
+        assert p.target == wiki / p.label, "the label is the path it lands on"
+        assert p.fm["page"] == p.label, "prefixed on both layers, unlike topics/"
+        if p.label.startswith("modules/"):
+            assert p.origin == "module" and p.fm["sources"] == []
+        else:
+            assert p.origin == "card"
     card = by_label["cards/glossary.md"]
     assert card.fm["kind"] == "card" and card.fm["name"] == "业务术语表"
     assert card.fm["sources"] == ["src/mod.py"], "source_files feeds `sources`"
     assert card.fm["source_files"] == ["src/mod.py"], "...and the IDE key still ships"
     assert card.origin == "card"
+    bare_card = by_label["cards/card-two.md"]
+    assert bare_card.fm["sources"] == [], "no source_files -> an honest empty base"
+    assert "source_files" not in bare_card.fm, "...and the absent IDE key is not forged"
+    assert bare_card.fm["slug"] == "two" and bare_card.fm["scope"] == "repo"
 
 
 def test_plan_knowledge_demands_both_directions_of_the_map(tmp_path):
     """The migration's reconciliation rule: every source dir claimed exactly once,
     no exceptions accepted. An unmapped dir means a page nobody seeded; a mapped dir
-    missing on disk means a slug pointing at nothing."""
+    missing on disk means a slug pointing at nothing.
+
+    Both halves, both layers. Every block below gets its own throwaway tree and a
+    table that is *complete* for the other layer, because the module loop runs first:
+    a block aimed at a card guard handed a broken module table would report the module
+    raise and still be green. Each `match=` therefore names its own guard.
+    """
     kb = _kb(tmp_path, ["父"], [])
+    root = {"父": "repo-root"}
     with pytest.raises(RuntimeError, match="unmapped module dir"):
         wiki_drift.plan_knowledge(kb, "a" * 40, modules={}, cards={})
     with pytest.raises(RuntimeError, match="module dir missing"):
         wiki_drift.plan_knowledge(kb, "a" * 40, modules={"父": "repo-root", "缺": "gone"}, cards={})
+
+    # "module" is the `_module.yaml` marker, not a directory on disk. A mapped dir
+    # that lost or renamed its marker used to plan its 5 faces silently, and the card
+    # scan is top-level only, so nothing on either side reported the swap.
+    kb_nomark = _kb(tmp_path / "m0", ["父"], [])
+    (kb_nomark / "父" / "_module.yaml").unlink()
+    with pytest.raises(RuntimeError, match="module dir missing"):
+        wiki_drift.plan_knowledge(kb_nomark, "a" * 40, modules=root, cards={})
+
+    # One face short is 4 pages published and 1 that is not — indistinguishable from
+    # a clean run by the plan count.
+    kb_face = _kb(tmp_path / "m1", ["父"], [])
+    (kb_face / "父" / "概述.md").unlink()
+    with pytest.raises(RuntimeError, match=r"module face missing: 父/概述\.md"):
+        wiki_drift.plan_knowledge(kb_face, "a" * 40, modules=root, cards={})
+
+    # Faces arrive without frontmatter (measured 0 today). A fence here would be
+    # nested into the body and hashed as prose; `is not None` is what makes a
+    # comment-only fence raise as well — `if fm:` waves `{}` through.
+    kb_fm = _kb(tmp_path / "m2", ["父"], [])
+    (kb_fm / "父" / "概述.md").write_text("---\nkind: face\n---\n\n# 概述\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unexpected frontmatter"):
+        wiki_drift.plan_knowledge(kb_fm, "a" * 40, modules=root, cards={})
+    (kb_fm / "父" / "概述.md").write_text("---\n# 注释\n---\n\n# 概述\n", encoding="utf-8")
+    assert wiki_drift.split_frontmatter(
+        "---\n# 注释\n---\nbody\n")[0] == {}, "the fence has to parse empty for this to bite"
+    with pytest.raises(RuntimeError, match="unexpected frontmatter"):
+        wiki_drift.plan_knowledge(kb_fm, "a" * 40, modules=root, cards={})
+
+    # Byte fidelity on faces: one invalid byte becomes U+FFFD under
+    # `read_page_text`'s `errors="replace"`, i.e. a page whose published bytes differ
+    # from the bytes the ledger hashes under the same key.
+    kb_byte = _kb(tmp_path / "m3", ["父"], [])
+    (kb_byte / "父" / "概述.md").write_bytes(b"# overview\n\n\xff\n")
+    with pytest.raises(RuntimeError, match="not the export bytes"):
+        wiki_drift.plan_knowledge(kb_byte, "a" * 40, modules=root, cards={})
+
+    # Both tables are keyed by the source *dir*, so two dirs can share one slug: 10
+    # plans, 5 of them labels another plan already owns.
+    kb_dupe = _kb(tmp_path / "m4", ["父", "父/子"], [])
+    with pytest.raises(RuntimeError, match="duplicate plan label"):
+        wiki_drift.plan_knowledge(
+            kb_dupe, "a" * 40, modules={"父": "same", "父/子": "same"}, cards={})
+
+    # ---- the card half ----
+    kb_unmapped = _kb(tmp_path / "c0", [], ["孤儿卡"])
+    with pytest.raises(RuntimeError, match="unmapped card dirs"):
+        wiki_drift.plan_knowledge(kb_unmapped, "a" * 40, modules={}, cards={})
+    # The table has to name the orphan too, or the unmapped guard fires first and the
+    # missing direction is never reached. `sorted(cards)` puts 孤(U+5B64) before
+    # 缺(U+7F3A), so the orphan plans and the typo is the one that raises.
+    with pytest.raises(RuntimeError, match="card dir missing"):
+        wiki_drift.plan_knowledge(
+            kb_unmapped, "a" * 40, modules={}, cards={"孤儿卡": "orphan", "缺卡": "gone"})
+
+    kb_nopage = _kb(tmp_path / "c1", [], [])
+    (kb_nopage / "空卡").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="card page missing"):
+        wiki_drift.plan_knowledge(kb_nopage, "a" * 40, modules={}, cards={"空卡": "empty"})
+
+    # A card page with no `---` fence used to plan with `sources: []` and no IDE keys
+    # at all: that block is the card's only evidence source, and losing it shipped a
+    # page claiming an empty evidence base where the export names eight files.
+    kb_bare = _kb(tmp_path / "c2", [], [])
+    (kb_bare / "无栅栏卡").mkdir(parents=True)
+    (kb_bare / "无栅栏卡" / "无栅栏卡.md").write_text("### 角色\n\n正文\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="has no frontmatter"):
+        wiki_drift.plan_knowledge(kb_bare, "a" * 40, modules={}, cards={"无栅栏卡": "bare"})
+
+    # The card half of byte fidelity: the fence is dropped by design, so byte
+    # identity is unavailable and a strict decode is what is left of the guarantee.
+    kb_bad = _kb(tmp_path / "c3", [], ["坏卡"])
+    bad = kb_bad / "坏卡" / "坏卡.md"
+    bad.write_bytes(bad.read_bytes() + b"\xff")
+    with pytest.raises(RuntimeError, match="not valid UTF-8"):
+        wiki_drift.plan_knowledge(kb_bad, "a" * 40, modules={}, cards={"坏卡": "broken"})
+
+    # A card that already owns one of our five keys must stop the seed rather than
+    # have the writer emit the key twice from two owners.
+    kb_clash = _kb(tmp_path / "c4", [], ["占键卡"])
+    (kb_clash / "占键卡" / "占键卡.md").write_text(
+        "---\nkind: card\nsources:\n    - src/mod.py\n---\n\n### 角色\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="already uses our keys"):
+        wiki_drift.plan_knowledge(kb_clash, "a" * 40, modules={}, cards={"占键卡": "clash"})
+
+    # An empty tree and a missing tree are both refusals, and the second one is a
+    # `RuntimeError`: `kb.iterdir()` used to raise `FileNotFoundError`, which is not
+    # what Task 6's exit-2 path prints.
+    empty_kb = tmp_path / "empty-kb"
+    empty_kb.mkdir()
+    with pytest.raises(RuntimeError, match="no knowledge pages planned"):
+        wiki_drift.plan_knowledge(empty_kb, "a" * 40, modules={}, cards={})
+    with pytest.raises(RuntimeError, match="no knowledge tree at"):
+        wiki_drift.plan_knowledge(tmp_path / "nope", "a" * 40, modules={}, cards={})
 
 
 def test_plan_knowledge_applies_the_reword_and_counts_it(tmp_path):
