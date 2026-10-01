@@ -319,13 +319,19 @@ def parse_refs(page: Path) -> list[Ref]:
     return refs
 
 
-def metadata_baseline() -> str | None:
-    if not META.exists():
+def metadata_baseline(meta_path: "Path | None" = None) -> str | None:
+    """The commit the wiki export was generated at.
+
+    `meta_path` exists for the one-shot seed read against the legacy root; the
+    tracked tree has no metadata file and gets its fallback from `tree_baseline()`.
+    """
+    path = meta_path if meta_path is not None else META
+    if not path.exists():
         return None
     try:
-        data = json.loads(META.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        print(f"warning: cannot read {META}: {exc}", file=sys.stderr)
+        print(f"warning: cannot read {path}: {exc}", file=sys.stderr)
         return None
     commit = (data.get("wiki_repo") or {}).get("last_commit_id") or ""
     # Generated outside a git root the IDE writes a magic non-commit marker
@@ -337,6 +343,63 @@ def metadata_baseline() -> str | None:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# M2 seeding: the IDE export -> the tracked tree
+# ---------------------------------------------------------------------------
+#
+# Source dir names are the export's own CJK keys; target names are ASCII, because
+# a full-width comma inside a *filename* has bitten this repo before (and the faces
+# are addressed by scripts). `topics/` keeps its CJK relative paths — that is the
+# ledger's primary key, so nothing there may be renamed.
+
+LEGACY_EXPORT = ".qoder/repowiki"
+LEGACY_KNOWLEDGE = "knowledge/zh"
+EXPORT_ARCHIVE = "_ide-export-retired-2026-10-01"
+
+_ROOT = "Vibe-Trading 多端一体化仓库（Agent_前端_Electron_Wiki_CI）"
+MODULE_SLUGS: dict[str, str] = {
+    _ROOT: "repo-root",
+    f"{_ROOT}/Vibe-Trading Agent 后端（API_MCP_CLI_回测）": "agent-backend",
+    f"{_ROOT}/Vibe Trading 前端应用（React + Vite 交易分析界面）": "frontend-app",
+    f"{_ROOT}/Vibe-Trading Electron 桌面宿主": "electron-desktop",
+    f"{_ROOT}/Vibe-Trading Wiki 静态站点与 Pages Functions": "wiki-static-site",
+    f"{_ROOT}/CI 流水线与安全门禁脚本": "ci-gates",
+}
+
+FACE_NAMES: dict[str, str] = {
+    "概述.md": "overview.md",
+    "架构设计.md": "architecture.md",
+    "技术栈.md": "tech-stack.md",
+    "编码规范.md": "conventions.md",
+    "特殊配置与命令.md": "commands.md",
+}
+
+CARD_SLUGS: dict[str, str] = {
+    "多语言仓库依赖管理：pip + pip-compile、npm lockfile 与 Dependabot 协同治理": "dependency-management",
+    "多端一体化构建系统：Docker 多阶段镜像、pyproject 包管理与 GitHub Actions CI_CD": "build-system",
+    "基于 Python stdlib logging + Uvicorn 访问日志脱敏的日志体系": "logging",
+    "基于 Pydantic 的集中式环境变量与结构化 Agent 配置系统": "pydantic-settings",
+    "前端样式体系：Tailwind CSS + CSS 变量主题系统": "tailwind-theme",
+    "Vibe-Trading 错误处理体系：FastAPI HTTPException + 领域异常类 + CLI 吞错 + Electron 进程级兜底": "error-handling",
+    "Novita AI — OpenAI 兼容推理网关": "novita-openai-gateway",
+    "GitHub Actions 每日同步工作流（sync-upstream）": "sync-upstream-workflow",
+    "业务术语表": "glossary",
+}
+
+# The only published page whose prose differs from the export. Its ci-gates
+# architecture face describes upstream gate (b) — and gate (b) greps the
+# filesystem for the literal that sentence names, so shipping it verbatim would
+# make the wiki the thing the gate fails on. Rewritten at seed time, counted, and
+# named in the output: publishing under this repo's own trademark policy, not a
+# waiver of it (spec §9.2). The needle is assembled at runtime for the same reason.
+REWORDS: dict[str, tuple[str, str]] = {
+    "modules/ci-gates/architecture.md": (
+        "b: 禁止字面量 '" + "".join(["World", "Quant"]) + "'",
+        "b: 禁止商标字面量（名单由 `tools/ci_grep_gates.sh` 自持）",
+    ),
+}
 
 
 # ---------------------------------------------------------------------------

@@ -2308,3 +2308,48 @@ def test_autocrlf_pinning_is_what_saves_the_body_bytes(tmp_path):
         # the assertion above proves nothing (this repo's HARNESS-BLIND category).
         assert b"\r\n" in loose, f"control lost the hazard: {loose[:40]!r}"
 
+
+# ---------------------------------------------------------------------------
+# M2 seeding: the constant tables the seed reads
+# ---------------------------------------------------------------------------
+
+
+def test_seed_slug_maps_are_two_way_unique_and_ascii():
+    """Hard-coded instead of parsed: the export's own `_index.yaml`/`_module.yaml`
+    are YAML, and gate (a) of this repo's CI exists precisely to keep a yaml parser
+    out of these tools. 6 + 9 is small enough to assert in both directions, which
+    is what turns 'we silently forgot a module' from a story into a red test."""
+    assert len(wiki_drift.MODULE_SLUGS) == 6
+    assert len(wiki_drift.CARD_SLUGS) == 9
+    assert len(wiki_drift.FACE_NAMES) == 5
+    for table in (wiki_drift.MODULE_SLUGS, wiki_drift.CARD_SLUGS):
+        slugs = list(table.values())
+        assert len(slugs) == len(set(slugs)), "two source dirs cannot share one target slug"
+        for slug in slugs:
+            assert re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug), slug
+    assert sorted(wiki_drift.FACE_NAMES.values()) == [
+        "architecture.md", "commands.md", "conventions.md", "overview.md", "tech-stack.md",
+    ]
+    # The parent module is the only depth-1 dir; the five children hang off it.
+    parents = [k for k in wiki_drift.MODULE_SLUGS if "/" not in k]
+    assert len(parents) == 1 and parents[0] in wiki_drift.MODULE_SLUGS
+
+
+def test_seed_reword_key_names_a_real_published_path():
+    """A typo in a REWORDS key would silently mean 'nothing was reworded' — the
+    exception would become an excuse for a page that never got seeded (spec §12)."""
+    targets = {f"modules/{slug}/{face}" for slug in wiki_drift.MODULE_SLUGS.values()
+               for face in wiki_drift.FACE_NAMES.values()}
+    targets |= {f"cards/{slug}.md" for slug in wiki_drift.CARD_SLUGS.values()}
+    assert set(wiki_drift.REWORDS) <= targets
+    assert list(wiki_drift.REWORDS) == ["modules/ci-gates/architecture.md"]
+
+
+def test_metadata_baseline_can_read_a_second_root(tmp_path):
+    """The seed reads the export's snapshot commit exactly once, from a path that is
+    not the module global — after M1 the tracked tree has no metadata file at all."""
+    meta = tmp_path / "zh" / "meta" / "repowiki-metadata.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(json.dumps({"wiki_repo": {"last_commit_id": "b" * 40}}), encoding="utf-8")
+    assert wiki_drift.metadata_baseline(meta) == "b" * 40
+
