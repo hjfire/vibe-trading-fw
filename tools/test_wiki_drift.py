@@ -3103,3 +3103,58 @@ def test_report_labels_the_metadata_fallthrough(wired, capsys):
     assert f"baseline  {wired['base']}  (metadata: repowiki-metadata.json)" in out, out
     assert "modal page verified_at" not in out, out
 
+
+# ---------------------------------------------------------------------------
+# M2 hand-authoring: modules/pine-engine (5 faces with no source in the export)
+# ---------------------------------------------------------------------------
+
+PINE_FACES = ["overview", "architecture", "tech-stack", "conventions", "commands"]
+
+
+def test_pine_engine_faces_are_grounded_in_real_files():
+    """Spec §11: these five pages have no source in the export, so the only thing
+    keeping them from being folklore is a `sources` list that resolves on disk and
+    a body long enough to be read. `anchors` must stay `open` — hand-writing a page
+    is not the same as verifying every cite in it."""
+    base = REAL_REPO / "repowiki" / "modules" / "pine-engine"
+    for face in PINE_FACES:
+        page = base / f"{face}.md"
+        assert page.is_file(), page
+        assert len(page.read_bytes()) > 800, page
+        fm = wiki_drift.read_frontmatter(page)
+        assert fm is not None and fm["page"] == f"modules/pine-engine/{face}.md"
+        assert fm["sources"], page
+        assert fm["anchors"] == "open" and fm["vouch"] == "applied-only"
+        assert wiki_drift.HEX40_RE.match(str(fm["verified_at"])), fm
+        for src in fm["sources"]:
+            assert (REAL_REPO / src).is_file(), f"{page.name} cites a missing file: {src}"
+        # a `sources` list that resolves but says nothing is still a false claim
+        assert len(fm["sources"]) >= 2, f"{page.name} cites {fm['sources']}"
+
+
+def test_pine_engine_is_the_seventh_module_and_faces_are_complete():
+    """CONTROLLER RULING 1: the brief asserted `slugs == {"pine-engine"} | set(
+    MODULE_SLUGS.values())` (7 dirs), but the other 6 module dirs are published only
+    by the real seed in Task 10, which has not run — at Task 8 `pine-engine` is the
+    sole directory. Narrowed to a 1-slug equality that still goes red on a stray or
+    misnamed sibling dir or a missing face; Task 10 widens it back to the 7-slug set."""
+    base = REAL_REPO / "repowiki" / "modules"
+    slugs = {p.name for p in base.iterdir() if p.is_dir()}
+    assert slugs == {"pine-engine"}, slugs
+    for slug in slugs:
+        assert sorted(p.name for p in (base / slug).glob("*.md")) == \
+            sorted(f"{f}.md" for f in PINE_FACES), slug
+
+
+def test_seed_does_not_touch_hand_authored_pages(tmp_path, monkeypatch):
+    """`plan_*` enumerates source dirs, so the authored module can only be written
+    by hand. Prove the seed's plan never yields a pine-engine path — the reverse
+    would let a re-seed overwrite prose nobody re-read."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    plans = (wiki_drift.plan_topics(export, "a" * 40)
+             + wiki_drift.plan_knowledge(export / wiki_drift.LEGACY_KNOWLEDGE, "a" * 40,
+                                         modules={"父": "repo-root"},
+                                         cards={"业务术语表": "glossary"}))
+    assert not [p for p in plans if "pine-engine" in p.label]
+    assert target.is_dir()  # the fixture really is the export this plan reads
+
