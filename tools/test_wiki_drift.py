@@ -1774,7 +1774,7 @@ def test_frontmatter_baseline_only_accepts_a_reachable_full_sha(tmp_path):
     assert wiki_drift.frontmatter_baseline(page) is None
     good = "0123456789abcdef" * 2 + "01234567"  # exactly 40 hex
     assert len(good) == 40
-    wiki_drift.update_frontmatter(page, verified_at=good)
+    wiki_drift.update_frontmatter(page, verified_at=good, vouch="all")
     assert wiki_drift.frontmatter_baseline(page) == good
 
 
@@ -1789,7 +1789,7 @@ def _refs_for(wired):
 
 def test_frontmatter_baseline_wins_over_ledger_and_snapshot(wired):
     page = wired["content"] / "前端应用" / "模块说明.md"
-    wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md", verified_at=wired["head"])
+    wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md", verified_at=wired["head"], vouch="all")
     base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {}, wired["base"])
     assert (base, tag) == (wired["head"], "frontmatter")
 
@@ -1798,7 +1798,7 @@ def test_unreachable_frontmatter_rev_does_not_become_a_baseline(wired):
     """A seeded page may name a commit a force-pushed sync GC'd. The snapshot stays
     the honest base — a phantom baseline would freeze the page's drift at zero."""
     page = wired["content"] / "前端应用" / "模块说明.md"
-    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32)
+    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32, vouch="all")
     base, tag = wiki_drift.effective_base(page, "前端应用/模块说明.md", {}, wired["base"])
     assert (base, tag) == (wired["base"], "snapshot")
 
@@ -1844,7 +1844,7 @@ def test_frontmatter_provenance_survives_a_clean_page(wired):
     """A page whose baseline came from its own frontmatter and owes nothing reads
     `frontmatter`, not `clean` — the report must keep saying where the base came from."""
     page = wired["content"] / "前端应用" / "模块说明.md"
-    wiki_drift.update_frontmatter(page, verified_at=wired["head"])
+    wiki_drift.update_frontmatter(page, verified_at=wired["head"], vouch="all")
     rep = audit_page(
         page, "前端应用/模块说明.md", "frontmatter", wired["head"],
         _refs_for(wired), set(), set(),
@@ -1856,7 +1856,7 @@ def test_recorded_drivers_are_measured_from_the_page_baseline(wired):
     """Drivers must follow the same precedence, or a stamped page would list itself
     as owing everything since the snapshot."""
     page = wired["content"] / "前端应用" / "模块说明.md"
-    wiki_drift.update_frontmatter(page, verified_at=wired["head"])
+    wiki_drift.update_frontmatter(page, verified_at=wired["head"], vouch="all")
     stale, _broken = wiki_drift.recorded_drivers(page, "前端应用/模块说明.md", wired["base"])
     assert stale == []
 
@@ -1866,7 +1866,7 @@ def test_unreachable_page_baseline_falls_back_instead_of_claiming_no_drivers(wir
     returning ([], []) is how a stamp quietly becomes a clean page. The plan's
     `frontmatter_baseline(page) or fallback` would have done exactly that."""
     page = wired["content"] / "前端应用" / "模块说明.md"
-    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32)
+    wiki_drift.update_frontmatter(page, verified_at="deadbeef" + "0" * 32, vouch="all")
     stale, _broken = wiki_drift.recorded_drivers(page, "前端应用/模块说明.md", wired["base"])
     assert stale == ["src/mod.py"]
 
@@ -1882,3 +1882,261 @@ def test_drift_md_names_the_missing_frontmatter(wired):
     main(["report", "--top", "5"])
     text = (wired["wiki"] / "update" / "DRIFT.md").read_text(encoding="utf-8")
     assert "缺 frontmatter 的页面：2" in text
+
+
+# ---------------------------------------------------------------------------
+# a repo-shaped fixture: the write-back tests must not exercise the IDE shape
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def repo_tree(tmp_path):
+    """A git repo whose wiki uses the *repo* layout: repowiki/topics/... .
+
+    Mirrors `repo` (the IDE-layout fixture) but with the tracked shape M1 moves to,
+    so the write-back tests exercise `layout == "repo"`. The second commit inserts
+    lines ABOVE the cited block: the block still exists, it just moved down, which
+    is exactly what `reanchor --shifts` claims to prove — so it needs lines a matcher
+    can recognise. Seven identical `print(1)` lines read as "nothing to prove", and a
+    fixture whose apply pass changes nothing would let the write-back assertions pass
+    by not running at all.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test")
+    (root / "src").mkdir()
+    mod = [
+        "# header",      # L1
+        "",              # L2
+        "def alpha():",  # L3
+        "    return 1",  # L4
+        "",              # L5
+        "def beta():",   # L6
+        "    return 2",  # L7
+    ]
+    (root / "src" / "mod.py").write_text("\n".join(mod) + "\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "snapshot baseline")
+    base = _git(root, "rev-parse", "HEAD").strip()
+
+    wiki = root / "repowiki"
+    content = wiki / "topics"
+    page_dir = content / "前端应用"
+    page_dir.mkdir(parents=True)
+    page = page_dir / "模块说明.md"
+    page.write_text(
+        "# 模块说明\n\n<cite>\n**本文引用的文件**\n"
+        "- [alpha](file://src/mod.py#L3-L4)\n</cite>\n\n## 简介\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "seed the repo-owned wiki tree")
+    seed = _git(root, "rev-parse", "HEAD").strip()
+
+    lines = (root / "src" / "mod.py").read_text(encoding="utf-8").splitlines()
+    (root / "src" / "mod.py").write_text(
+        "\n".join(["# inserted above the cited block"] * 6 + lines) + "\n", encoding="utf-8"
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "insert lines above the cited block")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    return {
+        "root": root, "wiki": wiki, "content": content, "page": page,
+        "base": base, "seed": seed, "head": head,
+    }
+
+
+@pytest.fixture
+def repo_wired(repo_tree, monkeypatch):
+    """The repo-layout tree, with every path global AND `wiki_root` pointed at it."""
+    root, wiki = repo_tree["root"], repo_tree["wiki"]
+    monkeypatch.setattr(wiki_drift, "REPO", root)
+    monkeypatch.setattr(wiki_drift, "WIKI", wiki)
+    monkeypatch.setattr(wiki_drift, "CONTENT", repo_tree["content"])
+    monkeypatch.setattr(wiki_drift, "META", wiki / "zh" / "meta" / "repowiki-metadata.json")
+    monkeypatch.setattr(wiki_drift, "UPDATE_DIR", wiki / "drift")
+    monkeypatch.setattr(wiki_drift, "LEDGER", wiki / "ledger.jsonl")
+    monkeypatch.setattr(wiki_drift, "wiki_root", wiki_drift.WikiRoot.resolve(wiki, base=root))
+    monkeypatch.setattr(wiki_drift, "_line_cache", {})
+    return repo_tree
+
+
+# ---------------------------------------------------------------------------
+# write-back: the stamp must leave its mark on the page, not only in the ledger
+# ---------------------------------------------------------------------------
+
+
+def test_repo_wired_fixture_is_the_repo_layout(repo_wired):
+    """Canary: if this fixture silently degrades to `ide`, every write-back
+    assertion below would pass by doing nothing."""
+    assert wiki_drift.wiki_root.layout == "repo"
+
+
+def test_mark_full_stamp_advances_the_page_baseline(repo_wired):
+    page = repo_wired["page"]
+    rel = "前端应用/模块说明.md"
+    assert main(["mark", "--page", rel, "-m", "re-derived prose"]) == 0
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["verified_at"] == repo_wired["head"] and fm["vouch"] == "all"
+    # The `page` key is the ledger's key, not the file name: a nested page stamped with
+    # only its name is a second spelling of one identity.
+    assert fm["page"] == rel
+
+
+def test_partial_stamp_never_moves_verified_at(repo_wired):
+    """Contract: a links-only / unfinished stamp may sign the ledger but must not
+    advance the page's baseline, or the page drops out of the queue unsolved."""
+    page = repo_wired["page"]
+    rel = "前端应用/模块说明.md"
+    assert main(["mark", "--page", rel, "--partial", "-m", "cites only"]) == 0
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["verified_at"] == "" and fm["vouch"] == "applied-only"
+    row = wiki_drift.load_ledger()[rel]
+    # The two axes are deliberately different here. `cites` scopes the LEDGER row, and
+    # a hand stamp — partial or not — was signed by whoever read the page, so it vouches
+    # every cite on it. `partial: True` is what keeps the prose owed, and `vouch` is what
+    # stops a later tool pass from reading that row as a finished page.
+    assert row.partial is True and row.cites == "all"
+
+
+def test_body_sha_stable_across_frontmatter_write(repo_wired):
+    page = repo_wired["page"]
+    rel = "前端应用/模块说明.md"
+    assert main(["mark", "--page", rel, "-m", "first"]) == 0
+    first = wiki_drift.load_ledger()[rel].sha_after
+    # The stamp is recorded before the block is written, so it equals the body hash;
+    # afterwards the file is longer but its body is not, which is the whole point.
+    assert first == wiki_drift.body_sha(page) != wiki_drift.sha256(page)
+    assert main(["mark", "--page", rel, "-m", "second"]) == 0
+    assert wiki_drift.load_ledger()[rel].sha_after == first
+
+
+def test_ide_layout_root_stays_byte_identical(wired, monkeypatch):
+    """The guard reads the root's shape off the disk, not the module global: a caller
+    whose `wiki_root` is stale (which is what a fixture that only re-points CONTENT
+    leaves behind) must still not be able to rewrite the IDE export."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    before = page.read_bytes()
+    monkeypatch.setattr(
+        wiki_drift,
+        "wiki_root",
+        wiki_drift.WikiRoot.resolve(wired["root"] / "repowiki", base=wired["root"]),
+    )
+    assert wiki_drift.wiki_root.layout == "repo"  # deliberately mismatched global
+    assert wiki_drift.stamp_frontmatter(page, verified_at="a" * 40) is None
+    assert page.read_bytes() == before
+
+
+def test_mark_on_an_ide_root_leaves_the_page_bytes_alone(wired):
+    """Same contract through the command path: frontmatter belongs to the tracked
+    tree, and touching 450 IDE bytes would recreate the second source of truth."""
+    page = wired["content"] / "前端应用" / "模块说明.md"
+    before = page.read_bytes()
+    assert main(["mark", "--page", "前端应用/模块说明.md", "-m", "ledger only"]) == 0
+    assert page.read_bytes() == before
+    assert wiki_drift.load_ledger()["前端应用/模块说明.md"].note == "ledger only"
+
+
+def test_anchor_axis_is_open_when_a_cite_was_refused():
+    """The decision `reanchor --apply` records: the tool refuses to invent targets
+    for ranges that stop past the end, so that page's anchor axis is NOT verified."""
+    assert wiki_drift.anchors_axis(0) == "verified"
+    assert wiki_drift.anchors_axis(2) == "open"
+
+
+def test_reanchor_apply_writes_the_anchor_axis_back(repo_wired):
+    page = repo_wired["page"]
+    # `--baseline` because the repo-shaped fixture has no IDE metadata file: with no
+    # baseline at all there is no window to diff, the pass finds nothing to move, and
+    # the write-back below would never run.
+    assert main(["reanchor", "--page", "前端应用/模块说明.md", "--shifts", "--apply",
+                 "--baseline", repo_wired["base"]]) == 0
+    # Prove the apply branch ran at all: without a moved link in the body, `fm is not
+    # None` below could only ever come from some other writer.
+    assert "[alpha](file://src/mod.py#L9-L10)" in page.read_text(encoding="utf-8")
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm is not None, "a repo-layout page must gain frontmatter after --apply"
+    assert fm["anchors"] == "verified"  # nothing on this page was refused
+    assert fm["vouch"] == "applied-only"  # a tool pass never vouches the whole page
+
+
+def test_a_refused_cite_keeps_the_anchor_axis_open(repo_wired):
+    """Both branches of `anchors_axis` have to be reachable through the command, or the
+    field is decoration. A cite whose target stops past the end is left as printed on
+    purpose — copying the range into its label would dress a fabricated cite up as a
+    self-consistent one — so the page cannot claim its anchors are verified."""
+    page = repo_wired["page"]
+    page.write_text(
+        page.read_text(encoding="utf-8").replace(
+            "- [alpha](file://src/mod.py#L3-L4)\n",
+            "- [alpha](file://src/mod.py#L3-L4)\n"
+            "- [mod.py:30-60](file://src/mod.py#L30-L60)\n",
+        ),
+        encoding="utf-8",
+    )
+    assert main(["reanchor", "--page", "前端应用/模块说明.md", "--shifts", "--apply",
+                 "--baseline", repo_wired["base"]]) == 0
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["anchors"] == "open" and "[mod.py:30-60](file://src/mod.py#L30-L60)" in (
+        page.read_text(encoding="utf-8")
+    )
+
+
+# ---------------------------------------------------------------------------
+# the vouch scope is what makes frontmatter precedence safe
+# ---------------------------------------------------------------------------
+
+
+def test_only_a_full_vouch_makes_verified_at_the_baseline(tmp_path):
+    """`verified_at` is a claim about the whole page, and only a hand `mark` may make
+    it. Without this gate the *next* writer (reanchor, a partial mark) would leave a
+    stale `verified_at` in front of a body nobody re-read — frontmatter outranks the
+    ledger, so the diff would be measured from HEAD and come out empty by construction.
+    That is the 414-hidden-todos failure mode, in new clothing."""
+    page = tmp_path / "p.md"
+    page.write_text("# 标题\n", encoding="utf-8")
+    good = "0123456789abcdef" * 2 + "01234567"
+    wiki_drift.update_frontmatter(page, verified_at=good, vouch="all")
+    assert wiki_drift.frontmatter_baseline(page) == good
+    wiki_drift.update_frontmatter(page, vouch="applied-only")
+    assert wiki_drift.frontmatter_baseline(page) is None
+
+
+def test_a_partial_mark_takes_back_a_previous_full_vouch(repo_wired):
+    """The ordering this contract exists to protect: a full stamp moves the baseline to
+    HEAD, a later partial pass signs the ledger `partial`, and the page must go back
+    into the queue rather than self-match against its own fresh stamp."""
+    page = repo_wired["page"]
+    rel = "前端应用/模块说明.md"
+    assert main(["mark", "--page", rel, "-m", "read the whole page"]) == 0
+    assert wiki_drift.read_frontmatter(page)["vouch"] == "all"
+    assert wiki_drift.frontmatter_baseline(page) == repo_wired["head"]
+
+    assert main(["mark", "--page", rel, "--partial", "-m", "cites only"]) == 0
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["vouch"] == "applied-only"
+    assert fm["verified_at"] == repo_wired["head"]  # not moved, not cleared
+    assert wiki_drift.frontmatter_baseline(page) is None
+    base, tag = wiki_drift.effective_base(page, rel, wiki_drift.load_ledger(), repo_wired["base"])
+    assert (base, tag) == (repo_wired["base"], "partial")
+
+
+def test_reanchor_apply_takes_back_a_stale_full_vouch(repo_wired):
+    """The same withdrawal where it actually bites: `mark` signed the page at an older
+    head, so the page owes the window since — and the tool pass that fixes its links
+    must not leave `vouch: all` in front of bytes nobody re-read."""
+    page = repo_wired["page"]
+    rel = "前端应用/模块说明.md"
+    wiki_drift.update_frontmatter(page, page=rel, verified_at=repo_wired["seed"], vouch="all")
+    assert wiki_drift.frontmatter_baseline(page) == repo_wired["seed"]
+    assert main(["reanchor", "--page", rel, "--shifts", "--apply"]) == 0
+    assert "[alpha](file://src/mod.py#L9-L10)" in page.read_text(encoding="utf-8")
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["vouch"] == "applied-only"
+    assert fm["verified_at"] == repo_wired["seed"]  # kept, but no longer a claim
+    assert wiki_drift.frontmatter_baseline(page) is None
+    base, tag = wiki_drift.effective_base(page, rel, wiki_drift.load_ledger(), repo_wired["base"])
+    assert (base, tag) == (repo_wired["base"], "partial")
+

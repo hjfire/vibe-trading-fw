@@ -477,12 +477,56 @@ def update_frontmatter(target: Path, **fields) -> dict:
 
 
 def frontmatter_baseline(page: Path) -> str | None:
-    """The page's own `verified_at`, or None when it is absent/unusable."""
+    """The page's own `verified_at` — but only while the page still vouches for all of
+    its cites, or None when the block is absent/unusable.
+
+    A baseline that outranks the ledger has to be a *claim about the whole page*, and
+    only a hand `mark` makes one. `reanchor --apply` and `mark --partial` edit bytes
+    nobody re-read while leaving `verified_at` in place, and a stamp at the current HEAD
+    measures its own drift window as empty: the page would drop out of the queue with
+    its todo list intact. That is how 414 unfinished pages once hid behind their own
+    stamps, so the withdrawal is recorded in the frontmatter as `vouch`.
+    """
     fm = read_frontmatter(page)
     if not fm:
         return None
+    if str(fm.get("vouch") or "").strip() != "all":
+        return None
     rev = str(fm.get("verified_at") or "").strip()
     return rev if HEX40_RE.match(rev) else None
+
+
+def anchors_axis(past_end: int) -> str:
+    """`verified` only when nothing was left unprovable on this page."""
+    return "open" if past_end else "verified"
+
+
+def stamp_frontmatter(
+    page: Path,
+    *,
+    rel: str | None = None,
+    verified_at: str | None = None,
+    anchors: str | None = None,
+    vouch: str | None = None,
+) -> dict | None:
+    """Write the stamp back onto the page — for the repo-owned tree only.
+
+    The layout is read off the disk (`WIKI`'s own shape) rather than from the
+    `wiki_root` global, because a stale global must not be able to rewrite the IDE
+    export: that snapshot is read-only by design (its own metadata drives the IDE's
+    incremental regeneration), and touching its 450 pages from here would recreate
+    the second source of truth this whole milestone exists to remove.
+
+    `rel` is the page's path relative to the content tree — the same string the ledger
+    is keyed by. Left to `update_frontmatter`'s default the `page` key would hold only
+    the file name, and two spellings of one identity is how a ledger row and its page
+    stop finding each other.
+    """
+    if WikiRoot.resolve(WIKI).layout != "repo":
+        return None
+    return update_frontmatter(
+        page, page=rel, verified_at=verified_at, anchors=anchors, vouch=vouch
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1361,6 +1405,16 @@ def cmd_reanchor(args: argparse.Namespace) -> int:
             # done, and a label-only fix must not take that claim back.
             reconciled = bool(entry and not entry.partial and entry.sha_after == body_sha(page))
             page.write_text(text, encoding="utf-8", newline="\n")
+            # Which axis this pass can honestly sign off: past-the-end cites were left
+            # as printed on purpose, so `anchors` is only `verified` when the page had
+            # none of those. The vouch is taken back unconditionally — this pass edited
+            # bytes nobody re-read, and `verified_at` outranks the ledger, so leaving an
+            # older `all` in place would sign the tool's edit as a finished page.
+            # Stamped before `stamp_links` so the drivers it records are measured with
+            # that withdrawal already in effect.
+            stamp_frontmatter(
+                page, rel=rel, anchors=anchors_axis(past_end), vouch="applied-only"
+            )
             signed = stamp_links(page, rel, fallback, entry, moved, reconciled)
             stamped += 1
             owed += bool(signed.get("partial"))
@@ -1558,6 +1612,17 @@ def cmd_mark(args: argparse.Namespace) -> int:
     UPDATE_DIR.mkdir(parents=True, exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    # A hand stamp vouches for the whole page, so it moves the baseline that travels
+    # with the page. A partial one records unfinished work: it must leave
+    # `verified_at` exactly where it was — but it takes the whole-page vouch back,
+    # because frontmatter outranks the ledger and a stale `all` would silently
+    # outrank the `partial` row written a moment ago.
+    stamp_frontmatter(
+        page,
+        rel=rel,
+        verified_at=None if args.partial else head,
+        vouch="applied-only" if args.partial else "all",
+    )
     if args.partial:
         print(f"marked {rel} partial at {head[:12]} — baseline unchanged, still {len(drivers)} driver(s)")
     else:
@@ -1586,7 +1651,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     rep.set_defaults(func=cmd_report)
 
     mark = sub.add_parser("mark", help="record a page as reconciled at HEAD")
-    mark.add_argument("--page", required=True, help="wiki page path, relative to zh/content")
+    mark.add_argument(
+        "--page",
+        required=True,
+        help="wiki page path, relative to the root's content tree "
+        "(topics/ in repowiki/, zh/content/ in the IDE export)",
+    )
     mark.add_argument("-m", "--message", default="", help="what was updated")
     mark.add_argument(
         "--partial",
