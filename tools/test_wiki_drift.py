@@ -2332,7 +2332,11 @@ def test_seed_slug_maps_are_two_way_unique_and_ascii():
     ]
     # The parent module is the only depth-1 dir; the five children hang off it.
     parents = [k for k in wiki_drift.MODULE_SLUGS if "/" not in k]
-    assert len(parents) == 1 and parents[0] in wiki_drift.MODULE_SLUGS
+    assert len(parents) == 1, "exactly one depth-1 module dir"
+    parent = parents[0]
+    assert wiki_drift.MODULE_SLUGS[parent] == "repo-root"
+    assert all(k.startswith(f"{parent}/") for k in wiki_drift.MODULE_SLUGS if k != parent), \
+        "every other module key must hang off the one parent"
 
 
 def test_seed_reword_key_names_a_real_published_path():
