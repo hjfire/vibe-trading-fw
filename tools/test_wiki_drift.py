@@ -3158,3 +3158,32 @@ def test_seed_does_not_touch_hand_authored_pages(tmp_path, monkeypatch):
     assert not [p for p in plans if "pine-engine" in p.label]
     assert target.is_dir()  # the fixture really is the export this plan reads
 
+
+# ---------------------------------------------------------------------------
+# M2 contract: repowiki/README.md is the only place these tables are written down
+# ---------------------------------------------------------------------------
+
+
+def test_readme_maps_every_seeded_name():
+    """The tables are the only place a human learns that `modules/ci-gates/` used to
+    be `…/CI 流水线与安全门禁脚本/架构设计.md`. Guarded against drift both ways: a
+    slug in the table but not in the code, and a slug in the code but not the table."""
+    text = (REAL_REPO / "repowiki" / "README.md").read_text(encoding="utf-8")
+    for slug in set(wiki_drift.MODULE_SLUGS.values()) | {"pine-engine"}:
+        assert f"`{slug}`" in text or f"/{slug}" in text, slug
+    for slug in wiki_drift.CARD_SLUGS.values():
+        assert f"`{slug}`" in text or f"cards/{slug}" in text, slug
+    for src, dst in wiki_drift.FACE_NAMES.items():
+        assert src in text and dst in text, (src, dst)
+    for name in wiki_drift.MODULE_SLUGS:                 # 中文源名必须也能查到
+        assert name.split("/")[-1] in text, name
+    assert wiki_drift.EXPORT_ARCHIVE in text
+
+
+def test_readme_states_the_conventions_a_reader_will_otherwise_violate():
+    text = (REAL_REPO / "repowiki" / "README.md").read_text(encoding="utf-8")
+    for needle in ("不是 `wiki/`", "topics/", "modules/", "cards/", "ledger.jsonl",
+                   "verified_at", "applied-only", "M5", "ci_grep_gates.sh",
+                   "./.qoder/", "--baseline"):
+        assert needle in text, needle
+
