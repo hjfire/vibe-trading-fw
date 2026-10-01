@@ -2140,3 +2140,70 @@ def test_reanchor_apply_takes_back_a_stale_full_vouch(repo_wired):
     base, tag = wiki_drift.effective_base(page, rel, wiki_drift.load_ledger(), repo_wired["base"])
     assert (base, tag) == (repo_wired["base"], "partial")
 
+
+# ---------------------------------------------------------------------------
+# zero-upstream-file-changes: a falsifiable requirement, not a good intention
+# ---------------------------------------------------------------------------
+#
+# This is a fork of an open-source project, and `merge upstream/main` is how it
+# stays current — a merge has no force/reset escape hatch that the owner would
+# accept, so every file upstream also owns is a hand conflict waiting on the next
+# sync. Upstream ownership here was measured, not assumed:
+#
+#   git ls-tree -r --name-only upstream/main -- <path>   (>0 ⇒ upstream owns it)
+#
+# which makes `.gitignore`, `tools/ci_grep_gates.sh`, `.github/workflows/test.yml`
+# and `wiki/**` (42 files) theirs, and `tools/wiki_drift.py`, `tools/test_wiki_drift.py`,
+# `项目档案.md`, `repowiki/**` and `docs/**` ours. The predicate below is the only
+# thing standing between a convenience edit and that conflict, so it has to be able
+# to say *yes* — see the canary.
+
+UPSTREAM_OWNED = re.compile(
+    r"^(\.gitignore|tools/ci_grep_gates\.sh|\.github/workflows/test\.yml|wiki/)"
+)
+
+
+def changed_vs_upstream() -> list[str]:
+    """Fork-side paths changed between upstream/main and HEAD."""
+    proc = subprocess.run(
+        ["git", "-C", str(REAL_REPO), "-c", "core.quotepath=off",
+         "diff", "--name-only", "upstream/main...HEAD"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"upstream/main is not resolvable here ({proc.stderr.strip()}) — "
+            "run `git fetch upstream` first. This check must fail, never skip: "
+            "a guard that quietly passes when it could not read anything is the "
+            "false green this repo already documents twice."
+        )
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def test_protected_path_predicate_flags_known_owned_paths():
+    """Canary: the filter has to be able to say yes, or an empty diff proves nothing."""
+    for path in (".gitignore", "tools/ci_grep_gates.sh", ".github/workflows/test.yml",
+                 "wiki/home/index.html"):
+        assert UPSTREAM_OWNED.match(path), path
+    for path in ("tools/wiki_drift.py", "repowiki/README.md", "docs/x/y.md",
+                 "agent/src/x.py", "repowiki/topics/前端应用/页.md"):
+        assert not UPSTREAM_OWNED.match(path), path
+
+
+def test_fork_change_set_is_not_empty():
+    """Second canary: `no offenders` over an empty diff would be the same vacuity."""
+    assert len(changed_vs_upstream()) > 100  # measured 275 at M1 time
+
+
+def test_an_unresolvable_upstream_raises_instead_of_passing(tmp_path, monkeypatch):
+    """The failure mode this repo keeps hitting: a check that cannot read anything
+    returns nothing, and nothing looks like compliance."""
+    monkeypatch.setitem(globals(), "REAL_REPO", tmp_path)
+    with pytest.raises(RuntimeError, match="must fail, never skip"):
+        changed_vs_upstream()
+
+
+def test_no_fork_commit_touches_an_upstream_owned_file():
+    offenders = [p for p in changed_vs_upstream() if UPSTREAM_OWNED.match(p)]
+    assert offenders == [], f"upstream-owned files modified by fork commits: {offenders}"
+
