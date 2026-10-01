@@ -27,21 +27,30 @@ That mapping is what makes the wiki maintainable outside the IDE:
   two causes it is: the file shrank since the snapshot, which an agent re-derives,
   or those lines never existed, which only a rewrite can fix.
 
-Only ``zh/content/**`` is ever written, and only under ``reanchor --apply``, which
-rewrites a provable link and the range its own label prints, then signs the page
-in the ledger as links-only work so ``report`` keeps its prose drivers open.
+Only the active root's content tree is ever written — ``topics/**`` in the
+repo-owned ``repowiki/``, ``zh/content/**`` in the IDE export — and only under
+``reanchor --apply``, which rewrites a provable link and the range its own label
+prints, then signs the page in the ledger as links-only work so ``report`` keeps
+its prose drivers open.
 
 ``repowiki-metadata.json`` is treated as read-only on purpose. Leaving
 ``last_commit_id`` alone keeps the IDE's own incremental-update path intact, so
 the wiki stays updatable from either side.
 
+The default root is the tracked ``repowiki/`` tree; ``--wiki-root`` re-points
+every path at another. Per-page baselines live in each page's own frontmatter
+(``verified_at``), which is what lets the corpus be maintained in git instead of
+inside an IDE snapshot.
+
 Usage::
 
-    python tools/wiki_drift.py                     # report -> .qoder/repowiki/update/
+    python tools/wiki_drift.py                     # report -> repowiki/drift/
     python tools/wiki_drift.py report --top 30
     python tools/wiki_drift.py report --page 安装与配置
     python tools/wiki_drift.py reanchor --shifts             # dry-run every page
     python tools/wiki_drift.py reanchor --page 安装与配置 --shifts --apply
+    python tools/wiki_drift.py --wiki-root repowiki report
+    python tools/wiki_drift.py --wiki-root .qoder/repowiki report   # legacy export
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md -m "re-anchored"
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md --partial
 
@@ -63,11 +72,103 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 REPO = Path(__file__).resolve().parents[1]
-WIKI = REPO / ".qoder" / "repowiki"
-CONTENT = WIKI / "zh" / "content"
-META = WIKI / "zh" / "meta" / "repowiki-metadata.json"
-UPDATE_DIR = WIKI / "update"
-LEDGER = UPDATE_DIR / "ledger.jsonl"
+
+# The wiki tree moved out of the IDE export and into the repo. Root-level
+# `repowiki/` is not matched by any .gitignore rule — unlike `docs/`, which
+# upstream's own .gitignore ignores wholesale, and unlike `.qoder/`, which lives
+# in .git/info/exclude and is invisible to git. So it becomes tracked without the
+# fork editing a single upstream file, and it is NOT inside upstream gate (b)'s
+# `--exclude-dir=docs` waiver: upstream's own tool polices this publication.
+WIKI_ROOT_DEFAULT = "repowiki"
+
+EMPTY_TREE_HINT = (
+    "no wiki pages under {content} (root {root}, layout {layout}).\n"
+    "  The repo-owned tree is seeded by milestone M2; until then the IDE export is\n"
+    "  still readable explicitly:  --wiki-root .qoder/repowiki\n"
+    "  Exiting 2 rather than reporting 0 pages, because an empty set that passes\n"
+    "  every assertion is this repo's known false green."
+)
+
+
+@dataclass(frozen=True)
+class WikiRoot:
+    """Where the wiki lives, and which of the two on-disk shapes it uses.
+
+    ``repo`` — the tracked tree: ``topics/ modules/ cards/ ledger.jsonl drift/``
+    ``ide``  — the legacy Qoder export: ``zh/content/ zh/meta/ update/``
+
+    Layout is read off the filesystem rather than from a flag: a directory holding
+    ``zh/content`` *is* the IDE export, and the two shapes are disjoint, so the
+    guess cannot be ambiguous. During M1 the new root holds only README.md, which
+    resolves to ``repo`` and yields an empty ``topics`` — the hard error below.
+    """
+
+    root: Path
+    layout: str
+
+    @classmethod
+    def resolve(cls, value: "str | Path", base: "Path | None" = None) -> "WikiRoot":
+        path = Path(value)
+        if not path.is_absolute():
+            path = (base if base is not None else REPO) / path
+        layout = "ide" if (path / "zh" / "content").is_dir() else "repo"
+        return cls(root=path, layout=layout)
+
+    @property
+    def content(self) -> Path:
+        return self.root / ("zh/content" if self.layout == "ide" else "topics")
+
+    @property
+    def update_dir(self) -> Path:
+        return self.root / ("update" if self.layout == "ide" else "drift")
+
+    @property
+    def ledger(self) -> Path:
+        return self.root / ("update/ledger.jsonl" if self.layout == "ide" else "ledger.jsonl")
+
+    @property
+    def meta(self) -> Path:
+        return self.root / "zh" / "meta" / "repowiki-metadata.json"
+
+    @property
+    def modules(self) -> Path:
+        return self.root / "modules"
+
+    @property
+    def cards(self) -> Path:
+        return self.root / "cards"
+
+    @property
+    def index_md(self) -> Path:
+        return self.root / "INDEX.md"
+
+
+def apply_wiki_root(value: "str | Path") -> WikiRoot:
+    """Re-point the path globals at `value`.
+
+    The five globals stay the single source of truth (25 use sites, and the 77
+    existing tests monkeypatch them directly), so this writes them rather than
+    threading a `WikiRoot` through every function. `main()` calls it only when
+    `--wiki-root` is present; the default is applied once at import.
+    """
+    global WIKI, CONTENT, META, UPDATE_DIR, LEDGER, wiki_root
+    root = WikiRoot.resolve(value)
+    WIKI = root.root
+    CONTENT = root.content
+    META = root.meta
+    UPDATE_DIR = root.update_dir
+    LEDGER = root.ledger
+    wiki_root = root
+    return root
+
+
+WIKI: Path
+CONTENT: Path
+META: Path
+UPDATE_DIR: Path
+LEDGER: Path
+wiki_root: WikiRoot
+apply_wiki_root(WIKI_ROOT_DEFAULT)
 
 CODE_SUFFIXES = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".toml", ".yaml",
@@ -1004,7 +1105,10 @@ def align_labels(text: str) -> tuple[str, int, int]:
 
 def cmd_reanchor(args: argparse.Namespace) -> int:
     if not CONTENT.is_dir():
-        print(f"no local Repo Wiki snapshot under {CONTENT}", file=sys.stderr)
+        print(
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            file=sys.stderr,
+        )
         return 2
     pages = collect_pages(args.page)
     fallback = args.baseline or metadata_baseline()
@@ -1145,8 +1249,11 @@ def normalise_page_arg(value: str) -> str:
 
 def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change]] | int:
     if not CONTENT.is_dir():
-        print(f"no local Repo Wiki snapshot under {CONTENT}; nothing to check", file=sys.stderr)
-        return 0
+        print(
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            file=sys.stderr,
+        )
+        return 2
     if not (REPO / ".git").exists():
         print(f"{REPO} is not a git repository", file=sys.stderr)
         return 2
@@ -1243,7 +1350,10 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def cmd_mark(args: argparse.Namespace) -> int:
     if not CONTENT.is_dir():
-        print(f"no local Repo Wiki snapshot under {CONTENT}", file=sys.stderr)
+        print(
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            file=sys.stderr,
+        )
         return 2
     rel = normalise_page_arg(args.page)
     page = CONTENT / rel
@@ -1296,6 +1406,12 @@ def cmd_mark(args: argparse.Namespace) -> int:
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki_drift.py", description="Repo Wiki drift checker")
+    parser.add_argument(
+        "--wiki-root",
+        default=None,
+        help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the IDE "
+        "export stays reachable as .qoder/repowiki)",
+    )
     sub = parser.add_subparsers(dest="cmd")
 
     rep = sub.add_parser("report", help="write drift.json + DRIFT.md (default)")
@@ -1336,8 +1452,21 @@ def main(argv: Iterable[str] | None = None) -> int:
     reanchor.add_argument("--baseline", help="override the wiki snapshot commit (40-hex)")
     reanchor.set_defaults(func=cmd_reanchor)
 
+    # The same flag, also accepted after the verb. SUPPRESS is what makes the two
+    # positions coexist: without a default of its own the subparser cannot overwrite
+    # a value the top-level parser already read.
+    for parser_ in (rep, mark, reanchor):
+        parser_.add_argument(
+            "--wiki-root",
+            default=argparse.SUPPRESS,
+            help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the IDE "
+            "export stays reachable as .qoder/repowiki)",
+        )
+
     raw = list(argv) if argv is not None else sys.argv[1:]
     args = parser.parse_args([*raw, "report"] if not raw else raw)
+    if getattr(args, "wiki_root", None):
+        apply_wiki_root(args.wiki_root)
     if args.cmd == "mark" and not str(args.page).endswith(".md"):
         parser.error("mark --page must name a .md file (report --page may be a substring)")
     try:

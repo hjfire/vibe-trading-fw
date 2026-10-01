@@ -540,10 +540,17 @@ def test_collect_pages_substring_match(wired):
         collect_pages("nope")
 
 
-def test_missing_content_tree_is_a_no_op(wired, monkeypatch, capsys):
+def test_missing_content_tree_is_an_error(wired, monkeypatch, capsys):
+    """Was `..._is_a_no_op` asserting exit 0. A wiki root with zero pages cannot be
+    reported as clean — that is how a half-seeded tree would lie."""
     monkeypatch.setattr(wiki_drift, "CONTENT", wired["root"] / ".qoder" / "absent")
-    assert cmd_report(_ns(baseline=None, page=None, top=5, json=False)) == 0
-    assert "no local Repo Wiki snapshot" in capsys.readouterr().err
+    monkeypatch.setattr(
+        wiki_drift,
+        "wiki_root",
+        wiki_drift.WikiRoot.resolve(wired["wiki"], base=wired["root"]),
+    )
+    assert cmd_report(_ns(baseline=None, page=None, top=5, json=False)) == 2
+    assert "no wiki pages" in capsys.readouterr().err
 
 
 def test_unusable_baseline_requires_an_override(wired, monkeypatch, capsys):
@@ -1561,3 +1568,86 @@ def test_shipped_wiki_tree_is_trademark_clean():
     scanned = [p for p in tree.rglob("*") if p.is_file()]
     assert scanned, "guard must not pass on an empty tree"
     assert scan_trademark(tree) == []
+
+
+# ---------------------------------------------------------------------------
+# WikiRoot: one root, two layouts, no silent empty tree
+# ---------------------------------------------------------------------------
+
+
+def test_wiki_root_repo_layout(tmp_path):
+    root = wiki_drift.WikiRoot.resolve(tmp_path, base=tmp_path)
+    assert root.layout == "repo"
+    assert root.content == tmp_path / "topics"
+    assert root.ledger == tmp_path / "ledger.jsonl"
+    assert root.update_dir == tmp_path / "drift"
+    assert root.meta == tmp_path / "zh" / "meta" / "repowiki-metadata.json"
+    assert root.modules == tmp_path / "modules"
+    assert root.cards == tmp_path / "cards"
+    assert root.index_md == tmp_path / "INDEX.md"
+
+
+def test_wiki_root_detects_the_ide_layout(tmp_path):
+    (tmp_path / "zh" / "content").mkdir(parents=True)
+    root = wiki_drift.WikiRoot.resolve(tmp_path, base=tmp_path)
+    assert root.layout == "ide"
+    assert root.content == tmp_path / "zh" / "content"
+    assert root.update_dir == tmp_path / "update"
+    assert root.ledger == tmp_path / "update" / "ledger.jsonl"
+
+
+def test_wiki_root_resolves_relative_to_the_repo(tmp_path):
+    root = wiki_drift.WikiRoot.resolve("repowiki", base=tmp_path)
+    assert root.root == tmp_path / "repowiki"
+
+
+def test_apply_wiki_root_repoints_the_five_globals(tmp_path, monkeypatch):
+    """`apply_wiki_root` mutates module globals, so the case must snapshot them
+    first — otherwise the mutation leaks into whichever test runs next."""
+    for name in ("REPO", "WIKI", "CONTENT", "META", "UPDATE_DIR", "LEDGER", "wiki_root"):
+        monkeypatch.setattr(wiki_drift, name, getattr(wiki_drift, name))
+    (tmp_path / "repowiki" / "topics").mkdir(parents=True)
+    monkeypatch.setattr(wiki_drift, "REPO", tmp_path)
+    root = wiki_drift.apply_wiki_root("repowiki")
+    assert root.layout == "repo"
+    assert wiki_drift.CONTENT == tmp_path / "repowiki" / "topics"
+    assert wiki_drift.LEDGER == tmp_path / "repowiki" / "ledger.jsonl"
+    assert wiki_drift.UPDATE_DIR == tmp_path / "repowiki" / "drift"
+    assert wiki_drift.wiki_root is root
+
+
+def test_wiki_root_flag_is_accepted_on_either_side_of_the_verb(tmp_path, monkeypatch, capsys):
+    """Both spellings must work: README and the usage block show
+    `--wiki-root repowiki report`, while muscle memory writes `report --wiki-root X`.
+    A flag defined only on the subparsers rejects the first form with an argparse error."""
+    for name in ("REPO", "WIKI", "CONTENT", "META", "UPDATE_DIR", "LEDGER", "wiki_root"):
+        monkeypatch.setattr(wiki_drift, name, getattr(wiki_drift, name))
+    root = tmp_path / "repo"
+    (root / "repowiki").mkdir(parents=True)
+    monkeypatch.setattr(wiki_drift, "REPO", root)
+    for argv in (["--wiki-root", "repowiki", "report"], ["report", "--wiki-root", "repowiki"]):
+        assert main(argv) == 2, argv
+        err = capsys.readouterr().err
+        assert "no wiki pages under" in err, argv
+        assert wiki_drift.CONTENT == root / "repowiki" / "topics", argv
+
+
+def test_empty_tree_is_an_error_not_a_green(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "repo"
+    (root / "repowiki").mkdir(parents=True)  # README only, no topics/
+    monkeypatch.setattr(wiki_drift, "REPO", root)
+    monkeypatch.setattr(wiki_drift, "WIKI", root / "repowiki")
+    monkeypatch.setattr(wiki_drift, "CONTENT", root / "repowiki" / "topics")
+    monkeypatch.setattr(
+        wiki_drift, "META", root / "repowiki" / "zh" / "meta" / "repowiki-metadata.json"
+    )
+    monkeypatch.setattr(wiki_drift, "UPDATE_DIR", root / "repowiki" / "drift")
+    monkeypatch.setattr(wiki_drift, "LEDGER", root / "repowiki" / "ledger.jsonl")
+    monkeypatch.setattr(
+        wiki_drift,
+        "wiki_root",
+        wiki_drift.WikiRoot.resolve(root / "repowiki", base=root),
+    )
+    assert main(["report"]) == 2
+    err = capsys.readouterr().err
+    assert "no wiki pages" in err and "--wiki-root" in err
