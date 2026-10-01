@@ -634,8 +634,8 @@ def stamp_frontmatter(
 @dataclass
 class PagePlan:
     """One page the seed intends to publish. Built before anything is written, so a
-    source-side surprise raises during planning instead of half-way through 489
-    writes."""
+    source-side surprise raises during planning instead of half-way through the
+    milestone's 494 page writes."""
 
     target: Path
     label: str          # path relative to WIKI, posix — what the tally prints
@@ -645,19 +645,23 @@ class PagePlan:
     reworded: bool = False
 
 
-def strip_reword(rel: str, body: bytes) -> tuple[bytes, bool]:
-    """Apply the one published-prose exception, and refuse to apply it quietly."""
-    pair = REWORDS.get(rel)
+def strip_reword(label: str, body: bytes) -> tuple[bytes, bool]:
+    """Apply the one published-prose exception, and refuse to apply it quietly.
+
+    `label` is the prefixed plan label (`topics/...`, `modules/...`) — the spelling
+    `REWORDS` is keyed by — not the unprefixed `fm["page"]` value.
+    """
+    pair = REWORDS.get(label)
     if pair is None:
         return body, False
     old, new = pair[0].encode("utf-8"), pair[1].encode("utf-8")
     if body.count(old) != 1:
         raise RuntimeError(
-            f"reword for {rel}: expected the needle exactly once, found {body.count(old)}"
+            f"reword for {label}: expected the needle exactly once, found {body.count(old)}"
         )
     replaced = body.replace(old, new)
     if replaced.count(b"\n") != body.count(b"\n"):
-        raise RuntimeError(f"reword for {rel} changed the line count")
+        raise RuntimeError(f"reword for {label} changed the line count")
     return replaced, True
 
 
@@ -670,6 +674,12 @@ def plan_topics(legacy: Path, snapshot: str) -> list[PagePlan]:
     bytes through `read_page_text`'s `newline=""` plus one `.encode("utf-8")` —
     nothing else. `body_sha` hashes exactly those bytes, so a newline translation or a
     renamed path here would silently read every existing stamp as `ledger-void`.
+
+    That byte identity is *checked*, not just claimed: `errors="replace"` turns an
+    invalid byte into U+FFFD and republishes different bytes under the same key, and a
+    plan built from such a text voids its own ledger row without a word of complaint.
+    So an un-reworded plan must equal `src.read_bytes()`. Measured today across the 450
+    export pages: 0 contain a CR, 0 carry a BOM.
 
     `fm["page"]` stays relative to `topics/` (no prefix) for the same reason: the
     prefix is where the page lives, `page` is what the ledger calls it.
@@ -686,14 +696,19 @@ def plan_topics(legacy: Path, snapshot: str) -> list[PagePlan]:
         # exactly the surprise this guard exists to catch. Measured 0 today.
         if fm is not None:
             raise RuntimeError(f"unexpected frontmatter in export page {rel}")
-        published, reworded = strip_reword(f"topics/{rel}", body.encode("utf-8"))
+        label = f"topics/{rel}"
+        published, reworded = strip_reword(label, body.encode("utf-8"))
+        if not reworded and published != src.read_bytes():
+            raise RuntimeError(f"planned body is not the export bytes for {rel}")
         plans.append(PagePlan(
             target=WIKI / "topics" / rel,
-            label=f"topics/{rel}",
+            label=label,
             body=published,
             fm={
                 "page": rel,
-                "sources": sorted({r.path for r in refs_from_text(body)}),
+                # Read off the published bytes, not the pre-reword text: `sources`
+                # must describe the prose that actually ships.
+                "sources": sorted({r.path for r in refs_from_text(published.decode("utf-8"))}),
                 "verified_at": snapshot,
                 "anchors": "open",
                 # Seeding moves bytes, it does not re-read cites: only a human
@@ -704,6 +719,10 @@ def plan_topics(legacy: Path, snapshot: str) -> list[PagePlan]:
             origin="topic",
             reworded=reworded,
         ))
+    if not plans:
+        # An empty plan set passes every per-page assertion there is, and the seed
+        # would then "succeed" having published 0 of 450 pages.
+        raise RuntimeError(f"no export pages planned from {content}")
     return plans
 
 

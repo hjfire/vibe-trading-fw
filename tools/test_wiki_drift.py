@@ -2391,17 +2391,35 @@ def _export(tmp_path: Path) -> Path:
 def test_plan_topics_keys_are_the_ledger_primary_key(tmp_path, monkeypatch):
     """The relative path must survive verbatim under `topics/`, CJK included: 426
     ledger rows are keyed by exactly this string, so a rename here silently
-    un-stamps every page."""
+    un-stamps every page. The rows hash the *body* too, so the body is pinned to the
+    source's own bytes, and a tree that plans no page at all is a failure, not a
+    green run."""
     wiki = tmp_path / "repowiki"
     wiki.mkdir()
     monkeypatch.setattr(wiki_drift, "WIKI", wiki)
-    plans = wiki_drift.plan_topics(_export(tmp_path), "a" * 40)
+    export = _export(tmp_path)
+    plans = wiki_drift.plan_topics(export, "a" * 40)
     assert [p.label for p in plans] == [
         "topics/前端应用/页一.md", "topics/前端应用/页二.md",
     ]
     assert plans[0].fm["page"] == "前端应用/页一.md", "`page` is relative to topics/"
     assert plans[0].origin == "topic"
     assert plans[0].target == wiki / "topics" / "前端应用" / "页一.md"
+    # The ledger hashes the *body bytes* under that key, so the bytes are the
+    # invariant too, not just the path. `Path.write_text` translates `\n` to the
+    # platform newline, so these fixture pages are CRLF here (the real export's 450
+    # pages are LF-only) — which is exactly what makes the assertion bite: a
+    # `\n` -> `\r\n` translation in `plan_topics` lands on the CRs and yields
+    # `\r\r\n` bytes, red; dropping the CRs (universal-newline reading) is red too.
+    src = export / "zh" / "content" / "前端应用" / "页一.md"
+    assert plans[0].body == src.read_bytes(), "the ledger hashes these exact bytes"
+    # And the key only means something if there are plans to carry it: a `zh/content`
+    # that exists but holds no page would otherwise sail through every assertion above
+    # and let Task 6's seed "succeed" having published 0 of 450 pages.
+    empty = tmp_path / "empty"
+    (empty / "zh" / "content").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="no export pages planned"):
+        wiki_drift.plan_topics(empty, "a" * 40)
 
 
 def test_plan_topics_sources_are_deduped_sorted_repo_paths(tmp_path):
@@ -2419,16 +2437,39 @@ def test_plan_topics_rejects_an_export_page_with_frontmatter(tmp_path):
     nest two blocks: `split_frontmatter` would then hash a body that starts with a
     stray `---`, and the ledger would call it a hand edit."""
     wiki = _export(tmp_path)
-    (wiki / "zh" / "content" / "前端应用" / "页三.md").write_text(
-        "---\nkind: x\n---\n\n# 页三\n", encoding="utf-8")
+    keyed = wiki / "zh" / "content" / "前端应用" / "页三.md"
+    keyed.write_text("---\nkind: x\n---\n\n# 页三\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unexpected frontmatter"):
+        wiki_drift.plan_topics(wiki, "a" * 40)
+    # A fence whose every line is a comment parses to `{}` — truthiness waves it
+    # through, `is not None` does not, and it is exactly the page this guard exists
+    # for. Isolate it: drop the `kind:` page so only the comment fence can raise.
+    keyed.unlink()
+    (wiki / "zh" / "content" / "前端应用" / "页四.md").write_text(
+        "---\n# 注释\n---\n\n# 页四\n", encoding="utf-8")
+    assert wiki_drift.split_frontmatter(
+        "---\n# 注释\n---\nbody\n")[0] == {}, "the fence has to parse empty for this to bite"
     with pytest.raises(RuntimeError, match="unexpected frontmatter"):
         wiki_drift.plan_topics(wiki, "a" * 40)
 
 
 def test_parse_refs_and_refs_from_text_are_one_implementation(tmp_path, wired):
     """Two codecs would drift. `sources` is only worth having if it is read the
-    same way the report reads cites."""
+    same way the report reads cites.
+
+    The seed hands `refs_from_text` the `newline=""` text (CR intact) and the report
+    hands it the universal-newline text, so the newline modality is the one thing that
+    genuinely differs between them — compare *those* two, not one call against itself.
+    A `write_bytes` page keeps its `\r\n` on every platform, so the two sides really do
+    read different bytes here, not just on a CRLF checkout.
+    """
     page = wired["content"] / "前端应用" / "模块说明.md"
-    text = page.read_text(encoding="utf-8")
-    assert [r.path for r in wiki_drift.refs_from_text(text)] == [r.path for r in parse_refs(page)]
+    crlf = wired["content"] / "前端应用" / "换行.md"
+    crlf.write_bytes(b"# \xe6\x8d\xa2\xe8\xa1\x8c\r\n\r\n<cite>\r\n"
+                     b"- [m](file://src/mod.py#L1-L4)\r\n</cite>\r\n")
+    for target in (page, crlf):
+        assert [r.path for r in wiki_drift.refs_from_text(wiki_drift.read_page_text(target))] == [
+            r.path for r in parse_refs(target)
+        ]
+    assert [r.path for r in parse_refs(crlf)] == ["src/mod.py"], "not one codec scored twice"
 
