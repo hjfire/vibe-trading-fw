@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -2681,4 +2682,138 @@ def test_plan_knowledge_applies_the_reword_and_counts_it(tmp_path):
     assert arch.reworded is True
     assert needle not in arch.body.decode("utf-8")
     assert "禁止商标字面量" in arch.body.decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# M2 seeding: cmd_seed (dry-run by default, per-body reconciliation, ledger copy)
+# ---------------------------------------------------------------------------
+
+
+def _seedable(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    """An export with 2 topic pages + a 1-module/1-card knowledge tree + a 2-row
+    ledger, and a repo-shaped target.
+
+    The slug maps are monkeypatched rather than left at the real 6-module/9-card
+    constants: `cmd_seed` calls `plan_knowledge(kb, snapshot)` with `modules=None`,
+    which resolves `MODULE_SLUGS` at call time, so an unpatched fixture dies on
+    `unmapped module dirs: ['父']` before writing a byte. Patching is also what pins
+    the arithmetic the assertions read: 2 topics + 5 faces + 1 card = 8 pages, and
+    the 5 faces carry no `<cite>` (measured: 0 `file://` refs in the whole knowledge
+    tree), so `no_sources` starts at 5.
+    """
+    export = _export(tmp_path)
+    # `main()` calls `apply_wiki_root`, which re-points the six path globals at the
+    # tmp target. Snapshot them first so the mutation dies with the case instead of
+    # leaking into whatever runs next (the same hygiene as
+    # `test_apply_wiki_root_repoints_the_five_globals`).
+    for name in ("REPO", "WIKI", "CONTENT", "META", "UPDATE_DIR", "LEDGER", "wiki_root"):
+        monkeypatch.setattr(wiki_drift, name, getattr(wiki_drift, name))
+    # Measured on the real export: 0 of the 450 topic pages and 0 of the 39 knowledge
+    # pages contain a CR. `_export`/`_kb` write with `Path.write_text`, which
+    # translates `\n` to the platform newline, so on a CRLF checkout the fixture would
+    # seed `\r\n` prose and the seeded page's no-CR assertion would be reading the
+    # fixture's writer rather than the seed's. Re-write the fixture bytes to LF so the
+    # assertion pins what it says it pins on every platform. `_export` itself stays
+    # CRLF on purpose — Task 4's byte-fidelity tripwire needs the CRs to bite.
+    for page in sorted((export / "zh" / "content").rglob("*.md")):
+        page.write_bytes(page.read_bytes().replace(b"\r\n", b"\n"))
+    monkeypatch.setattr(wiki_drift, "REPO", tmp_path)
+    monkeypatch.setattr(wiki_drift, "MODULE_SLUGS", {"父": "repo-root"})
+    monkeypatch.setattr(wiki_drift, "CARD_SLUGS", {"业务术语表": "glossary"})
+    kb = _kb(tmp_path, ["父"], ["业务术语表"])
+    dst_kb = export / wiki_drift.LEGACY_KNOWLEDGE
+    dst_kb.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(kb, dst_kb)
+    for page in sorted(dst_kb.rglob("*.md")):
+        page.write_bytes(page.read_bytes().replace(b"\r\n", b"\n"))
+    (export / "update" / "ledger.jsonl").write_text(
+        json.dumps({"page": "前端应用/页一.md", "head": "c" * 40,
+                    "sha_after": "d" * 64, "note": "n", "at": "t"}) + "\n"
+        + json.dumps({"page": "前端应用/页二.md", "head": "c" * 40,
+                      "sha_after": "e" * 64, "note": "n", "at": "t"}) + "\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "repowiki"
+    target.mkdir()
+    return export, target
+
+
+def test_seed_defaults_to_dry_run_then_is_idempotent(tmp_path, monkeypatch, capsys):
+    export, target = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(target), "seed", "--from", str(export), "--snapshot", "a" * 40]
+    assert main(argv) == 0
+    assert not list(target.rglob("*.md")), "dry-run must not write a byte"
+    assert not (target / "ledger.jsonl").exists(), "the ledger is a byte too"
+    assert "dry-run: nothing written" in capsys.readouterr().out
+    assert main([*argv, "--apply"]) == 0
+    written = sorted(p.as_posix() for p in target.rglob("*.md"))
+    assert len(written) == 8, written  # 2 topics + 5 faces + 1 card
+    before = {p: p.read_bytes() for p in target.rglob("*.md")}
+    # re-running --apply is what a later operator actually does; it must be a no-op
+    assert main([*argv, "--apply"]) == 0
+    assert {p: p.read_bytes() for p in target.rglob("*.md")} == before, "not idempotent"
+    assert "pages_written=0 pages_skipped=8" in capsys.readouterr().out
+
+
+def test_seed_reconciles_body_bytes(tmp_path, monkeypatch, capsys):
+    export, target = _seedable(tmp_path, monkeypatch)
+    assert main(["--wiki-root", str(target), "seed", "--from", str(export),
+                 "--snapshot", "a" * 40, "--apply"]) == 0
+    page = target / "topics" / "前端应用" / "页一.md"
+    src_text = (export / "zh" / "content" / "前端应用" / "页一.md").read_text(encoding="utf-8")
+    assert page.read_text(encoding="utf-8").endswith(src_text), "frontmatter only, prose verbatim"
+    assert page.read_bytes().startswith(b"---\n") and b"\r\n" not in page.read_bytes()
+    tally = capsys.readouterr().out
+    assert "sha_mismatch=0" in tally and "reworded=0" in tally
+    # the 5 module faces carry no <cite> block at all; the 2 topics and the card all
+    # have sources, so no_sources must be exactly 5 and origins splits 2/5/1.
+    assert "no_sources=5" in tally, tally
+    assert "origins={card:1, module:5, topic:2}" in tally, tally
+
+
+def test_seed_copies_the_ledger_byte_identically(tmp_path, monkeypatch):
+    export, target = _seedable(tmp_path, monkeypatch)
+    assert main(["--wiki-root", str(target), "seed", "--from", str(export),
+                 "--snapshot", "a" * 40, "--apply"]) == 0
+    src = (export / "update" / "ledger.jsonl").read_bytes()
+    dst = (target / "ledger.jsonl").read_bytes()
+    assert dst == src, "426 rows are the only un-reconstructable asset this repo has"
+    rows = wiki_drift.load_ledger()
+    assert sorted(rows) == ["前端应用/页一.md", "前端应用/页二.md"]
+    for rel in rows:
+        assert (target / "topics" / rel).is_file(), "every row must resolve in the new tree"
+
+
+def test_seed_refuses_an_ide_layout_target(tmp_path, monkeypatch, capsys):
+    """Seeding into the export would rewrite the source in place and make the next
+    run's diff meaningless."""
+    export, _ = _seedable(tmp_path, monkeypatch)
+    assert main(["--wiki-root", str(export), "seed", "--apply"]) == 2
+    assert "refusing to seed into an ide-layout root" in capsys.readouterr().err
+
+
+def test_seed_reports_a_missing_reword_needle(tmp_path, monkeypatch, capsys):
+    """The exception must be countable, or 'the one reworded page' doubles as the
+    excuse for a page that never got seeded (spec §12)."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    monkeypatch.setattr(wiki_drift, "REWORDS", {
+        "modules/repo-root/overview.md": ("needle-not-present", "replacement")})
+    assert main(["--wiki-root", str(target), "seed", "--from", str(export),
+                 "--snapshot", "a" * 40, "--apply"]) == 2
+    assert "reword for modules/repo-root/overview.md" in capsys.readouterr().err
+    assert not list(target.rglob("*.md")), "a failed plan must not half-publish a tree"
+
+
+def test_seed_counts_pages_without_sources(tmp_path, monkeypatch, capsys):
+    """Delta form, so the counter is pinned to one page rather than to the fixture's
+    face count: the same export seeds 5 source-less pages, adding one cite-free topic
+    page makes it 6."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(target), "seed", "--from", str(export),
+            "--snapshot", "a" * 40, "--apply"]
+    assert main(argv) == 0
+    assert "no_sources=5" in capsys.readouterr().out
+    (export / "zh" / "content" / "无引用.md").write_text("# 无引用\n\n散文\n", encoding="utf-8")
+    assert main(argv) == 0
+    assert "no_sources=6" in capsys.readouterr().out
 

@@ -871,6 +871,122 @@ def plan_knowledge(
 
 
 # ---------------------------------------------------------------------------
+# M2 seeding: the publish step
+# ---------------------------------------------------------------------------
+#
+# Planning decided *what* ships; this section ships it and counts what happened
+# while doing so. The whole point of the tally is that "the seed ran" is a
+# falsifiable statement: every page it plans is reconciled against the bytes that
+# were planned for it, the exceptions are named rather than absorbed, and the
+# numbers print on one line that a human or a gate can read.
+#
+# `--dry-run` is the default and `--apply` the opt-in, inverting the usual CLI
+# habit on purpose: the first run of this command against the real export happens
+# before anyone has reviewed a diff, and a mistake there rewrites the tree that
+# Task 10 commits.
+
+
+@dataclass
+class SeedTally:
+    written: int = 0
+    skipped: int = 0
+    mismatched: int = 0
+    reworded: int = 0
+    checked: int = 0
+    no_sources: int = 0
+    origins: dict[str, int] = field(default_factory=dict)
+    reword_names: list[str] = field(default_factory=list)
+
+    def line(self) -> str:
+        return (f"pages_written={self.written} pages_skipped={self.skipped} "
+                f"sha_mismatch={self.mismatched} checked={self.checked} "
+                f"reworded={self.reworded} no_sources={self.no_sources} "
+                f"origins={{{', '.join(f'{k}:{v}' for k, v in sorted(self.origins.items()))}}}")
+
+
+def apply_page_plan(plan: PagePlan, tally: SeedTally, dry_run: bool) -> None:
+    """Publish one page: our frontmatter, then the body bytes verbatim.
+
+    `newline="\\n"` is not enough — the payload is assembled as bytes, so no layer
+    between here and the disk can decide to rewrite a line ending inside the prose.
+    The post-write `endswith(plan.body)` is the per-file sha256 reconciliation
+    spec §12 asks for: it fails if the body that landed differs from the body that
+    was planned, whichever step did it.
+    """
+    payload = emit_frontmatter(plan.fm).encode("utf-8") + plan.body
+    tally.checked += 1
+    tally.origins[plan.origin] = tally.origins.get(plan.origin, 0) + 1
+    if not plan.fm["sources"]:
+        tally.no_sources += 1
+    if plan.reworded:
+        tally.reworded += 1
+        tally.reword_names.append(plan.label)
+    if plan.target.is_file() and plan.target.read_bytes() == payload:
+        tally.skipped += 1
+        return
+    if dry_run:
+        tally.written += 1
+        return
+    plan.target.parent.mkdir(parents=True, exist_ok=True)
+    plan.target.write_bytes(payload)
+    if not plan.target.read_bytes().endswith(plan.body):
+        tally.mismatched += 1
+    else:
+        tally.written += 1
+
+
+def copy_ledger(legacy: Path, dry_run: bool) -> tuple[int, str]:
+    src = legacy / "update" / "ledger.jsonl"
+    if not src.is_file():
+        raise RuntimeError(f"ledger missing from the export: {src}")
+    data = src.read_bytes()
+    rows = [line for line in data.decode("utf-8").splitlines() if line.strip()]
+    if not dry_run:
+        (WIKI / "ledger.jsonl").write_bytes(data)
+        if (WIKI / "ledger.jsonl").read_bytes() != data:
+            raise RuntimeError("ledger copy is not byte-identical")
+    return len(rows), hashlib.sha256(data).hexdigest()[:12]
+
+
+def cmd_seed(args: argparse.Namespace) -> int:
+    legacy = Path(args.from_root)
+    if not legacy.is_absolute():
+        legacy = REPO / legacy
+    if wiki_root.layout != "repo":
+        print(
+            f"refusing to seed into an ide-layout root ({legacy}): the target tree is "
+            "the tracked publication, not the export",
+            file=sys.stderr,
+        )
+        return 2
+    snapshot = args.snapshot or metadata_baseline(
+        legacy / "zh" / "meta" / "repowiki-metadata.json")
+    if not snapshot or not HEX40_RE.match(snapshot):
+        print(
+            f"seed snapshot commit unavailable at {legacy}: pass --snapshot <40-hex>",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        plans = (plan_topics(legacy, snapshot)
+                 + plan_knowledge(legacy / LEGACY_KNOWLEDGE, snapshot))
+    except RuntimeError as exc:
+        print(f"seed plan failed: {exc}", file=sys.stderr)
+        return 2
+    tally = SeedTally()
+    for plan in plans:
+        apply_page_plan(plan, tally, not args.apply)
+    rows, digest = copy_ledger(legacy, not args.apply)
+    print(("" if args.apply else "dry-run: nothing written\n") + tally.line())
+    print(f"ledger_rows={rows} ledger_sha={digest} snapshot={snapshot} target={WIKI}")
+    if tally.reword_names:
+        print("reworded: " + ", ".join(tally.reword_names))
+    if not args.apply:
+        print("pass --apply to publish")
+    return 0 if tally.mismatched == 0 else 1
+
+
+# ---------------------------------------------------------------------------
 # ledger
 # ---------------------------------------------------------------------------
 
@@ -2027,10 +2143,23 @@ def main(argv: Iterable[str] | None = None) -> int:
     reanchor.add_argument("--baseline", help="override the wiki snapshot commit (40-hex)")
     reanchor.set_defaults(func=cmd_reanchor)
 
+    seed = sub.add_parser(
+        "seed",
+        help="one-shot: publish the IDE export into the tracked tree "
+             "(dry-run unless --apply; idempotent; reconciles every body byte)",
+    )
+    seed.add_argument("--from", dest="from_root", default=LEGACY_EXPORT,
+                      help="legacy export root (default %(default)s)")
+    seed.add_argument("--snapshot",
+                      help="40-hex commit the export was generated at "
+                           "(default: read from its metadata once, then never again)")
+    seed.add_argument("--apply", action="store_true", help="write; without it, plan and report only")
+    seed.set_defaults(func=cmd_seed)
+
     # The same flag, also accepted after the verb. SUPPRESS is what makes the two
     # positions coexist: without a default of its own the subparser cannot overwrite
     # a value the top-level parser already read.
-    for parser_ in (rep, mark, reanchor):
+    for parser_ in (rep, mark, reanchor, seed):
         parser_.add_argument(
             "--wiki-root",
             default=argparse.SUPPRESS,
