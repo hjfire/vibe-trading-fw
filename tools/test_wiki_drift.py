@@ -3133,14 +3133,15 @@ def test_pine_engine_faces_are_grounded_in_real_files():
 
 
 def test_pine_engine_is_the_seventh_module_and_faces_are_complete():
-    """CONTROLLER RULING 1: the brief asserted `slugs == {"pine-engine"} | set(
-    MODULE_SLUGS.values())` (7 dirs), but the other 6 module dirs are published only
-    by the real seed in Task 10, which has not run — at Task 8 `pine-engine` is the
-    sole directory. Narrowed to a 1-slug equality that still goes red on a stray or
-    misnamed sibling dir or a missing face; Task 10 widens it back to the 7-slug set."""
+    """CONTROLLER RULING 4 (Task 10 widening): this asserted a 1-slug equality at
+    Task 8 because the other 6 module dirs were published only by the real seed,
+    which had not run. Now that the seed has landed, `repowiki/modules/` holds all
+    7 — `pine-engine` (hand-authored) plus the 6 slugs `MODULE_SLUGS` maps — and
+    this is the full 7-slug equality, i.e. the post-seed state. A stray or misnamed
+    sibling dir, or a missing face in any one of them, goes red here."""
     base = REAL_REPO / "repowiki" / "modules"
     slugs = {p.name for p in base.iterdir() if p.is_dir()}
-    assert slugs == {"pine-engine"}, slugs
+    assert slugs == {"pine-engine"} | set(wiki_drift.MODULE_SLUGS.values()), slugs
     for slug in slugs:
         assert sorted(p.name for p in (base / slug).glob("*.md")) == \
             sorted(f"{f}.md" for f in PINE_FACES), slug
@@ -3157,6 +3158,29 @@ def test_seed_does_not_touch_hand_authored_pages(tmp_path, monkeypatch):
                                          cards={"业务术语表": "glossary"}))
     assert not [p for p in plans if "pine-engine" in p.label]
     assert target.is_dir()  # the fixture really is the export this plan reads
+
+
+def test_seeded_tree_is_not_an_empty_set():
+    """'All 494 pages parsed' over a directory holding 1 README is the exact false
+    green this repo has now documented three times.
+
+    CONTROLLER RULING 1: scope to the three PAGE directories rather than
+    name-excluding. The brief's `{README.md, INDEX.md}` exclusion set is not enough
+    for the tree this task creates, because `repowiki/drift/DRIFT.md` is also not a
+    wiki page (and has no frontmatter) — name-excluding would count it and land it
+    in `missing`. Dir-scoping excludes all three for the right reason: a top-level
+    file has `parts[0] == "README.md"`, and a report has `parts[0] == "drift"`."""
+    tree = REAL_REPO / "repowiki"
+    pages = sorted(p for p in tree.rglob("*.md")
+                   if p.relative_to(tree).parts[0] in {"topics", "modules", "cards"})
+    assert len(pages) == 494, len(pages)          # 450 topics + 35 module faces + 9 cards
+    with_sources = [p for p in pages if (wiki_drift.read_frontmatter(p) or {}).get("sources")]
+    assert len(with_sources) == 463, len(with_sources)   # 494 − 31 measured no_sources
+    missing = [p for p in pages if wiki_drift.read_frontmatter(p) is None]
+    assert missing == [], missing[:3]
+    blocks = [wiki_drift.split_frontmatter(wiki_drift.read_page_text(p))[0] for p in pages]
+    assert all(fm and fm["verified_at"] and fm["page"] for fm in blocks), "every page carries a baseline"
+    assert sum(1 for fm in blocks if fm["vouch"] == "all") == 0, "seeding is not a re-reading"
 
 
 # ---------------------------------------------------------------------------
