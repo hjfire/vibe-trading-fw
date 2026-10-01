@@ -34,7 +34,7 @@ vouch: applied-only
 | 对外 API | `pineScript.ts` | `compilePine(code, dataList, opts?) → PineArtifact \| PineFailure`、`toArtifact`、`isPineStrategy`、`validatePine` |
 | 内置 | `pineTa.ts`、`pineMath.ts` | `ta.*` 状态机与 `math.*`/`str.*`/casts 等纯函数表 |
 | 复合值 | `pineArray.ts`、`pineMap.ts`、`pineMatrix.ts` | `array.*`/`map.*`/`matrix.*` 命名空间（复用 `V[]` 的原地可变引用对象） |
-| 交易与绘图 | `pineOrders.ts`、`pineDrawings.ts` | `strategy.*` 撮合模拟、`plot`/`line`/`label`/`box` 的 overlay 渲染 |
+| 交易与绘图 | `pineOrders.ts`、`pineDrawings.ts` | `strategy.*` 撮合模拟；`pineDrawings.ts` 把 `line`/`label`/`box`/`fill`/`table` 等绘图原语注册成 KLineChart overlay（`plot` 线不走这里，由 `pineScript.toArtifact` 直接产 chart figures） |
 | 多周期 | `pineResample.ts` | `request.security` 与 `timeframe.*` 的时间戳聚合 |
 | 桥接 | `pineSignal.ts` | 把策略的逐根持仓列导出给后端 SignalEngine 的查找引擎 |
 
