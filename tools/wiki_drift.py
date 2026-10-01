@@ -253,6 +253,10 @@ class LedgerEntry:
     drivers: list[str] = field(default_factory=list)
     partial: bool = False
     applied: list[str] = field(default_factory=list)
+    # What the stamp vouches for on the *anchor* axis: `all` means every cite on
+    # the page is current at `head`, `applied-only` means just the ones listed in
+    # `applied` are, and the rest keep their page baseline.
+    cites: str = "applied-only"
 
 
 def load_ledger() -> dict[str, LedgerEntry]:
@@ -279,6 +283,9 @@ def load_ledger() -> dict[str, LedgerEntry]:
                 drivers=list(row.get("drivers") or []),
                 partial=bool(row.get("partial")),
                 applied=list(row.get("applied") or []),
+                # Rows written before the vouch-scope field existed all came from
+                # `reanchor --apply`, which only ever moved the anchors it names.
+                cites=row.get("cites") or "applied-only",
             )
     return latest
 
@@ -873,10 +880,10 @@ def ref_base(ref: Ref, cite_base: str | None, entry: LedgerEntry | None) -> tupl
     """Which slice of history a single cite was written against.
 
     ``cite_base`` is that answer for the page as a whole: the baseline the anchors
-    were authored against, or the head a links-only stamp was signed at, since
-    such a stamp says every cite was brought current there. An anchor this tool
-    moved itself is an exception — its coordinate is only meaningful against the
-    HEAD its own stamp recorded, which is usually further along. Reading either
+    were authored against, or, when a stamp vouches for every cite on the page
+    (``cites: all``), the head it was signed at. An anchor this tool moved itself
+    is an exception — its coordinate is only meaningful against the HEAD its own
+    stamp recorded, which is usually further along. Reading either
     one against an older window diffs the wrong lines of history and walks the
     link further down the file on every run.
 
@@ -941,6 +948,9 @@ def stamp_links(
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "drivers": drivers,
         "applied": sorted({*(prior.applied if prior else []), *moved}),
+        # This stamp only vouches for the anchors it actually re-pointed. Says so
+        # in the row, so a later pass cannot read the whole page as current.
+        "cites": "applied-only",
     }
     if not (prior_reconciled and not moved):
         entry["partial"] = True
@@ -1012,12 +1022,22 @@ def cmd_reanchor(args: argparse.Namespace) -> int:
         # re-point an already-current page onto stale text.
         base, provenance = effective_base(page, rel, ledger, fallback)
         entry = ledger.get(rel)
-        # A links-only stamp says every cite was brought current at the head it
-        # was signed at, so the shift pass diffs anchors against that head — while
-        # `report` keeps diffing against the snapshot, which is what leaves the
-        # page's prose drivers open.
+        # A stamp that vouches for *every* cite (a hand `mark --partial`) says the
+        # anchors were brought current at its head, so the shift pass diffs them
+        # against that head — while `report` keeps diffing against the snapshot,
+        # which is what leaves the page's prose drivers open. A links-only stamp
+        # from this tool vouches only for the anchors in its `applied` list, and
+        # those are handled one by one in `ref_base`; promoting the whole page on
+        # its strength would read the cites it could not resolve as already
+        # current and drop them off the judgement queue.
         cite_base = base
-        if args.shifts and provenance == "partial" and entry and rev_reachable(entry.head):
+        if (
+            args.shifts
+            and provenance == "partial"
+            and entry
+            and entry.cites == "all"
+            and rev_reachable(entry.head)
+        ):
             cite_base = entry.head
         moved: list[str] = []
         every = {r for r in parse_refs(page)}
@@ -1250,6 +1270,9 @@ def cmd_mark(args: argparse.Namespace) -> int:
         "note": args.message or "",
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "drivers": drivers,
+        # A hand stamp is signed by whoever read the page, so it vouches for every
+        # cite on it, not just the handful an automated pass happened to move.
+        "cites": "all",
     }
     if args.partial:
         entry["partial"] = True

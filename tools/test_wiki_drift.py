@@ -956,7 +956,10 @@ def test_an_anchor_the_tool_moved_is_not_walked_by_the_next_run(tmp_path, monkey
     assert main(["reanchor", "--page", "平移测试", "--shifts"]) == 0
     out = capsys.readouterr().out
     assert "PROPOSE" not in out and " -> " not in out
-    assert "2 already on their line" in out
+    # Only the anchor this tool moved is vouched as current; the two it gave up on
+    # stay in the queue, so a second pass counts one, not three, as settled.
+    assert "1 already on their line" in out
+    assert "src/gate.py#6-7" not in out
     assert page.read_text(encoding="utf-8") == written
 
 
@@ -968,10 +971,48 @@ def test_apply_signs_the_anchors_it_moved_as_partial_work(tmp_path, monkeypatch,
     assert "1 page(s) re-stamped as links-only" in capsys.readouterr().out
     row = _ledger_rows(ctx)[-1]
     assert row["partial"] is True
+    assert row["cites"] == "applied-only"
     assert row["applied"] == ["src/gate.py#L6-L7"]
     assert row["sha_after"] == wiki_drift.sha256(page)
     assert row["drivers"] == ["src/gate.py"]
     assert row["head"] == _git(ctx["root"], "rev-parse", "HEAD").strip()
+
+
+def test_a_stamp_does_not_blind_the_tool_to_the_cites_it_left_open(tmp_path, monkeypatch, capsys):
+    """An unresolved cite has to outlive the sweep that rewrote its neighbours.
+
+    A links-only stamp vouches for the anchors this tool moved. The ones it gave
+    up on are still written against the snapshot, and re-deriving those against
+    the stamp head makes each one match itself: the judgement queue would empty
+    without anybody having judged it.
+    """
+    ctx = _build_shift_repo(tmp_path / "s26", monkeypatch)
+    assert main(["reanchor", "--page", "平移测试", "--shifts", "--apply"]) == 0
+    first = capsys.readouterr().out
+    assert "block-changed" in first
+
+    assert main(["reanchor", "--page", "平移测试", "--shifts"]) == 0
+    out = capsys.readouterr().out
+    assert "block-changed" in out and "src/gate.py#5-7" in out
+
+
+def test_a_ledger_row_from_before_the_vouch_field_vouches_for_nothing(tmp_path, monkeypatch, capsys):
+    """Rows written by an earlier build carry no `cites` key at all.
+
+    They must read as links-only: defaulting them to `all` would keep the 40 pages
+    the pilot sweep already stamped exactly as blind as the bug being fixed here.
+    """
+    ctx = _build_shift_repo(tmp_path / "s27", monkeypatch)
+    assert main(["reanchor", "--page", "平移测试", "--shifts", "--apply"]) == 0
+    row = dict(_ledger_rows(ctx)[-1])
+    row.pop("cites")
+    ledger = ctx["root"] / ".qoder" / "repowiki" / "update" / "ledger.jsonl"
+    ledger.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["reanchor", "--page", "平移测试", "--shifts"]) == 0
+    out = capsys.readouterr().out
+    assert "block-changed" in out and "src/gate.py#5-7" in out
 
 
 def test_an_anchor_the_tool_moved_moves_again_when_the_file_grows(tmp_path, monkeypatch, capsys):
@@ -1217,6 +1258,7 @@ def test_a_partial_stamp_reads_hand_fixed_anchors_as_current(tmp_path, monkeypat
         encoding="utf-8",
     )
     assert main(["mark", "--page", "平移测试.md", "--partial", "-m", "anchors re-derived by hand"]) == 0
+    assert _ledger_rows(ctx)[-1]["cites"] == "all"
     capsys.readouterr()
 
     assert main(["reanchor", "--page", "平移测试", "--shifts"]) == 0
