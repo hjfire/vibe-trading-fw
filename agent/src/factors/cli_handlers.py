@@ -552,8 +552,15 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
     from ``src.tools.alpha_bench_tool`` (we do NOT modify that module).
     """
     try:
-        if (getattr(args, "oos_split", None) or getattr(args, "random_seeds", 5) != 5) and not getattr(args, "strict", False):
-            _err("alpha bench: --oos-split/--random-seeds only take effect with --strict.")
+        if (
+            getattr(args, "oos_split", None)
+            or getattr(args, "training_cutoff", None)
+            or getattr(args, "random_seeds", 5) != 5
+        ) and not getattr(args, "strict", False):
+            _err(
+                "alpha bench: --oos-split/--training-cutoff/--random-seeds "
+                "only take effect with --strict."
+            )
             return 1
         # Read once, carried everywhere: the panel source decides where every
         # number in this run came from, so it must not be re-derived per call.
@@ -567,6 +574,7 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
                     random_control=True,
                     n_random_seeds=max(1, int(getattr(args, "random_seeds", 5) or 5)),
                     oos_split=getattr(args, "oos_split", None),
+                    training_cutoff=getattr(args, "training_cutoff", None),
                 )
             else:
                 from src.factors.bench_runner import run_bench
@@ -610,7 +618,13 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
 
         strict_banner = (
             " [strict: random control"
-            + (f", oos {args.oos_split}" if getattr(args, "oos_split", None) else "")
+            + (
+                f", OOS after {args.training_cutoff}"
+                if getattr(args, "training_cutoff", None)
+                else f", oos {args.oos_split}"
+                if getattr(args, "oos_split", None)
+                else ""
+            )
             + "]"
             if getattr(args, "strict", False)
             else ""
@@ -788,6 +802,8 @@ def cmd_alpha_bench(args: argparse.Namespace) -> int:
                     envelope[key] = result[key]
             if result.get("oos_split") is not None:
                 envelope["oos_split"] = result["oos_split"]
+            if result.get("training_cutoff") is not None:
+                envelope["training_cutoff"] = result["training_cutoff"]
         if universe_meta:
             envelope["meta"] = universe_meta
         if report_path is not None:
@@ -1059,6 +1075,15 @@ def add_subparser(subparsers: Any) -> argparse.ArgumentParser:
         default=None,
         metavar="YYYY-MM-DD",
         help="Strict mode only: split train/test at this date for the OOS confirmation gate",
+    )
+    p_bench.add_argument(
+        "--training-cutoff",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "Strict mode only: use this model training cutoff as the "
+            "train/test boundary"
+        ),
     )
     p_bench.add_argument(
         "--random-seeds",
