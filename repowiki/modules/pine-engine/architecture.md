@@ -22,7 +22,7 @@ vouch: applied-only
 2. **求值** — `pineRuntime.ts`：`runPine(src, bars, opts?) → PineResult`，逐 bar 跑语句表，维护变量历史、输入、输出收集与 `ENUM_NS` 常量识别。
 3. **内置** — `pineTa.ts`（`ta.*` 状态机）与 `pineMath.ts`（`math.*`/`str.*`/casts/日期/颜色的纯函数表）。
 4. **绘图 / 撮合** — `pineDrawings.ts`（把 `drawings` 变 KLineChart overlay）与 `pineOrders.ts`（`strategy.*` 成交模拟，独立于 bar 循环以便单测）。
-5. **对外 API / 挂载** — `pineScript.ts` 是唯一被 UI 直接调用的模块；把结果落到图表的挂载点在 `indicatorLang.ts`（见第 5 节）。
+5. **对外 API / 挂载** — `pineScript.ts` 是唯一被 UI 直接调用的执行入口（组件侧另有只从 `pineTypes.ts` 取类型的，如 `workbench/ReportTab.tsx` 的 `PineReport`）；把结果落到图表的挂载点在 `indicatorLang.ts`（见第 5 节）。
 
 ## 2. 逐 bar 求值与历史缓冲
 

@@ -12,7 +12,7 @@ vouch: applied-only
 ---
 # Pine 兼容引擎总览
 
-前端自研的 TradingView Pine v5/v6 兼容层：导入 `.pine` 源码，按 Pine 的「逐根 K 线」语义求值，把线、标记、参考线与交易画进 KLineChart v10，并把「脚本自己算出的策略报告」与「后端回测口径」严格分开。本模块是知识树里唯一一页 Pine——导出快照里没有它，正文只写 `frontend/src/lib/pine*.ts` 与其 `__tests__` 里读得到的事实。
+前端自研的 TradingView Pine v5/v6 兼容层：导入 `.pine` 源码，按 Pine 的「逐根 K 线」语义求值，把线、标记与参考线画进 KLineChart v10（`pineScript.ts` 的 `toArtifact` 只从 `result.lines`/`markers`/`hlines` 生成图表 figure），策略成交不画进图表——它们作为 `PineReport.trades` 报告表格单独呈现（`workbench/ReportTab.tsx`）。同时把「脚本自己算出的策略报告」与「后端回测口径」严格分开。本模块是知识树里唯一一页 Pine——导出快照里没有它，正文只写 `frontend/src/lib/pine*.ts` 与其 `__tests__` 里读得到的事实。
 
 ## 1. 它是什么、不是什么
 
@@ -38,4 +38,4 @@ vouch: applied-only
 | 多周期 | `pineResample.ts` | `request.security` 与 `timeframe.*` 的时间戳聚合 |
 | 桥接 | `pineSignal.ts` | 把策略的逐根持仓列导出给后端 SignalEngine 的查找引擎 |
 
-细节见 `modules/pine-engine/` 其余四面；对外入口以 `pineScript.ts` 为唯一被 UI 直接调用的模块。
+细节见 `modules/pine-engine/` 其余四面；对外入口以 `pineScript.ts` 为唯一被 UI 直接调用的执行入口（UI 侧另有组件只从 `pineTypes.ts` 取类型，如 `workbench/ReportTab.tsx` 的 `PineReport`）。

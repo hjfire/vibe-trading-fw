@@ -20,7 +20,7 @@ vouch: applied-only
 cd frontend && npx.cmd vitest run src/lib/__tests__
 ```
 
-Windows 的 PowerShell 5.1 要写 `npx.cmd`（`npx` 不带扩展名可能命中不到、或被解析到无发行版的 WSL，表现为「像跑了又红了」的假信号）。`vitest` 是 devDependency，`package.json` 的 `test` 脚本即 `vitest run`；只跑某支用 `-t` 加测试名片段即可。
+Windows 的 PowerShell 5.1 要写 `npx.cmd`（`npx` 不带扩展名可能命中不到、或被解析到无发行版的 WSL，表现为「像跑了又红了」的假信号）。`vitest` 是 devDependency：`package.json` 里 **`test:run` 才是 `vitest run`**（`test:coverage` = `vitest run --coverage`），裸 `test` 脚本是 watch 模式的 `vitest`、不会自己退出，所以要一次性过套件就用上面的 `vitest run` 原命令或 `npm run test:run`；只跑某支用 `-t` 加测试名片段即可。
 
 ## 2. 三闸对账
 
