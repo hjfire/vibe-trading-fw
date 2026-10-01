@@ -1633,6 +1633,8 @@ def test_wiki_root_flag_is_accepted_on_either_side_of_the_verb(tmp_path, monkeyp
 
 
 def test_empty_tree_is_an_error_not_a_green(tmp_path, monkeypatch, capsys):
+    """Zero pages must not read as zero problems: an empty set that passes every
+    assertion is this repo's known false green."""
     root = tmp_path / "repo"
     (root / "repowiki").mkdir(parents=True)  # README only, no topics/
     monkeypatch.setattr(wiki_drift, "REPO", root)
@@ -1651,3 +1653,123 @@ def test_empty_tree_is_an_error_not_a_green(tmp_path, monkeypatch, capsys):
     assert main(["report"]) == 2
     err = capsys.readouterr().err
     assert "no wiki pages" in err and "--wiki-root" in err
+
+
+# ---------------------------------------------------------------------------
+# frontmatter: the per-page baseline, and the hash that must survive adding it
+# ---------------------------------------------------------------------------
+
+FM_SAMPLE = (
+    "---\n"
+    'page: "回测引擎/投资组合优化器/最大分散化优化器.md"\n'
+    "sources:\n"
+    '  - "agent/backtest/optimizers/max_diversification.py"\n'
+    '  - "agent/backtest/constraints.py"\n'
+    'verified_at: "0000000000000000000000000000000000000000"\n'
+    "anchors: verified\n"
+    "vouch: applied-only\n"
+    "---\n"
+    "# 最大分散化优化器\n\n<cite>\n- [x](file://agent/backtest/constraints.py#L1-L9)\n</cite>\n"
+)
+
+
+def test_split_frontmatter_keeps_body_bytes_intact():
+    fm, body = wiki_drift.split_frontmatter(FM_SAMPLE)
+    assert fm["page"] == "回测引擎/投资组合优化器/最大分散化优化器.md"
+    assert fm["sources"] == [
+        "agent/backtest/optimizers/max_diversification.py",
+        "agent/backtest/constraints.py",
+    ]
+    assert fm["anchors"] == "verified" and fm["vouch"] == "applied-only"
+    assert fm["verified_at"] == "0" * 40
+    assert body.startswith("# 最大分散化优化器")
+    assert "<cite>" in body
+
+
+def test_pages_without_frontmatter_are_unaffected(tmp_path):
+    plain = tmp_path / "plain.md"
+    plain.write_text("# 标题\n正文\n", encoding="utf-8")
+    assert wiki_drift.parse_frontmatter(plain.read_text(encoding="utf-8")) is None
+    assert wiki_drift.body_sha(plain) == wiki_drift.sha256(plain)
+
+
+def test_body_hash_is_byte_faithful_on_a_crlf_checkout(tmp_path):
+    """core.autocrlf=true makes this repo's working copy CRLF. A body hash built from
+    newline-translated text would not match the bytes on disk, so every existing
+    ledger row would read `ledger-void` the moment frontmatter is seeded — the exact
+    regression body_sha exists to avoid. The suite caught this on the first run."""
+    page = tmp_path / "crlf.md"
+    page.write_bytes(
+        "# 标题\r\n\r\n<cite>\r\n- [x](file://a.py#L1-L2)\r\n</cite>\r\n".encode("utf-8")
+    )
+    old = wiki_drift.sha256(page)
+    assert wiki_drift.body_sha(page) == old
+    assert wiki_drift.read_frontmatter(page) is None
+    wiki_drift.update_frontmatter(page, anchors="verified")
+    assert wiki_drift.body_sha(page) == old, "seeding frontmatter must not void the stamp"
+    assert "\r\n" in wiki_drift.body_text(page), "the body keeps its own line endings"
+    assert wiki_drift.read_frontmatter(page)["anchors"] == "verified"
+
+
+def test_ledger_hash_survives_seeding_frontmatter(tmp_path):
+    """The load-bearing property: adding frontmatter must not void the 426 existing
+    ledger rows, because they hash the body and seeding keeps the body byte-exact."""
+    legacy = tmp_path / "legacy.md"
+    legacy.write_text("# 标题\n\n<cite>\n- [x](file://a.py#L1-L2)\n</cite>\n", encoding="utf-8")
+    old_sha = wiki_drift.sha256(legacy)
+    seeded = tmp_path / "seeded.md"
+    seeded.write_text(
+        wiki_drift.emit_frontmatter(
+            {
+                "page": "主题/页.md",
+                "sources": ["a.py"],
+                "verified_at": "0" * 40,
+                "anchors": "open",
+                "vouch": "applied-only",
+            }
+        )
+        + legacy.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    assert wiki_drift.body_sha(seeded) == old_sha
+    assert wiki_drift.sha256(seeded) != old_sha
+
+
+def test_emit_then_read_roundtrip(tmp_path):
+    page = tmp_path / "p.md"
+    original = "# 标题\n正文\n"
+    page.write_text(original, encoding="utf-8", newline="\n")
+    fm = wiki_drift.update_frontmatter(
+        page,
+        page="主题/页.md",
+        sources=["b.py", "a.py"],
+        verified_at="f" * 40,
+        anchors="verified",
+        vouch="all",
+    )
+    assert fm["sources"] == ["b.py", "a.py"]  # cite order preserved, not sorted
+    assert wiki_drift.read_frontmatter(page) == fm
+    assert wiki_drift.body_text(page) == original
+
+
+def test_update_frontmatter_is_idempotent_and_order_stable(tmp_path):
+    page = tmp_path / "p.md"
+    page.write_text("# 标题\n正文\n", encoding="utf-8")
+    first = wiki_drift.update_frontmatter(page, anchors="verified")
+    after_first = page.read_text(encoding="utf-8")
+    wiki_drift.update_frontmatter(page, anchors="verified")
+    assert page.read_text(encoding="utf-8") == after_first
+    assert list(first) == ["page", "sources", "verified_at", "anchors", "vouch"]
+    assert "sources: []" in after_first  # empty list must parse back as a list
+
+
+def test_frontmatter_baseline_only_accepts_a_reachable_full_sha(tmp_path):
+    page = tmp_path / "p.md"
+    page.write_text("# 标题\n", encoding="utf-8")
+    assert wiki_drift.frontmatter_baseline(page) is None
+    wiki_drift.update_frontmatter(page, verified_at="abc123")  # not 40 hex
+    assert wiki_drift.frontmatter_baseline(page) is None
+    good = "0123456789abcdef" * 2 + "01234567"  # exactly 40 hex
+    assert len(good) == 40
+    wiki_drift.update_frontmatter(page, verified_at=good)
+    assert wiki_drift.frontmatter_baseline(page) == good

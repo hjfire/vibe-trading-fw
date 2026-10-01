@@ -340,6 +340,152 @@ def sha256(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# page frontmatter: the baseline that travels with the page
+# ---------------------------------------------------------------------------
+#
+# Written by hand, not by a YAML library. The shape is fixed (five keys, one list)
+# and gate (a) of the repo's own CI is about `yaml.load`, so pulling a parser in
+# would buy nothing. Scalars are emitted as JSON-quoted strings — valid YAML, and
+# it keeps CJK paths and `/` unescaped — and the one flow form this emitter
+# produces, `[]`, is read back as an empty list.
+
+FM_KEYS = ("page", "sources", "verified_at", "anchors", "vouch")
+FM_BLOCK_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
+FM_LIST_ITEM_RE = re.compile(r"^[ \t]+-[ \t]+(.*)$")
+FM_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(.*)$")
+HEX40_RE = re.compile(r"\A[0-9a-f]{40}\Z", re.IGNORECASE)
+
+
+def _fm_scalar(raw: str) -> str | list:
+    """One YAML scalar this emitter can produce: a JSON-quoted string, a bare
+    token, or the empty flow list `[]`."""
+    raw = raw.strip()
+    if raw == "[]":
+        return []
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
+        if raw[0] == '"':
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return raw[1:-1]
+        return raw[1:-1]
+    return raw
+
+
+def read_page_text(page: Path) -> str:
+    """Page text with the file's own line endings intact.
+
+    `newline=""` is the whole point. This checkout is CRLF (core.autocrlf=true), and
+    universal-newline reading would turn every `\r\n` in the prose into `\n` before
+    hashing it — so the body hash would not match the bytes on disk, and all 426
+    existing ledger rows would read `ledger-void` on the first report after M2.
+    """
+    with page.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+        return handle.read()
+
+
+def split_frontmatter(text: str) -> tuple[dict | None, str]:
+    """``(frontmatter-or-None, body)``.
+
+    The body is what the ledger hashes, which is the only reason adding
+    frontmatter does not void the 426 existing stamps.
+    """
+    match = FM_BLOCK_RE.match(text)
+    if not match:
+        return None, text
+    fm: dict = {}
+    pending: str | None = None
+    for line in match.group(1).splitlines():
+        if not line.strip():
+            continue
+        item = FM_LIST_ITEM_RE.match(line)
+        if item and pending:
+            fm.setdefault(pending, []).append(_fm_scalar(item.group(1)))
+            continue
+        kv = FM_KV_RE.match(line)
+        if not kv:
+            continue
+        key, value = kv.group(1), kv.group(2).strip()
+        if value:
+            fm[key] = _fm_scalar(value)
+            pending = None
+        else:
+            pending = key
+            fm.setdefault(key, [])
+    return fm, text[match.end():]
+
+
+def parse_frontmatter(text: str) -> dict | None:
+    return split_frontmatter(text)[0]
+
+
+def read_frontmatter(page: Path) -> dict | None:
+    return parse_frontmatter(read_page_text(page))
+
+
+def body_text(page: Path) -> str:
+    return split_frontmatter(read_page_text(page))[1]
+
+
+def body_sha(page: Path) -> str:
+    """Hash of the prose bytes, frontmatter excluded.
+
+    `sha_after` in the ledger means this: a page can gain or update frontmatter
+    without its reconciliation claim dissolving, while a hand edit to the prose
+    still voids it (the `ledger-void` path). A page with no frontmatter hashes to
+    exactly what `sha256(page)` returns, which is what keeps the pre-M1 stamps.
+    """
+    return hashlib.sha256(body_text(page).encode("utf-8")).hexdigest()
+
+
+def emit_frontmatter(fm: dict) -> str:
+    lines = ["---", f"page: {json.dumps(fm.get('page', ''), ensure_ascii=False)}"]
+    sources = list(fm.get("sources") or [])
+    if sources:
+        lines.append("sources:")
+        lines += [f"  - {json.dumps(s, ensure_ascii=False)}" for s in sources]
+    else:
+        lines.append("sources: []")
+    lines.append(f"verified_at: {json.dumps(fm.get('verified_at', ''), ensure_ascii=False)}")
+    lines.append(f"anchors: {fm.get('anchors', 'open')}")
+    lines.append(f"vouch: {fm.get('vouch', 'applied-only')}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
+
+def update_frontmatter(target: Path, **fields) -> dict:
+    """Merge `fields` into the page's frontmatter, creating the block if absent.
+
+    The file argument is `target`, not `page`: `page` is one of the five keys, and
+    a parameter named after a field would make that field impossible to set.
+
+    Key order is fixed to FM_KEYS and empty values are written explicitly, so a
+    page rewritten twice stays byte-identical — a generator that touches pages must
+    be diffable or its own output looks like an edit.
+    """
+    fm, body = split_frontmatter(read_page_text(target))
+    merged = dict(fm or {})
+    merged.update({k: v for k, v in fields.items() if v is not None})
+    merged.setdefault("page", target.name)
+    merged.setdefault("sources", [])
+    merged.setdefault("verified_at", "")
+    merged.setdefault("anchors", "open")
+    merged.setdefault("vouch", "applied-only")
+    ordered = {k: merged[k] for k in FM_KEYS}
+    target.write_text(emit_frontmatter(ordered) + body, encoding="utf-8", newline="\n")
+    return ordered
+
+
+def frontmatter_baseline(page: Path) -> str | None:
+    """The page's own `verified_at`, or None when it is absent/unusable."""
+    fm = read_frontmatter(page)
+    if not fm:
+        return None
+    rev = str(fm.get("verified_at") or "").strip()
+    return rev if HEX40_RE.match(rev) else None
+
+
+# ---------------------------------------------------------------------------
 # ledger
 # ---------------------------------------------------------------------------
 
@@ -408,7 +554,7 @@ def effective_base(
     """
     entry = ledger.get(rel)
     if entry and entry.head and entry.sha_after:
-        if sha256(page) != entry.sha_after:
+        if body_sha(page) != entry.sha_after:
             return fallback, "ledger-void"
         if entry.partial:
             return fallback, "partial"
@@ -1044,7 +1190,7 @@ def stamp_links(
     entry = {
         "page": rel,
         "head": git("rev-parse", "HEAD").strip(),
-        "sha_after": sha256(page),
+        "sha_after": body_sha(page),
         "note": (prior.note if prior else "") or "links only: anchors re-pointed by `reanchor --apply`",
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "drivers": drivers,
@@ -1197,7 +1343,7 @@ def cmd_reanchor(args: argparse.Namespace) -> int:
             # Read the page's state before this write overwrites it: an entry that
             # still hashes to the page and was signed reconciled says the prose is
             # done, and a label-only fix must not take that claim back.
-            reconciled = bool(entry and not entry.partial and entry.sha_after == sha256(page))
+            reconciled = bool(entry and not entry.partial and entry.sha_after == body_sha(page))
             page.write_text(text, encoding="utf-8", newline="\n")
             signed = stamp_links(page, rel, fallback, entry, moved, reconciled)
             stamped += 1
@@ -1376,7 +1522,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
     entry = {
         "page": rel,
         "head": head,
-        "sha_after": sha256(page),
+        "sha_after": body_sha(page),
         "note": args.message or "",
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "drivers": drivers,
