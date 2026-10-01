@@ -726,6 +726,97 @@ def plan_topics(legacy: Path, snapshot: str) -> list[PagePlan]:
     return plans
 
 
+def plan_knowledge(
+    kb: Path,
+    snapshot: str,
+    modules: "dict[str, str] | None" = None,
+    cards: "dict[str, str] | None" = None,
+) -> list[PagePlan]:
+    """The aggregation layer: 6 module dirs x 5 faces + 9 repo-level cards.
+
+    Module faces carry no `<cite>` block at all (measured: 0 `file://` refs in the
+    whole knowledge tree), so their `sources` is honestly empty — a page whose
+    evidence base nobody recorded must not be given one by the generator. Cards
+    publish their IDE metadata alongside our five keys.
+
+    `modules`/`cards` are parameters rather than constants so a test can feed a
+    small table; production reads `MODULE_SLUGS`/`CARD_SLUGS`. Both directions of
+    the mapping are checked, because the reconciliation rule for the migration is
+    that every source dir is claimed exactly once: an on-disk dir with no slug is a
+    page nobody seeds, and a slug with no dir is a published path pointing at
+    nothing. Card dirs are told apart from module dirs by the absence of
+    `_module.yaml`, which is what keeps the module *root* — the one dir that is a
+    module and sits at the top level — from being read as an unmapped card.
+    """
+    modules = MODULE_SLUGS if modules is None else modules
+    cards = CARD_SLUGS if cards is None else cards
+    plans: list[PagePlan] = []
+
+    found_mods = {str(p.parent.relative_to(kb)).replace("\\", "/")
+                  for p in kb.rglob("_module.yaml")}
+    unmapped = sorted(found_mods - set(modules))
+    if unmapped:
+        raise RuntimeError(f"unmapped module dirs: {unmapped}")
+    for dir_rel, slug in sorted(modules.items()):
+        mod = kb / dir_rel
+        if not mod.is_dir():
+            raise RuntimeError(f"module dir missing: {dir_rel}")
+        for face_src, face_dst in sorted(FACE_NAMES.items()):
+            src = mod / face_src
+            if not src.is_file():
+                raise RuntimeError(f"module face missing: {dir_rel}/{face_src}")
+            fm, body = split_frontmatter(read_page_text(src))
+            # `is not None`, not truthiness, exactly as in `plan_topics`: a fence
+            # whose lines all parse to nothing returns {}, and `if fm:` would wave
+            # that page through into a nested block the ledger then hashes as prose.
+            if fm is not None:
+                raise RuntimeError(f"unexpected frontmatter in {dir_rel}/{face_src}")
+            rel = f"modules/{slug}/{face_dst}"
+            published, reworded = strip_reword(rel, body.encode("utf-8"))
+            plans.append(PagePlan(
+                target=WIKI / rel, label=rel, body=published, reworded=reworded,
+                fm={"page": rel, "sources": [], "verified_at": snapshot,
+                    "anchors": "open", "vouch": "applied-only"},
+                origin="module",
+            ))
+
+    found_cards = {p.name for p in kb.iterdir()
+                   if p.is_dir() and not (p / "_module.yaml").exists()}
+    unmapped_cards = sorted(found_cards - set(cards))
+    if unmapped_cards:
+        raise RuntimeError(f"unmapped card dirs: {unmapped_cards}")
+    for dir_name, slug in sorted(cards.items()):
+        if dir_name not in found_cards:
+            raise RuntimeError(f"card dir missing: {dir_name}")
+        src = kb / dir_name / f"{dir_name}.md"
+        if not src.is_file():
+            raise RuntimeError(f"card page missing: {dir_name}")
+        fm, body = split_frontmatter(read_page_text(src))
+        extra = dict(fm or {})
+        # Read, not popped: `sources` is the derived view (sorted, blank-stripped,
+        # deduplicated) while `source_files` keeps shipping verbatim under the IDE's
+        # own key — Task 2's foreign-key preservation exists so a card's metadata
+        # round-trips. A card without the key (the glossary, measured) keeps not
+        # having it, and gets `sources: []`.
+        files = extra.get("source_files", [])
+        if not isinstance(files, list):
+            files = [files]
+        clash = sorted(k for k in extra if k in FM_KEYS)
+        if clash:
+            raise RuntimeError(f"card {dir_name} already uses our keys {clash}")
+        rel = f"cards/{slug}.md"
+        published, reworded = strip_reword(rel, body.encode("utf-8"))
+        plans.append(PagePlan(
+            target=WIKI / rel, label=rel, body=published, reworded=reworded,
+            fm={"page": rel,
+                "sources": sorted({str(s) for s in files if str(s).strip()}),
+                "verified_at": snapshot, "anchors": "open", "vouch": "applied-only",
+                **extra},
+            origin="card",
+        ))
+    return plans
+
+
 # ---------------------------------------------------------------------------
 # ledger
 # ---------------------------------------------------------------------------

@@ -2359,7 +2359,7 @@ def test_metadata_baseline_can_read_a_second_root(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# M2 seeding: page planning (PagePlan / plan_topics / refs_from_text)
+# M2 seeding: page planning (PagePlan / plan_topics / plan_knowledge / refs_from_text)
 # ---------------------------------------------------------------------------
 
 
@@ -2472,4 +2472,76 @@ def test_parse_refs_and_refs_from_text_are_one_implementation(tmp_path, wired):
             r.path for r in parse_refs(target)
         ]
     assert [r.path for r in parse_refs(crlf)] == ["src/mod.py"], "not one codec scored twice"
+
+
+def _kb(tmp_path: Path, modules: list[str], cards: list[str]) -> Path:
+    """A throwaway knowledge export: module dirs holding `_module.yaml` + the 5
+    faces, and card dirs holding one self-named `.md`.
+
+    Fake tables, never the real tree: `modules=`/`cards=` exist so these tests can
+    feed 2 modules and 1 card. A unit test that read `.qoder/repowiki/knowledge/`
+    would be invisible to CI and to anyone without the export, and Task 10 is the
+    one that runs against it for real.
+    """
+    kb = tmp_path / "knowledge" / "zh"
+    for m in modules:
+        d = kb / m
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "_module.yaml").write_text("key: x\n", encoding="utf-8")
+        for face in wiki_drift.FACE_NAMES:
+            (d / face).write_text(f"# {face}\n\n内容\n", encoding="utf-8")
+    for c in cards:
+        d = kb / c
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{c}.md").write_text(
+            f"---\nkind: card\nname: {c}\nsource_files:\n    - src/mod.py\n---\n\n### 角色\n",
+            encoding="utf-8",
+        )
+    return kb
+
+
+def test_plan_knowledge_maps_every_face_and_keeps_card_keys(tmp_path):
+    kb = _kb(tmp_path, ["父", "父/子"], ["业务术语表"])
+    # The second fake module is slugged `agent-backend`, not `ci-gates`: `REWORDS`
+    # claims `modules/ci-gates/architecture.md`, and `strip_reword` demands the needle
+    # exactly once on any label it owns — a stand-in dir with generic prose in that
+    # slot raises instead of planning. Test 3 puts the needle there on purpose.
+    plans = wiki_drift.plan_knowledge(
+        kb, "a" * 40, modules={"父": "repo-root", "父/子": "agent-backend"},
+        cards={"业务术语表": "glossary"})
+    assert len(plans) == 11, "2 modules x 5 faces + 1 card"
+    by_label = {p.label: p for p in plans}
+    assert by_label["modules/repo-root/overview.md"].fm["sources"] == []
+    card = by_label["cards/glossary.md"]
+    assert card.fm["kind"] == "card" and card.fm["name"] == "业务术语表"
+    assert card.fm["sources"] == ["src/mod.py"], "source_files feeds `sources`"
+    assert card.fm["source_files"] == ["src/mod.py"], "...and the IDE key still ships"
+    assert card.origin == "card"
+
+
+def test_plan_knowledge_demands_both_directions_of_the_map(tmp_path):
+    """The migration's reconciliation rule: every source dir claimed exactly once,
+    no exceptions accepted. An unmapped dir means a page nobody seeded; a mapped dir
+    missing on disk means a slug pointing at nothing."""
+    kb = _kb(tmp_path, ["父"], [])
+    with pytest.raises(RuntimeError, match="unmapped module dir"):
+        wiki_drift.plan_knowledge(kb, "a" * 40, modules={}, cards={})
+    with pytest.raises(RuntimeError, match="module dir missing"):
+        wiki_drift.plan_knowledge(kb, "a" * 40, modules={"父": "repo-root", "缺": "gone"}, cards={})
+
+
+def test_plan_knowledge_applies_the_reword_and_counts_it(tmp_path):
+    needle = "b: 禁止字面量 '" + "".join(["World", "Quant"]) + "'"
+    kb = _kb(tmp_path, [], [])
+    d = kb / "父"
+    d.mkdir(parents=True)
+    (d / "_module.yaml").write_text("key: x\n", encoding="utf-8")
+    for face in wiki_drift.FACE_NAMES:
+        (d / face).write_text(f"# {face}\n\n内容\n", encoding="utf-8")
+    (d / "架构设计.md").write_text(f"# 架构\n\n{needle}；c: 下一句\n", encoding="utf-8")
+    plans = wiki_drift.plan_knowledge(kb, "a" * 40, modules={"父": "ci-gates"}, cards={})
+    arch = next(p for p in plans if p.label == "modules/ci-gates/architecture.md")
+    assert arch.reworded is True
+    assert needle not in arch.body.decode("utf-8")
+    assert "禁止商标字面量" in arch.body.decode("utf-8")
 
