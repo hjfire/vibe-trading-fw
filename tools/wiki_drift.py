@@ -952,9 +952,15 @@ def cmd_seed(args: argparse.Namespace) -> int:
     legacy = Path(args.from_root)
     if not legacy.is_absolute():
         legacy = REPO / legacy
-    if wiki_root.layout != "repo":
+    # The layout is read off the disk (`WIKI`'s own shape), not from the `wiki_root`
+    # global — the same strong form `stamp_frontmatter` uses, for the same reason: a
+    # stale global must not be able to point a writer at the IDE export. Seed is the
+    # milestone's highest-consequence writer, so it gets the strictest reading.
+    # The message names `WIKI` because that is the thing being refused; `legacy` is
+    # the `--from` source, which is normally *supposed* to be an IDE-layout root.
+    if WikiRoot.resolve(WIKI).layout != "repo":
         print(
-            f"refusing to seed into an ide-layout root ({legacy}): the target tree is "
+            f"refusing to seed into an ide-layout root ({WIKI}): the target tree is "
             "the tracked publication, not the export",
             file=sys.stderr,
         )

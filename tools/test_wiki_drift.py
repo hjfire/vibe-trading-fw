@@ -2746,6 +2746,11 @@ def test_seed_defaults_to_dry_run_then_is_idempotent(tmp_path, monkeypatch, caps
     assert not (target / "ledger.jsonl").exists(), "the ledger is a byte too"
     assert "dry-run: nothing written" in capsys.readouterr().out
     assert main([*argv, "--apply"]) == 0
+    # `checked` is Task 10's "nothing was absorbed" counter: it increments once per
+    # plan that reaches `apply_page_plan`, before the skip/write branches, so the
+    # first real apply must read 8 — the same 8 the `written` list counts two lines
+    # later, from the other side of the assertion.
+    assert "checked=8" in capsys.readouterr().out, "first --apply tally"
     written = sorted(p.as_posix() for p in target.rglob("*.md"))
     assert len(written) == 8, written  # 2 topics + 5 faces + 1 card
     before = {p: p.read_bytes() for p in target.rglob("*.md")}
@@ -2760,8 +2765,15 @@ def test_seed_reconciles_body_bytes(tmp_path, monkeypatch, capsys):
     assert main(["--wiki-root", str(target), "seed", "--from", str(export),
                  "--snapshot", "a" * 40, "--apply"]) == 0
     page = target / "topics" / "前端应用" / "页一.md"
-    src_text = (export / "zh" / "content" / "前端应用" / "页一.md").read_text(encoding="utf-8")
+    src = export / "zh" / "content" / "前端应用" / "页一.md"
+    src_text = src.read_text(encoding="utf-8")
     assert page.read_text(encoding="utf-8").endswith(src_text), "frontmatter only, prose verbatim"
+    # The leg above reads *text* on both sides, and universal newlines make a CR the
+    # seed added invisible: `read_text` would strip it from the page and from the
+    # source alike, and the assertion would still hold. These are the bytes the 426
+    # ledger rows hash, so compare them (`_seedable` has rewritten the fixture to LF,
+    # which is what the real export measures as, so this holds byte-for-byte).
+    assert page.read_bytes().endswith(src.read_bytes()), "verbatim at the byte level too"
     assert page.read_bytes().startswith(b"---\n") and b"\r\n" not in page.read_bytes()
     tally = capsys.readouterr().out
     assert "sha_mismatch=0" in tally and "reworded=0" in tally
@@ -2788,8 +2800,21 @@ def test_seed_refuses_an_ide_layout_target(tmp_path, monkeypatch, capsys):
     """Seeding into the export would rewrite the source in place and make the next
     run's diff meaningless."""
     export, _ = _seedable(tmp_path, monkeypatch)
+    # Snapshot the whole export, not one page: the refusal's promise is that the
+    # source tree is untouched, and a `topics/` dir or a `ledger.jsonl` appearing
+    # beside `zh/content` breaks that promise just as surely as a rewritten page.
+    before = {p.relative_to(export).as_posix(): p.read_bytes()
+              for p in sorted(export.rglob("*")) if p.is_file()}
     assert main(["--wiki-root", str(export), "seed", "--apply"]) == 2
-    assert "refusing to seed into an ide-layout root" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "refusing to seed into an ide-layout root" in err
+    # The message must name the *refused target*. `--from` defaults to the legacy
+    # export, and interpolating that path here would blame a repo-layout source
+    # directory for an IDE-layout target — the opposite of what the operator needs.
+    assert str(export) in err, err
+    assert {p.relative_to(export).as_posix(): p.read_bytes()
+            for p in sorted(export.rglob("*")) if p.is_file()} == before, \
+        "a refused seed must leave the export byte-for-byte as it found it"
 
 
 def test_seed_reports_a_missing_reword_needle(tmp_path, monkeypatch, capsys):
@@ -2816,4 +2841,110 @@ def test_seed_counts_pages_without_sources(tmp_path, monkeypatch, capsys):
     (export / "zh" / "content" / "无引用.md").write_text("# 无引用\n\n散文\n", encoding="utf-8")
     assert main(argv) == 0
     assert "no_sources=6" in capsys.readouterr().out
+
+
+def test_seed_counts_a_reword_that_actually_lands(tmp_path, monkeypatch, capsys):
+    """`reworded` is a contract field (Task 10 reads the tally line), and a counter
+    that is only ever asserted at 0 cannot be deleted. The existing needle test keys a
+    label whose needle is *absent*, so it exercises `strip_reword`'s refusal, never the
+    increment. `内容` occurs exactly once in every face body `_kb` writes and holds no
+    newline, so both of `strip_reword`'s guards (count == 1, line count unchanged) stay
+    satisfied and the reword is the real thing."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    monkeypatch.setattr(wiki_drift, "REWORDS", {
+        "modules/repo-root/overview.md": ("内容", "改写后的正文")})
+    assert main(["--wiki-root", str(target), "seed", "--from", str(export),
+                 "--snapshot", "a" * 40, "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "reworded=1" in out, out
+    assert "reworded: modules/repo-root/overview.md" in out, out
+    assert "sha_mismatch=0" in out, "a reworded body still reconciles against itself"
+    page = target / "modules" / "repo-root" / "overview.md"
+    assert "改写后的正文" in page.read_text(encoding="utf-8"), "the reword landed on disk"
+
+
+def test_seed_flags_a_body_that_landed_different(tmp_path, monkeypatch, capsys):
+    """The post-write `endswith(plan.body)` is the per-file reconciliation spec §12
+    asks for, and it is the only thing that can raise `sha_mismatch` — so it needs a
+    measured divergence, not a 0 read off a clean run. `write_bytes` is patched to
+    append one byte to every `.md` write and to nothing else: mangle a non-`.md` write
+    too and `copy_ledger`'s own byte-identity guard raises first, turning this into the
+    exit-2 path instead of the exit-1 the reconciliation is supposed to produce."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    real_write_bytes = Path.write_bytes
+
+    def one_byte_more(self, data: bytes) -> int:
+        return real_write_bytes(self, data + b"X" if self.suffix == ".md" else data)
+
+    monkeypatch.setattr(Path, "write_bytes", one_byte_more)
+    rc = main(["--wiki-root", str(target), "seed", "--from", str(export),
+               "--snapshot", "a" * 40, "--apply"])
+    out = capsys.readouterr().out
+    assert "sha_mismatch=8" in out, out
+    assert "pages_written=0" in out, "a mismatched page is not a published one"
+    assert rc == 1, "a body that landed different is a failed seed, not a green run"
+
+
+def test_seed_reads_the_layout_off_the_disk_not_the_global(tmp_path, monkeypatch, capsys):
+    """`wiki_root` is a global, and `stamp_frontmatter` re-reads the disk precisely
+    because a stale one must not decide who writes the IDE export. Seed is this
+    milestone's highest-consequence writer, so it holds the same line: with a global
+    that claims `repo` and a `WIKI` that is shaped like the export, the run still
+    refuses."""
+    export, _ = _seedable(tmp_path, monkeypatch)
+    monkeypatch.setattr(wiki_drift, "WIKI", export)
+    monkeypatch.setattr(wiki_drift, "wiki_root",
+                        wiki_drift.WikiRoot(root=export, layout="repo"))
+    assert wiki_drift.cmd_seed(
+        _ns(from_root=str(export), snapshot="a" * 40, apply=True)) == 2
+    assert "refusing to seed into an ide-layout root" in capsys.readouterr().err
+    assert not (export / "topics").exists(), "and it refused before writing"
+
+
+def test_copy_ledger_refuses_a_missing_export_ledger(tmp_path, monkeypatch):
+    """The ledger is the one asset the seed cannot reconstruct, so its absence is the
+    one failure that raises rather than tallies — and nothing pinned the string the
+    operator of Task 10 reads when the export moved out from under the run."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    monkeypatch.setattr(wiki_drift, "WIKI", wiki)
+    with pytest.raises(RuntimeError, match="ledger missing from the export"):
+        wiki_drift.copy_ledger(tmp_path / "no-such-export", dry_run=False)
+    assert not (wiki / "ledger.jsonl").exists()
+
+
+def test_copy_ledger_refuses_a_copy_that_landed_different(tmp_path, monkeypatch):
+    """The ledger's mirror of the per-page reconciliation: write, re-read, compare,
+    and raise — never publish a truncated 426-row history with a green exit code."""
+    (tmp_path / "export" / "update").mkdir(parents=True)
+    data = json.dumps({"page": "a.md", "head": "c" * 40, "sha_after": "d" * 64,
+                       "note": "n", "at": "t"}).encode("utf-8") + b"\n"
+    (tmp_path / "export" / "update" / "ledger.jsonl").write_bytes(data)
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    monkeypatch.setattr(wiki_drift, "WIKI", wiki)
+    real_write_bytes = Path.write_bytes
+
+    def one_byte_more(self, payload: bytes) -> int:
+        return real_write_bytes(self, payload + b"X" if self.parent == wiki else payload)
+
+    monkeypatch.setattr(Path, "write_bytes", one_byte_more)
+    with pytest.raises(RuntimeError, match="ledger copy is not byte-identical"):
+        wiki_drift.copy_ledger(tmp_path / "export", dry_run=False)
+
+
+def test_seed_stops_on_a_missing_export_ledger(tmp_path, monkeypatch, capsys):
+    """The unit test above proves the raise; this one proves `cmd_seed` reaches it and
+    that the CLI turns it into exit 2 with the message on stderr, not a traceback.
+    Measured, and deliberately not asserted either way: unlike a failed *plan* (see
+    `test_seed_reports_a_missing_reword_needle`, which writes nothing), this failure
+    lands after the write loop, so the pages are already on disk when it raises — the
+    ledger is what does not get published."""
+    export, target = _seedable(tmp_path, monkeypatch)
+    (export / "update" / "ledger.jsonl").unlink()
+    assert main(["--wiki-root", str(target), "seed", "--from", str(export),
+                 "--snapshot", "a" * 40, "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "ledger missing from the export" in err, err
+    assert not (target / "ledger.jsonl").exists()
 
