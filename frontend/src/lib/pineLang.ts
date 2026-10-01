@@ -662,10 +662,15 @@ export class PineParser {
   private dropTypeWords(): void {
     // `float x =`, `const float x =`, `series int i =` … and the array-typed
     // form `float[] buffer =` / `int[] idx =` (Pine's typed-array declaration),
-    // plus the generic form `array<float> buf` / `map<int, MyUDT> m`.
+    // plus the generic form `array<float> buf` / `map<int, MyUDT> m`. A `[]` or
+    // `<>` suffix marks a type annotation for ANY leading identifier, including
+    // a user-defined type (`Entry[] rows =`), which TYPE_WORDS alone cannot see;
+    // an ident WITHOUT such a suffix is only dropped when it is a built-in word
+    // (a bare user-type name is the variable name, and `and`/`or` lex as idents,
+    // so `ident ident` is not always an annotation).
     for (;;) {
       const t = this.peek();
-      if (!(t.kind === "ident" && TYPE_WORDS.has(t.value))) break;
+      if (t.kind !== "ident") break;
       let p = this.pos + 1;
       let kind: "none" | "array" | "generic" = "none";
       if (
@@ -678,6 +683,7 @@ export class PineParser {
         const g = this.genericEnd(p);
         if (g !== null) { p = g; kind = "generic"; }
       }
+      if (kind === "none" && !TYPE_WORDS.has(t.value)) break;
       const nxt = this.tk[p];
       if (nxt && nxt.kind === "ident") {
         this.next(); // type word

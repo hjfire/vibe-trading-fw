@@ -900,3 +900,42 @@ describe("UDT methods on a record run with the record as implicit receiver", () 
     expect(vals[2]).toBe(102);
   });
 });
+
+/**
+ * Facet C: a user-defined-type array declaration `var Type[] rows =
+ * array.new<Type>()`. Before this the parser only ate `float[]`/`array<T>`
+ * built-in annotations, so a `Type[]` suffix left `Type` as the variable name
+ * and choked on the `]` — a compile error. Real SMC order-block / FVG libraries
+ * (`var Zone[] = array.new<Zone>()`, `var FVG[] = array.new<FVG>()`) use it.
+ */
+describe("user-type array declarations (var Type[] = array.new<Type>()) parse", () => {
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("declares a growing record array and reads a field off a pulled element", () => {
+    const src =
+      V6 +
+      "type Entry\n    float x\n    float y\n" +
+      "var Entry[] rows = array.new<Entry>()\n" +
+      "if bar_index == 5\n    array.push(rows, Entry.new(7, 8))\n" +
+      "e = array.get(rows, 0)\nplot(na(e) ? na : e.x)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    const vals = lineValues(src);
+    expect(Number.isNaN(vals[0])).toBe(true); // before the push, rows is empty
+    expect(vals[6]).toBe(7); // element pulled and field read through the record
+  });
+
+  it("accepts a `Type[]` declaration without `var`", () => {
+    const src = V6 + "type Box\n    float w\nBox[] boxes = array.new<Box>()\nplot(1)\n";
+    expect(artifact(src).abort).toBeFalsy();
+  });
+
+  it("built-in float[] and array.new<float>() still parse (no regression)", () => {
+    const src =
+      V6 +
+      "var float[] buf = array.new<float>()\narray.push(buf, close)\n" +
+      "plot(array.size(buf) > 0 ? array.get(buf, 0) : na)\n";
+    expect(artifact(src).abort).toBeFalsy();
+    expect(produced(src)).toBe(true);
+  });
+});
