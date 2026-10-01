@@ -939,3 +939,68 @@ describe("user-type array declarations (var Type[] = array.new<Type>()) parse", 
     expect(produced(src)).toBe(true);
   });
 });
+
+/**
+ * Facet D: a method (or field read) invoked on a COMPUTED receiver — the value
+ * an earlier call/index group produced, e.g. `zones.pop().delete()`,
+ * `arr.pop().x`, or `mk().dbl()`. The lexer folds plain `a.b` into one ident, so
+ * a standalone `.` token only ever appears after `)`/`]`; before this the
+ * postfix parser stopped at `[`, leaving the `.` unconsumed and aborting the
+ * whole script with "意外的内容". The runtime now evaluates the receiver and
+ * routes by its shape (record method / array method / drawing handle).
+ */
+describe("method / field chains on a computed receiver (obj.pop().delete(), mk().dbl())", () => {
+  const V6 = "//@version=6\nindicator(\"t\")\n";
+
+  it("runs a UDT method on a record pulled off an array", () => {
+    const src =
+      V6 +
+      "type Zone\n    int n\n    int del() => n\n" +
+      "var Zone[] zones = array.new<Zone>()\n" +
+      "if bar_index == 3\n    array.push(zones, Zone.new(5))\n" +
+      "r = array.size(zones) > 0 ? zones.pop().del() : na\nplot(r)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    const vals = lineValues(src);
+    expect(Number.isNaN(vals[0])).toBe(true); // empty before the push
+    expect(vals[3]).toBe(5); // pop() -> record, .del() runs against it
+    expect(Number.isNaN(vals[4])).toBe(true); // array now empty again
+  });
+
+  it("reads a field off a record produced by a chained call", () => {
+    const src =
+      V6 +
+      "type P\n    float x\n    float y\n" +
+      "var P[] ps = array.new<P>()\n" +
+      "if bar_index == 2\n    array.push(ps, P.new(9, 8))\n" +
+      "v = array.size(ps) > 0 ? ps.pop().x : na\nplot(v)\n";
+    expect(artifact(src).abort).toBeFalsy();
+    expect(lineValues(src)[2]).toBe(9);
+  });
+
+  it("calls a method on the result of a user function", () => {
+    const src =
+      V6 +
+      "type Q\n    float x\n    float dbl() => x * 2\n" +
+      "mk() => Q.new(4)\nplot(mk().dbl())\n";
+    expect(artifact(src).abort).toBeFalsy();
+    expect(lineValues(src)[0]).toBe(8); // Q.new(4).dbl() = 4 * 2
+  });
+
+  it("deletes a drawing handle pulled off an array without aborting", () => {
+    const src =
+      V6 +
+      "var bs = array.new<box>()\n" +
+      "if bar_index == 3\n    array.push(bs, box.new(0, 0, 0, 0))\n" +
+      "if bar_index == 5 and array.size(bs) > 0\n    bs.pop().delete()\nplot(close)\n";
+    const a = artifact(src);
+    expect(a.abort).toBeFalsy();
+    expect(produced(src)).toBe(true); // the plot(close) survives the drawing chain
+  });
+
+  it("a genuinely undefined trailing name still errors honestly (no silent loosening)", () => {
+    // `.(` with no name after the dot is a real syntax error, not a chain we
+    // swallow — proving the new postfix branch did not blanket-accept junk.
+    expect(() => artifact(V6 + "x = 1\nplot((x).)\n")).toThrow();
+  });
+});

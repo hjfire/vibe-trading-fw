@@ -255,6 +255,17 @@ export type Expr =
   | { k: "arr"; items: Expr[]; line: number }
   | { k: "idx"; base: Expr; off: Expr; line: number }
   | { k: "call"; name: string; args: Arg[]; line: number; cid: number }
+  /**
+   * A method invoked on a COMPUTED receiver — the value produced by an earlier
+   * call or index group, e.g. `zones.pop().delete()` or `mk().dbl()`. The lexer
+   * merges plain `a.b` into one ident, so a standalone `.` token only ever
+   * survives after a `)` / `]` group; that is exactly this OOP chain shape.
+   * `obj` is the receiver expression, `name` the method, `args` its arguments.
+   */
+  | { k: "methcall"; obj: Expr; name: string; args: Arg[]; line: number; cid: number }
+  /** Field read on a computed receiver (`arr.pop().x`), the non-call sibling
+   *  of `methcall` produced by the same postfix `.` step. */
+  | { k: "meth"; obj: Expr; name: string; line: number }
   | { k: "bin"; op: string; a: Expr; b: Expr; line: number }
   | { k: "un"; op: string; a: Expr; line: number }
   | { k: "tern"; c: Expr; a: Expr; b: Expr; line: number }
@@ -1179,6 +1190,25 @@ export class PineParser {
         base = { k: "idx", base, off, line: t.line };
         continue;
       }
+      if (t.kind === "op" && t.value === ".") {
+        // Method / field chain on a COMPUTED receiver. A bare `.` token only
+        // reaches here after a `)`/`]` group (the lexer otherwise folds `a.b`
+        // into a single ident), so this is precisely `zones.pop().delete()` /
+        // `arr.pop().x` — TradingView's object-oriented call syntax.
+        this.next();
+        const nameTok = this.peek();
+        if (nameTok.kind !== "ident") {
+          throw new PineError(`第 ${t.line} 行："." 之后需要一个名字`);
+        }
+        this.next();
+        if (this.isOp("(")) {
+          const args = this.parseArgList();
+          base = { k: "methcall", obj: base, name: nameTok.value, args, line: nameTok.line, cid: this.cid++ };
+        } else {
+          base = { k: "meth", obj: base, name: nameTok.value, line: nameTok.line };
+        }
+        continue;
+      }
       break;
     }
     return base;
@@ -1233,28 +1263,39 @@ export class PineParser {
         if (g !== null && this.tk[g]?.kind === "op" && this.tk[g].value === "(") this.pos = g;
       }
       if (this.isOp("(")) {
-        this.next();
-        const args: Arg[] = [];
-        if (!this.isOp(")")) {
-          do {
-            this.skipNl();
-            const nt = this.peek();
-            const nn = this.tk[this.pos + 1];
-            if (nt.kind === "ident" && nn?.kind === "op" && nn.value === "=") {
-              this.next();
-              this.next();
-              args.push({ name: nt.value, value: this.parseExpr() });
-            } else {
-              args.push({ value: this.parseExpr() });
-            }
-          } while (this.eatOp(","));
-        }
-        this.expectOp(")");
+        const args = this.parseArgList();
         return { k: "call", name: t.value, args, line: t.line, cid: this.cid++ };
       }
       return { k: "id", name: t.value, line: t.line };
     }
     throw new PineError(`第 ${t.line} 行：意外的内容 "${t.value || "文件结尾"}"`);
+  }
+
+  /**
+   * Parse a `(...)` argument list starting at the open paren, handling named
+   * arguments (`length=14`). Shared by `parsePrimary` (plain/namespaced calls)
+   * and `parsePostfix` (method calls on a computed receiver) so the two call
+   * shapes stay byte-identical.
+   */
+  private parseArgList(): Arg[] {
+    this.expectOp("(");
+    const args: Arg[] = [];
+    if (!this.isOp(")")) {
+      do {
+        this.skipNl();
+        const nt = this.peek();
+        const nn = this.tk[this.pos + 1];
+        if (nt.kind === "ident" && nn?.kind === "op" && nn.value === "=") {
+          this.next();
+          this.next();
+          args.push({ name: nt.value, value: this.parseExpr() });
+        } else {
+          args.push({ value: this.parseExpr() });
+        }
+      } while (this.eatOp(","));
+    }
+    this.expectOp(")");
+    return args;
   }
 }
 

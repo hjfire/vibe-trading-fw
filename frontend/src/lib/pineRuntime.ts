@@ -898,6 +898,47 @@ export class PineRuntime {
     return out;
   }
 
+  /**
+   * Run `obj.name(args)` where `obj` is a computed value (the receiver of a
+   * method chain such as `zones.pop().delete()`). The receiver is already
+   * evaluated to `v`; we route by its shape so the result behaves like the
+   * equivalent free-form call, and never abort the numeric run:
+   *  1. a `@udt:` record → its registered type method (facet E path);
+   *  2. an array `V[]` → the array library method form (`arr.pop()` result);
+   *  3. a live drawing handle (an int id present in `drawObjs`) → apply the
+   *     drawing op directly, so `boxes.pop().delete()` really deletes the shape;
+   *  anything else → an honest warn + void, matching how a decorative object
+   *     method call is already handled for the plain-variable receiver form.
+   */
+  private dispatchMethodOn(node: Extract<Expr, { k: "methcall" }>): V {
+    const nothing = sentinel("void");
+    const v = this.val(node.obj);
+    const method = node.name;
+    const args = node.args;
+    if (Array.isArray(v) && typeof v[0] === "string" && v[0].startsWith("@udt:")) {
+      const mfn = this.typeMethods.get(v[0].slice("@udt:".length))?.get(method);
+      if (mfn) return this.callMethod(mfn, v as V[], args, node.cid);
+    }
+    if (Array.isArray(v) && ARRAY_METHODS.has(method)) {
+      return this.runArray(method, args, v as V[]);
+    }
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const handle = Math.trunc(v);
+      const obj = this.drawObjs.get(handle);
+      if (obj) {
+        try {
+          this.applyDrawOp(obj, method, [{ value: { k: "num", v: handle, line: node.line } }, ...args]);
+          if (obj.deleted) this.drawObjs.delete(handle);
+        } catch {
+          // Decorative; never abort the run over a drawing method.
+        }
+        return nothing;
+      }
+    }
+    this.warn(`方法 "${method}()" 作用于运行期对象，本实现不支持该调用，已忽略`);
+    return nothing;
+  }
+
   /* ------------------------------------------------------------ expressions */
 
   val(e: Expr): V {
@@ -926,6 +967,29 @@ export class PineRuntime {
         const out = this.dispatch(e);
         this.ctxCid = savedCid;
         this.write("f:" + e.cid, out, false);
+        return out;
+      }
+      case "meth": {
+        // Field read off a computed receiver (`zones.pop().x`): resolve through
+        // the record's declared field order; any non-record value (na included)
+        // yields na rather than aborting, mirroring `base.field` on an na base.
+        const rec = this.val(e.obj);
+        if (Array.isArray(rec) && typeof rec[0] === "string" && rec[0].startsWith("@udt:")) {
+          const fields = this.types.get(rec[0].slice("@udt:".length));
+          if (fields) {
+            const idx = fields.indexOf(e.name);
+            return idx >= 0 ? (rec as V[])[idx + 1] : NA;
+          }
+        }
+        return NA;
+      }
+      case "methcall": {
+        // Method invoked on a computed receiver (`zones.pop().delete()`). The
+        // receiver is evaluated first, then routed by the value's shape.
+        const savedCid = this.ctxCid;
+        this.ctxCid = e.cid;
+        const out = this.dispatchMethodOn(e);
+        this.ctxCid = savedCid;
         return out;
       }
       case "bin":
@@ -1259,6 +1323,10 @@ export class PineRuntime {
         case "call":
           if (this.fns.has(n.name)) return true;
           return n.args.some((a) => walkExpr(a.value));
+        case "meth":
+          return walkExpr(n.obj);
+        case "methcall":
+          return walkExpr(n.obj) || n.args.some((a) => walkExpr(a.value));
         case "bin":
           return walkExpr(n.a) || walkExpr(n.b);
         case "un":
