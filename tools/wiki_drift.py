@@ -343,11 +343,12 @@ def sha256(path: Path) -> str:
 # page frontmatter: the baseline that travels with the page
 # ---------------------------------------------------------------------------
 #
-# Written by hand, not by a YAML library. The shape is fixed (five keys, one list)
-# and gate (a) of the repo's own CI is about `yaml.load`, so pulling a parser in
-# would buy nothing. Scalars are emitted as JSON-quoted strings — valid YAML, and
-# it keeps CJK paths and `/` unescaped — and the one flow form this emitter
-# produces, `[]`, is read back as an empty list.
+# Written by hand, not by a YAML library. The shape is fixed — the five keys this
+# tool owns in their own order, then any key it does not, sorted — and gate (a) of
+# the repo's own CI is about `yaml.load`, so pulling a parser in would buy nothing.
+# Scalars are emitted as JSON-quoted strings — valid YAML, and it keeps CJK paths
+# and `/` unescaped — and the one flow form this emitter produces, `[]`, is read
+# back as an empty list.
 
 FM_KEYS = ("page", "sources", "verified_at", "anchors", "vouch")
 FM_BLOCK_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
@@ -438,8 +439,22 @@ def body_sha(page: Path) -> str:
     return hashlib.sha256(body_text(page).encode("utf-8")).hexdigest()
 
 
+def _emit_kv(key: str, value: "str | list") -> str:
+    """One non-FM_KEYS entry: a JSON-quoted scalar, or a 2-space list.
+
+    The IDE export indents its lists by 4 spaces; the reader accepts any leading
+    whitespace (`FM_LIST_ITEM_RE`), so re-indenting on the way out is a rendering
+    change, not a content change — and one shape is what makes the block diffable.
+    """
+    if isinstance(value, list):
+        if not value:
+            return f"{key}: []"
+        return "\n".join([f"{key}:"] + [f"  - {json.dumps(v, ensure_ascii=False)}" for v in value])
+    return f"{key}: {json.dumps(value, ensure_ascii=False)}"
+
+
 def emit_frontmatter(fm: dict) -> str:
-    lines = ["---", f"page: {json.dumps(fm.get('page', ''), ensure_ascii=False)}"]
+    lines = [f"page: {json.dumps(fm.get('page', ''), ensure_ascii=False)}"]
     sources = list(fm.get("sources") or [])
     if sources:
         lines.append("sources:")
@@ -449,8 +464,9 @@ def emit_frontmatter(fm: dict) -> str:
     lines.append(f"verified_at: {json.dumps(fm.get('verified_at', ''), ensure_ascii=False)}")
     lines.append(f"anchors: {fm.get('anchors', 'open')}")
     lines.append(f"vouch: {fm.get('vouch', 'applied-only')}")
-    lines.append("---")
-    return "\n".join(lines) + "\n"
+    for key in sorted(k for k in fm if k not in FM_KEYS):
+        lines.append(_emit_kv(key, fm[key]))
+    return "---\n" + "\n".join(lines) + "\n---\n"
 
 
 def update_frontmatter(target: Path, **fields) -> dict:
@@ -459,9 +475,12 @@ def update_frontmatter(target: Path, **fields) -> dict:
     The file argument is `target`, not `page`: `page` is one of the five keys, and
     a parameter named after a field would make that field impossible to set.
 
-    Key order is fixed to FM_KEYS and empty values are written explicitly, so a
-    page rewritten twice stays byte-identical — a generator that touches pages must
-    be diffable or its own output looks like an edit.
+    Keys this tool does not own are kept and rewritten, so seeding a page cannot
+    delete the metadata its IDE export carries. The returned dict — and the block on
+    disk — puts the five known keys first in their fixed order, then the foreign
+    ones sorted, with empty values written explicitly; a page rewritten twice stays
+    byte-identical, because a generator that touches pages must be diffable or its
+    own output looks like an edit.
     """
     fm, body = split_frontmatter(read_page_text(target))
     merged = dict(fm or {})
@@ -471,9 +490,10 @@ def update_frontmatter(target: Path, **fields) -> dict:
     merged.setdefault("verified_at", "")
     merged.setdefault("anchors", "open")
     merged.setdefault("vouch", "applied-only")
-    ordered = {k: merged[k] for k in FM_KEYS}
-    target.write_text(emit_frontmatter(ordered) + body, encoding="utf-8", newline="\n")
-    return ordered
+    # Reorder only — every key in `merged` is still in the result.
+    merged = {k: merged[k] for k in (*FM_KEYS, *sorted(k for k in merged if k not in FM_KEYS))}
+    target.write_text(emit_frontmatter(merged) + body, encoding="utf-8", newline="\n")
+    return merged
 
 
 def frontmatter_baseline(page: Path) -> str | None:

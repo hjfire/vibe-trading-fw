@@ -1767,6 +1767,49 @@ def test_update_frontmatter_is_idempotent_and_order_stable(tmp_path):
     assert "sources: []" in after_first  # empty list must parse back as a list
 
 
+def test_emit_frontmatter_keeps_foreign_keys(tmp_path):
+    """The 9 IDE cards ship metadata we do not own and must not silently delete:
+    `update_frontmatter` used to rebuild the block from FM_KEYS alone, which
+    dropped every other key. Body bytes stay untouched — that is what `body_sha`
+    and the 426 ledger rows depend on."""
+    page = tmp_path / "卡片.md"
+    page.write_text(
+        "---\n"
+        "kind: external_dependency\n"
+        "category_hints:\n"
+        "    - framework_behavior\n"
+        "    - auth_protocol\n"
+        "source_files:\n"
+        "    - frontend/src/lib/pineLang.ts\n"
+        "---\n\n### 角色\n正文\n",
+        encoding="utf-8",
+    )
+    body_before = wiki_drift.body_text(page)
+    fm = wiki_drift.update_frontmatter(page, verified_at="a" * 40, anchors="open")
+    assert fm["kind"] == "external_dependency"
+    assert fm["category_hints"] == ["framework_behavior", "auth_protocol"]
+    assert fm["source_files"] == ["frontend/src/lib/pineLang.ts"]
+    again = wiki_drift.read_frontmatter(page)
+    assert again["kind"] == "external_dependency", "round trip must not drop it"
+    assert wiki_drift.body_text(page) == body_before, "the ledger hashes the body, not the block"
+    # Idempotence: a generator whose own output looks like an edit is unreviewable.
+    before = page.read_bytes()
+    wiki_drift.update_frontmatter(page, verified_at="a" * 40)
+    assert page.read_bytes() == before
+    text = page.read_text(encoding="utf-8")
+    assert text.index("source_files:") > text.index("vouch:"), "5 known keys first, then sorted extras"
+    assert text.index("category_hints:") < text.index("kind:"), "extras sorted, not in arrival order"
+
+
+def test_foreign_scalar_keys_are_emitted_and_reread(tmp_path):
+    page = tmp_path / "x.md"
+    page.write_text("", encoding="utf-8", newline="\n")
+    wiki_drift.update_frontmatter(page, name="业务术语表", empty_list=[])
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm["name"] == "业务术语表"
+    assert fm["empty_list"] == [], "an empty list must survive as `[]`, not as a nested key"
+
+
 def test_frontmatter_baseline_only_accepts_a_reachable_full_sha(tmp_path):
     page = tmp_path / "p.md"
     page.write_text("# 标题\n", encoding="utf-8")
