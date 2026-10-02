@@ -2421,6 +2421,99 @@ def cmd_mark(args: argparse.Namespace) -> int:
     return 0
 
 
+INDEX_BANNER = (
+    "# Repo Wiki 索引\n"
+    "> 生成物，由 `python -X utf8 tools/wiki_drift.py index` 重写；请勿手改。\n"
+    "> {stats}\n"
+    "> **散文层未核**：链接层已核对到各页基线，正文自快照以来未逐页复核 —— 别当事实源引用，"
+    "查现状请 `Grep`/`Read` 打 `repowiki/` 本体。\n"
+)
+
+
+def render_index(total: int, stamped: int, modules: list[tuple[str, int, str]],
+                 cards: list[tuple[str, str]],
+                 topics: list[tuple[str, int, list[tuple[str, str, str]]]]) -> str:
+    """The navigation file, as a pure function of the wiki tree on disk.
+
+    No clock and no git-derived number: `index --check` runs in CI against whatever
+    commit the scheduler happened to pick up, and any figure that moves when only code
+    changes would make that gate red forever — which is spec §9.1's named failure mode.
+    Per-page `verified_at` is fine because it lives in the page, so it only changes when
+    the page does. The water level is `stale`'s job.
+    """
+    stats = (f"共 {total} 页专题 · {stamped} 页带 `verified_at` 基线 · "
+             f"{len(modules)} 个模块 × 5 面 · {len(cards)} 张仓库级卡片")
+    out = [INDEX_BANNER.format(stats=stats), "", "## 模块", ""]
+    for slug, faces, stamp in modules:
+        out.append(f"- [{slug}](modules/{slug}/overview.md) — {faces} 面 · {stamp}")
+    out += ["", "## 卡片", ""]
+    for label, stem in cards:
+        out.append(f"- [{stem}](cards/{stem}.md)")
+    out += ["", "## 专题", ""]
+    for top, pages, rows in topics:
+        out.append(f"### {top} ({pages} 页)")
+        out.append("")
+        for label, rel, stamp in rows:
+            out.append(f"- [{label}](topics/{rel}) `{stamp}`")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _fm_stamped(path: Path) -> str:
+    fm = read_frontmatter(path) if path.is_file() else None
+    return (fm or {}).get("verified_at", "")[:8] or "--------"
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    """Generate `INDEX.md` from the tree, or with --check compare it instead of writing."""
+    pages = sorted(CONTENT.rglob("*.md")) if CONTENT.is_dir() else []
+    stamped = [p for p in pages if _fm_stamped(p) != "--------"]
+    if not pages:
+        print(EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI,
+                                     layout=wiki_root.layout,
+                                     archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
+              file=sys.stderr)
+        return 2
+    if args.check and not stamped:
+        print(f"INDEX.md cannot certify this tree: {len(pages)} page(s) carry "
+              "no verified_at baseline, so the index would be deterministic but empty of "
+              "baselines — run `mark`/`reanchor --apply` to stamp them.", file=sys.stderr)
+        return 1
+    modules_dir, cards_dir = WIKI / "modules", WIKI / "cards"
+    modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamped(d / "overview.md"))
+               for d in sorted(modules_dir.iterdir())
+               if d.is_dir() and (d / "overview.md").is_file()] if modules_dir.is_dir() else []
+    cards = [(c.stem, c.stem) for c in sorted(cards_dir.glob("*.md"))] if cards_dir.is_dir() else []
+    groups: dict[str, list[Path]] = {}
+    for page in pages:
+        rel = str(page.relative_to(CONTENT)).replace("\\", "/")
+        groups.setdefault(rel.split("/")[0], []).append(page)
+    topics = []
+    for top in sorted(groups):
+        rows = sorted(([(p.stem,
+                         str(p.relative_to(CONTENT)).replace("\\", "/"),
+                         _fm_stamped(p)) for p in groups[top]]), key=lambda r: r[1])
+        topics.append((top, len(rows), rows))
+    text = render_index(total=len(pages), stamped=len(stamped), modules=modules,
+                        cards=cards, topics=topics)
+    path = wiki_root.index_md
+    if args.check:
+        if path.is_file() and path.read_text(encoding="utf-8") == text:
+            print(f"INDEX.md is current ({len(pages)} pages)")
+            return 0
+        print(f"INDEX.md is stale — run: python -X utf8 tools/wiki_drift.py index "
+              f"(expected {len(text)} bytes)", file=sys.stderr)
+        return 1
+    refusal = write_refusal("index")
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    print(f"wrote {path} ({len(text)} bytes, {len(pages)} pages)")
+    return 0
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki_drift.py", description="Repo Wiki drift checker")
     parser.add_argument(
@@ -2498,10 +2591,15 @@ def main(argv: Iterable[str] | None = None) -> int:
                             "(--json takes precedence over this flag)")
     stale.set_defaults(func=cmd_stale)
 
+    index = sub.add_parser("index", help="regenerate INDEX.md from the tree on disk")
+    index.add_argument("--check", action="store_true",
+                       help="compare instead of write; exit 1 when it differs (CI)")
+    index.set_defaults(func=cmd_index)
+
     # The same flag, also accepted after the verb. SUPPRESS is what makes the two
     # positions coexist: without a default of its own the subparser cannot overwrite
     # a value the top-level parser already read.
-    for parser_ in (rep, mark, reanchor, seed, stale):
+    for parser_ in (rep, mark, reanchor, seed, stale, index):
         parser_.add_argument(
             "--wiki-root",
             default=argparse.SUPPRESS,

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -4171,4 +4172,105 @@ def test_the_two_baseline_failures_are_not_the_same_message(wired, monkeypatch, 
     undeterminable = capsys.readouterr().err
     assert supplied.strip() != undeterminable.strip(), (supplied, undeterminable)
     assert BASELINE_ADVICE.search(undeterminable) and not BASELINE_ADVICE.search(supplied)
+
+
+# ---------------------------------------------------------------------------
+# M3 index: the deterministic INDEX.md, and the --check that refuses an unstamped tree
+# ---------------------------------------------------------------------------
+
+
+def _index_inputs(tree: dict) -> dict:
+    """Assemble render_index's arguments the way cmd_index does, so the renderer is
+    tested as a pure function and cmd_index is tested through behaviour."""
+    wiki, content = tree["wiki"], tree["content"]
+    pages = sorted(content.rglob("*.md")) if content.is_dir() else []
+    modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamp(d / "overview.md"))
+               for d in sorted(wiki.glob("modules/*/"))
+               if (d / "overview.md").is_file()] if (wiki / "modules").is_dir() else []
+    cards = [(c.stem, c.stem) for c in sorted((wiki / "cards").glob("*.md"))] \
+        if (wiki / "cards").is_dir() else []
+    topics = []
+    for top in sorted({str(p.relative_to(content)).replace("\\", "/").split("/")[0]
+                       for p in pages}):
+        rows = [(p.stem, str(p.relative_to(content)).replace("\\", "/"), _fm_stamp(p))
+                for p in pages
+                if str(p.relative_to(content)).replace("\\", "/").startswith(top + "/")]
+        topics.append((top, len(rows), sorted(rows, key=lambda r: r[1])))
+    return {"total": len(pages),
+            "stamped": sum(1 for p in pages if _fm_stamp(p) != "--------"),
+            "modules": modules, "cards": cards, "topics": topics}
+
+
+def _fm_stamp(path: Path) -> str:
+    fm = wiki_drift.read_frontmatter(path) if path.is_file() else None
+    return (fm or {}).get("verified_at", "")[:8] or "--------"
+
+
+def test_index_output_is_byte_identical_across_two_runs(repo_wired):
+    """Determinism is the contract, and the two ways it breaks are ordering and clocks.
+
+    Sorting is explicit in the renderer; the risk a future edit reintroduces is a
+    timestamp — or, since Task 3's ruling, a git-derived number. Neither may appear.
+    """
+    once = wiki_drift.render_index(**_index_inputs(repo_wired))
+    twice = wiki_drift.render_index(**_index_inputs(repo_wired))
+    assert once == twice
+    for banned in ("generated_at", "HEAD", "verified@", str(datetime.date.today().year)):
+        assert banned not in once, banned
+
+
+def test_index_prints_only_what_the_disk_already_claims(repo_wired):
+    """The reader's question is 'which page is where, and when was it last stamped',
+    and `verified_at` is on the page. Everything else in this file would be a claim the
+    navigation layer cannot re-verify."""
+    page = repo_wired["page"]
+    wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md",
+                                  verified_at=repo_wired["base"], vouch="all")
+    text = wiki_drift.render_index(**_index_inputs(repo_wired))
+    assert repo_wired["base"][:8] in text
+    assert "模块说明" in text
+    assert "(topics/前端应用/模块说明.md)" in text
+
+
+def test_index_banner_says_the_prose_is_not_verified(repo_wired):
+    """spec §10 item 5: until M5 finishes, the prose layer must not read as a fact
+    source, and the banner is where a reader meets that first."""
+    text = wiki_drift.render_index(**_index_inputs(repo_wired))
+    assert "散文层未核" in text
+    assert "别当事实源" in text
+    assert "请勿手改" in text
+
+
+def test_index_check_refuses_a_tree_where_no_page_is_stamped(repo_wired, capsys):
+    """Anti-empty, and the reason it is `--check` that refuses: a corpus with zero
+    frontmatter would render a perfectly deterministic INDEX.md full of `--------`, and
+    a deterministic blank file is exactly the kind of green that means nothing."""
+    for fm in repo_wired["page"].parent.rglob("*.md"):
+        fm.write_text("## 正文\n", encoding="utf-8")
+    rc = wiki_drift.cmd_index(_args(check=True))
+    assert rc == 1, rc
+    err = capsys.readouterr().err
+    assert "no verified_at" in err, err
+
+
+def test_index_writes_nothing_on_a_read_only_root(repo_wired, monkeypatch, capsys):
+    """`index` is the fifth writing verb M3 adds, so it goes through the same entry gate
+    `mark` and `reanchor --apply` use — the contract in README §一 is four entries
+    before this task and five after, and a verb that skips it re-opens the clobber
+    hazard M2 paid for with a lost DRIFT.md.
+
+    The root must really have the IDE shape: `WikiRoot.resolve()` decides layout from
+    `zh/content/` on disk, so a nonexistent path resolves to `repo` and the gate would
+    never be reached. Create the shape, do not assume it.
+    """
+    export = repo_wired["root"] / "export"
+    (export / "zh" / "content").mkdir(parents=True)
+    monkeypatch.setattr(wiki_drift, "wiki_root",
+                        wiki_drift.WikiRoot.resolve(export, base=repo_wired["root"]))
+    before = _tree_bytes(repo_wired["wiki"])
+    rc = wiki_drift.cmd_index(_args())
+    assert rc == 2, rc
+    assert "read-only" in capsys.readouterr().err
+    assert _tree_bytes(repo_wired["wiki"]) == before
+    assert not (export / "INDEX.md").exists()
 
