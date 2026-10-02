@@ -15,8 +15,11 @@ under ``.qoder/repowiki/_ide-export-retired-2026-10-01/`` — still readable as 
 
 That mapping is what makes the wiki maintainable outside the IDE:
 
-* compare each page's referenced files against the wiki's own baseline commit
-  (read from ``wiki_repo.last_commit_id``, never rewritten here);
+* compare each page's referenced files against *that page's* baseline commit —
+  per-page ``verified_at`` frontmatter first, then the page's ledger row, then the
+  tree-wide fallback ``tree_baseline()`` (the modal page stamp; ``metadata_baseline()``'s
+  ``wiki_repo.last_commit_id`` is only that fallback's last resort, for a root whose
+  pages carry no stamp at all). Nothing here rewrites the metadata;
 * keep an append-only, page-level ledger of reconciliations, so a page already
   brought current is measured from *its* commit rather than from the original
   snapshot date — which turns maintenance into per-page increments instead of
@@ -31,14 +34,19 @@ That mapping is what makes the wiki maintainable outside the IDE:
   or those lines never existed, which only a rewrite can fix.
 
 Only the active root's content tree is ever written — ``topics/**`` in the
-repo-owned ``repowiki/``, ``zh/content/**`` in the IDE export — and only under
-``reanchor --apply``, which rewrites a provable link and the range its own label
-prints, then signs the page in the ledger as links-only work so ``report`` keeps
-its prose drivers open.
+repo-owned ``repowiki/``, ``zh/content/**`` in an IDE export — and that is enforced,
+not advised: every verb resolves its ``--page`` through ``page_arg_within_content()``,
+which refuses a ``..`` component, an absolute path, and anything whose resolved form
+lands outside ``CONTENT``. ``mark`` and ``reanchor --apply`` then rewrite that page and
+its ledger row; ``reanchor --apply`` rewrites a provable link and the range its own
+label prints, signing the page as links-only work so ``report`` keeps its prose
+drivers open.
 
-``repowiki-metadata.json`` is treated as read-only on purpose. Leaving
-``last_commit_id`` alone keeps the IDE's own incremental-update path intact, so
-the wiki stays updatable from either side.
+``repowiki-metadata.json`` is treated as read-only on purpose: its encrypted fields are
+not authorable outside the IDE, and after M2 it is only the baseline fallback's last
+resort. There is no "either side" to stay updatable any more — Task 11 moved the
+export's ``zh/content`` and ``update`` into the archive, so the IDE has no
+incremental-update path left, and the tracked tree is the publication.
 
 The default root is the tracked ``repowiki/`` tree; ``--wiki-root`` re-points
 every path at another. Per-page baselines live in each page's own frontmatter
@@ -73,7 +81,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Iterable
 
 REPO = Path(__file__).resolve().parents[1]
@@ -1949,10 +1957,64 @@ class AmbiguousPage(Exception):
     pass
 
 
+class PageOutsideRoot(Exception):
+    """A `--page` argument that does not resolve inside the active root's content tree.
+
+    Reproduced by M2's final review: `mark --page ../../wiki/<page>.md` returned rc=0,
+    injected `vouch: "all"` frontmatter into an *upstream-owned* Markdown file, and
+    appended the escaped string as a ledger key. `CONTENT / rel` accepts `..` happily
+    and an absolute argument replaces the base outright, so the only thing that stopped
+    `.gitignore` was the `.md` suffix gate — an accident of suffix, not a guard.
+    """
+
+    def __init__(self, value: str, why: str) -> None:
+        super().__init__(
+            f"--page '{value}' is outside {CONTENT} ({why}). A page path is relative "
+            "to the active root's content tree (`topics/` in the tracked root, "
+            "`zh/content/` in an IDE export), with no `..` component and no absolute "
+            "path. Nothing was written and no ledger row was appended."
+        )
+
+
+def page_arg_within_content(value: str) -> tuple[str, Path]:
+    """One containment resolver for every site that reads a user-supplied `--page`.
+
+    Returns `(rel, path)`: the ledger-key spelling and the page under `CONTENT`. Refuses
+    `..` components, absolute paths, and anything whose resolved form leaves the content
+    tree — the check is *containment*, not shape, so a nested CJK key
+    (`回测引擎/投资组合优化器/最大分散化优化器.md`) and the `./`-prefixed spelling both
+    keep working exactly as they did.
+
+    `strip_dotslash()` is deliberately left alone: `<cite>` targets keep their dot-dirs
+    (`.github` must not turn into `github`), and a ref is never written to, so the guard
+    belongs on the page-argument path only.
+    """
+    raw = value.replace("\\", "/")
+    if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).is_absolute():
+        raise PageOutsideRoot(value, "an absolute path is not a page under the root")
+    if ".." in PurePosixPath(raw).parts:
+        raise PageOutsideRoot(value, "a `..` component points above the content tree")
+    rel = normalise_page_arg(value)
+    if not rel:
+        raise PageOutsideRoot(value, "an empty path names no page")
+    page = CONTENT / rel
+    try:
+        page.resolve().relative_to(CONTENT.resolve())
+    except ValueError:
+        raise PageOutsideRoot(value, "the resolved path leaves the content tree") from None
+    return rel, page
+
+
 def collect_pages(filter_substr: str | None) -> list[Path]:
     pages = sorted(CONTENT.rglob("*.md"))
     if filter_substr is None:
         return pages
+    # The same guard for `report`/`reanchor`, which only filter by substring: this
+    # function builds no path from its argument (it filters the `rglob` output), so an
+    # escaping needle could never reach a file — but answering "no wiki page matches"
+    # to an argument that means *another tree* is the empty-set false green this repo
+    # has documented three times. One rule for every `--page` beats two exceptions.
+    page_arg_within_content(filter_substr)
     needle = normalise_page_arg(filter_substr)
     kept = [p for p in pages if needle in str(p.relative_to(CONTENT)).replace("\\", "/")]
     if not kept:
@@ -1978,19 +2040,37 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
     fallback = args.baseline or tree_baseline()
     if not fallback:
         print(
-            "wiki baseline commit unavailable — pass --baseline <sha> "
-            "(snapshot was generated outside a git root, or metadata is missing)",
+            "wiki baseline commit unavailable — both sources were tried and neither "
+            f"supplied one: no page under {CONTENT} carries a 40-hex `verified_at`, and "
+            f"the root's `wiki_repo.last_commit_id` ({META}) is absent or unusable. "
+            "Pass --baseline <sha> to say which commit the corpus was generated at.",
             file=sys.stderr,
         )
         return 2
 
     head = git("rev-parse", "HEAD").strip()
     if not rev_reachable(fallback):
-        print(
-            f"baseline {fallback} is not reachable from HEAD — pass --baseline <sha> "
-            "(the snapshot commit was GC'd by a force-pushed sync)",
-            file=sys.stderr,
-        )
+        # One string used to serve two different causes, so a run that HAD passed
+        # `--baseline` was told to pass `--baseline`. Name where this value came from and
+        # recommend the flag only to someone who is not already holding it.
+        if args.baseline:
+            print(
+                f"baseline {fallback} is not reachable from HEAD — that is the value "
+                "--baseline supplied, and this repository has no such commit (a "
+                "force-pushed sync GC'd it, or it came from another clone). Replace it "
+                "with a commit that resolves here, or drop the flag and let the page "
+                "`verified_at` stamps supply the fallback.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"baseline {fallback} is not reachable from HEAD — that is the tree-wide "
+                f"fallback, i.e. the modal page `verified_at` under {CONTENT} or, where no "
+                "page is stamped, the root's `wiki_repo.last_commit_id` "
+                f"({META}), and this repository has no such commit (a force-pushed sync "
+                "GC'd it). Pass --baseline <sha> to override it.",
+                file=sys.stderr,
+            )
         return 2
     changes_at_snapshot = diff_since(fallback)
     dirty, untracked = worktree_delta()
@@ -2000,7 +2080,7 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
 
     try:
         pages = collect_pages(args.page)
-    except PageNotFound as exc:
+    except (PageNotFound, PageOutsideRoot) as exc:
         print(exc, file=sys.stderr)
         return 2
 
@@ -2046,13 +2126,26 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
-    UPDATE_DIR.mkdir(parents=True, exist_ok=True)
-    (UPDATE_DIR / "drift.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (UPDATE_DIR / "DRIFT.md").write_text(
-        render_markdown(payload, reports, gaps, args.top), encoding="utf-8"
-    )
+    # I-4: an `ide`-layout root is the archived export — `EMPTY_TREE_HINT` and
+    # `--wiki-root`'s help both advertise it as "a readable second root", and reading it
+    # used to write `update/DRIFT.md` + `update/drift.json` *into* the archive. That is
+    # an unrecoverable side effect (`.qoder/` sits in `.git/info/exclude`, so git cannot
+    # undo it) on the one snapshot of the pre-M2 state this repo has. The archive is
+    # read-only, exactly as M1 made its page bytes read-only in `stamp_frontmatter()`:
+    # `report` prints its summary and writes nothing, and `--json` is the documented way
+    # to take the payload away from it. The layout is the active root's own —
+    # `apply_wiki_root()` derives `WIKI`, `UPDATE_DIR` and `wiki_root` from one
+    # resolution, so no CLI invocation can pair a writes-allowed layout with an
+    # IDE-shaped tree.
+    writes_reports = wiki_root.layout != "ide"
+    if writes_reports:
+        UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+        (UPDATE_DIR / "drift.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (UPDATE_DIR / "DRIFT.md").write_text(
+            render_markdown(payload, reports, gaps, args.top), encoding="utf-8"
+        )
     s = payload["summary"]
     print(f"HEAD      {payload['head']}")
     # Name the value's actual source, not a story about it. The resolved fallback can
@@ -2078,7 +2171,13 @@ def cmd_report(args: argparse.Namespace) -> int:
         f"refs      {s['distinct_refs']} distinct | {s['refs_changed']} changed | "
         f"{s['refs_broken']} missing | {s['uncovered']} uncited changed files"
     )
-    print(f"report    {UPDATE_DIR / 'DRIFT.md'}")
+    if writes_reports:
+        print(f"report    {UPDATE_DIR / 'DRIFT.md'}")
+    else:
+        print(
+            f"report    nothing written — the IDE-layout root {WIKI} is a read-only "
+            "snapshot (use --json; its stdout carries this payload)"
+        )
     return 0
 
 
@@ -2090,8 +2189,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    rel = normalise_page_arg(args.page)
-    page = CONTENT / rel
+    rel, page = page_arg_within_content(args.page)
     if not page.is_file():
         matches = collect_pages(args.page)
         if len(matches) != 1:
@@ -2235,7 +2333,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("mark --page must name a .md file (report --page may be a substring)")
     try:
         return args.func(args)
-    except (PageNotFound, AmbiguousPage) as exc:
+    except (PageNotFound, AmbiguousPage, PageOutsideRoot) as exc:
         print(exc, file=sys.stderr)
         return 2
     except RuntimeError as exc:

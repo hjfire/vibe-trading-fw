@@ -1,0 +1,14 @@
+# Derived reports, not publication.
+#
+# `python -X utf8 tools/wiki_drift.py --wiki-root repowiki report` rewrites these two
+# files on every run, so tracking them meant the documented command left ` M
+# repowiki/drift/DRIFT.md` + ` M repowiki/drift/drift.json` in `git status` forever, and
+# whatever was committed stated a HEAD and a water level that were already stale (the
+# final review measured `uncovered 888` committed against `1379` live). They are output,
+# regenerable in one command from the tree they describe.
+#
+# The fact source stays "the Markdown here + `ledger.jsonl`". The rule lives in this
+# file rather than the repository root's .gitignore because that file belongs to
+# upstream and this fork's constraint is to leave it byte-for-byte alone — a deeper
+# .gitignore wins for its own subtree, exactly like the .gitattributes next to it.
+drift/

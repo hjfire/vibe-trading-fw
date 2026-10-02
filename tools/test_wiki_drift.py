@@ -29,6 +29,7 @@ import pytest
 from wiki_drift import (  # type: ignore[import-untyped]
     AmbiguousPage,
     PageNotFound,
+    PageOutsideRoot,
     PageReport,
     audit_page,
     cmd_mark,
@@ -3296,6 +3297,12 @@ def test_seed_does_not_touch_hand_authored_pages(tmp_path, monkeypatch):
     assert target.is_dir()  # the fixture really is the export this plan reads
 
 
+# The commit the IDE export was generated at, and the `verified_at` every seeded page
+# carries (`tree_baseline()`'s modal value over the shipped tree, measured 489 of 494).
+# 5 hand-authored `modules/pine-engine/` faces are stamped later, at `b19b6578…`.
+SEEDING_SNAPSHOT = "7fdffa31a0d6ff54d236db3dea6adaf8d1ca6709"
+
+
 def test_seeded_tree_is_not_an_empty_set():
     """'All 494 pages parsed' over a directory holding 1 README is the exact false
     green this repo has now documented three times.
@@ -3305,7 +3312,17 @@ def test_seeded_tree_is_not_an_empty_set():
     for the tree this task creates, because `repowiki/drift/DRIFT.md` is also not a
     wiki page (and has no frontmatter) — name-excluding would count it and land it
     in `missing`. Dir-scoping excludes all three for the right reason: a top-level
-    file has `parts[0] == "README.md"`, and a report has `parts[0] == "drift"`."""
+    file has `parts[0] == "README.md"`, and a report has `parts[0] == "drift"`.
+
+    The `vouch` clause states the durable invariant the seeding actually claimed, not
+    a snapshot of a moving tree. `mark` without `--partial` writes `vouch: "all"` AND
+    rewrites `verified_at` to HEAD, so a live count of `all` measures whether M5 has
+    started: the final review reproduced this assertion going red on the first
+    legitimate stamp (`assert 1 == 0`), in the same test that carries the anti-empty-set
+    canary. What seeding promised is narrower — no page vouches for all its cites
+    **while still stamped at the seeding snapshot**, because that pairing is a claimed
+    re-reading nobody did.
+    """
     tree = REAL_REPO / "repowiki"
     pages = sorted(p for p in tree.rglob("*.md")
                    if p.relative_to(tree).parts[0] in {"topics", "modules", "cards"})
@@ -3316,7 +3333,12 @@ def test_seeded_tree_is_not_an_empty_set():
     assert missing == [], missing[:3]
     blocks = [wiki_drift.split_frontmatter(wiki_drift.read_page_text(p))[0] for p in pages]
     assert all(fm and fm["verified_at"] and fm["page"] for fm in blocks), "every page carries a baseline"
-    assert sum(1 for fm in blocks if fm["vouch"] == "all") == 0, "seeding is not a re-reading"
+    unearned = [
+        p.relative_to(tree).as_posix()
+        for p, fm in zip(pages, blocks)
+        if fm["vouch"] == "all" and fm["verified_at"] == SEEDING_SNAPSHOT
+    ]
+    assert unearned == [], f"`vouch: all` at the seeding stamp is a re-reading nobody did: {unearned[:3]}"
 
 
 # ---------------------------------------------------------------------------
@@ -3349,4 +3371,412 @@ def test_readme_states_the_conventions_a_reader_will_otherwise_violate():
                    "verified_at", "applied-only", "M5", "ci_grep_gates.sh",
                    "./.qoder/", "--baseline"):
         assert needle in text, needle
+
+
+# ---------------------------------------------------------------------------
+# C-1: `--page` cannot take the tool outside the active root's content tree
+# ---------------------------------------------------------------------------
+#
+# `mark --page ../../victim.md` used to return rc=0: it rewrote a file that is not a
+# wiki page, stamped `vouch: "all"` plus a `verified_at` onto a page nobody read, and
+# appended the escaped string as a ledger key. In the real repo that same spelling
+# reaches upstream's `wiki/*.md`, which is the one rule that outranks this milestone.
+# Before this section, nothing in the suite passed a `..` component to any verb.
+
+
+def _plant_victims(repo_wired) -> dict[str, Path]:
+    """Two real files outside `CONTENT`, at the depths a `--page` argument reaches.
+
+    `root/wiki/victim.md` stands in for upstream's public documentation site — the
+    same relative distance (`../../wiki/<page>.md`) as the review's sandbox probe.
+    `wiki/victim.md` is inside the root but above `topics/`: the property being
+    enforced is containment in the *content tree*, not merely containment in the repo.
+    """
+    root, wiki = repo_wired["root"], repo_wired["wiki"]
+    upstream = root / "wiki" / "victim.md"
+    upstream.parent.mkdir(parents=True, exist_ok=True)
+    upstream.write_text("# 上游文档站的一页\n\n这页不该被本工具改写。\n", encoding="utf-8")
+    above_content = wiki / "victim.md"
+    above_content.write_text("# 根内、内容树外的一页\n\n同样不该被改写。\n", encoding="utf-8")
+    return {"upstream": upstream, "above_content": above_content}
+
+
+def _victim_bytes(victims: dict[str, Path]) -> dict[str, str]:
+    return {key: path.read_bytes().hex() for key, path in victims.items()}
+
+
+@pytest.mark.parametrize("arg, which", [
+    ("../../wiki/victim.md", "upstream"),          # the probe the review ran
+    ("..\\..\\wiki\\victim.md", "upstream"),       # Windows separators
+    ("./../../wiki/victim.md", "upstream"),        # the `./`-prefixed form
+    ("a/../../wiki/victim.md", "upstream"),        # hop in, two hops out
+    ("../../wiki/../wiki/victim.md", "upstream"),  # disguised
+    ("..\\victim.md", "above_content"),
+    ("../victim.md", "above_content"),             # inside the root, outside CONTENT
+    ("topics/../victim.md", "above_content"),      # re-enters the root, not the tree
+])
+def test_mark_refuses_an_escaping_page_argument(repo_wired, capsys, arg, which):
+    """rc=2, the victim's bytes intact, no ledger row, no `update/`/`drift/` created."""
+    victims = _plant_victims(repo_wired)
+    before = _victim_bytes(victims)
+    assert main(["mark", "--page", arg, "-m", "must never land"]) == 2
+    err = capsys.readouterr().err
+    assert arg in err, err                       # names the offending argument
+    assert str(repo_wired["content"]) in err, err  # names the root it must stay inside
+    assert _victim_bytes(victims) == before, "a refused --page must not touch a byte"
+    assert not wiki_drift.LEDGER.exists(), "a refused --page must not append the ledger"
+    assert not wiki_drift.UPDATE_DIR.exists()
+
+
+@pytest.mark.parametrize("spell", ["path", "posix"])
+def test_mark_refuses_an_absolute_page_argument(repo_wired, capsys, spell):
+    """Both absolute spellings: pathlib lets an absolute arg replace the base outright."""
+    victims = _plant_victims(repo_wired)
+    before = _victim_bytes(victims)
+    absolute = victims["upstream"]
+    arg = str(absolute) if spell == "path" else absolute.as_posix()
+    assert main(["mark", "--page", arg, "-m", "must never land"]) == 2
+    err = capsys.readouterr().err
+    assert arg in err and str(repo_wired["content"]) in err, err
+    assert _victim_bytes(victims) == before
+    assert not wiki_drift.LEDGER.exists()
+
+
+def test_mark_still_writes_a_deeply_nested_cjk_page(repo_wired):
+    """The other half of the guard: containment must not cost a legitimate page.
+
+    Three CJK levels, the shape of the real ledger keys
+    (`回测引擎/投资组合优化器/最大分散化优化器.md`), marked through the same command.
+    """
+    page = repo_wired["content"] / "回测引擎" / "投资组合优化器" / "最大分散化优化器.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "# 最大分散化优化器\n\n<cite>\n**本文引用的文件**\n"
+        "- [alpha](file://src/mod.py#L9-L10)\n</cite>\n\n## 简介\n",
+        encoding="utf-8",
+    )
+    rel = "回测引擎/投资组合优化器/最大分散化优化器.md"
+    assert main(["mark", "--page", rel, "-m", "重读完毕"]) == 0
+    fm = wiki_drift.read_frontmatter(page)
+    assert fm is not None and fm["page"] == rel, fm
+    assert fm["verified_at"] == repo_wired["head"] and fm["vouch"] == "all"
+    assert wiki_drift.load_ledger()[rel].note == "重读完毕"
+
+
+def test_mark_still_accepts_the_dotslash_spelling(repo_wired):
+    """`./x/y.md` is a legitimate prefix, not an escape: it must keep working."""
+    rel = "./前端应用/模块说明.md"
+    assert main(["mark", "--page", rel, "-m", "同一页的另一种写法"]) == 0
+    # The ledger key is the normalised path, so the two spellings stay one identity.
+    assert set(wiki_drift.load_ledger()) == {"前端应用/模块说明.md"}
+
+
+def test_report_refuses_an_escaping_page_argument(repo_wired, capsys):
+    victims = _plant_victims(repo_wired)
+    before = _victim_bytes(victims)
+    # `--baseline` because the repo-shaped fixture has no IDE metadata: without a
+    # baseline `build()` exits 2 earlier, and the guard would never be reached.
+    assert main(["report", "--page", "../../wiki/victim.md", "--baseline", repo_wired["base"]]) == 2
+    err = capsys.readouterr().err
+    assert "../../wiki/victim.md" in err and str(repo_wired["content"]) in err, err
+    assert _victim_bytes(victims) == before
+    assert not (repo_wired["wiki"] / "drift" / "DRIFT.md").exists()
+    assert not (repo_wired["wiki"] / "drift" / "drift.json").exists()
+
+
+def test_reanchor_refuses_an_escaping_page_argument(repo_wired, capsys):
+    victims = _plant_victims(repo_wired)
+    before = _victim_bytes(victims)
+    assert main(["reanchor", "--page", "../victim.md", "--shifts", "--apply"]) == 2
+    assert "../victim.md" in capsys.readouterr().err
+    assert _victim_bytes(victims) == before
+    assert not wiki_drift.LEDGER.exists()
+
+
+def test_collect_pages_refuses_escaping_needles_and_stays_home_otherwise(repo_wired):
+    """What `collect_pages` could actually do before the guard, measured not assumed.
+
+    It builds no path from the argument: it filters `CONTENT.rglob("*.md")` by
+    substring, so an escaping needle could only ever match nothing (rc=2 via
+    PageNotFound) and could not write outside. The guard still applies, because one
+    rule for every `--page` spelling is cheaper to reason about than two, and the
+    positive half below pins that it cannot return a path outside the content tree.
+    """
+    _plant_victims(repo_wired)
+    for needle in ("../victim.md", "..\\victim.md", "../../wiki/victim.md",
+                   str(repo_wired["root"] / "wiki" / "victim.md")):
+        with pytest.raises(PageOutsideRoot):
+            collect_pages(needle)
+    for page in collect_pages("前端应用"):
+        assert page.resolve().is_relative_to(repo_wired["content"].resolve())
+
+
+# ---------------------------------------------------------------------------
+# I-4: an IDE-layout root is a read-only snapshot, so `report` writes nothing into it
+# ---------------------------------------------------------------------------#
+# `EMPTY_TREE_HINT` and `--wiki-root`'s help both advertise the archived export as "a
+# readable second root". Measured, `report` against it exited 0 AND wrote
+# `update/DRIFT.md` + `update/drift.json` into the archive — an unrecoverable write
+# into the one backup of the pre-M2 state, because `.qoder/` is in `.git/info/exclude`
+# and git therefore cannot undo it. The reviewer's own probe left those two files
+# behind; this pair of cases is what stops the tool from making more of them.
+
+
+def _hold_path_globals(monkeypatch) -> None:
+    """`main()` runs `apply_wiki_root`, which mutates the six path globals in place.
+
+    Re-assigning each through `monkeypatch` is what makes the mutation die with the
+    case (the same hygiene `_seedable` documents).
+    """
+    for name in ("REPO", "WIKI", "CONTENT", "META", "UPDATE_DIR", "LEDGER", "wiki_root"):
+        monkeypatch.setattr(wiki_drift, name, getattr(wiki_drift, name))
+
+
+def test_report_on_an_ide_root_writes_nothing(wired, monkeypatch, capsys):
+    _hold_path_globals(monkeypatch)
+    update = wired["wiki"] / "update"
+    update.mkdir(parents=True, exist_ok=True)
+    sentinel = update / "ledger.jsonl"
+    sentinel.write_text(
+        json.dumps({"page": "前端应用/模块说明.md", "head": "c" * 40,
+                    "sha_after": "d" * 64, "note": "归档里的既有行", "at": "t"},
+                   ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    before_bytes = {p.name: p.read_bytes() for p in update.iterdir()}
+
+    assert main(["--wiki-root", str(wired["wiki"]), "report"]) == 0
+
+    assert wiki_drift.wiki_root.layout == "ide", "the CLI must have read the archive shape"
+    assert {p.name: p.read_bytes() for p in update.iterdir()} == before_bytes, (
+        "an IDE-layout root keeps exactly the files it had — nothing added, nothing rewritten"
+    )
+    assert not (update / "DRIFT.md").exists() and not (update / "drift.json").exists()
+    out = capsys.readouterr().out
+    assert "read-only snapshot" in out and str(wired["wiki"]) in out, out
+    # …and the report is still delivered: the summary lines are the whole point.
+    assert "pages     2 total" in out, out
+
+
+def test_report_on_a_repo_root_still_writes_both_reports(repo_wired, monkeypatch, capsys):
+    """The other side of the rule: untracking `drift/` (Fix 3) must not stop `report`
+    from producing its files in the tracked layout."""
+    _hold_path_globals(monkeypatch)
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "report",
+                 "--baseline", repo_wired["base"]]) == 0
+    drift = repo_wired["wiki"] / "drift"
+    assert (drift / "DRIFT.md").is_file() and (drift / "drift.json").is_file()
+    out = capsys.readouterr().out
+    assert str(drift / "DRIFT.md") in out, out
+    assert "read-only snapshot" not in out
+
+
+# ---------------------------------------------------------------------------
+# I-3: `repowiki/drift/` is derived output, so it is not tracked
+# ---------------------------------------------------------------------------
+
+
+def _ls_files(*args: str) -> list[str]:
+    proc = subprocess.run(
+        ["git", "-C", str(REAL_REPO), "-c", "core.quotepath=off", *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 0, f"{args} -> rc={proc.returncode}: {proc.stderr}"
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def test_drift_reports_are_derived_and_not_tracked():
+    """`report` rewrites `DRIFT.md` + `drift.json` on every run.
+
+    Tracking them (as M2 did) meant the documented headline command left two ` M`
+    entries in `git status` forever — churn with no owner for a fork whose whole rule
+    is a clean upstream sync — and whatever got committed stated a HEAD and a water
+    level that were already false (measured at the review: `uncovered 888` committed vs
+    `1379` live). They are output, regenerable in one command from the tree they
+    describe, so the tracked tree is the publication only.
+
+    The ignore rule lives in `repowiki/.gitignore`, not the repository root's
+    `.gitignore`, because that file is upstream-owned and this fork's binding rule is to
+    leave it byte-for-byte alone.
+    """
+    assert _ls_files("ls-files", "repowiki/drift") == [], "derived reports must not be tracked"
+    # `check-ignore -v` names the file and pattern that fired, so a rule deleted or
+    # moved out of `repowiki/` cannot pass this quietly.
+    provenance = _ls_files(
+        "check-ignore", "-v", "repowiki/drift/DRIFT.md", "repowiki/drift/drift.json"
+    )
+    assert len(provenance) == 2, provenance
+    for line in provenance:
+        assert "repowiki/.gitignore" in line and "drift/" in line, line
+
+
+def test_tracked_repowiki_tree_is_pages_plus_four_derivation_free_entries():
+    """The publication's composition, re-measured rather than subtracted by hand.
+
+    494 pages (pinned by `test_seeded_tree_is_not_an_empty_set`) plus four items that
+    are neither pages nor derived: `/.gitattributes` (the LF pin the ledger hashes
+    depend on), `/.gitignore` (keeps `drift/` out of the tree), `/README.md`,
+    `/ledger.jsonl`. Adding a fifth tracked non-page file is a decision, and this is
+    where it has to be made — the count is expressed from the two facts, so it cannot
+    drift out of sync with the page count it is quoted next to.
+    """
+    names = _ls_files("ls-files", "repowiki")
+    non_pages = sorted(
+        n for n in names if n.split("/")[1] not in {"topics", "modules", "cards"}
+    )
+    assert non_pages == [
+        "repowiki/.gitattributes",
+        "repowiki/.gitignore",
+        "repowiki/README.md",
+        "repowiki/ledger.jsonl",
+    ], non_pages
+    pages = [n for n in names if n not in non_pages]
+    assert len(pages) == 494, len(pages)
+    assert len(names) == 494 + len(non_pages) == 498, len(names)
+
+
+# ---------------------------------------------------------------------------
+# M-4 + acceptance gate 6: M2's central property must stay re-checkable
+# ---------------------------------------------------------------------------
+#
+# "The 450 seeded bodies are the archived export's bodies, byte for byte" was proven by
+# one hand-run command whose script (`.qoder/tmp/audit_sweep_shape2.py`) still pointed at
+# the emptied `.qoder/repowiki/zh/content` — so it printed `pages touched 0 | lines
+# changed 0` and exited 0. That is this repo's documented false green on its own
+# acceptance criterion, and M-4's larger half: no test asserted the archive exists, so
+# `git clean -fdx` could delete a directory no commit protects and every constant-derived
+# `EXPORT_ARCHIVE` assertion in the suite would stay green.
+#
+# These two cases do not `pytest.skip()` when the archive is missing. Red is the correct
+# outcome: an absent archive means the seed's parent evidence is gone, which is exactly
+# what a guard is supposed to say out loud, and a skip would make the deletion look like
+# a passing suite.
+
+
+ARCHIVE_CONTENT = (
+    REAL_REPO / wiki_drift.LEGACY_EXPORT / wiki_drift.EXPORT_ARCHIVE / "zh" / "content"
+)
+EXTERNAL_BACKUP = "../wiki-content-backup-2026-10-01"
+
+
+def test_the_archived_export_still_holds_the_450_seeded_pages():
+    """The archive is the only in-repo copy of what 450 pages were copied FROM.
+
+    It is not tracked — `.qoder/` sits in `.git/info/exclude` — so `git` cannot restore
+    it and `git clean -fdx` deletes it. The only recovery is the external backup at
+    `../wiki-content-backup-2026-10-01` (also untracked, outside the repo), which is
+    named in the failure text because a reader who hits this needs the path, not a hint.
+    """
+    missing = (
+        f"the archived IDE export is gone: {ARCHIVE_CONTENT} is not a directory. "
+        f"Nothing in git can bring it back (`.qoder/` is excluded, and the archive was "
+        f"moved, not committed) — recover it from the external backup at "
+        f"{EXTERNAL_BACKUP} before any claim about seed fidelity is re-checked."
+    )
+    assert ARCHIVE_CONTENT.is_dir(), missing
+    pages = sorted(ARCHIVE_CONTENT.rglob("*.md"))
+    assert pages, missing
+    assert len(pages) == 450, (
+        f"the archive holds {len(pages)} pages, not the 450 the seed copied; "
+        f"cross-check against {EXTERNAL_BACKUP} before trusting either side"
+    )
+
+
+def test_every_seeded_topic_body_matches_the_archive_byte_for_byte():
+    """Gate 6, made permanent: 450 pages, both directions named, no empty iteration.
+
+    For every archived export page the same relative key must exist under
+    `repowiki/topics/`, and the seeded page's *body* bytes (its frontmatter stripped —
+    the frontmatter is what M2 added, and `body_sha()` hashes the body for exactly this
+    reason) must equal the export file's bytes. The count is asserted from the archive
+    side, so a walk that found nothing could never pass, and the two failure lists are
+    reported separately: "absent" is a lost page, "mismatch" is an edited one.
+    """
+    export_pages = sorted(ARCHIVE_CONTENT.rglob("*.md"))
+    assert len(export_pages) == 450, (
+        f"refusing to compare against {len(export_pages)} archived pages — the 450-page "
+        f"archive is the premise of this check (see the case above; recovery is "
+        f"{EXTERNAL_BACKUP})"
+    )
+    absent: list[str] = []
+    mismatched: list[str] = []
+    for export in export_pages:
+        rel = export.relative_to(ARCHIVE_CONTENT).as_posix()
+        seeded = REAL_REPO / "repowiki" / "topics" / export.relative_to(ARCHIVE_CONTENT)
+        if not seeded.is_file():
+            absent.append(rel)
+            continue
+        if wiki_drift.body_text(seeded).encode("utf-8") != export.read_bytes():
+            mismatched.append(rel)
+    assert absent == [], f"pages the seed did not publish: {absent[:5]} ({len(absent)} total)"
+    assert mismatched == [], (
+        f"seeded bodies that are not the archive's bytes: {mismatched[:5]} "
+        f"({len(mismatched)} total)"
+    )
+    assert len(export_pages) - len(absent) - len(mismatched) == 450
+
+
+# ---------------------------------------------------------------------------
+# M-3: the two baseline failures are different problems and must say so differently
+# ---------------------------------------------------------------------------
+#
+# Measured verbatim before this section, for a run that DID pass the flag:
+#   baseline b19b5a… is not reachable from HEAD — pass --baseline <sha> (the snapshot
+#   commit was GC'd by a force-pushed sync)
+# Both failure modes (nothing determinable / a supplied value that does not resolve)
+# printed the same remedy, so the tool instructed the operator to do the thing they had
+# just done. Each message now names what was actually tried and what is missing, and the
+# flag is only recommended to someone who is not already using it.
+
+# The tool spells the remedy as prose at the start of a sentence ("Pass --baseline <sha>
+# to override it."), while the defect this section pins is the *advice*, not its casing —
+# so every assertion below matches the phrase case-insensitively.
+BASELINE_ADVICE = re.compile(r"pass --baseline", re.IGNORECASE)
+
+
+def test_supplied_unreachable_baseline_does_not_recommend_the_flag_it_was_given(
+        wired, monkeypatch, capsys):
+    given = "f" * 40
+    assert main(["report", "--baseline", given]) == 2
+    err = capsys.readouterr().err
+    assert f"baseline {given} is not reachable from HEAD" in err, err
+    assert not BASELINE_ADVICE.search(err), err        # the operator just did that
+    assert "--baseline" in err, err                    # …named as where the value came from
+    assert str(wired["content"]) not in err            # not blamed on the tree
+
+
+def test_derived_unreachable_baseline_still_offers_the_override(wired, capsys):
+    """`tree_baseline()`'s own value can be the unreachable one (a GC'd snapshot)."""
+    (wired["wiki"] / "zh" / "meta" / "repowiki-metadata.json").write_text(
+        json.dumps({"wiki_repo": {"last_commit_id": "e" * 40}}), encoding="utf-8"
+    )
+    assert main(["report"]) == 2
+    err = capsys.readouterr().err
+    assert f"baseline {'e' * 40} is not reachable from HEAD" in err, err
+    assert BASELINE_ADVICE.search(err), err
+    assert "verified_at" in err, err                  # says where the value came from
+
+
+def test_undeterminable_baseline_names_both_sources_it_tried(wired, monkeypatch, capsys):
+    absent_meta = wired["root"] / "nothing.json"
+    monkeypatch.setattr(wiki_drift, "META", absent_meta)
+    assert main(["report"]) == 2
+    err = capsys.readouterr().err
+    assert BASELINE_ADVICE.search(err), err            # here the advice IS the remedy
+    assert str(wired["content"]) in err, err           # the page tree was looked at …
+    assert "verified_at" in err, err                   # … and said so, key and all
+    assert str(absent_meta) in err and "wiki_repo.last_commit_id" in err, err
+    # … both sources named, each with the file it actually opened.
+
+
+def test_the_two_baseline_failures_are_not_the_same_message(wired, monkeypatch, capsys):
+    """The defect was one string serving two causes; the pair must now differ."""
+    given = "f" * 40
+    assert main(["report", "--baseline", given]) == 2
+    supplied = capsys.readouterr().err
+    monkeypatch.setattr(wiki_drift, "META", wired["root"] / "nothing.json")
+    assert main(["report"]) == 2
+    undeterminable = capsys.readouterr().err
+    assert supplied.strip() != undeterminable.strip(), (supplied, undeterminable)
+    assert BASELINE_ADVICE.search(undeterminable) and not BASELINE_ADVICE.search(supplied)
 
