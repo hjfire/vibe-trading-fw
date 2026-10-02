@@ -137,8 +137,8 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki seed    # 默认 dry-run
 
 ## 归档位置
 
-`.qoder/repowiki/_ide-export-retired-2026-10-01/{zh,update}`：播种后把导出的 `zh/` 与
-`update/` 整棵**移动**进去（改名归档，不删除，也不入库）。`knowledge/` 留在原处
+`.qoder/repowiki/_ide-export-retired-2026-10-01/{zh,update}`：播种后已把导出的 `zh/` 与
+`update/` 整棵**移动**进去（2026-10-02 落盘；改名归档，不删除，也不入库）。`knowledge/` 留在原处
 `.qoder/repowiki/knowledge/` —— 它是 `seed` 幂等重放的输入，动它等于自断后路；同时它也正是
 「已知长期现象」那节里门禁长期红的那条命中路径。
 

@@ -16,6 +16,7 @@ Run with::
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -1671,6 +1672,128 @@ def test_empty_tree_hint_points_at_the_archive(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "no wiki pages" in err and "--wiki-root" in err
     assert wiki_drift.EXPORT_ARCHIVE in err
+
+
+def _packed(text: str) -> str:
+    """Help text with every run of whitespace removed, so argparse's wrapping can
+    never break a long path across two lines and make an assertion miss it."""
+    return "".join(text.split())
+
+
+def _assert_no_bare_legacy_root(text: str, label: str) -> None:
+    """Every mention of the retired root must carry the archive suffix.
+
+    A bare `.qoder/repowiki` in help output is an instruction the shell cannot
+    run any more (it exits 2), which is the defect this pins shut."""
+    packed = _packed(text)
+    for hit in re.finditer(re.escape(wiki_drift.LEGACY_EXPORT), packed):
+        tail = packed[hit.end():]
+        assert tail.startswith(f"/{wiki_drift.EXPORT_ARCHIVE}"), (
+            label, packed[max(0, hit.start() - 60):hit.end() + 30]
+        )
+
+
+def _archive_value(node: ast.Call) -> ast.expr:
+    """The expression one `EMPTY_TREE_HINT.format(...)` call hands to `archive=`."""
+    return next(kw.value for kw in node.keywords if kw.arg == "archive")
+
+
+@pytest.mark.parametrize("argv", [
+    ["mark", "--page", "缺席页.md"],
+    ["reanchor", "--page", "缺席页"],
+], ids=["mark", "reanchor"])
+def test_empty_tree_hint_points_at_the_archive_on_the_writing_verbs(
+        tmp_path, monkeypatch, capsys, argv):
+    """The hint has three call sites — `cmd_reanchor`, `build()` (behind `report`)
+    and `cmd_mark` — and before this case only `report` reached its own.
+
+    Deleting `archive=` at either writer raised a bare `KeyError` *inside the
+    error path*, so the suite stayed green while `mark`/`reanchor` on an empty
+    root turned into a traceback instead of the six-line explanation. Same drive
+    shape as the `report` case above, same three assertions, plus the rendered
+    archive path itself: that is what a wrong-but-present `archive=` would slip
+    past."""
+    monkeypatch.setattr(wiki_drift, "CONTENT", tmp_path / "topics")
+    monkeypatch.setattr(wiki_drift, "WIKI", tmp_path)
+    monkeypatch.setattr(wiki_drift, "UPDATE_DIR", tmp_path / "drift")
+    monkeypatch.setattr(wiki_drift, "LEDGER", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(wiki_drift, "wiki_root", wiki_drift.WikiRoot(root=tmp_path, layout="repo"))
+    assert main(argv) == 2, argv
+    err = capsys.readouterr().err
+    assert "no wiki pages" in err and "--wiki-root" in err, argv
+    assert f"{wiki_drift.LEGACY_EXPORT}/{wiki_drift.EXPORT_ARCHIVE}" in err, argv
+
+
+def test_every_empty_tree_hint_call_site_passes_archive():
+    """Static backstop to the behavioural cases above: a *fourth* guard added by
+    the next milestone (`stale`/`index`) that forgets `archive=` fails exactly
+    like the two untested sites did — a `KeyError` no other test reaches.
+
+    Sweeping the source also pins the two regressions this task's brief warns
+    about: the template must stay a plain `.format` string (an f-string would
+    evaluate `{content}` at import and NameError on module load), and its slot
+    list must equal the keywords each site passes, so `{archive}` cannot be
+    dropped from the template while the call sites still hand it over."""
+    src = (REAL_REPO / "tools" / "wiki_drift.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    slots = set(re.findall(r"\{(\w+)\}", wiki_drift.EMPTY_TREE_HINT))
+    assert slots == {"content", "root", "layout", "archive"}, sorted(slots)
+
+    sites = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "format"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "EMPTY_TREE_HINT"
+    ]
+    assert len(sites) >= 3, [node.lineno for node in sites]
+    for node in sites:
+        passed = {kw.arg for kw in node.keywords}
+        assert passed == slots, (node.lineno, sorted(passed))
+        # the archive value must be DERIVED (`LEGACY_EXPORT` + `EXPORT_ARCHIVE`);
+        # a second hardcoded copy of the path is what drifted out of sync this round
+        segment = ast.get_source_segment(src, _archive_value(node)) or ""
+        words = set(re.findall(r"\w+", segment))
+        assert {"LEGACY_EXPORT", "EXPORT_ARCHIVE"} <= words, (node.lineno, segment)
+
+    assignment = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "EMPTY_TREE_HINT" for t in node.targets)
+    ]
+    assert len(assignment) == 1, assignment
+    assert not isinstance(assignment[0].value, ast.JoinedStr), "must stay a .format template"
+
+
+def test_help_advertises_the_archive_not_the_retired_root(capsys):
+    """Both `--wiki-root` help strings and the module docstring's usage block used
+    to tell readers the IDE export "stays reachable as .qoder/repowiki" — measured
+    today that root exits 2, so following `--help` produced a hard failure the
+    tool's own documentation had caused.
+
+    `seed --help` is checked for the archive only, not for the bare root: its
+    `--from` default is still the pre-retirement export root, which is a seeding
+    concern (M3 owns the `--from`/`knowledge/` split), not a `--wiki-root` claim.
+    """
+    archive = f"{wiki_drift.LEGACY_EXPORT}/{wiki_drift.EXPORT_ARCHIVE}"
+
+    def _help(argv):
+        with pytest.raises(SystemExit):
+            main(argv)
+        return _packed(capsys.readouterr().out)
+
+    top = _help(["--help"])
+    assert archive in top
+    _assert_no_bare_legacy_root(top, "--help")
+    for verb in ("report", "mark", "reanchor"):
+        out = _help([verb, "--help"])
+        assert archive in out, verb
+        _assert_no_bare_legacy_root(out, f"{verb} --help")
+    assert archive in _help(["seed", "--help"])
+
+    doc = _packed(wiki_drift.__doc__ or "")
+    assert archive in doc, "the usage block must show the archive path"
+    _assert_no_bare_legacy_root(doc, "module docstring")
 
 
 # ---------------------------------------------------------------------------

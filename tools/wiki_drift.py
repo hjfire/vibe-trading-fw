@@ -2,13 +2,16 @@
 """wiki_drift.py — keep the local Repo Wiki corpus honest about the code it documents.
 
 Qoder IDE owns Repo Wiki *generation*: the table of contents, the navigation
-tree and the incremental-update baseline all live in
-``.qoder/repowiki/zh/meta/repowiki-metadata.json``, and several of its fields
+tree and the incremental-update baseline all live in the IDE export's
+``zh/meta/repowiki-metadata.json``, and several of its fields
 (``current_document_structure``, ``catalogue_think_content``, per-catalog
 ``raw_data``) are ``WikiEncrypted:`` blobs no external tool can author. The
-rendered pages under ``.qoder/repowiki/zh/content/**`` are plain UTF-8
-Markdown, though — and every one of them opens with a ``<cite>`` block of
+rendered pages under that export's ``zh/content/**`` are plain UTF-8 Markdown,
+though — and every one of them opens with a ``<cite>`` block of
 ``[name](file://path#Lx-Ly)`` links, which is a page -> source-file mapping.
+Since M2 the export is archived rather than current, so both of those trees sit
+under ``.qoder/repowiki/_ide-export-retired-2026-10-01/`` — still readable as a
+``--wiki-root``, no longer the publication (that is the tracked ``repowiki/``).
 
 That mapping is what makes the wiki maintainable outside the IDE:
 
@@ -50,7 +53,8 @@ Usage::
     python tools/wiki_drift.py reanchor --shifts             # dry-run every page
     python tools/wiki_drift.py reanchor --page 安装与配置 --shifts --apply
     python tools/wiki_drift.py --wiki-root repowiki report
-    python tools/wiki_drift.py --wiki-root .qoder/repowiki report   # legacy export
+    python tools/wiki_drift.py --wiki-root \
+        .qoder/repowiki/_ide-export-retired-2026-10-01 report   # archived IDE export
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md -m "re-anchored"
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md --partial
 
@@ -2151,8 +2155,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--wiki-root",
         default=None,
-        help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the IDE "
-        "export stays reachable as .qoder/repowiki)",
+        help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the archived IDE "
+        f"export is a readable second root at {LEGACY_EXPORT}/{EXPORT_ARCHIVE})",
     )
     sub = parser.add_subparsers(dest="cmd")
 
@@ -2219,8 +2223,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser_.add_argument(
             "--wiki-root",
             default=argparse.SUPPRESS,
-            help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the IDE "
-            "export stays reachable as .qoder/repowiki)",
+            help=f"wiki tree to operate on (default {WIKI_ROOT_DEFAULT}; the archived IDE "
+            f"export is a readable second root at {LEGACY_EXPORT}/{EXPORT_ARCHIVE})",
         )
 
     raw = list(argv) if argv is not None else sys.argv[1:]
