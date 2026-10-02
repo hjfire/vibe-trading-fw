@@ -4483,3 +4483,28 @@ def test_the_two_archive_cases_are_marked_local_archive():
     conftest = (REAL_REPO / "tools" / "conftest.py").read_text(encoding="utf-8")
     assert "addinivalue_line" in conftest and "local_archive" in conftest
 
+
+def test_the_workflow_materialises_upstream_main_so_the_guards_are_not_silently_skipped():
+    """P-9: two fork-hygiene guards shell `git diff upstream/main...HEAD`, and a fresh
+    runner checkout only ever configures `origin` — so without this step the hard suite
+    step is red by construction on its first real run. The wrong fix is marking the guards
+    out of the CI selection: upstream/main is measured to be an ANCESTOR of HEAD here
+    (behind=0, ahead=215), so with the checkout's fetch-depth: 0 the fetch is a ref write,
+    not a download — and 「上游零改动」 is the invariant this fork cannot afford to unwatch.
+    """
+    text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
+    fetch_idx = text.index("refs/remotes/upstream/main")
+    assert fetch_idx < text.index("wiki_freshness_gate.sh"), "the ref must exist before history is read"
+    assert "git remote add upstream" in text[:fetch_idx]
+    assert "git fetch upstream" in text[:fetch_idx]
+    # the fetch is a hard step: only the water level may soften. A second tolerance flag
+    # is the named failure mode — always-red gates get switched off, and so do soft ones.
+    assert text.count("continue-on-error") == 1
+    assert text.index("continue-on-error") > fetch_idx
+    # and the two guards that consume the ref must stay inside the CI selection.
+    src = (REAL_REPO / "tools" / "test_wiki_drift.py").read_text(encoding="utf-8")
+    marked = re.findall(r'@pytest\.mark\.local_archive\ndef (test_\w+)', src)
+    for name in ("test_fork_change_set_is_not_empty",
+                 "test_no_fork_commit_touches_an_upstream_owned_file"):
+        assert name not in marked, name
+

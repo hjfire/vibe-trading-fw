@@ -34,6 +34,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # `stale` needs every page's verified_at commit reachable
+      # 控制器裁定 P-9：套件里两条守卫读 upstream/main —— changed_vs_upstream()
+      # （tools/test_wiki_drift.py:2658）跑 `git diff --name-only upstream/main...HEAD`，
+      # 读不到就 raise，那是它的设计：一个读不到东西的检查必须失败，绝不 skip。
+      # actions/checkout 只配 origin，refs/remotes/upstream/* 永远不会自己出现，所以这一步
+      # 要在任何读写历史的步骤之前把 ref 落盘。形状照抄本仓已有的 fork 自有先例
+      # sync-upstream.yml:30-31（git remote add 会记下标准 refspec，故 git fetch upstream
+      # 就产出该跟踪 ref）；公开仓、匿名 HTTPS，所以 permissions 保持 contents: read，
+      # 这一步不需要 SYNC_TOKEN。本地实测 upstream/main 是 HEAD 的祖先（behind=0 /
+      # ahead=215），且上一步已取全量历史 ⇒ 这一步只做协商，几乎不传字节。
+      # 这一步是硬的：它红 = 够不到上游，而步骤名本身就是诊断。
+      - name: Materialise upstream/main for the fork-hygiene guards
+        run: |
+          git remote add upstream https://github.com/HKUDS/Vibe-Trading.git
+          git fetch upstream
+          git rev-parse --verify refs/remotes/upstream/main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
