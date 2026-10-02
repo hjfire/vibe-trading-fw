@@ -4489,18 +4489,26 @@ def test_the_workflow_materialises_upstream_main_so_the_guards_are_not_silently_
     runner checkout only ever configures `origin` — so without this step the hard suite
     step is red by construction on its first real run. The wrong fix is marking the guards
     out of the CI selection: upstream/main is measured to be an ANCESTOR of HEAD here
-    (behind=0, ahead=215), so with the checkout's fetch-depth: 0 the fetch is a ref write,
+    (behind=0), so with the checkout's fetch-depth: 0 the fetch is a ref write,
     not a download — and 「上游零改动」 is the invariant this fork cannot afford to unwatch.
     """
     text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
     fetch_idx = text.index("refs/remotes/upstream/main")
     assert fetch_idx < text.index("wiki_freshness_gate.sh"), "the ref must exist before history is read"
-    assert "git remote add upstream" in text[:fetch_idx]
-    assert "git fetch upstream" in text[:fetch_idx]
-    # the fetch is a hard step: only the water level may soften. A second tolerance flag
-    # is the named failure mode — always-red gates get switched off, and so do soft ones.
+    # I-1: the three commands are asserted INSIDE the step block. `git fetch upstream`
+    # also appears in this workflow's Chinese comments, so a whole-file substring match
+    # stayed green after the load-bearing line was deleted (reviewer mutation R2) —
+    # the same shape as Task 4's M-1, where prose satisfied `"445" in src`.
+    step = re.search(r"- name: Materialise upstream/main.*?(?=\n {6}- |\Z)", text, re.S).group(0)
+    assert "git remote add upstream https://github.com/HKUDS/Vibe-Trading.git" in step, step
+    assert "git fetch upstream" in step
+    assert "git rev-parse --verify refs/remotes/upstream/main" in step
+    # the fetch is a hard step: only the water level may soften, and the flag has to sit
+    # *inside that one step* — moving it onto the install step keeps the count at 1 while
+    # hardening the gate, which is §9.1's 「首周只观察」 written backwards (mutation R3).
     assert text.count("continue-on-error") == 1
-    assert text.index("continue-on-error") > fetch_idx
+    gate_idx = text.index("Wiki freshness gate")
+    assert gate_idx < text.index("continue-on-error") < text.index("wiki_freshness_gate.sh")
     # and the two guards that consume the ref must stay inside the CI selection.
     src = (REAL_REPO / "tools" / "test_wiki_drift.py").read_text(encoding="utf-8")
     marked = re.findall(r'@pytest\.mark\.local_archive\ndef (test_\w+)', src)

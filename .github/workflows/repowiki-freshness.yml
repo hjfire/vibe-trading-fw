@@ -44,6 +44,11 @@ jobs:
       # 这一步不需要 SYNC_TOKEN。本地实测 upstream/main 是 HEAD 的祖先（behind=0 /
       # ahead=215），且上一步已取全量历史 ⇒ 这一步只做协商，几乎不传字节。
       # 这一步是硬的：它红 = 够不到上游，而步骤名本身就是诊断。
+      # 已知残留风险（只有真实 runner 能证伪）：checkout 默认会把临时凭证写进全局 git 配置
+      # http.https://github.com/.extraheader，同 host 的这一步会带上它。公开仓对任意已认证
+      # 账户可读，预期无害；若首红就在这一行，改法是给上面的 checkout 加一行
+      # `persist-credentials: false`（本 job 不写任何 git 状态，没人需要那颗 header），
+      # 而不是给这一步加容错开关或给那两条守卫打标记摘出 CI。
       - name: Materialise upstream/main for the fork-hygiene guards
         run: |
           git remote add upstream https://github.com/HKUDS/Vibe-Trading.git
