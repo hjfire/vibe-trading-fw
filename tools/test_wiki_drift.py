@@ -3343,7 +3343,7 @@ def test_seed_reads_the_layout_off_the_disk_not_the_global(tmp_path, monkeypatch
     monkeypatch.setattr(wiki_drift, "wiki_root",
                         wiki_drift.WikiRoot(root=export, layout="repo"))
     assert wiki_drift.cmd_seed(
-        _ns(from_root=str(export), snapshot="a" * 40, apply=True)) == 2
+        _ns(from_root=str(export), snapshot="a" * 40, apply=True, force=False)) == 2
     assert "refusing to seed into an ide-layout root" in capsys.readouterr().err
     assert not (export / "topics").exists(), "and it refused before writing"
 
