@@ -84,8 +84,9 @@ WIKI_ROOT_DEFAULT = "repowiki"
 
 EMPTY_TREE_HINT = (
     "no wiki pages under {content} (root {root}, layout {layout}).\n"
-    "  The repo-owned tree is seeded by milestone M2; until then the IDE export is\n"
-    "  still readable explicitly:  --wiki-root .qoder/repowiki\n"
+    "  The tracked tree is the publication: repowiki/topics (+ modules/, cards/).\n"
+    "  The IDE export was archived (moved, not deleted) and is still readable as a\n"
+    "  second root:  --wiki-root {archive}\n"
     "  Exiting 2 rather than reporting 0 pages, because an empty set that passes\n"
     "  every assertion is this repo's known false green."
 )
@@ -1807,7 +1808,8 @@ def align_labels(text: str) -> tuple[str, int, int]:
 def cmd_reanchor(args: argparse.Namespace) -> int:
     if not CONTENT.is_dir():
         print(
-            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout,
+                                   archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
             file=sys.stderr,
         )
         return 2
@@ -1961,7 +1963,8 @@ def normalise_page_arg(value: str) -> str:
 def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change]] | int:
     if not CONTENT.is_dir():
         print(
-            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout,
+                                   archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
             file=sys.stderr,
         )
         return 2
@@ -2078,7 +2081,8 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_mark(args: argparse.Namespace) -> int:
     if not CONTENT.is_dir():
         print(
-            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout),
+            EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI, layout=wiki_root.layout,
+                                   archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
             file=sys.stderr,
         )
         return 2

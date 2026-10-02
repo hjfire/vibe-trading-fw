@@ -1660,6 +1660,19 @@ def test_empty_tree_is_an_error_not_a_green(tmp_path, monkeypatch, capsys):
     assert "no wiki pages" in err and "--wiki-root" in err
 
 
+def test_empty_tree_hint_points_at_the_archive(tmp_path, monkeypatch, capsys):
+    """After M2 the export is archived, so the hint that still says 'read it with
+    --wiki-root .qoder/repowiki' would send a reader to a directory that no longer
+    has a content tree. Both substrings the existing cases assert must survive."""
+    monkeypatch.setattr(wiki_drift, "CONTENT", tmp_path / "topics")
+    monkeypatch.setattr(wiki_drift, "WIKI", tmp_path)
+    monkeypatch.setattr(wiki_drift, "wiki_root", wiki_drift.WikiRoot(root=tmp_path, layout="repo"))
+    assert main(["report"]) == 2
+    err = capsys.readouterr().err
+    assert "no wiki pages" in err and "--wiki-root" in err
+    assert wiki_drift.EXPORT_ARCHIVE in err
+
+
 # ---------------------------------------------------------------------------
 # frontmatter: the per-page baseline, and the hash that must survive adding it
 # ---------------------------------------------------------------------------
