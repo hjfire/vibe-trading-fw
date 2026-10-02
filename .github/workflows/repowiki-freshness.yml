@@ -38,11 +38,15 @@ jobs:
       # （tools/test_wiki_drift.py:2658）跑 `git diff --name-only upstream/main...HEAD`，
       # 读不到就 raise，那是它的设计：一个读不到东西的检查必须失败，绝不 skip。
       # actions/checkout 只配 origin，refs/remotes/upstream/* 永远不会自己出现，所以这一步
-      # 要在任何读写历史的步骤之前把 ref 落盘。形状照抄本仓已有的 fork 自有先例
-      # sync-upstream.yml:30-31（git remote add 会记下标准 refspec，故 git fetch upstream
-      # 就产出该跟踪 ref）；公开仓、匿名 HTTPS，所以 permissions 保持 contents: read，
-      # 这一步不需要 SYNC_TOKEN。本地实测 upstream/main 是 HEAD 的祖先（behind=0 /
-      # ahead=215），且上一步已取全量历史 ⇒ 这一步只做协商，几乎不传字节。
+      # 要在任何读写历史的步骤之前把 ref 落盘。形状照抄本仓已有的 **fork 自有**先例
+      # `.github/workflows/sync-upstream.yml`（它同样是 fork 独有、不在 UPSTREAM_OWNED 的
+      # 上游归属表里 —— 别把它读成上游文件）：git remote add 会记下标准 refspec，故
+      # git fetch upstream 就产出该跟踪 ref；公开仓、匿名 HTTPS，所以 permissions 保持
+      # contents: read，这一步不需要 SYNC_TOKEN。本地实测 upstream/main 是 HEAD 的**严格
+      # 祖先**（落后 0，判据是 `git merge-base --is-ancestor upstream/main HEAD`），而领先
+      # 多少条是**时点读数** —— 本文件每落一次库它自己就 +1，所以这里不写数字；要核对就在
+      # 跑这条工作流的那个 commit 上重跑 rev-list --left-right --count。上一步已取全量历史
+      # ⇒ 这一步只做 ref 协商，几乎不传字节。
       # 这一步是硬的：它红 = 够不到上游，而步骤名本身就是诊断。
       # 已知残留风险（只有真实 runner 能证伪）：checkout 默认会把临时凭证写进全局 git 配置
       # http.https://github.com/.extraheader，同 host 的这一步会带上它。公开仓对任意已认证
@@ -69,9 +73,12 @@ jobs:
         env:
           WIKI_STALE_MAX: '445'
         run: bash tools/wiki_freshness_gate.sh
-      # 套件（硬）。归档那两条用例带 local_archive 标记，读的是未入库的
-      # .qoder/repowiki/_ide-export-retired-2026-10-01，全新检出里必然红，所以在这里摘掉；
-      # 标记注册在 tools/conftest.py。门禁与工具在 CI 里始终只读 —— 本文件没有任何步骤
-      # 写 INDEX.md，也没有任何步骤提交产物。
+      # 套件（硬）。带 local_archive 标记的是**三条**用例（这个数是形状，不是水位；选择器的
+      # 读数按「在某 commit 实测」写）：前两条断言未入库的
+      # .qoder/repowiki/_ide-export-retired-2026-10-01 仍在位，全新检出里必然红；第三条断言
+      # 导出的正文树**不在**该容器里，没有容器时它自己 skip —— 摘掉它们的理由不是「怕它们
+      # 报警」，而是它们在 CI 既没有归档也没有容器、读数与本地不同源。标记注册在
+      # tools/conftest.py。门禁与工具在 CI 里始终只读 —— 本文件没有任何步骤写 INDEX.md，
+      # 也没有任何步骤提交产物。
       - name: Wiki guard suite
         run: python -X utf8 -m pytest tools/test_wiki_drift.py -q -m "not local_archive"

@@ -6,7 +6,7 @@
 
 **Architecture:** 全部复用 M1/M2 已有的取数层：`build(args)` 已经是「一次 git、按页分配」的批处理，`stale` 只是它的队列视图 + 一个每页基线的 commit 计数缓存；`index` 是磁盘树的确定性投影，不写时间戳；门禁脚本只读，工作流是新文件。写盘动词一律经过 `write_refusal()` 同一个判据。
 
-**Tech Stack:** Python 3.13 标准库（`argparse`/`ast`/`subprocess`/`json`/`pathlib`，**无 pyyaml、无新依赖**）、pytest、bash、GitHub Actions。
+**Tech Stack:** Python 3.11 标准库（**这条在 2026-10-03 的 Task 9 按实机更正：原文写的是 3.13** —— 本机 `python -V` = 3.11.9，`.github/workflows/repowiki-freshness.yml` 的 `setup-python` 钉的也是 3.11；`argparse`/`ast`/`subprocess`/`json`/`pathlib`，**无 pyyaml、无新依赖**）、pytest、bash、GitHub Actions。
 
 **Spec:** `docs/superpowers/specs/2026-10-01-repo-wiki-rebuild-design.md` —— §6 表的 `stale`/`index` 两行、§9.1 的门禁脚本与工作流、§5.3 的 `INDEX.md` 形状、§10 里程碑表 M3 那一行是本计划的授权来源；计划与 spec 冲突时以 spec 为准。
 

@@ -70,9 +70,27 @@ Usage::
         .qoder/repowiki/_ide-export-retired-2026-10-01 report   # archived IDE export
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md -m "re-anchored"
     python tools/wiki_drift.py mark --page 安装与配置/安装与配置.md --partial
+    python tools/wiki_drift.py stale --top 30        # the M5 rewrite queue (reads only)
+    python tools/wiki_drift.py stale --format count  # one integer: what the gate reads
+    python tools/wiki_drift.py index                 # rewrite INDEX.md from the tree
+    python tools/wiki_drift.py index --check         # compare instead of write (CI)
+    python tools/wiki_drift.py seed --from <export root> --snapshot <40-hex> --apply
+        # one-shot publish of an IDE export into the tracked tree; dry-run without
+        # --apply, and a page whose bytes differ from the payload is refused unless
+        # --force says the overwrite is meant. Since the M2 archive no single --from
+        # root carries both the body tree and the knowledge layer, so a replay leaves
+        # rc 2 and not one page written — repowiki/README.md documents that split.
 
-Exit code is 0 when the check ran (even if pages are stale) and 2 on a
-usage/environment error, so it is safe to chain after a build.
+Exit codes are three, not two, and a gate has to tell them apart. 0: the check ran and
+reconciled (even when pages are stale — staleness is the subject, not the failure).
+1: the work ran and a comparison did not hold — ``index --check`` found a different
+``INDEX.md``, or a seeded body landed with different bytes (``tools/wiki_freshness_gate.sh``
+exits 1 on the same reading: water level above ``WIKI_STALE_MAX``, or an ``index --check``
+leg that did not come back 0). 2: the tool refused to do the work at all — a usage or
+environment error, a read-only root layout, a ``--page`` outside the content tree, an
+unavailable baseline, or ``seed`` refusing to overwrite an edited page. So ``2`` means
+"nothing was measured" and ``1`` means "it was measured and disagrees"; chaining this
+after a build is safe only because of that difference.
 """
 
 from __future__ import annotations
