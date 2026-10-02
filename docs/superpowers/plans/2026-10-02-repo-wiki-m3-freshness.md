@@ -40,8 +40,15 @@
 
 ```python
 def _args(**kw):
-    """An argparse-shaped namespace: `build()` reads attributes, not a dict."""
-    ns = argparse.Namespace(baseline=None, page=None, top=25, json=False, fmt="queue")
+    """An argparse-shaped namespace: `build()` reads attributes, not a dict.
+
+    `baseline` is deliberately NOT defaulted: the `repo_wired` fixture has no stamped page
+    and no metadata file, so `tree_baseline()` returns None and `build()` exits 2 with the
+    "no usable baseline" message. Every test that reaches `build()` names its own baseline.
+    `check` is here because Task 3's `cmd_index` reads it.
+    """
+    ns = argparse.Namespace(baseline=None, page=None, top=25, json=False, fmt="queue",
+                            check=False)
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
@@ -55,37 +62,50 @@ def test_a_page_with_no_drift_but_unverified_prose_is_still_queued(repo_wired, c
     score, the queue would read 22 while the water level is 445 and M5 would be handed
     a list that quietly omits 423 pages — which is the exact failure this project has
     already been burned by once, where a stamp hid work the tool could not do itself.
+
+    `--baseline head` is what makes the drift axis empty: with the tree's own HEAD as the
+    snapshot nothing has changed, so `prose-unverified` is the ONLY reason that can fire,
+    and a `queue_reason()` that forgot it would turn this red instead of passing quietly.
+    `sha_after` must be the live `body_sha(page)` — `effective_base()` only takes a
+    ledger row seriously when `head` AND `sha_after` are non-empty, and an empty
+    `sha_after` yields state `snapshot`, which is not in the queue at all.
     """
-    head = repo_wired["head"]
+    head, page = repo_wired["head"], repo_wired["page"]
     wiki_drift.LEDGER.parent.mkdir(parents=True, exist_ok=True)
     with wiki_drift.LEDGER.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
-            "page": "前端应用/模块说明.md", "head": head, "sha_after": "",
+            "page": "前端应用/模块说明.md", "head": head,
+            "sha_after": wiki_drift.body_sha(page),
             "note": "anchors only", "cites": "applied-only", "partial": True,
         }, ensure_ascii=False) + "\n")
-    rc = wiki_drift.cmd_stale(_args())
+    rc = wiki_drift.cmd_stale(_args(baseline=head))
     assert rc == 0
     out = capsys.readouterr().out
     assert "前端应用/模块说明.md" in out
     assert "prose-unverified" in out
-    assert "1" in out.splitlines()[-1], out.splitlines()
+    assert out.splitlines()[-1] == "1", out.splitlines()
 
 
 def test_the_queue_count_is_not_report_needs_update(repo_wired):
     """Two different numbers, both honest: `count` counts prose debt, `needs_update`
     counts drift. Pinning them apart is what stops a future refactor from merging the
-    two predicates and silently dropping 423 pages again."""
-    ns = _args()
-    built = wiki_drift.build(ns)
+    two predicates and silently dropping 423 pages again.
+
+    Baseline is the FIRST commit here, so the cited file really has moved and at least
+    one page carries a score — a test whose loop body never runs would certify nothing.
+    """
+    built = wiki_drift.build(_args(baseline=repo_wired["base"]))
+    assert not isinstance(built, int), built
     payload, reports, _ = built
     queue = [r for r in reports if wiki_drift.queue_reason(r) is not None]
-    assert payload["summary"]["needs_update"] == len(
-        [r for r in reports if r.score])
+    scored = [r for r in reports if r.score]
+    assert scored, "fixture lost its drift axis: this test would pass by asserting nothing"
+    assert payload["summary"]["needs_update"] == len(scored)
     assert len(queue) >= payload["summary"]["needs_update"]
-    for rep in reports:
-        if rep.score:
-            assert wiki_drift.queue_reason(rep) in (
-                "sources-changed", "refs-missing", "anchors-open"), rep.page
+    for rep in scored:
+        assert wiki_drift.queue_reason(rep) in (
+            "sources-changed", "refs-missing", "anchors-open"), rep.page
+```
 
 
 def test_queue_reason_prefers_the_reason_that_carries_the_most_work(repo_wired):
@@ -224,7 +244,12 @@ Run:
 python -X utf8 tools/wiki_drift.py stale --format count
 python -X utf8 tools/wiki_drift.py stale --json | python -X utf8 -c "import json,sys; d=json.load(sys.stdin); print(d['count'], d['reasons'])"
 ```
-Expected: 第一个输出 **445**；第二个的 `reasons` 里 `sources-changed + prose-unverified + refs-missing + anchors-open` 之和 = 445。若 445 对不上，**停在这里**：数字对不上说明搬迁或基线判定错了（spec §10 明写这一条是 M2 搬迁正确性的复查），不要把下一个任务的活带过去。
+Expected: 第一个输出 **445**；第二个的 `reasons` 里 `sources-changed + prose-unverified + refs-missing + anchors-open` 之和 = 445。
+
+控制器 2026-10-02 @`f692dafc` 已实测过这条等式的两个来源：`report` 给 `needs update 445`，state 分布 `partial 423 / stale 22 / clean 4 / reconciled 1`，且 `partial & score==0` 的页数是 **0** —— 所以今天 `count` 与 `needs_update` 恰好同为 445。这两个数**没有理由永远相等**（`count >= needs_update`，一旦有人把一页标成 partial 而它的链接全 healthy，两者就分叉），所以：
+
+- `count > 445` 不是失败，按上面的分布逐条解释即可（多出来的必须是 `prose-unverified` 且 `score==0` 的页）。
+- `count < 445` **才是**停下来的信号：那说明搬迁或基线判定错了（spec §10 明写这一条是 M2 搬迁正确性的复查），把读数原样报告给控制器，不要把下一个任务的活带过去。
 
 - [ ] **Step 6: 提交**
 
@@ -262,7 +287,7 @@ def test_commits_since_counts_the_commits_that_moved_a_pages_sources(repo_wired)
         "#L3-L4", "#L9-L10"), encoding="utf-8")
     _git(repo_wired["root"], "add", "-A")
     _git(repo_wired["root"], "commit", "-m", "move the citation")
-    rows = _stale_json()
+    rows = _stale_json(baseline=repo_wired["base"])
     row = [r for r in rows["queue"] if r["page"] == "前端应用/模块说明.md"]
     assert row, rows["queue"]
     assert row[0]["commits_since"] >= 2, row[0]
@@ -288,7 +313,7 @@ def test_stale_makes_one_git_log_per_distinct_baseline_not_per_page(repo_wired, 
         return real_git(*args)
 
     monkeypatch.setattr(wiki_drift, "git", spy)
-    assert wiki_drift.cmd_stale(_args()) == 0
+    assert wiki_drift.cmd_stale(_args(baseline=repo_wired["base"])) == 0
     logs = [c for c in calls if c and c[0] == "log"]
     assert len(logs) == 1, logs
 ```
@@ -296,17 +321,21 @@ def test_stale_makes_one_git_log_per_distinct_baseline_not_per_page(repo_wired, 
 辅助函数放同一段（读 `--json` 支路的 stdout）：
 
 ```python
-def _stale_json() -> dict:
-    """Run `cmd_stale --json` and parse what it printed."""
-    import io
+def _stale_json(baseline: str) -> dict:
+    """Run `cmd_stale --json` in-process and parse what it printed.
+
+    `baseline` is required because the fixture supplies no tree-wide baseline (see
+    `_args`), and the JSON branch must be exercised through `cmd_stale`, not by
+    re-deriving the rows.
+    """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        rc = wiki_drift.cmd_stale(_args(json=True))
+        rc = wiki_drift.cmd_stale(_args(json=True, baseline=baseline))
     assert rc == 0
     return json.loads(buf.getvalue())
 ```
 
-（若 `contextlib` 未导入，在文件顶部 `import` 块补 `import contextlib`。）
+（`contextlib` 与 `io` 若未导入，在文件顶部 `import` 块补 `import contextlib` / `import io`；Task 1 还要 `import argparse`。测试文件现在导入了 `ast/json/os/re/shutil/subprocess/sys`，没有这三个。）
 
 - [ ] **Step 2: 跑到红**
 
@@ -371,6 +400,8 @@ def make_commits_counter() -> Callable[[str, list[str]], int]:
 Run: `python -X utf8 -m pytest tools/test_wiki_drift.py -q -k "commits_since or per_distinct_baseline"`
 Expected: `2 passed`
 
+控制器已核过 `len(logs) == 1` 是可达的：`git log` 在本工具里目前**没有任何既有调用点**（`diff_since()` 用两次 `git diff`、`worktree_delta()` 用 `git status`、`rev_reachable()` 用 `merge-base`、`build()` 用 `rev-parse`），所以 spy 数到的 `log` 只可能来自 `commits_touching`。若实测 >1，先查是不是把计数放进了 per-page 循环，而不是放宽断言。
+
 - [ ] **Step 5: 真树读一遍，确认计数不是 0 也不是荒谬**
 
 Run: `python -X utf8 tools/wiki_drift.py stale --top 5`
@@ -394,8 +425,10 @@ git commit -s -m "feat(wiki): stale 的 commits_since 走 per-baseline 缓存，
 - Test: `tools/test_wiki_drift.py`
 
 **Interfaces:**
-- Consumes: `build(args)`、`wiki_root.index_md`（`WikiRoot:155-157`，`root/"INDEX.md"`）、`WIKI/"modules"`（7 个 slug 目录 × `overview/architecture/tech-stack/conventions/commands.md`）、`WIKI/"cards"`（9 个 `*.md`）、`read_frontmatter(page)`（:571）、`write_refusal(verb)`（:193）、`queue_reason()`（Task 1）。
-- Produces: `render_index(payload: dict, reports: list[PageReport], head: str, modules: list[tuple[str, int, str]], cards: list[tuple[str, str]], topics: list[tuple[str, int, int, list[tuple[str, str, str]]]]) -> str`；`cmd_index(args) -> int`；CLI 动词 `index [--check] [--baseline REV]`。
+- Consumes: `wiki_root.index_md`（`WikiRoot:154-156`，`root/"INDEX.md"`）、`CONTENT`（`rglob("*.md")`）、`WIKI/"modules"`（7 个 slug 目录 × `overview/architecture/tech-stack/conventions/commands.md`）、`WIKI/"cards"`（9 个 `*.md`）、`read_frontmatter(page)`（:571）、`write_refusal(verb)`（:193）。
+- Produces: `render_index(total: int, stamped: int, modules: list[tuple[str, int, str]], cards: list[tuple[str, str]], topics: list[tuple[str, int, list[tuple[str, str, str]]]]) -> str`；`cmd_index(args) -> int`；`_fm_stamped(path) -> str`；CLI 动词 `index [--check]`。
+
+**控制器裁定（覆盖计划原文，执行者不要翻案）**：`INDEX.md` 必须是**磁盘 wiki 树的纯函数**，一律不含 HEAD、sha、也不含任何从 `build()` 拿来的漂移派生数（`needs_update`、队列条数、per-page `state`）。理由是 Task 4 的门禁：`index --check` 要在 CI 里对**任意** commit 成立，而一次上游同步只改代码不改 wiki —— 一旦文件里印了 `HEAD`，`--check` 就在那个 commit 之后永久为红，正是 spec §9.1 写的「一个永远红、所以会被关掉的门」。`stale --format count` 与 `DRIFT.md` 才是带 git 派生数的面，它们本来就每轮重算、不入库。所以「多少页待更新」这句话在 `INDEX.md` 里被删掉，改由 `stale` 打印；`render_index` 也不再需要 `build()`，`cmd_index` 因此**不需要基线**，在一个尚未 `mark` 过的树上也能跑。这条裁定的代价：`INDEX.md` 里看不到水位。收益：门禁的第二条腿有意义。若收口时判定这条错了，只需把 `--check` 换成「比较前把 head token 归一化」，那是一行的事。
 
 - [ ] **Step 1: 写失败的用例（确定性 + 反空 + 只读门）**
 
@@ -404,78 +437,93 @@ def test_index_output_is_byte_identical_across_two_runs(repo_wired):
     """Determinism is the contract, and the two ways it breaks are ordering and clocks.
 
     Sorting is explicit in the renderer; the risk a future edit reintroduces is a
-    timestamp. There is no `generated_at` anywhere in INDEX.md by design — `drift.json`
-    carries the clock, the navigation file must not, or `--check` fails on every run.
+    timestamp — or, since Task 3's ruling, a git-derived number. Neither may appear.
     """
-    head = _git(repo_wired["root"], "rev-parse", "HEAD").strip()
-    once = wiki_drift.render_index(**_index_inputs(repo_wired, head))
-    twice = wiki_drift.render_index(**_index_inputs(repo_wired, head))
+    once = wiki_drift.render_index(**_index_inputs(repo_wired))
+    twice = wiki_drift.render_index(**_index_inputs(repo_wired))
     assert once == twice
-    assert head[:8] in once
-    for stamp in ("generated_at", datetime.now().strftime("%Y"), time.strftime("%Y-%m")):
-        assert stamp not in once, stamp
+    for banned in ("generated_at", "HEAD", "verified@", str(datetime.date.today().year)):
+        assert banned not in once, banned
+
+
+def test_index_prints_only_what_the_disk_already_claims(repo_wired):
+    """The reader's question is 'which page is where, and when was it last stamped',
+    and `verified_at` is on the page. Everything else in this file would be a claim the
+    navigation layer cannot re-verify."""
+    page = repo_wired["page"]
+    wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md",
+                                  verified_at=repo_wired["base"], vouch="all")
+    text = wiki_drift.render_index(**_index_inputs(repo_wired))
+    assert repo_wired["base"][:8] in text
+    assert "模块说明" in text
+    assert "(topics/前端应用/模块说明.md)" in text
 
 
 def test_index_banner_says_the_prose_is_not_verified(repo_wired):
     """spec §10 item 5: until M5 finishes, the prose layer must not read as a fact
     source, and the banner is where a reader meets that first."""
-    head = _git(repo_wired["root"], "rev-parse", "HEAD").strip()
-    text = wiki_drift.render_index(**_index_inputs(repo_wired, head))
+    text = wiki_drift.render_index(**_index_inputs(repo_wired))
     assert "散文层未核" in text
     assert "别当事实源" in text
     assert "请勿手改" in text
 
 
-def test_index_check_refuses_a_tree_where_no_page_is_stamped(repo_wired, monkeypatch, capsys):
+def test_index_check_refuses_a_tree_where_no_page_is_stamped(repo_wired, capsys):
     """Anti-empty, and the reason it is `--check` that refuses: a corpus with zero
-    frontmatter would render a perfectly deterministic INDEX.md full of blanks, and a
-    deterministic blank file is exactly the kind of green that means nothing."""
-    page = repo_wired["page"]
-    for fm in page.parent.rglob("*.md"):
+    frontmatter would render a perfectly deterministic INDEX.md full of `--------`, and
+    a deterministic blank file is exactly the kind of green that means nothing."""
+    for fm in repo_wired["page"].parent.rglob("*.md"):
         fm.write_text("## 正文\n", encoding="utf-8")
-    ns = _args(check=True)
-    rc = wiki_drift.cmd_index(ns)
+    rc = wiki_drift.cmd_index(_args(check=True))
     assert rc == 1, rc
-    assert "no_frontmatter" in capsys.readouterr().out
+    err = capsys.readouterr().err
+    assert "no verified_at" in err, err
 
 
 def test_index_writes_nothing_on_a_read_only_root(repo_wired, monkeypatch, capsys):
-    """`index` is the fourth writing verb M3 adds, so it goes through the same entry
-    gate `mark` and `reanchor --apply` use — the contract in README §一 is four
-    entries, not three, and a fifth that skips it re-opens the clobber hazard."""
+    """`index` is the fifth writing verb M3 adds, so it goes through the same entry gate
+    `mark` and `reanchor --apply` use — the contract in README §一 is four entries
+    before this task and five after, and a verb that skips it re-opens the clobber
+    hazard M2 paid for with a lost DRIFT.md.
+
+    The root must really have the IDE shape: `WikiRoot.resolve()` decides layout from
+    `zh/content/` on disk, so a nonexistent path resolves to `repo` and the gate would
+    never be reached. Create the shape, do not assume it.
+    """
+    export = repo_wired["root"] / "export"
+    (export / "zh" / "content").mkdir(parents=True)
     monkeypatch.setattr(wiki_drift, "wiki_root",
-                        wiki_drift.WikiRoot.resolve(repo_wired["root"] / "nonsense",
-                                                    base=repo_wired["root"]))
+                        wiki_drift.WikiRoot.resolve(export, base=repo_wired["root"]))
     before = _tree_bytes(repo_wired["wiki"])
     rc = wiki_drift.cmd_index(_args())
     assert rc == 2, rc
-    assert "read-only" in capsys.readouterr().err or "拒绝写入" in capsys.readouterr().err
-    assert _tree_bytes(repo_wired["root"]) == before
+    assert "read-only" in capsys.readouterr().err
+    assert _tree_bytes(repo_wired["wiki"]) == before
+    assert not (export / "INDEX.md").exists()
 ```
 
-`_index_inputs(repo_wired, head)` 是测试侧的输入装配器，把 `build()` 的输出与磁盘树打包成 `render_index` 的关键字参数（写出来，别留空）：
+`_index_inputs(tree)` 是测试侧的输入装配器，把磁盘树打包成 `render_index` 的关键字参数（写出来，别留空）：
 
 ```python
-def _index_inputs(tree: dict, head: str) -> dict:
+def _index_inputs(tree: dict) -> dict:
     """Assemble render_index's arguments the way cmd_index does, so the renderer is
     tested as a pure function and cmd_index is tested through behaviour."""
-    built = wiki_drift.build(_args())
-    assert not isinstance(built, int), built
-    payload, reports, _gaps = built
-    wiki = tree["wiki"]
-    modules = [(d.name, len(list((d).glob("*.md"))), _fm_stamp(d / "overview.md"))
-               for d in sorted((wiki / "modules").glob("*/")) if (d / "overview.md").is_file()] \
-        if (wiki / "modules").is_dir() else []
-    cards = [(c.name, c.stem) for c in sorted((wiki / "cards").glob("*.md"))] \
+    wiki, content = tree["wiki"], tree["content"]
+    pages = sorted(content.rglob("*.md")) if content.is_dir() else []
+    modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamp(d / "overview.md"))
+               for d in sorted(wiki.glob("modules/*/"))
+               if (d / "overview.md").is_file()] if (wiki / "modules").is_dir() else []
+    cards = [(c.stem, c.stem) for c in sorted((wiki / "cards").glob("*.md"))] \
         if (wiki / "cards").is_dir() else []
     topics = []
-    for top in sorted({r.page.split("/")[0] for r in reports}):
-        rows = [(r.page.split("/")[-1][:-3], r.page, _fm_stamp(tree["content"] / r.page))
-                for r in reports if r.page.split("/")[0] == top]
-        queued = sum(1 for r in reports if r.page.split("/")[0] == top
-                     and wiki_drift.queue_reason(r) is not None)
-        topics.append((top, len(rows), queued, rows))
-    return {"payload": payload, "reports": reports, "head": head,
+    for top in sorted({str(p.relative_to(content)).replace("\\", "/").split("/")[0]
+                       for p in pages}):
+        rows = [(p.stem, str(p.relative_to(content)).replace("\\", "/"), _fm_stamp(p))
+                for p in pages
+                if str(p.relative_to(content)).replace("\\", "/").startswith(top + "/")]
+        topics.append((top, len(rows), sorted(rows, key=lambda r: r[1])))
+    return {"total": len(pages),
+            "stamped": sum(1 for p in pages if _fm_stamp(p) != "--------"),
             "modules": modules, "cards": cards, "topics": topics}
 
 
@@ -484,10 +532,12 @@ def _fm_stamp(path: Path) -> str:
     return (fm or {}).get("verified_at", "")[:8] or "--------"
 ```
 
+（`datetime` 需要在测试文件顶部 `import datetime` —— 上面第一条用例用 `datetime.date.today().year` 当禁词，不是拿它当时间源。）
+
 - [ ] **Step 2: 跑到红**
 
 Run: `python -X utf8 -m pytest tools/test_wiki_drift.py -q -k "index"`
-Expected: FAIL —— `AttributeError: ... has no attribute 'render_index'`。
+Expected: 5 条 FAIL —— `AttributeError: ... has no attribute 'render_index'`（或 `cmd_index`）。
 
 - [ ] **Step 3: 实现渲染器与命令**
 
@@ -501,28 +551,28 @@ INDEX_BANNER = (
 )
 
 
-def render_index(payload: dict, reports: list[PageReport], head: str,
-                 modules: list[tuple[str, int, str]], cards: list[tuple[str, str]],
-                 topics: list[tuple[str, int, int, list[tuple[str, str, str]]]]) -> str:
-    """The navigation file, as a pure function of the tree.
+def render_index(total: int, stamped: int, modules: list[tuple[str, int, str]],
+                 cards: list[tuple[str, str]],
+                 topics: list[tuple[str, int, list[tuple[str, str, str]]]]) -> str:
+    """The navigation file, as a pure function of the wiki tree on disk.
 
-    No clock, no filesystem order: every list arrives sorted and the only hash printed
-    is the HEAD the caller resolved. `INDEX.md` is what a human clicks through, so it
-    also carries the prose-not-verified banner — a spec §10 requirement that must not
-    depend on someone remembering to paste it.
+    No clock and no git-derived number: `index --check` runs in CI against whatever
+    commit the scheduler happened to pick up, and any figure that moves when only code
+    changes would make that gate red forever — which is spec §9.1's named failure mode.
+    Per-page `verified_at` is fine because it lives in the page, so it only changes when
+    the page does. The water level is `stale`'s job.
     """
-    queued = sum(1 for r in reports if queue_reason(r) is not None)
-    stats = (f"共 {len(reports)} 页 · 其中 {queued} 页在 `stale` 队列里"
-             f"（正文未核或引用有变更）· 基线 HEAD {head[:8]}")
+    stats = (f"共 {total} 页专题 · {stamped} 页带 `verified_at` 基线 · "
+             f"{len(modules)} 个模块 × 5 面 · {len(cards)} 张仓库级卡片")
     out = [INDEX_BANNER.format(stats=stats), "", "## 模块", ""]
     for slug, faces, stamp in modules:
-        out.append(f"- [{slug}](modules/{slug}/overview.md) — {faces} 面 · verified@{stamp}")
+        out.append(f"- [{slug}](modules/{slug}/overview.md) — {faces} 面 · {stamp}")
     out += ["", "## 卡片", ""]
     for label, stem in cards:
         out.append(f"- [{stem}](cards/{stem}.md)")
     out += ["", "## 专题", ""]
-    for top, pages, page_queued, rows in topics:
-        out.append(f"### {top} ({pages} 页 · {page_queued} 页待更新)")
+    for top, pages, rows in topics:
+        out.append(f"### {top} ({pages} 页)")
         out.append("")
         for label, rel, stamp in rows:
             out.append(f"- [{label}](topics/{rel}) `{stamp}`")
@@ -530,56 +580,59 @@ def render_index(payload: dict, reports: list[PageReport], head: str,
     return "\n".join(out).rstrip() + "\n"
 
 
+def _fm_stamped(path: Path) -> str:
+    fm = read_frontmatter(path) if path.is_file() else None
+    return (fm or {}).get("verified_at", "")[:8] or "--------"
+
+
 def cmd_index(args: argparse.Namespace) -> int:
-    """Generate `INDEX.md`, or with --check compare it instead of writing it."""
-    built = build(args)
-    if isinstance(built, int):
-        return built
-    payload, reports, _gaps = built
-    missing = payload["summary"]["no_frontmatter"]
-    if args.check and missing:
-        print(f"INDEX.md cannot certify this tree: {missing} page(s) carry no frontmatter, "
-              "so the index would be deterministic but empty of baselines — run "
-              "`report` and seed/re-mark them.", file=sys.stderr)
+    """Generate `INDEX.md` from the tree, or with --check compare it instead of writing."""
+    pages = sorted(CONTENT.rglob("*.md")) if CONTENT.is_dir() else []
+    stamped = [p for p in pages if _fm_stamped(p) != "--------"]
+    if not pages:
+        print(EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI,
+                                     layout=wiki_root.layout,
+                                     archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
+              file=sys.stderr)
+        return 2
+    if args.check and not stamped:
+        print(f"INDEX.md cannot certify this tree: {len(pages)} page(s) carry "
+              "no verified_at baseline, so the index would be deterministic but empty of "
+              "baselines — run `mark`/`reanchor --apply` to stamp them.", file=sys.stderr)
         return 1
-    head = payload["head"]
-    wiki = WIKI
-    modules_dir, cards_dir = wiki / "modules", wiki / "cards"
+    modules_dir, cards_dir = WIKI / "modules", WIKI / "cards"
     modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamped(d / "overview.md"))
                for d in sorted(modules_dir.iterdir())
                if d.is_dir() and (d / "overview.md").is_file()] if modules_dir.is_dir() else []
     cards = [(c.stem, c.stem) for c in sorted(cards_dir.glob("*.md"))] if cards_dir.is_dir() else []
-    groups: dict[str, list[PageReport]] = {}
-    for rep in reports:
-        groups.setdefault(rep.page.split("/")[0], []).append(rep)
+    groups: dict[str, list[Path]] = {}
+    for page in pages:
+        rel = str(page.relative_to(CONTENT)).replace("\\", "/")
+        groups.setdefault(rel.split("/")[0], []).append(page)
     topics = []
     for top in sorted(groups):
-        rows = [(r.page.split("/")[-1][:-3], r.page, _fm_stamped(CONTENT / r.page))
-                for r in sorted(groups[top], key=lambda r: r.page)]
-        queued = sum(1 for r in groups[top] if queue_reason(r) is not None)
-        topics.append((top, len(rows), queued, rows))
-    text = render_index(payload=payload, reports=reports, head=head,
-                        modules=modules, cards=cards, topics=topics)
+        rows = sorted(([(p.stem,
+                         str(p.relative_to(CONTENT)).replace("\\", "/"),
+                         _fm_stamped(p)) for p in groups[top]]), key=lambda r: r[1])
+        topics.append((top, len(rows), rows))
+    text = render_index(total=len(pages), stamped=len(stamped), modules=modules,
+                        cards=cards, topics=topics)
     path = wiki_root.index_md
     if args.check:
         if path.is_file() and path.read_text(encoding="utf-8") == text:
-            print(f"INDEX.md is current ({len(reports)} pages, HEAD {head[:8]})")
+            print(f"INDEX.md is current ({len(pages)} pages)")
             return 0
         print(f"INDEX.md is stale — run: python -X utf8 tools/wiki_drift.py index "
-              f"(expected {len(text)} bytes at HEAD {head[:8]})", file=sys.stderr)
+              f"(expected {len(text)} bytes)", file=sys.stderr)
         return 1
     refusal = write_refusal("index")
     if refusal:
         print(refusal, file=sys.stderr)
         return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
-    print(f"wrote {path} ({len(text)} bytes, {len(reports)} pages, HEAD {head[:8]})")
+    print(f"wrote {path} ({len(text)} bytes, {len(pages)} pages)")
     return 0
-
-
-def _fm_stamped(path: Path) -> str:
-    fm = read_frontmatter(path) if path.is_file() else None
-    return (fm or {}).get("verified_at", "")[:8] or "--------"
 ```
 
 注册（并把 `index` 加进 :2360 的 `--wiki-root` 循环元组）：
@@ -588,14 +641,13 @@ def _fm_stamped(path: Path) -> str:
     index = sub.add_parser("index", help="regenerate INDEX.md from the tree on disk")
     index.add_argument("--check", action="store_true",
                        help="compare instead of write; exit 1 when it differs (CI)")
-    index.add_argument("--baseline", help="override the wiki snapshot commit (40-hex)")
     index.set_defaults(func=cmd_index)
 ```
 
-- [ ] **Step 4: 四条用例转绿**
+- [ ] **Step 4: 五条用例转绿**
 
 Run: `python -X utf8 -m pytest tools/test_wiki_drift.py -q -k "index"`
-Expected: `4 passed`
+Expected: `5 passed`
 
 - [ ] **Step 5: 真树生成并入库，再验两次字节相同**
 
@@ -606,8 +658,10 @@ cp repowiki/INDEX.md .qoder/tmp/m3-index-a.md
 python -X utf8 tools/wiki_drift.py index
 cmp .qoder/tmp/m3-index-a.md repowiki/INDEX.md && echo "DETERMINISTIC"
 grep -c '^' repowiki/INDEX.md
+grep -c 'HEAD' repowiki/INDEX.md
+python -X utf8 -c "import inspect,tools.wiki_drift as w; print('git' in inspect.getsource(w.cmd_index))"
 ```
-Expected: `--check` rc=0；`cmp` 报 `DETERMINISTIC`；行数 ≈ 450 页 + 7 模块 + 9 卡片 + 表头 ≈ 480–520。检查 `INDEX.md` 里 `445 页在 \`stale\` 队列里` 这个数与 Task 1 的实测一致。
+Expected: `--check` rc=0；`cmp` 报 `DETERMINISTIC`；行数 ≈ 450 页 + 7 模块 + 9 卡片 + 表头与空行 ≈ 480–560；`grep -c 'HEAD'` = **0**；最后一条打印 **False**（`cmd_index` 源码里不得出现 `git` 调用）。这两条是上面那道裁定的直接取证：文件里没有任何随 commit 移动的记号，Task 4 的门禁第二腿才有意义。若 `grep -c 'HEAD'` 不是 0，说明还留着 git 派生数 —— 不要放宽门禁，回到渲染器把它删掉。
 
 - [ ] **Step 6: 提交**
 
@@ -639,30 +693,60 @@ def test_the_freshness_gate_is_readable_and_carries_no_brand_patterns():
     assert "WIKI_STALE_MAX" in src and "445" in src
     assert "stale --format count" in src
     assert "index --check" in src
-    assert REAL_BRAND.lower() not in src.lower(), "freshness gate must not duplicate brand needles"
+    # TM_NEEDLE (:1534) is the suite's already-lowercased brand needle; the point of
+    # asserting on it is that this fork-owned file must not contain it in ANY casing.
+    assert TM_NEEDLE not in src.lower()
+    assert "".join(["World", "Quant"]) not in src
 
 
-def test_the_freshness_gate_fails_when_the_water_level_rises(tmp_path):
-    """Run it with the count faked: a gate whose red path has never been taken is not
-    a gate. Both legs get exercised — over threshold ⇒ exit 1, at threshold ⇒ exit 0."""
+def test_the_gate_threshold_branch_fails_closed_and_only_that_branch():
+    """A gate whose red path has never been taken is not a gate.
+
+    Both directions of the comparison are exercised by moving ONLY `WIKI_STALE_MAX`, so
+    the assertions cannot be satisfied by the other leg: the low run must be rc=1 for
+    the water level, and the generous run must not mention the water level at all.
+    Asserting rc=0 on the second run would make the suite borrow `index --check`'s repo
+    hygiene — a soft, continue-on-error gate step must not be replicated as a hard test.
+    """
     script = REAL_REPO / "tools" / "wiki_freshness_gate.sh"
-    fake = tmp_path / "wiki_drift.py"
-    fake.write_text("import sys\nprint(446 if 'count' in sys.argv else '')\n", encoding="utf-8")
-    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
-    # `python` resolves to a stub that prints an over-threshold count.
-    stub = tmp_path / "python"
-    stub.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
-    stub.chmod(0o755)
-    proc = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", env=env, cwd=REAL_REPO)
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "wiki stale pages: 446" in proc.stdout
+    low = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", cwd=str(REAL_REPO),
+                         env={**os.environ, "WIKI_STALE_MAX": "1"})
+    assert low.returncode == 1, low.stdout + low.stderr
+    assert "water level rose above the threshold" in low.stdout
+    assert re.search(r"wiki stale pages: \d+ \(threshold 1\)", low.stdout), low.stdout
+
+    high = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", cwd=str(REAL_REPO),
+                          env={**os.environ, "WIKI_STALE_MAX": "999999"})
+    assert "water level rose above the threshold" not in high.stdout, high.stdout
+    assert "wiki stale pages: " in high.stdout
+
+
+def test_the_gate_fails_loudly_when_the_tool_prints_nothing():
+    """The branch the threshold tests cannot reach.
+
+    If `stale --format count` dies (unreachable baseline, a fresh clone without history),
+    `$STALE` is empty and a bare `[ "" -gt 445 ]` is a bash diagnostic that evaluates
+    false — the gate would print `ok` on a broken tool. The guard is asserted statically
+    here because reaching it needs a stubbed `python` on PATH, which is the flaky half of
+    a Windows Git Bash test; Task 10's MS-probes cover the behavioural half.
+    """
+    src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
+    guard = src.index('[[ "$STALE" =~ ^[0-9]+$ ]]')
+    bail = src.index("exit 1", guard)
+    compared = src.index('-gt "$LIMIT"')
+    assert bail < compared, "a non-integer reading must stop the script, not fall through"
+    assert guard < compared, "the integer guard must come before the comparison"
+    assert "did not print one integer" in src
 ```
+
+**执行者注意（控制器已实测）**：不要再用 PATH 前置 `python` stub 去伪造读数 —— 在 Git Bash 下 `chmod 0o755` 一个无扩展名脚本、再靠 `PATH` 让 bash 找到它，本身就是不稳定的一环，而移动 `WIKI_STALE_MAX` 已经能覆盖同一个比较分支。`TM_NEEDLE` 与 `REAL_REPO` 都是测试文件里已有的名字（:1534 / :1537），不要新造 `REAL_BRAND`。
 
 - [ ] **Step 2: 跑到红**
 
-Run: `python -X utf8 -m pytest tools/test_wiki_drift.py -q -k "freshness_gate"`
-Expected: FAIL —— `FileNotFoundError: ... wiki_freshness_gate.sh`。
+Run: `python -X utf8 -m pytest tools/test_wiki_drift.py -q -k "freshness_gate or gate_threshold_branch or gate_fails_loudly"`
+Expected: FAIL —— `FileNotFoundError: ... wiki_freshness_gate.sh`（三条都红：两条 subprocess 跑不到脚本，一条 `src.index` 在缺文件时先抛 `FileNotFoundError`）。
 
 - [ ] **Step 3: 写脚本**
 
@@ -772,14 +856,16 @@ def test_the_fork_workflow_collects_the_suite_and_only_softens_the_water_level()
 def test_the_two_archive_cases_are_marked_local_archive():
     """They read `.qoder/repowiki/_ide-export-retired-2026-10-01`, which is untracked and
     absent from a fresh checkout — so in CI they are red by construction, not by defect.
-    Marking them is what lets the workflow collect the other 190."""
+    Marking them is what lets the workflow collect the rest."""
     src = (REAL_REPO / "tools" / "test_wiki_drift.py").read_text(encoding="utf-8")
     marked = re.findall(r'@pytest\.mark\.local_archive\ndef (test_\w+)', src)
     assert len(marked) >= 2, marked
     for name in ("test_the_archived_export_still_holds_the_450_seeded_pages",
                  "test_every_seeded_topic_body_matches_the_archive_byte_for_byte"):
         assert name in marked, marked
-    assert "-m \"not local_archive\"" in src or True  # the deselect lives in the workflow
+    # The marker must be REGISTERED, or `-m "not local_archive"` warns-and-passes and a
+    # future typo in the marker name silently deselects nothing.
+    assert "addinivalue_line" in src and "local_archive" in src
 ```
 
 - [ ] **Step 2: 跑到红**
@@ -1006,7 +1092,12 @@ def test_drift_json_names_the_baseline_and_where_it_came_from(repo_wired):
     assert payload["baseline"]
     assert payload["baseline_source"] in ("--baseline", "page-verified_at-mode",
                                          "wiki_repo.last_commit_id")
-    assert "baseline_source" in wiki_drift.render_markdown.__doc__ or True
+    # DRIFT.md must say the same thing the JSON says, or the human surface keeps lying
+    # while only the machine surface gets fixed. `render_markdown(payload, reports, gaps,
+    # top)` is the real arity (:1320); the baseline line is :1328.
+    md = wiki_drift.render_markdown(payload, [], [], 3)
+    assert "baseline" in md and payload["baseline"] in md
+    assert payload["baseline_source"] in md
 ```
 
 再加一条：传 `--baseline <sha>` ⇒ `baseline_source == "--baseline"`；不传且页有 stamp ⇒ `"page-verified_at-mode"`（用 `repo_wired` 的 `seed` 提交号写进页 frontmatter 后实测，别猜）。
@@ -1205,3 +1296,16 @@ SURVIVED 的必须写清「为什么这套用例分不出」，不许写成「�
 2. **占位符**：Task 5 的两处 `uses:` 与 `python-version`、Task 6 的 `PagePlan` 构造是「逐字从指定位置抄取」的指令，附了取数命令与要抄的确切文件行号 —— 这是可执行的取材步骤，不是 TBD。其余步骤全部自带完整代码。
 3. **类型一致性**：`queue_reason(rep: PageReport) -> str | None`（Task 1）在 Task 3/8 的使用签名一致；`apply_page_plan(..., force=False) -> str`（Task 6）与 `cmd_seed` 调用点、Task 8 的 AST 规则不冲突；`payload["baseline"]/["baseline_source"]`（Task 7）在 Task 1 的 `--json` 里被读作 `payload["metadata_baseline"]` —— **这是计划里唯一的真实顺序耦合**：Task 7 改名后 Task 1 的 JSON 行必须同步，故 Task 7 Step 3 的「三处消费者」必须包含 `cmd_stale`。执行 Task 7 时先 `grep -n 'metadata_baseline' tools/wiki_drift.py` 把 `cmd_stale` 一起改掉，全量必须仍绿。
 4. **歧义**：`stale --format count` 与 `report` 的 `needs_update` 的关系已在 Task 1 用两条用例钉成「两个不同但都诚实的数」，并在 README（Task 9 Step 2）与档案里各写一次；阈值默认值 445 在 Task 4 脚本与 Task 5 工作流的 `env` 里各出现一次，两处都是「当前实测水位」的同一读数，若收口时水位变化就一起改。
+
+## 预飞行复核（控制器 @`f692dafc`，2026-10-02 落盘后才拆任务）
+
+写计划的人对磁盘读了一遍再改自己写的东西，六处按原文执行会直接失败或骗过评审，已就地改掉：
+
+| # | 原文的问题 | 判据出处（实测） | 改成 |
+|---|---|---|---|
+| P-1 | Task 1 的 `_args()` 不给 `baseline`，而 `repo_wired`  fixture 既无 stamped 页也无 metadata 文件 | `build()` :2075-2085：`fallback = args.baseline or tree_baseline()`，取不到即 rc=2 | 每个到达 `build()` 的用例自己点名 baseline；`_args` 不再默认它 |
+| P-2 | Task 1 第一条用例的台账行 `sha_after: ""` | `effective_base()` :1142 要求 `entry.head and entry.sha_after` 同时非空，否则落到 `snapshot` 态 ⇒ 不进队列，用例会以「测不到」的方式假绿 | `sha_after` 取 `body_sha(page)`，并把 baseline 设为 `head` 让漂移轴为空，使 `prose-unverified` 成为唯一可能的 reason |
+| P-3 | Task 3 让 `INDEX.md` 印 `HEAD` 与队列条数 | 两者都是 git 派生数：一次只改代码的上游同步就会让 `index --check` 永久红 ⇒ spec §9.1 点名的「永远红的门会被关掉」 | `render_index` 改成磁盘树的纯函数（页名 + 页内 `verified_at`），`cmd_index` 不调 `build()`，并新增两条取证（文件里 `HEAD` 计数为 0、`cmd_index` 源码不含 `git`） |
+| P-4 | Task 3 的只读用例把 `wiki_root` 指到不存在的路径 | `WikiRoot.resolve()` :124-129 按 `zh/content/` 是否存在判 layout；不存在 ⇒ `repo` ⇒ 门根本不触发，rc=0 | 先 `mkdir -p export/zh/content` 造出真 IDE 形状，再断言 rc=2 且未写出 `INDEX.md` |
+| P-5 | Task 4 用 `REAL_BRAND`（不存在）与 PATH 前置 `python` stub（Windows Git Bash 下 `chmod` + 无扩展名脚本可执行性不稳） | 测试文件已有的针脚是 `TM_NEEDLE`（:1534）与 `REAL_REPO`（:1537） | 换成移动 `WIKI_STALE_MAX` 两侧取值（1 ⇒ rc=1；999999 ⇒ 不提水位），第三条用例改为静态断言「非整数读数必须在比较之前 exit 1」 |
+| P-6 | Task 5/7 各有一条 `assert X or True` | 永真断言就是本项目反复设计的「什么都没错的绿色」 | 删除，换成有牙齿的断言（marker 必须 `addinivalue_line` 注册；DRIFT.md 必须与 JSON 同口径） |
