@@ -105,7 +105,6 @@ def test_the_queue_count_is_not_report_needs_update(repo_wired):
     for rep in scored:
         assert wiki_drift.queue_reason(rep) in (
             "sources-changed", "refs-missing", "anchors-open"), rep.page
-```
 
 
 def test_queue_reason_prefers_the_reason_that_carries_the_most_work(repo_wired):
