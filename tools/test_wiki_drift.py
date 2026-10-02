@@ -1695,8 +1695,9 @@ def test_empty_tree_hint_points_at_the_archive(tmp_path, monkeypatch, capsys):
     Not a duplicate of `test_every_empty_tree_hint_call_site_passes_archive`: that case
     reads the AST and pins that every `.format` site hands over `archive=`; this one runs
     one site and pins the bytes it prints. It is also not the whole picture — editing the
-    TEMPLATE moves both sides of this equality at once, which is the sibling case's slot
-    list, not something this case can see.
+    TEMPLATE moves both sides of this equality at once, so the prose itself is the
+    sibling's business (its slot set, its line count, its `Exiting 2` sentence), never
+    something this case can see.
     """
     monkeypatch.setattr(wiki_drift, "CONTENT", tmp_path / "topics")
     monkeypatch.setattr(wiki_drift, "WIKI", tmp_path)
@@ -1776,11 +1777,20 @@ def test_every_empty_tree_hint_call_site_passes_archive():
     about: the template must stay a plain `.format` string (an f-string would
     evaluate `{content}` at import and NameError on module load), and its slot
     list must equal the keywords each site passes, so `{archive}` cannot be
-    dropped from the template while the call sites still hand it over."""
+    dropped from the template while the call sites still hand it over. The three
+    assertions on the template itself (slot set, line count, the `Exiting 2`
+    sentence) are what remain when a hint edit moves both sides of a behavioural
+    equality at once."""
     src = (REAL_REPO / "tools" / "wiki_drift.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     slots = set(re.findall(r"\{(\w+)\}", wiki_drift.EMPTY_TREE_HINT))
     assert slots == {"content", "root", "layout", "archive"}, sorted(slots)
+    # The template's own prose is load-bearing and the behavioural cases cannot protect
+    # it: they compare stderr against the formatted hint, so both sides move together when
+    # a line is deleted. These two pins are the only thing that notices the explanation of
+    # *why* the command exits 2 disappearing.
+    assert wiki_drift.EMPTY_TREE_HINT.count("\n") == 5, repr(wiki_drift.EMPTY_TREE_HINT)
+    assert "Exiting 2" in wiki_drift.EMPTY_TREE_HINT, repr(wiki_drift.EMPTY_TREE_HINT)
 
     sites = [
         node for node in ast.walk(tree)
@@ -1808,6 +1818,52 @@ def test_every_empty_tree_hint_call_site_passes_archive():
     assert not isinstance(assignment[0].value, ast.JoinedStr), "must stay a .format template"
 
 
+GUARD_CALLS = ("write_refusal", "root_is_read_only")
+# The write shapes the sweep recognises. An attribute name alone is enough for the
+# `Path`/`shutil` verbs that no read-only object carries (`touch`, `copyfile`, …);
+# `os.replace` and `shutil.copy` need the receiver, because `value.replace("\\", "/")`
+# appears all over this module and is string work, not a write.
+WRITE_ATTRS = ("write_text", "write_bytes", "mkdir", "makedirs", "touch",
+               "copyfile", "copy2", "copytree", "rename")
+QUALIFIED_WRITES = {"os": ("replace",), "shutil": ("copy",)}
+WRITE_MODE_CHARS = "wax+"
+
+
+def _call_name(node: ast.Call) -> str | None:
+    return getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+
+
+def _open_mode_is_writing(node: ast.Call) -> bool:
+    # `LEDGER.open("a")` is a method call, so the mode is its FIRST positional argument,
+    # while builtin `open(path, "a")` carries the path first. Reading the wrong index
+    # would call every `page.open("r")` a write.
+    index = 0 if isinstance(node.func, ast.Attribute) else 1
+    mode = next((kw.value for kw in node.keywords if kw.arg == "mode"),
+                node.args[index] if len(node.args) > index else None)
+    return (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+            and any(c in WRITE_MODE_CHARS for c in mode.value))
+
+
+def _is_filesystem_write(node: ast.Call) -> bool:
+    name = _call_name(node)
+    if name == "open":
+        return _open_mode_is_writing(node)
+    if name in WRITE_ATTRS:
+        return True
+    receiver = getattr(node.func, "value", None)
+    return isinstance(receiver, ast.Name) and name in QUALIFIED_WRITES.get(receiver.id, ())
+
+
+def _is_layout_comparison(node: ast.AST) -> bool:
+    """`<expr>.layout <op> "repo"` — the inline half of the root-shape gate, as
+    `cmd_seed` writes it. Matching the AST node instead of the source text is what
+    stops a comment or docstring that merely *says* `layout != "repo"` from passing an
+    ungated writer, which is how the first version of this case was satisfied."""
+    return (isinstance(node, ast.Compare)
+            and isinstance(node.left, ast.Attribute) and node.left.attr == "layout"
+            and any(isinstance(c, ast.Constant) and c.value == "repo" for c in node.comparators))
+
+
 def test_every_command_that_writes_is_gated_on_the_root_shape():
     """A BACKSTOP, not a fix: measured here it finds zero offenders, so it is green by
     construction today and its whole value is the fourth writer somebody adds next
@@ -1815,20 +1871,21 @@ def test_every_command_that_writes_is_gated_on_the_root_shape():
     happens to drive. Static reading is the cheap way to close that, the same idea as the
     EMPTY_TREE_HINT call-site case above it.
 
-    Rule: every `cmd_*` containing a filesystem write must contain a guard call
-    (`write_refusal` / `root_is_read_only`) whose line number precedes the first write's
-    line number, or carry the inline `layout != "repo"` shape `cmd_seed` uses. Two limits
-    are worth naming instead of letting the docstring overclaim: the `layout != "repo"`
-    half is a source-text test over the whole function (so a comment saying it counts —
-    the honest version of this rule is "the gate is written down somewhere above the
-    write"), and it sweeps `cmd_*` bodies only, so a write that lives in a helper
-    (`apply_page_plan`, `copy_ledger`) is invisible here. The floor below is what keeps
-    the case from going vacuous if either the verbs or the write shapes are renamed.
+    Rule: every `cmd_*` containing a filesystem write must contain a root-shape gate — a
+    `write_refusal` / `root_is_read_only` call, or a comparison of some `.layout` against
+    the `"repo"` literal — whose line number precedes the first write's line number.
+
+    Three limits worth naming instead of letting the docstring overclaim:
+      * it sweeps `cmd_*` bodies only, so a write that lives in a helper
+        (`apply_page_plan`, `copy_ledger`) is invisible here;
+      * writes are matched by NAME, so the sweep sees the shapes listed above and nothing
+        else — a verb it does not name is a hole, which is why the floor below counts
+        writers rather than trusting the match;
+      * a write through a handle that was opened outside the swept body carries no mode
+        for the sweep to read.
     """
     src = (REAL_REPO / "tools" / "wiki_drift.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
-    writes = ("write_text", "write_bytes", "mkdir")
-    guards = ("write_refusal", "root_is_read_only")
     offenders = []
     writers: list[tuple[str, int | None, int]] = []
     for node in tree.body:
@@ -1836,14 +1893,13 @@ def test_every_command_that_writes_is_gated_on_the_root_shape():
             continue
         write_lines, guard_line = [], None
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                fname = getattr(sub.func, "attr", None) or getattr(sub.func, "id", None)
-                seg = ast.get_source_segment(src, sub) or ""
-                if fname in writes or (fname == "open" and '"a"' in seg):
-                    write_lines.append(sub.lineno)
-                if fname in guards or 'layout != "repo"' in (ast.get_source_segment(src, node) or ""):
-                    if guard_line is None or sub.lineno < guard_line:
-                        guard_line = sub.lineno
+            gated = (isinstance(sub, ast.Call) and _call_name(sub) in GUARD_CALLS) or \
+                _is_layout_comparison(sub)
+            if gated:
+                if guard_line is None or sub.lineno < guard_line:
+                    guard_line = sub.lineno
+            elif isinstance(sub, ast.Call) and _is_filesystem_write(sub):
+                write_lines.append(sub.lineno)
         if write_lines:
             writers.append((node.name, guard_line, min(write_lines)))
         if write_lines and (guard_line is None or guard_line > min(write_lines)):
@@ -5006,6 +5062,11 @@ def test_the_fork_workflow_pins_every_uses_step_to_a_commit_sha():
     for pin in ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
                 "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"):
         assert text.count(pin) == 1, pin
-    for invoked in re.findall(r"^ +- uses: (\S+)", text, re.M):
-        assert re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", invoked), invoked
+    # Whitespace-tolerant so re-indenting a step cannot make this list empty, and the
+    # count is pinned because an empty list would make the loop below assert nothing at all
+    # while both verbatim pins above still match.
+    invoked = re.findall(r"^\s*- +uses:\s+(\S+)", text, re.M)
+    assert len(invoked) == 2, invoked
+    for step in invoked:
+        assert re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", step), step
 
