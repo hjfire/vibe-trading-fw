@@ -4003,15 +4003,18 @@ def test_drift_reports_are_derived_and_not_tracked():
     )
 
 
-def test_tracked_repowiki_tree_is_pages_plus_four_derivation_free_entries():
+def test_tracked_repowiki_tree_is_pages_plus_five_non_page_entries():
     """The publication's composition, re-measured rather than subtracted by hand.
 
-    494 pages (pinned by `test_seeded_tree_is_not_an_empty_set`) plus four items that
-    are neither pages nor derived: `/.gitattributes` (the LF pin the ledger hashes
-    depend on), `/.gitignore` (keeps `drift/` out of the tree), `/README.md`,
-    `/ledger.jsonl`. Adding a fifth tracked non-page file is a decision, and this is
-    where it has to be made — the count is expressed from the two facts, so it cannot
-    drift out of sync with the page count it is quoted next to.
+    494 pages (pinned by `test_seeded_tree_is_not_an_empty_set`) plus five items that are
+    not pages: `/.gitattributes` (the LF pin the ledger hashes depend on), `/.gitignore`
+    (keeps `drift/` out of the tree), `/INDEX.md`, `/README.md`, `/ledger.jsonl`.
+    `/INDEX.md` is the one generated entry the tracked tree keeps on purpose — `index
+    --check` compares the shipped artifact against the tree, so it must be in the
+    artifact; the generated reports under `drift/` stay ignored. Adding a sixth tracked
+    non-page file is a decision, and this is where it has to be made — the count is
+    expressed from the two facts, so it cannot drift out of sync with the page count it is
+    quoted next to.
     """
     names = _ls_files("ls-files", "repowiki")
     non_pages = sorted(
@@ -4020,12 +4023,13 @@ def test_tracked_repowiki_tree_is_pages_plus_four_derivation_free_entries():
     assert non_pages == [
         "repowiki/.gitattributes",
         "repowiki/.gitignore",
+        "repowiki/INDEX.md",
         "repowiki/README.md",
         "repowiki/ledger.jsonl",
     ], non_pages
     pages = [n for n in names if n not in non_pages]
     assert len(pages) == 494, len(pages)
-    assert len(names) == 494 + len(non_pages) == 498, len(names)
+    assert len(names) == 494 + len(non_pages) == 499, len(names)
 
 
 # ---------------------------------------------------------------------------
@@ -4179,41 +4183,19 @@ def test_the_two_baseline_failures_are_not_the_same_message(wired, monkeypatch, 
 # ---------------------------------------------------------------------------
 
 
-def _index_inputs(tree: dict) -> dict:
-    """Assemble render_index's arguments the way cmd_index does, so the renderer is
-    tested as a pure function and cmd_index is tested through behaviour."""
-    wiki, content = tree["wiki"], tree["content"]
-    pages = sorted(content.rglob("*.md")) if content.is_dir() else []
-    modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamp(d / "overview.md"))
-               for d in sorted(wiki.glob("modules/*/"))
-               if (d / "overview.md").is_file()] if (wiki / "modules").is_dir() else []
-    cards = [(c.stem, c.stem) for c in sorted((wiki / "cards").glob("*.md"))] \
-        if (wiki / "cards").is_dir() else []
-    topics = []
-    for top in sorted({str(p.relative_to(content)).replace("\\", "/").split("/")[0]
-                       for p in pages}):
-        rows = [(p.stem, str(p.relative_to(content)).replace("\\", "/"), _fm_stamp(p))
-                for p in pages
-                if str(p.relative_to(content)).replace("\\", "/").startswith(top + "/")]
-        topics.append((top, len(rows), sorted(rows, key=lambda r: r[1])))
-    return {"total": len(pages),
-            "stamped": sum(1 for p in pages if _fm_stamp(p) != "--------"),
-            "modules": modules, "cards": cards, "topics": topics}
-
-
-def _fm_stamp(path: Path) -> str:
-    fm = wiki_drift.read_frontmatter(path) if path.is_file() else None
-    return (fm or {}).get("verified_at", "")[:8] or "--------"
-
-
 def test_index_output_is_byte_identical_across_two_runs(repo_wired):
     """Determinism is the contract, and the two ways it breaks are ordering and clocks.
 
     Sorting is explicit in the renderer; the risk a future edit reintroduces is a
     timestamp — or, since Task 3's ruling, a git-derived number. Neither may appear.
+
+    The inputs come from `collect_index_inputs()`, the one production assembler: a
+    test-side copy would grade the copy and let the committed file stay whatever
+    `cmd_index` produced, so any drift between the two would be won by production in
+    silence.
     """
-    once = wiki_drift.render_index(**_index_inputs(repo_wired))
-    twice = wiki_drift.render_index(**_index_inputs(repo_wired))
+    once = wiki_drift.render_index(**wiki_drift.collect_index_inputs())
+    twice = wiki_drift.render_index(**wiki_drift.collect_index_inputs())
     assert once == twice
     for banned in ("generated_at", "HEAD", "verified@", str(datetime.date.today().year)):
         assert banned not in once, banned
@@ -4226,7 +4208,7 @@ def test_index_prints_only_what_the_disk_already_claims(repo_wired):
     page = repo_wired["page"]
     wiki_drift.update_frontmatter(page, page="前端应用/模块说明.md",
                                   verified_at=repo_wired["base"], vouch="all")
-    text = wiki_drift.render_index(**_index_inputs(repo_wired))
+    text = wiki_drift.render_index(**wiki_drift.collect_index_inputs())
     assert repo_wired["base"][:8] in text
     assert "模块说明" in text
     assert "(topics/前端应用/模块说明.md)" in text
@@ -4235,7 +4217,7 @@ def test_index_prints_only_what_the_disk_already_claims(repo_wired):
 def test_index_banner_says_the_prose_is_not_verified(repo_wired):
     """spec §10 item 5: until M5 finishes, the prose layer must not read as a fact
     source, and the banner is where a reader meets that first."""
-    text = wiki_drift.render_index(**_index_inputs(repo_wired))
+    text = wiki_drift.render_index(**wiki_drift.collect_index_inputs())
     assert "散文层未核" in text
     assert "别当事实源" in text
     assert "请勿手改" in text
@@ -4273,4 +4255,60 @@ def test_index_writes_nothing_on_a_read_only_root(repo_wired, monkeypatch, capsy
     assert "read-only" in capsys.readouterr().err
     assert _tree_bytes(repo_wired["wiki"]) == before
     assert not (export / "INDEX.md").exists()
+
+
+def test_index_check_goes_red_when_a_wrong_byte_is_appended(repo_wired, capsys):
+    """The leg nothing graded: `cmd_index`'s own success write and the `--check` that
+    reads it back.
+
+    Tests 1-3 exercise the renderer, and `--check` compared `cmd_index` against itself,
+    so a bug in the production assembly — grouping, ordering, the byte shape the file
+    lands in — passed the whole suite and got committed. This closes it at the level that
+    ships: the bytes written to `wiki_root.index_md` must equal
+    `render_index(**collect_index_inputs()).encode("utf-8")` (which also pins the
+    `newline="\n"` LF shape on a Windows host), `--check` is then 0 on that file, and it
+    goes 1 once ONE WRONG BYTE IS APPENDED to it — the append variant rather than deleting
+    the file, because a missing file only proves existence is compared, not content. The
+    two printed figures are byte lengths, not character counts: `--check`'s red line is
+    what Task 4's CI will print.
+    """
+    wiki_drift.update_frontmatter(repo_wired["page"], page="前端应用/模块说明.md",
+                                  verified_at=repo_wired["base"], vouch="all")
+    path = wiki_drift.wiki_root.index_md
+    expected = wiki_drift.render_index(**wiki_drift.collect_index_inputs()).encode("utf-8")
+    # non-ASCII banner ⇒ a character count would be a different, smaller number
+    assert len(expected) > len(expected.decode("utf-8"))
+
+    assert wiki_drift.cmd_index(_args()) == 0
+    assert path.read_bytes() == expected
+    assert f"{len(expected)} bytes" in capsys.readouterr().out
+
+    assert wiki_drift.cmd_index(_args(check=True)) == 0, "the file just written is current"
+
+    path.write_bytes(path.read_bytes() + b"x")
+    assert wiki_drift.cmd_index(_args(check=True)) == 1
+    err = capsys.readouterr().err
+    assert "INDEX.md is stale" in err and f"expected {len(expected)} bytes" in err, err
+
+
+def test_index_treats_a_list_shaped_verified_at_as_no_stamp_at_all(repo_wired):
+    """Only a string is a stamp.
+
+    `split_frontmatter()` reads `verified_at:` with an empty value plus indented items as
+    a LIST — and a one-element list is truthy, so a blind `[:8]` handed the list straight
+    through: the page counted toward `stamped` and rendered as a Python repr inside the
+    backticks. Both are claims the disk does not make, so such a page reads unstamped.
+    """
+    page = repo_wired["page"]
+    page.write_text(
+        "---\npage: 前端应用/模块说明.md\nverified_at:\n  - 7fdffa31c0de\n---\n\n## 正文\n",
+        encoding="utf-8",
+    )
+    assert wiki_drift.read_frontmatter(page)["verified_at"] == ["7fdffa31c0de"]
+
+    inputs = wiki_drift.collect_index_inputs()
+    assert inputs["total"] == 1 and inputs["stamped"] == 0, inputs
+    text = wiki_drift.render_index(**inputs)
+    assert "['" not in text and "7fdffa31" not in text, text
+    assert "`--------`" in text
 

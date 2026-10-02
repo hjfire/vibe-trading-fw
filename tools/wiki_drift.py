@@ -2460,25 +2460,31 @@ def render_index(total: int, stamped: int, modules: list[tuple[str, int, str]],
 
 
 def _fm_stamped(path: Path) -> str:
+    """The page's first 8 stamp characters, or `--------` when it carries no stamp.
+
+    Only a string counts: `split_frontmatter()` turns `verified_at:` with an empty value
+    plus indented items into a list, and a one-element list is truthy — slicing it `[:8]`
+    hands back the list, so the page would both count toward `stamped` and print its
+    Python repr where a baseline should be.
+    """
     fm = read_frontmatter(path) if path.is_file() else None
-    return (fm or {}).get("verified_at", "")[:8] or "--------"
+    stamp = (fm or {}).get("verified_at", "")
+    if not isinstance(stamp, str):
+        return "--------"
+    return stamp[:8] or "--------"
 
 
-def cmd_index(args: argparse.Namespace) -> int:
-    """Generate `INDEX.md` from the tree, or with --check compare it instead of writing."""
+def collect_index_inputs() -> dict:
+    """Walk the tree once and package exactly the five keys `render_index` takes.
+
+    This is the assembler, in production, and there is only one copy of it: the renderer
+    tests call it too. A test-side duplicate grades the duplicate while the committed
+    `INDEX.md` stays whatever `cmd_index` produced here, so any divergence between the two
+    is won by production in silence — the copy Task 3's brief dictated dropped a page
+    sitting directly under `CONTENT` from 专题 while still counting it in `total`.
+    """
     pages = sorted(CONTENT.rglob("*.md")) if CONTENT.is_dir() else []
     stamped = [p for p in pages if _fm_stamped(p) != "--------"]
-    if not pages:
-        print(EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI,
-                                     layout=wiki_root.layout,
-                                     archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
-              file=sys.stderr)
-        return 2
-    if args.check and not stamped:
-        print(f"INDEX.md cannot certify this tree: {len(pages)} page(s) carry "
-              "no verified_at baseline, so the index would be deterministic but empty of "
-              "baselines — run `mark`/`reanchor --apply` to stamp them.", file=sys.stderr)
-        return 1
     modules_dir, cards_dir = WIKI / "modules", WIKI / "cards"
     modules = [(d.name, len(list(d.glob("*.md"))), _fm_stamped(d / "overview.md"))
                for d in sorted(modules_dir.iterdir())
@@ -2494,15 +2500,34 @@ def cmd_index(args: argparse.Namespace) -> int:
                          str(p.relative_to(CONTENT)).replace("\\", "/"),
                          _fm_stamped(p)) for p in groups[top]]), key=lambda r: r[1])
         topics.append((top, len(rows), rows))
-    text = render_index(total=len(pages), stamped=len(stamped), modules=modules,
-                        cards=cards, topics=topics)
+    return {"total": len(pages), "stamped": len(stamped),
+            "modules": modules, "cards": cards, "topics": topics}
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    """Generate `INDEX.md` from the tree, or with --check compare it instead of writing."""
+    inputs = collect_index_inputs()
+    if not inputs["total"]:
+        print(EMPTY_TREE_HINT.format(content=CONTENT, root=WIKI,
+                                     layout=wiki_root.layout,
+                                     archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
+              file=sys.stderr)
+        return 2
+    if args.check and not inputs["stamped"]:
+        print(f"INDEX.md cannot certify this tree: {inputs['total']} page(s) carry "
+              "no verified_at baseline, so the index would be deterministic but empty of "
+              "baselines — run `mark`/`reanchor --apply` to stamp them.", file=sys.stderr)
+        return 1
+    text = render_index(**inputs)
+    # `--check`'s red line is printed by Task 4's CI: name bytes, not `len(text)` characters
+    nbytes = len(text.encode("utf-8"))
     path = wiki_root.index_md
     if args.check:
         if path.is_file() and path.read_text(encoding="utf-8") == text:
-            print(f"INDEX.md is current ({len(pages)} pages)")
+            print(f"INDEX.md is current ({inputs['total']} pages)")
             return 0
         print(f"INDEX.md is stale — run: python -X utf8 tools/wiki_drift.py index "
-              f"(expected {len(text)} bytes)", file=sys.stderr)
+              f"(expected {nbytes} bytes)", file=sys.stderr)
         return 1
     refusal = write_refusal("index")
     if refusal:
@@ -2510,7 +2535,7 @@ def cmd_index(args: argparse.Namespace) -> int:
         return 2
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
-    print(f"wrote {path} ({len(text)} bytes, {len(pages)} pages)")
+    print(f"wrote {path} ({nbytes} bytes, {inputs['total']} pages)")
     return 0
 
 
