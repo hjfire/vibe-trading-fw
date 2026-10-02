@@ -3513,9 +3513,10 @@ def _dir_link(request, link: Path, target: Path) -> None:
     """Make `link` a directory that *reaches* `target` from inside the content tree.
 
     Windows needs no privilege or developer mode for a junction; POSIX takes a symlink.
-    A platform that refuses both skips the case rather than passing vacuously — the
-    branch under test is the resolved comparison, and a suite that could not build the
-    escape route it is about would prove nothing by going green.
+    The two legs fail differently on purpose: a refused `os.symlink` skips the case,
+    while a raising `CreateJunction` errors it. Either way the case does not go green —
+    the branch under test is the resolved comparison, and a suite that could not build
+    the escape route it is about would prove nothing by passing vacuously.
     """
     if sys.platform == "win32":
         import _winapi

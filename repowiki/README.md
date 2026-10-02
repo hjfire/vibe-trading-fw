@@ -15,13 +15,14 @@
 - 非事实源：`.qoder/repowiki/**` 是 Qoder IDE 的导出物，冻结在 2026-08-14 的索引
   快照上，并被 `.git/info/exclude` 排除（git 不知道它存在，因此没有撤销能力）。
   正文已于 2026-10-02 改名归档进 `_ide-export-retired-2026-10-01/`，那份归档是**只读**的：
-  `--wiki-root` 指到 `ide` 布局根时，三个会写盘的入口（`report` 的派生报表、`mark`、
-  `reanchor --apply`）一律 **rc=2 拒绝写入**，一个字节都不改。这条规则是事故换来的 ——
+  `--wiki-root` 指到 `ide` 布局根时，四个会写盘的入口一律 **rc=2 拒绝写入**，一个字节都不改：
+  `report` 的派生报表、`mark`、`reanchor --apply` 走 `wiki_root` 判据，`seed`（含干跑）走
+  「目标根必须是 `repo` 形状」的磁盘判据。这条规则是事故换来的 ——
   加门之前实测到 `report` 会把报表写进归档（M1 那份 `DRIFT.md` 因此没了）、`mark` 会在
   归档里凭空创建 `update/ledger.jsonl`、`reanchor --apply` 会改写导出页的字节。
   判据两处不同是有意的：命令入口读 `wiki_root`（`apply_wiki_root()` 一次解析同时导出
   `WIKI`/`CONTENT`/`UPDATE_DIR`/`LEDGER`，CLI 拼不出「可写布局 ＋ IDE 形状」这对组合），
-  而 `stamp_frontmatter()` 直接按磁盘形状判定，因为它也被只改了部分全局量的 fixture 调用。
+  而 `stamp_frontmatter()` 与 `seed` 直接按磁盘形状判定（严格读法），因为前者也被只改了部分全局量的 fixture 调用。
   `SearchKnowledge` 读的是那份 IDE 索引，所以它的 overview 会长期显示过期内容 —
   这是上游限制，只能标注，不能消除。
 
