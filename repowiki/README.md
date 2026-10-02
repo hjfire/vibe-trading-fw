@@ -117,14 +117,17 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki mark \
 ```bash
 cd "E:/Vibe-Trading-main/Vibe-Trading-main"
 python -X utf8 tools/wiki_drift.py --wiki-root repowiki report   # 现在无需 --baseline
-python -X utf8 tools/wiki_drift.py --wiki-root repowiki seed    # 默认 dry-run，不写盘
 ```
 
 - `report` 不再强制 `--baseline`：基线自己回落到逐页 `verified_at` 的**众数**
   （`tree_baseline()`，平票由 commit 本身裁决，与 walk 顺序无关）。仍想指定就写
   `--baseline <40-hex>`，显式值优先于任何回落；取不到众数时它也是唯一出路。
-- `seed` 是一次性动作，默认 dry-run：只打印计数与被改写页的名字（`reworded:` 那一行），
-  `--apply` 才写盘。跑之前先按「归档位置」确认导出物已在盘上。
+- `seed` 是一次性动作，M2 已跑完（播种提交 `f16d5dbc`），**且归档之后它不再有单一可用的
+  `--from` 根**：`seed` 要求 `zh/content` 与 `knowledge/` 落在同一个根下，而归档只移走了
+  前者（→ `_ide-export-retired-2026-10-01/zh`），后者按下一节的「归档位置」有意原地留在
+  `.qoder/repowiki/knowledge`。实测三种写法一律 `rc=2`：默认根、显式 `.qoder/repowiki`、
+  显式归档根（后者报 `no knowledge tree at …/_ide-export-retired-2026-10-01/knowledge/zh`）。
+  要复播得先把两样放回同一根。默认 dry-run、`--apply` 才写盘这一点不变。
 
 ## 页集口径（M2 冻结的决定，M3 要扩必须显式改判）
 
