@@ -3366,11 +3366,26 @@ def test_readme_maps_every_seeded_name():
 
 
 def test_readme_states_the_conventions_a_reader_will_otherwise_violate():
+    """The operator-facing doc must keep saying the things that are not in the code.
+
+    M-5: this needle tuple used to stop at the mapping-table terms, so spec §6's five
+    non-regressable contracts (`cites` 担保范围, `partial` 不推进基线, `ledger-void`,
+    行数口径, 越界两分类) could all vanish from the README and stay green — the one
+    document M5's agents read before editing a cite was the one nothing checked.
+    """
     text = (REAL_REPO / "repowiki" / "README.md").read_text(encoding="utf-8")
     for needle in ("不是 `wiki/`", "topics/", "modules/", "cards/", "ledger.jsonl",
                    "verified_at", "applied-only", "M5", "ci_grep_gates.sh",
                    "./.qoder/", "--baseline"):
         assert needle in text, needle
+    # §6's five contracts, by the phrase each section is titled with.
+    for contract in ("`cites` 担保范围", "不推进报表基线", "ledger-void",
+                     "换行数+1", "越界分两类"):
+        assert contract in text, contract
+    # …plus the two surfaces M2's review found undocumented: the reports are derived,
+    # and the archived export is read-only (`report` writes nothing into it).
+    for fact in ("repowiki/.gitignore", "一个字都不写"):
+        assert fact in text, fact
 
 
 # ---------------------------------------------------------------------------

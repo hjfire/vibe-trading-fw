@@ -9,9 +9,13 @@
 
 ## 谁是事实源
 
-- 事实源：本目录下的 Markdown ＋ `ledger.jsonl`（担保日志）。
+- 事实源：本目录下的 Markdown ＋ `ledger.jsonl`（担保日志）。`drift/` 里的 `DRIFT.md` 与 `drift.json`
+  是 `report` 的**派生物**，被 `repowiki/.gitignore` 排除、不入库（规则写在本子树里而不是仓库根的
+  `.gitignore`，因为根那份归上游，本 fork 的约束是它一个字节都不动）。
 - 非事实源：`.qoder/repowiki/**` 是 Qoder IDE 的导出物，冻结在 2026-08-14 的索引
   快照上，并被 `.git/info/exclude` 排除（git 不知道它存在，因此没有撤销能力）。
+  正文已于 2026-10-02 改名归档进 `_ide-export-retired-2026-10-01/`，那份归档是**只读**的：
+  `--wiki-root` 指到 `ide` 布局根时 `report` 一个字都不写（它曾经会把报表写进归档里）。
   `SearchKnowledge` 读的是那份 IDE 索引，所以它的 overview 会长期显示过期内容 —
   这是上游限制，只能标注，不能消除。
 
@@ -122,12 +126,40 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki report   # 现在无需 
 - `report` 不再强制 `--baseline`：基线自己回落到逐页 `verified_at` 的**众数**
   （`tree_baseline()`，平票由 commit 本身裁决，与 walk 顺序无关）。仍想指定就写
   `--baseline <40-hex>`，显式值优先于任何回落；取不到众数时它也是唯一出路。
+- 三个动词的 `--page` 都必须落在**活动根的内容树之内**（默认根就是 `topics/`）：不许 `..` 段、
+  不许绝对路径，越界一律 `rc=2` 且零字节写入、零台账追加。这条闸门是终审整改加的 —— 之前
+  `mark --page ../../wiki/x.md` 能 rc=0 改写**上游拥有**的 `wiki/*.md` 并给它盖上 `vouch: all`。
+  深层中文键与 `./` 前缀写法都照常可用，路径就是 `ledger.jsonl` 的主键，别改。
 - `seed` 是一次性动作，M2 已跑完（播种提交 `f16d5dbc`），**且归档之后它不再有单一可用的
   `--from` 根**：`seed` 要求 `zh/content` 与 `knowledge/` 落在同一个根下，而归档只移走了
   前者（→ `_ide-export-retired-2026-10-01/zh`），后者按下一节的「归档位置」有意原地留在
   `.qoder/repowiki/knowledge`。实测三种写法一律 `rc=2`：默认根、显式 `.qoder/repowiki`、
   显式归档根（后者报 `no knowledge tree at …/_ide-export-retired-2026-10-01/knowledge/zh`）。
-  要复播得先把两样放回同一根。默认 dry-run、`--apply` 才写盘这一点不变。
+  要复播得先把两样放回同一根 —— **但这条前置条件本身是危险的，M5 之后尤其**：`seed --apply` 对目标页
+  只在「字节完全等于计划载荷」时跳过，否则直接 `write_bytes()`，没有 `--force`、不警告覆盖、也不出 diff，
+  计数里 `written` 也不区分「新页」与「我用 2026-08-14 的导出覆盖了你在 M5 重写的正文」。所以复播前必须
+  先把工作树干净地提交，且把它当一次**回滚**而不是更新来读。让 `seed` 在正文不同时拒绝写入（要覆盖得显式
+  加 flag）是 M3 的一条待办，不是现在能靠文档绕过的措辞问题。默认 dry-run、`--apply` 才写盘这一点不变。
+
+## 五条不可回退的契约（spec §6，踩过坑才定下的）
+
+这五条是 M1/M2 用事故换来的口径，M5 的 agent 改任何一页之前要先知道它们存在。「顺手优化」掉其中任何
+一条都会静默改变水位，而水位是这棵树唯一的进度事实源。
+
+1. **`cites` 担保范围（`vouch`）**：只有 `all` 才让页的 `verified_at` 顶替台账/快照当基线，而 `all` 只能
+   由「人真的重读过整页」的 `mark`（不带 `--partial`）写下；`reanchor --apply` 只搬得动它列进 `applied`
+   的那些引用，所以永远写 `applied-only`。当年把 `applied-only` 当全页担保，414 条待判引用被读成「已在
+   自己行上」，队列从 414 缩到 3 —— 工具把自己干不了的活藏了起来。
+2. **`partial` 不推进报表基线**：`mark --partial` 表示「引用已新、正文未核」，报表基线原地不动、只前移
+   锚点基线。423 个 `partial` 页就是这么留在队列里的，谁把它们盖章清掉谁就造出第二个 414。
+3. **`ledger-void` 由正文 sha 判定**：台账行的 `sha_after` 与页当前正文字节不符即作废，退回快照基线并
+   在报表点名 —— 防「改过一页却冒充已核对」。哈希按字节算（`open(newline="")`），且 `repowiki/.gitattributes`
+   把全树钉成 LF；两者任一失效，426 行台账会集体读成 `ledger-void`。
+4. **编辑器行数口径 `换行数+1`**：生成器把「末尾换行之后那个编辑器行号」写进 EOF 引用（全仓 3194 处），
+   所以 `file_line_count` 按 `newlines + 1` 计。按换行数计会把这 3194 条健康引用全判成越界。
+5. **越界分两类、报表分别措辞**：「文件收缩导致」可重定位，交给 `reanchor`；「快照当天就不存在这些行」
+   是生成器给整文件引用套的 `#L1-L200` 模板（全仓 25 个不同串），只能人工换掉。合并成一句话就会让第二类
+   看起来像工具没干活。
 
 ## 页集口径（M2 冻结的决定，M3 要扩必须显式改判）
 
