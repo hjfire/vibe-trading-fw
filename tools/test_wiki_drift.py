@@ -1680,14 +1680,41 @@ def test_empty_tree_is_an_error_not_a_green(tmp_path, monkeypatch, capsys):
 def test_empty_tree_hint_points_at_the_archive(tmp_path, monkeypatch, capsys):
     """After M2 the export is archived, so the hint that still says 'read it with
     --wiki-root .qoder/repowiki' would send a reader to a directory that no longer
-    has a content tree. Both substrings the existing cases assert must survive."""
+    has a content tree.
+
+    Equality on the WHOLE rendered template, not the three substrings this case used to
+    check: `no wiki pages`, `--wiki-root` and the archive name all survive a hint whose
+    last two lines were dropped at `build()`'s empty-tree branch (the site `report`
+    prints through), and they survive a wrong `layout=` or a swapped content/root pair.
+    Measured both of those against a scratch copy of the module: this case goes red and the
+    substring cases stay green, which is item ③ of the M3 list in one line. `--json` is
+    observed too, because the JSON path is the documented machine surface — `build()`
+    returns 2 before `cmd_report` reaches its `json.dumps`, so the hint must stay on
+    stderr and stdout must stay empty.
+
+    Not a duplicate of `test_every_empty_tree_hint_call_site_passes_archive`: that case
+    reads the AST and pins that every `.format` site hands over `archive=`; this one runs
+    one site and pins the bytes it prints. It is also not the whole picture — editing the
+    TEMPLATE moves both sides of this equality at once, which is the sibling case's slot
+    list, not something this case can see.
+    """
     monkeypatch.setattr(wiki_drift, "CONTENT", tmp_path / "topics")
     monkeypatch.setattr(wiki_drift, "WIKI", tmp_path)
     monkeypatch.setattr(wiki_drift, "wiki_root", wiki_drift.WikiRoot(root=tmp_path, layout="repo"))
+    want = wiki_drift.EMPTY_TREE_HINT.format(
+        content=wiki_drift.CONTENT,
+        root=wiki_drift.WIKI,
+        layout="repo",
+        archive=f"{wiki_drift.LEGACY_EXPORT}/{wiki_drift.EXPORT_ARCHIVE}",
+    )
     assert main(["report"]) == 2
     err = capsys.readouterr().err
-    assert "no wiki pages" in err and "--wiki-root" in err
-    assert wiki_drift.EXPORT_ARCHIVE in err
+    assert err.strip() == want.strip(), err
+    # the same hint, still whole, on the machine-readable path
+    assert main(["report", "--json"]) == 2
+    seen = capsys.readouterr()
+    assert seen.out == "", seen.out
+    assert seen.err.strip() == want.strip(), seen.err
 
 
 def _packed(text: str) -> str:
@@ -1779,6 +1806,52 @@ def test_every_empty_tree_hint_call_site_passes_archive():
     ]
     assert len(assignment) == 1, assignment
     assert not isinstance(assignment[0].value, ast.JoinedStr), "must stay a .format template"
+
+
+def test_every_command_that_writes_is_gated_on_the_root_shape():
+    """A BACKSTOP, not a fix: measured here it finds zero offenders, so it is green by
+    construction today and its whole value is the fourth writer somebody adds next
+    milestone beside `LEDGER.open("a")` / `write_bytes` — one that no behavioural case
+    happens to drive. Static reading is the cheap way to close that, the same idea as the
+    EMPTY_TREE_HINT call-site case above it.
+
+    Rule: every `cmd_*` containing a filesystem write must contain a guard call
+    (`write_refusal` / `root_is_read_only`) whose line number precedes the first write's
+    line number, or carry the inline `layout != "repo"` shape `cmd_seed` uses. Two limits
+    are worth naming instead of letting the docstring overclaim: the `layout != "repo"`
+    half is a source-text test over the whole function (so a comment saying it counts —
+    the honest version of this rule is "the gate is written down somewhere above the
+    write"), and it sweeps `cmd_*` bodies only, so a write that lives in a helper
+    (`apply_page_plan`, `copy_ledger`) is invisible here. The floor below is what keeps
+    the case from going vacuous if either the verbs or the write shapes are renamed.
+    """
+    src = (REAL_REPO / "tools" / "wiki_drift.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    writes = ("write_text", "write_bytes", "mkdir")
+    guards = ("write_refusal", "root_is_read_only")
+    offenders = []
+    writers: list[tuple[str, int | None, int]] = []
+    for node in tree.body:
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("cmd_")):
+            continue
+        write_lines, guard_line = [], None
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                fname = getattr(sub.func, "attr", None) or getattr(sub.func, "id", None)
+                seg = ast.get_source_segment(src, sub) or ""
+                if fname in writes or (fname == "open" and '"a"' in seg):
+                    write_lines.append(sub.lineno)
+                if fname in guards or 'layout != "repo"' in (ast.get_source_segment(src, node) or ""):
+                    if guard_line is None or sub.lineno < guard_line:
+                        guard_line = sub.lineno
+        if write_lines:
+            writers.append((node.name, guard_line, min(write_lines)))
+        if write_lines and (guard_line is None or guard_line > min(write_lines)):
+            offenders.append((node.name, guard_line, min(write_lines)))
+    # `cmd_reanchor`, `cmd_report`, `cmd_mark` and `cmd_index` write today; a sweep that
+    # found nothing would certify any future refactor of the module's shapes.
+    assert len(writers) >= 3, writers
+    assert not offenders, offenders
 
 
 def test_help_advertises_the_archive_not_the_retired_root(capsys):
@@ -4435,6 +4508,33 @@ def test_every_seeded_topic_body_matches_the_archive_byte_for_byte():
     assert len(export_pages) - len(absent) - len(mismatched) == 450
 
 
+@pytest.mark.local_archive
+def test_the_ide_export_body_tree_is_still_absent():
+    """README says `.qoder/repowiki` is frozen at the 2026-08-14 snapshot, because M2
+    moved `zh/content/` aside into `_ide-export-retired-2026-10-01` and made `repowiki/`
+    the publication.
+
+    If somebody clicks Generate in the IDE again, `zh/content` grows back under the
+    container, `--wiki-root .qoder/repowiki` starts working, and that README sentence
+    becomes a lie inside the tracked tree with nothing in the suite to notice — the two
+    roots would silently disagree about which one is publication. `LEGACY_EXPORT` is the
+    CONTAINER (it already ends in `/repowiki`, so it must not be joined twice), and the
+    body tree is the one path whose ABSENCE is the claim.
+
+    The container is untracked (`.qoder/` sits in `.git/info/exclude`), so this skips
+    rather than fails on a checkout without it — unlike the two archive cases above,
+    which assert the archive's presence and are red when it is gone.
+    """
+    container = REAL_REPO / wiki_drift.LEGACY_EXPORT
+    if not container.is_dir():
+        pytest.skip(f"no .qoder container on this checkout: {container}")
+    body = container / "zh" / "content"
+    assert not body.is_dir(), (
+        f"{body} exists again: the IDE export grew back, so README's frozen-snapshot "
+        "claim is false and the two roots disagree about which tree is publication"
+    )
+
+
 # ---------------------------------------------------------------------------
 # M-3: the two baseline failures are different problems and must say so differently
 # ---------------------------------------------------------------------------
@@ -4835,4 +4935,77 @@ def test_the_workflow_materialises_upstream_main_so_the_guards_are_not_silently_
     for name in ("test_fork_change_set_is_not_empty",
                  "test_no_fork_commit_touches_an_upstream_owned_file"):
         assert name not in marked, name
+
+
+def _gate_step(text: str) -> str:
+    """The `Wiki freshness gate` step block: from its `- name:` line to the next step
+    header or comment at the same indent, so nothing outside the step is read as its
+    command.
+
+    Scoping matters the same way it does for the upstream-fetch step above: this file's
+    Chinese comments describe the very spellings the assertions below forbid or require,
+    so a whole-file substring can be fed by prose and stay green over a broken command.
+    """
+    return re.search(r"- name: Wiki freshness gate.*?(?=\n {6}(?:- |#)|\Z)", text, re.S).group(0)
+
+
+def test_the_fork_workflow_invokes_the_gate_script_as_bash_tools():
+    """M-1 carried from the Task 5 review: `bash tools/…`, never `./tools/…`.
+
+    `git config core.filemode` is false here and `git ls-files -s` gives the gate script
+    the mode 100644, so its executable bit is not in git at all: on a Linux runner that
+    checks these bytes out, `./tools/wiki_freshness_gate.sh` dies with Permission denied
+    while the local shell still runs it. `sh tools/…` is the same trap one step further
+    out — it runs, but a reader cannot tell from the workflow whether the file is an
+    executable or just text. Nothing pinned the spelling today: the cases above only
+    assert `"wiki_freshness_gate.sh" in text`.
+
+    The negative half is NOT the bare string `sh tools/wiki_freshness_gate.sh` — that is a
+    substring of the correct `bash tools/wiki_freshness_gate.sh`, so a plain membership
+    test would have been red on the untouched file. The regex demands a non-word character
+    in front of `sh`, i.e. a standalone `sh` invocation.
+    """
+    text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
+    step = _gate_step(text)
+    assert "bash tools/wiki_freshness_gate.sh" in step, step
+    assert "./tools/wiki_freshness_gate.sh" not in text
+    assert re.search(r"(?<!\w)sh\s+tools/wiki_freshness_gate\.sh", text) is None, text
+
+
+def test_the_fork_workflow_overrides_the_water_level_with_the_measured_number():
+    """M-2 carried from the Task 5 review: the gate is soft, so its threshold is the only
+    thing that can make it mean something, and nothing in the suite read the workflow's
+    `env:` value.
+
+    The other 445 pins live in `tools/wiki_freshness_gate.sh` (`${WIKI_STALE_MAX:-445}`)
+    and cover the script's FALLBACK; this is the workflow's OVERRIDE, and a runner always
+    takes the override. `WIKI_STALE_MAX: '999999'` there is a gate that is green for every
+    tree imaginable — and the suite stayed green with it, which is the always-green light
+    §9.1 exists to avoid. ConsciousUpdate by design: when M5 lowers the real water level
+    this literal has to move in the same commit, and the red here is the reminder.
+    """
+    text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
+    assert "WIKI_STALE_MAX: '445'" in _gate_step(text), _gate_step(text)
+    # one override only: a job- or workflow-level `WIKI_STALE_MAX` would win over, or
+    # silently coexist with, the step value this case just read.
+    assert text.count("WIKI_STALE_MAX:") == 1, text
+
+
+def test_the_fork_workflow_pins_every_uses_step_to_a_commit_sha():
+    """M-4 carried from the Task 5 review: the pins are load-bearing, and no case read
+    them.
+
+    `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` is a commit;
+    `actions/checkout@v7` is a moving tag that can change what a scheduled run does
+    without this repo changing a byte. Both spellings are asserted verbatim, once each,
+    and the general shape with them — every `- uses:` line in the file must resolve to a
+    40-hex commit — so a third step added later cannot arrive unpinned either. Editing
+    either pin to a mutable tag left the whole suite green before this case.
+    """
+    text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
+    for pin in ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"):
+        assert text.count(pin) == 1, pin
+    for invoked in re.findall(r"^ +- uses: (\S+)", text, re.M):
+        assert re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", invoked), invoked
 
