@@ -413,7 +413,10 @@ def test_report_writes_json_and_markdown(wired, capsys):
     payload = json.loads((wired["wiki"] / "update" / "drift.json").read_text(encoding="utf-8"))
     assert payload["summary"]["pages"] == 2
     assert payload["summary"]["needs_update"] == 2
-    assert payload["metadata_baseline"] == wired["base"]
+    assert payload["baseline"] == wired["base"]
+    # The IDE fixture has no page stamp, so this is the metadata arm — named, not guessed
+    # from the SHA (see `test_drift_json_says_the_metadata_file_supplied_the_baseline`).
+    assert payload["baseline_source"] == "wiki_repo.last_commit_id"
     md = (wired["wiki"] / "update" / "DRIFT.md").read_text(encoding="utf-8")
     assert "待更新页面" in md and "src/gone.py" in md
     # Non-vacuity: the report must name the real gaps, not print an empty table.
@@ -596,7 +599,8 @@ def test_render_markdown_lists_every_bucket(wired):
     payload = {
         "generated_at": "2026-10-01T00:00:00+00:00",
         "head": "h",
-        "metadata_baseline": "b",
+        "baseline": "b",
+        "baseline_source": "page-verified_at-mode",
         "summary": {
             "pages": 2, "needs_update": 1, "clean": 1, "reconciled": 0, "ledger_void": 0,
             "partial": 0, "no_frontmatter": 0, "frontmatter": 0,
@@ -608,11 +612,14 @@ def test_render_markdown_lists_every_bucket(wired):
     assert "a.md" in md and "src/gone.py" in md and "src/brand_new.py" in md
     assert "缺失 1" in md and "变更 1" in md
     assert "缺 frontmatter 的页面：0" in md
+    # DRIFT.md carries the same provenance field `drift.json` does (Task 7's key rename).
+    assert "`b`" in md and "page-verified_at-mode" in md
 
 
 def test_render_markdown_says_all_clear_instead_of_hiding_the_table(wired):
     payload = {
-        "generated_at": "x", "head": "h", "metadata_baseline": "b",
+        "generated_at": "x", "head": "h",
+        "baseline": "b", "baseline_source": "wiki_repo.last_commit_id",
         "summary": {
             "pages": 1, "needs_update": 0, "clean": 1, "reconciled": 0, "ledger_void": 0,
             "partial": 0, "no_frontmatter": 1, "frontmatter": 0,
@@ -624,6 +631,9 @@ def test_render_markdown_says_all_clear_instead_of_hiding_the_table(wired):
     assert "无" in md
     # A clean-looking tree where nobody seeded the pages must say so out loud.
     assert "缺 frontmatter 的页面：1" in md
+    # And a metadata-derived baseline says `wiki_repo.last_commit_id`, not a page mode this
+    # payload never had: the second of the three values, rendered through the same line.
+    assert "wiki_repo.last_commit_id" in md
 
 
 # ---------------------------------------------------------------------------
@@ -3728,6 +3738,117 @@ def test_report_labels_the_metadata_fallthrough(wired, capsys):
     out = capsys.readouterr().out
     assert f"baseline  {wired['base']}  (metadata: repowiki-metadata.json)" in out, out
     assert "modal page verified_at" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# drift.json: the baseline key names where its own value came from
+# ---------------------------------------------------------------------------
+
+
+def _stamp_every_page(repo_wired, revision: str) -> list:
+    """Stamp every page of the repo-layout tree the way seeding does, and return them.
+    The empty tree is refused here rather than by the callers: `build()` on a root with
+    no page would exit 2, and a case whose setup wrote no stamp would then be asserting
+    a provenance nothing derived."""
+    pages = sorted(repo_wired["content"].rglob("*.md"))
+    assert pages, "a tree with no page derives nothing"
+    for page in pages:
+        wiki_drift.update_frontmatter(page, verified_at=revision, vouch="applied-only")
+    return pages
+
+
+def test_drift_json_names_the_baseline_and_where_it_came_from(repo_wired):
+    """The payload key was `metadata_baseline` while the value was the modal page
+    `verified_at`. A machine-readable surface that misreports its own provenance is the
+    same defect the human-readable half got fixed for in the M2 rounds — the JSON is what
+    a future tool will trust, and DRIFT.md is what a human will."""
+    _stamp_every_page(repo_wired, repo_wired["base"])
+    built = wiki_drift.build(_args())
+    assert not isinstance(built, int), built
+    payload, _reports, _gaps = built
+    assert "metadata_baseline" not in payload, sorted(payload)
+    # Measured against the seeded tree, not a SHA guessed from the fixture's shape.
+    assert payload["baseline"] == repo_wired["base"]
+    assert payload["baseline_source"] == "page-verified_at-mode"
+    # DRIFT.md must say the same thing the JSON says, or the human surface keeps lying
+    # while only the machine surface gets fixed. `render_markdown(payload, reports, gaps,
+    # top)` is the real arity; the baseline line is the one under the HEAD line.
+    md = render_markdown(payload, [], [], 3)
+    assert "baseline" in md and payload["baseline"] in md
+    assert payload["baseline_source"] in md
+
+
+def test_drift_json_says_an_operator_flag_supplied_the_baseline(repo_wired):
+    """No page and no metadata claimed this value, so crediting either of them is the
+    same lie pointing the other way. The repo-layout root carries no metadata file, which
+    is what bounds the arm: with no flag this tree derives nothing at all."""
+    pages = sorted(repo_wired["content"].rglob("*.md"))
+    assert pages and all(not wiki_drift.read_frontmatter(p) for p in pages)
+    assert wiki_drift.tree_baseline() is None, "nothing in the tree to fall back on"
+    assert isinstance(wiki_drift.build(_args()), int), "the no-baseline exit 2 is the floor"
+    built = wiki_drift.build(_args(baseline=repo_wired["head"]))
+    assert not isinstance(built, int), built
+    payload = built[0]
+    assert payload["baseline"] == repo_wired["head"]
+    assert payload["baseline_source"] == "--baseline"
+
+
+def test_drift_json_says_the_metadata_file_supplied_the_baseline(wired):
+    """The arm a one-line `if tree_baseline(): source = "page-verified_at-mode"` gets
+    wrong: `tree_baseline()` swallows its own metadata last resort, so on a root with no
+    page stamp it returns a SHA that came out of `repowiki-metadata.json`, and a label
+    crediting the page mode there is exactly as false as the old key name."""
+    pages = sorted(wired["content"].rglob("*.md"))
+    assert pages and all(not wiki_drift.read_frontmatter(p) for p in pages)
+    assert wiki_drift.tree_baseline() == metadata_baseline() == wired["base"]
+    built = wiki_drift.build(_args())
+    assert not isinstance(built, int), built
+    payload = built[0]
+    assert payload["baseline"] == wired["base"]
+    assert payload["baseline_source"] == "wiki_repo.last_commit_id"
+    # The scan `build()` asks about must be the half that cannot see the metadata file:
+    # None on this tree while `tree_baseline()` answers with the SHA — and the moment one
+    # page is stamped, the page wins, which is the ordering M2 pinned.
+    assert wiki_drift.page_mode_baseline() is None
+    wiki_drift.update_frontmatter(pages[0], verified_at="a" * 40)
+    assert wiki_drift.page_mode_baseline() == "a" * 40
+    assert wiki_drift.tree_baseline() == "a" * 40
+
+
+def test_the_two_surfaces_read_the_same_source_field(repo_wired, capsys):
+    """`cmd_report` used to re-guess the provenance by comparing the payload against
+    `metadata_baseline()` — a second truth, which disagrees with `build()` the moment the
+    modal page stamp equals the metadata value. Both surfaces now read the payload's one
+    field, and this case is what stops them drifting apart again."""
+    _stamp_every_page(repo_wired, repo_wired["base"])
+    built = wiki_drift.build(_args())
+    assert not isinstance(built, int), built
+    source = built[0]["baseline_source"]
+    assert source == "page-verified_at-mode"
+    assert source in render_markdown(built[0], [], [], 3)
+    assert cmd_report(_args()) == 0
+    out = capsys.readouterr().out
+    assert source in out, out
+    # The readable half of the line is what M2 pinned; the machine field is added to it,
+    # never swapped for it.
+    assert f"baseline  {repo_wired['base']}  (tree: modal page verified_at)" in out, out
+
+
+def test_stale_json_echoes_the_payloads_own_baseline(repo_wired):
+    """A fourth consumer of the renamed key: `stale --json` prints its own top-level
+    `baseline`, read straight out of the payload. Every existing case hands it a
+    `--baseline`, which takes the flag arm; this one lets the tree supply the value, and
+    that is where the read had to be renamed or the verb dies on a KeyError."""
+    _stamp_every_page(repo_wired, repo_wired["base"])
+    built = wiki_drift.build(_args())
+    assert not isinstance(built, int), built
+    payload = built[0]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert wiki_drift.cmd_stale(_args(json=True)) == 0
+    rows = json.loads(buf.getvalue())
+    assert rows["baseline"] == payload["baseline"] == repo_wired["base"]
+    assert rows["head"] == payload["head"]
 
 
 # ---------------------------------------------------------------------------

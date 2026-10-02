@@ -32,6 +32,11 @@ That mapping is what makes the wiki maintainable outside the IDE:
 * name the cites whose range stops past the end of the file, and say which of the
   two causes it is: the file shrank since the snapshot, which an agent re-derives,
   or those lines never existed, which only a rewrite can fix.
+* say which of the three sources supplied the baseline the whole run measured against:
+  the payload carries ``baseline`` plus ``baseline_source`` (``--baseline``,
+  ``page-verified_at-mode`` or ``wiki_repo.last_commit_id``), because a machine-readable
+  surface that credits ``repowiki-metadata.json`` for a number it read off the pages is
+  the same lie M2 fixed in the printed line — and the JSON is what a future tool trusts.
 
 Only the active root's content tree is ever written — ``topics/**`` in the
 repo-owned ``repowiki/``, ``zh/content/**`` in an IDE export — and that is enforced,
@@ -415,22 +420,16 @@ def metadata_baseline(meta_path: "Path | None" = None) -> str | None:
     return commit
 
 
-def tree_baseline() -> str | None:
-    """The commit the current tree agrees it was generated at.
+def page_mode_baseline() -> str | None:
+    """The modal per-page `verified_at` over `CONTENT`, or None when no page carries one.
 
-    Modal page `verified_at` over `CONTENT`, ties broken by the revision itself so
-    the answer cannot depend on walk order; falls back to the IDE metadata while an
-    IDE-layout root is what is being read. `frontmatter_baseline()` gates on `vouch`
-    because a page's stamp must not outrank its own ledger row; this value is the
-    opposite case — the tree-wide fallback for pages that have no per-page claim.
-
-    Keeping `metadata_baseline()` as the last resort is a deliberate deviation from
-    spec §6, which asked for that call path to be deleted: a page stamp always wins,
-    so only a tree with no usable per-page stamp reaches it, and that is exactly the
-    IDE-layout root the pre-M1 cases run on. Dropping the fallback would have
-    repointed `test_unreachable_metadata_baseline_asks_for_an_override`, the guard
-    that a missing baseline is an error rather than a guess. M2's README and the
-    archive both have to record this, so it is not a silent difference.
+    The scan `tree_baseline()` is built on, split out so a caller that has to NAME the
+    provenance of the baseline it publishes can ask this question without reaching the
+    metadata last resort — `tree_baseline()`'s docstring carries why that matters. Ties
+    break by the revision itself, so the answer cannot depend on walk order.
+    `frontmatter_baseline()` gates on `vouch` because a page's stamp must not outrank its
+    own ledger row; this value is the opposite case — the tree-wide number for pages that
+    have no per-page claim.
     """
     counts: Counter[str] = Counter()
     if CONTENT.is_dir():
@@ -441,9 +440,34 @@ def tree_baseline() -> str | None:
             rev = str(fm.get("verified_at") or "").strip().lower()
             if HEX40_RE.match(rev):
                 counts[rev] += 1
-    if counts:
-        return min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    return metadata_baseline()
+    if not counts:
+        return None
+    return min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+
+def tree_baseline() -> str | None:
+    """The commit the current tree agrees it was generated at.
+
+    Modal page `verified_at` over `CONTENT` (see `page_mode_baseline()`), ties broken by
+    the revision itself so the answer cannot depend on walk order; falls back to the IDE
+    metadata while an IDE-layout root is what is being read. `frontmatter_baseline()` gates
+    on `vouch` because a page's stamp must not outrank its own ledger row; this value is
+    the opposite case — the tree-wide fallback for pages that have no per-page claim.
+
+    Keeping `metadata_baseline()` as the last resort is a deliberate deviation from
+    spec §6, which asked for that call path to be deleted: a page stamp always wins,
+    so only a tree with no usable per-page stamp reaches it, and that is exactly the
+    IDE-layout root the pre-M1 cases run on. Dropping the fallback would have
+    repointed `test_unreachable_metadata_baseline_asks_for_an_override`, the guard
+    that a missing baseline is an error rather than a guess. M2's README and the
+    archive both have to record this, so it is not a silent difference.
+
+    A caller that has to say WHICH of the two supplied its value cannot use this answer:
+    a truthy one only proves "the tree agrees", and the metadata SHA is hiding behind the
+    `or`. `build()`, which publishes the provenance next to the number, asks
+    `page_mode_baseline()` instead.
+    """
+    return page_mode_baseline() or metadata_baseline()
 
 
 def sha256(path: Path) -> str:
@@ -1412,7 +1436,9 @@ def render_markdown(payload: dict, reports: list[PageReport], gaps: list[Change]
         "",
         f"- 生成时间：{payload['generated_at']}",
         f"- 当前 HEAD：`{payload['head']}`",
-        f"- Wiki 快照基线：`{payload['metadata_baseline']}`（只读取，不改写 `repowiki-metadata.json`）",
+        f"- Wiki 快照基线 `baseline`：`{payload['baseline']}`"
+        f"｜来源 `baseline_source`：`{payload['baseline_source']}`"
+        "（只读取，不改写 `repowiki-metadata.json`）",
         f"- 页面：共 {s['pages']}｜需更新 {s['needs_update']}｜已一致 {s['clean']}"
         f"（其中台账已对齐 {s['reconciled']}、台账失效 {s['ledger_void']}、只改了链接 {s['partial']}）",
         f"- 引用源文件：{s['distinct_refs']} 个｜自各页有效基线以来有变更 {s['refs_changed']}｜已不存在 {s['refs_broken']}",
@@ -2160,7 +2186,19 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
     if not (REPO / ".git").exists():
         print(f"{REPO} is not a git repository", file=sys.stderr)
         return 2
-    fallback = args.baseline or tree_baseline()
+    # Which of the three sources supplied the fallback, recorded while it is chosen and
+    # not re-guessed afterwards: `tree_baseline()` would answer with the metadata SHA and
+    # call it "the tree agrees", so asking it and then testing truthiness would credit the
+    # pages with a number they never carried. The `not fallback` guard below still owns the
+    # no-source case, so every path that reaches the payload has a truthy value here.
+    if args.baseline:
+        baseline_source, fallback = "--baseline", args.baseline
+    else:
+        mode = page_mode_baseline()
+        if mode:
+            baseline_source, fallback = "page-verified_at-mode", mode
+        else:
+            baseline_source, fallback = "wiki_repo.last_commit_id", metadata_baseline()
     if not fallback:
         print(
             "wiki baseline commit unavailable — both sources were tried and neither "
@@ -2220,7 +2258,12 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "head": head,
-        "metadata_baseline": fallback,
+        # `baseline`, not `metadata_baseline`: the value is only sometimes the metadata's,
+        # and `baseline_source` names which of the three supplied it. Every printer reads
+        # these two fields — `render_markdown`, `cmd_report`, `stale --json` — so no
+        # surface can re-grow a guess of its own.
+        "baseline": fallback,
+        "baseline_source": baseline_source,
         "summary": {
             "pages": len(reports),
             "needs_update": len(needs),
@@ -2239,6 +2282,18 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
         "uncovered": [vars(c) for c in gaps],
     }
     return payload, reports, gaps
+
+
+# The three `baseline_source` values `build()` writes, spelled out for a human reader.
+# This map only TRANSLATES the machine field; it never decides it. Deciding it here is what
+# this printer used to do — it compared the resolved value against `metadata_baseline()`, so
+# a root whose modal page stamp happens to equal `wiki_repo.last_commit_id` got announced
+# as `metadata:` while the payload said `page-verified_at-mode`: one misreport, two places.
+BASELINE_SOURCE_LABELS = {
+    "--baseline": "--baseline override (operator-supplied)",
+    "page-verified_at-mode": "tree: modal page verified_at",
+    "wiki_repo.last_commit_id": "metadata: repowiki-metadata.json",
+}
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -2271,21 +2326,12 @@ def cmd_report(args: argparse.Namespace) -> int:
         )
     s = payload["summary"]
     print(f"HEAD      {payload['head']}")
-    # Name the value's actual source, not a story about it. The resolved fallback can
-    # come from three places and only one of them is the modal page stamp: an operator
-    # `--baseline` is by definition not that stamp, and a tree with no page stamps
-    # (`tree_baseline()`'s last resort, i.e. any IDE-layout root) is the metadata file
-    # talking. `metadata_baseline()` is one json read; a second `tree_baseline()` would
-    # re-walk the whole tree just to relabel a line. The comparison cannot mislabel a
-    # seeded repo-layout tree either: that root has no `zh/meta/repowiki-metadata.json`,
-    # so it returns `None`, and `None` is never a 40-hex page stamp.
-    if args.baseline:
-        source = "--baseline override (operator-supplied)"
-    elif metadata_baseline() == payload["metadata_baseline"]:
-        source = "metadata: repowiki-metadata.json"
-    else:
-        source = "tree: modal page verified_at"
-    print(f"baseline  {payload['metadata_baseline']}  ({source})")
+    # The payload's own field, spelled two ways: the label for whoever is reading the
+    # terminal and the machine value in brackets, which is what `drift.json` and DRIFT.md
+    # show. Nothing here decides provenance any more — a line that guessed would still
+    # print after `build()` had said something different.
+    source = payload["baseline_source"]
+    print(f"baseline  {payload['baseline']}  ({BASELINE_SOURCE_LABELS[source]})  [{source}]")
     print(
         f"pages     {s['pages']} total | needs update {s['needs_update']} | clean {s['clean']} "
         f"(ledger {s['reconciled']}, void {s['ledger_void']}, partial {s['partial']})"
@@ -2365,7 +2411,7 @@ def cmd_stale(args: argparse.Namespace) -> int:
     by_reason = Counter(row["reason"] for row in queue)
 
     if getattr(args, "json", False):
-        print(json.dumps({"head": payload["head"], "baseline": payload["metadata_baseline"],
+        print(json.dumps({"head": payload["head"], "baseline": payload["baseline"],
                           "count": len(queue),
                           "reasons": {r: by_reason[r] for r in QUEUE_REASONS},
                           "queue": queue}, ensure_ascii=False, indent=2))
