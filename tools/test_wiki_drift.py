@@ -4312,3 +4312,73 @@ def test_index_treats_a_list_shaped_verified_at_as_no_stamp_at_all(repo_wired):
     assert "['" not in text and "7fdffa31" not in text, text
     assert "`--------`" in text
 
+
+# ---------------------------------------------------------------------------
+# M3-4: 新鲜度门禁脚本 —— 只读、阈值化，且不带商标门的模式串
+# ---------------------------------------------------------------------------
+#
+# `tools/wiki_freshness_gate.sh` 是 Task 5 的 CI 步骤消费的那份 rc 契约，所以这里的三条
+# 用例各自钉住一条分支：文件内容（政策不复刻）、阈值两个方向、以及工具没有输出时的
+# fail-closed 守卫。
+
+
+def test_the_freshness_gate_is_readable_and_carries_no_brand_patterns():
+    """Two policies, one implementation each. The brand/code gates live in
+    `ci_grep_gates.sh` (upstream-owned, unchangeable); copying their needles into a
+    fork script is how a policy ends up half-updated."""
+    src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
+    assert "WIKI_STALE_MAX" in src and "445" in src
+    assert "stale --format count" in src
+    assert "index --check" in src
+    # TM_NEEDLE (:1538) is the suite's already-lowercased brand needle; the point of
+    # asserting on it is that this fork-owned file must not contain it in ANY casing.
+    assert TM_NEEDLE not in src.lower()
+    assert "".join(["World", "Quant"]) not in src
+
+
+def test_the_gate_threshold_branch_fails_closed_and_only_that_branch():
+    """A gate whose red path has never been taken is not a gate.
+
+    Both directions of the comparison are exercised by moving ONLY `WIKI_STALE_MAX`, so
+    the assertions cannot be satisfied by the other leg: the low run must be rc=1 for
+    the water level, and the generous run must not mention the water level at all.
+    Asserting rc=0 on the second run would make the suite borrow `index --check`'s repo
+    hygiene — a soft, continue-on-error gate step must not be replicated as a hard test.
+    """
+    script = REAL_REPO / "tools" / "wiki_freshness_gate.sh"
+    # 实测（本机）：Windows 的 CreateProcess 先搜系统目录再搜 PATH，裸 "bash" 命中的是
+    # C:\Windows\System32\bash.exe —— WSL 启动器回吐一句 UTF-16 的「未安装发行版」并以 rc=1
+    # 结束，门禁脚本根本没跑，而 `returncode == 1` 却会假绿。`shutil.which` 按 PATH 顺序解析，
+    # 拿到的正是 Git Bash，与 CI 里 `bash tools/wiki_freshness_gate.sh` 同一颗解释器。
+    bash = shutil.which("bash") or "bash"
+    low = subprocess.run([bash, str(script)], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", cwd=str(REAL_REPO),
+                         env={**os.environ, "WIKI_STALE_MAX": "1"})
+    assert low.returncode == 1, low.stdout + low.stderr
+    assert "water level rose above the threshold" in low.stdout
+    assert re.search(r"wiki stale pages: \d+ \(threshold 1\)", low.stdout), low.stdout
+
+    high = subprocess.run([bash, str(script)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", cwd=str(REAL_REPO),
+                          env={**os.environ, "WIKI_STALE_MAX": "999999"})
+    assert "water level rose above the threshold" not in high.stdout, high.stdout
+    assert "wiki stale pages: " in high.stdout
+
+
+def test_the_gate_fails_loudly_when_the_tool_prints_nothing():
+    """The branch the threshold tests cannot reach.
+
+    If `stale --format count` dies (unreachable baseline, a fresh clone without history),
+    `$STALE` is empty and a bare `[ "" -gt 445 ]` is a bash diagnostic that evaluates
+    false — the gate would print `ok` on a broken tool. The guard is asserted statically
+    here because reaching it needs a stubbed `python` on PATH, which is the flaky half of
+    a Windows Git Bash test; Task 10's MS-probes cover the behavioural half.
+    """
+    src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
+    guard = src.index('[[ "$STALE" =~ ^[0-9]+$ ]]')
+    bail = src.index("exit 1", guard)
+    compared = src.index('-gt "$LIMIT"')
+    assert bail < compared, "a non-integer reading must stop the script, not fall through"
+    assert guard < compared, "the integer guard must come before the comparison"
+    assert "did not print one integer" in src
+
