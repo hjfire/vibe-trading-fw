@@ -3397,6 +3397,155 @@ def test_seed_stops_on_a_missing_export_ledger(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# M3 Task 6: the seed overwrite gate (`--force`)
+# ---------------------------------------------------------------------------
+
+
+def _plans_by_target(export: Path, snapshot: str) -> "dict[Path, wiki_drift.PagePlan]":
+    """The plans `cmd_seed` builds, keyed by target — rebuilt from the real
+    constructors instead of hand-written `PagePlan`s.
+
+    `apply_page_plan` reads `plan.fm["sources"]`, so a fixture dict built without that
+    key dies on a `KeyError` that says nothing about the gate. The caller must have run
+    `main(["--wiki-root", <target>, ...])` first: that is what re-points `WIKI`, and
+    `plan_topics`/`plan_knowledge` take their targets from it — plans built before it
+    would aim at the real `repowiki/` tree. `snapshot` must be the value the tree was
+    seeded with, or every page reads as changed on the frontmatter axis alone.
+    """
+    plans = (wiki_drift.plan_topics(export, snapshot)
+             + wiki_drift.plan_knowledge(export / wiki_drift.LEGACY_KNOWLEDGE, snapshot))
+    by_target = {p.target: p for p in plans}
+    assert len(by_target) == 8, sorted(p.label for p in plans)
+    return by_target
+
+
+def test_seed_refuses_to_overwrite_a_changed_page_without_force(tmp_path, monkeypatch, capsys):
+    """`seed --apply` used to `write_bytes` anything whose bytes differed, with no
+    warning and a `written` count that did not distinguish a new page from a clobber.
+    After M5 that is the recipe for deleting rewritten prose with a 2026-08-14 export —
+    which is why the README sentence about re-seeding was labelled rollback-grade."""
+    export, wiki = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
+    assert main([*argv, "--apply"]) == 0, "seed the fixture tree before anyone edits it"
+    capsys.readouterr()
+    target = wiki / "topics" / "前端应用" / "页一.md"
+    plan = _plans_by_target(export, "a" * 40)[target]
+    # `original` is the whole seeded file (frontmatter + body), which is exactly the
+    # payload a forced re-publish writes — so the last assertion below compares the
+    # bytes the gate protects, not just the prose.
+    original = target.read_bytes()
+    # The brief's `b"## 重写过的正文…"` needle is not valid Python (a bytes literal may
+    # not hold non-ASCII), so the same text — CJK and trailing `\n` included — is encoded
+    # explicitly rather than shortened to ASCII, which would stop pinning a CJK page.
+    target.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    tally = wiki_drift.SeedTally()
+    rc = wiki_drift.apply_page_plan(plan, tally, dry_run=False, force=False)
+
+    assert rc == "refused", rc
+    assert tally.overwritten == 1
+    assert target.read_bytes() == "## 重写过的正文，不是导出物\n".encode("utf-8")
+    rc2 = wiki_drift.apply_page_plan(plan, wiki_drift.SeedTally(), dry_run=False, force=True)
+    assert rc2 == "written"
+    assert target.read_bytes() == original
+
+
+def test_seed_overwrite_gate_fires_only_on_bytes_a_human_changed(tmp_path, monkeypatch, capsys):
+    """The two shapes that must stay open under `force=False`, or the gate is just
+    "refuse every write" and the real seeding run cannot happen: a page whose target
+    file is absent is the new-page case, and a page whose bytes already equal the
+    payload is the idempotent re-run. Both must clear with `overwritten` still 0, while
+    the one edited page in the same tally is refused — the three together are what make
+    `overwritten` mean "bytes a human may have written" and not "bytes that differ".
+    """
+    export, wiki = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
+    assert main([*argv, "--apply"]) == 0
+    capsys.readouterr()
+    plans = _plans_by_target(export, "a" * 40)
+    edited = wiki / "topics" / "前端应用" / "页一.md"
+    unchanged = wiki / "topics" / "前端应用" / "页二.md"
+    gone = wiki / "modules" / "repo-root" / "overview.md"
+    edited.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    missing_bytes = gone.read_bytes()
+    gone.unlink()
+
+    tally = wiki_drift.SeedTally()
+    assert wiki_drift.apply_page_plan(plans[edited], tally, dry_run=False, force=False) == "refused"
+    assert wiki_drift.apply_page_plan(plans[unchanged], tally, dry_run=False, force=False) == "skipped"
+    assert wiki_drift.apply_page_plan(plans[gone], tally, dry_run=False, force=False) == "written"
+
+    assert (tally.overwritten, tally.refused, tally.skipped, tally.written) == (1, 1, 1, 1)
+    assert "overwritten=1 refused=1" in tally.line(), tally.line()
+    assert edited.read_bytes() == "## 重写过的正文，不是导出物\n".encode("utf-8")
+    assert gone.read_bytes() == missing_bytes, "a missing page still publishes without --force"
+
+
+def test_seed_apply_refuses_an_edited_page_until_force(tmp_path, monkeypatch, capsys):
+    """The CLI contract an operator of Task 10 reads: exit 2 (the same code every other
+    refusal in this tool uses — 1 is reserved for "the work ran and did not reconcile"),
+    the count and `--force` named on stderr, the tally line still printed, and NOT one
+    ledger byte copied. A refused run that printed `ledger_rows=2` would be claiming a
+    published tree; and `exists()` proves nothing here, since the first apply already
+    put that file there — the bytes have to be identical."""
+    export, wiki = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
+    assert main([*argv, "--apply"]) == 0
+    page = wiki / "topics" / "前端应用" / "页一.md"
+    seeded = page.read_bytes()
+    capsys.readouterr()
+    page.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    ledger = wiki / "ledger.jsonl"
+    ledger_before = ledger.read_bytes()
+    tree_before = {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))}
+
+    rc = main([*argv, "--apply"])
+    out = capsys.readouterr()
+    assert rc == 2, rc
+    assert "refused to overwrite 1 page(s)" in out.err, out.err
+    assert "--force" in out.err, out.err
+    assert "topics/前端应用/页一.md" in out.err, "the message must name which page is edited"
+    assert "overwritten=1 refused=1" in out.out, out.out
+    assert "pages_written=0 pages_skipped=7" in out.out, out.out
+    assert "ledger_rows=" not in out.out and "ledger_sha=" not in out.out, out.out
+    assert ledger.read_bytes() == ledger_before, "a refused run publishes no ledger"
+    assert page.read_bytes() == "## 重写过的正文，不是导出物\n".encode("utf-8"), "refused means refused"
+    assert {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))} == tree_before
+
+    forced = main([*argv, "--apply", "--force"])
+    out = capsys.readouterr()
+    assert forced == 0, out.err
+    assert "overwritten=1" in out.out, out.out
+    assert "pages_written=1" in out.out, out.out
+    assert "ledger_rows=2" in out.out, "the ledger only ships with the pages"
+    assert page.read_bytes() == seeded, "--force really does restore the export"
+
+
+def test_seed_dry_run_reports_a_refused_page_instead_of_a_written_one(tmp_path, monkeypatch, capsys):
+    """Dry-run's whole job is to predict `--apply` verbatim, so a page `--apply` would
+    refuse must not be tallied as `written` here — the run that gets read for a decision
+    is the one that would be false. The cost is honest and intended: a tree holding one
+    edited page exits 2 on a read-only preview. Nothing is written either way."""
+    export, wiki = _seedable(tmp_path, monkeypatch)
+    argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
+    assert main([*argv, "--apply"]) == 0
+    page = wiki / "topics" / "前端应用" / "页一.md"
+    capsys.readouterr()
+    page.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    ledger_before = (wiki / "ledger.jsonl").read_bytes()
+    tree_before = {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))}
+
+    assert main(argv) == 2, "dry-run predicts the refusal, so it reports it"
+    out = capsys.readouterr()
+    assert "dry-run: nothing written" in out.out, out.out
+    assert "overwritten=1 refused=1" in out.out, out.out
+    assert "pages_written=0" in out.out, "an edited page is not a page dry-run would write"
+    assert "refused to overwrite 1 page(s)" in out.err, out.err
+    assert "ledger_rows=" not in out.out, out.out
+    assert ledger_before == (wiki / "ledger.jsonl").read_bytes()
+    assert {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))} == tree_before
+
+
+# ---------------------------------------------------------------------------
 # tree_baseline: the tree-wide fallback that retires the mandatory --baseline
 # ---------------------------------------------------------------------------
 

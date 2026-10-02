@@ -992,16 +992,33 @@ class SeedTally:
     no_sources: int = 0
     origins: dict[str, int] = field(default_factory=dict)
     reword_names: list[str] = field(default_factory=list)
+    overwritten: int = 0
+    refused: int = 0
 
     def line(self) -> str:
+        # The two new fields are appended, never interleaved: spec §6 pins the names
+        # *and* the order of the first five pairs, and Task 10 greps this line by prefix.
         return (f"pages_written={self.written} pages_skipped={self.skipped} "
                 f"sha_mismatch={self.mismatched} checked={self.checked} "
                 f"reworded={self.reworded} no_sources={self.no_sources} "
-                f"origins={{{', '.join(f'{k}:{v}' for k, v in sorted(self.origins.items()))}}}")
+                f"origins={{{', '.join(f'{k}:{v}' for k, v in sorted(self.origins.items()))}}} "
+                f"overwritten={self.overwritten} refused={self.refused}")
 
 
-def apply_page_plan(plan: PagePlan, tally: SeedTally, dry_run: bool) -> None:
-    """Publish one page: our frontmatter, then the body bytes verbatim.
+def apply_page_plan(plan: PagePlan, tally: SeedTally, dry_run: bool,
+                    force: bool = False) -> str:
+    """Publish one page, and never silently replace bytes a human may have rewritten.
+
+    Returns one of "skipped" / "written" / "refused" so the caller can count without
+    re-reading the tally. The pre-existing-bytes check is the whole point: M5 will
+    rewrite prose, and `seed` is a one-shot whose `--from` root no longer exists as a
+    single usable place — running it again is not a refresh, it is a rollback.
+
+    `overwritten` counts a differing page whether or not `force` let it through, so the
+    tally still says how many pages were clobbered; `refused` is the count of pages that
+    were not. Dry-run takes the same branch rather than predicting it, because a preview
+    that tallied an edited page as `written` would be describing an `--apply` that refuses
+    it — and the preview is the run a human reads the decision off.
 
     `newline="\\n"` is not enough — the payload is assembled as bytes, so no layer
     between here and the disk can decide to rewrite a line ending inside the prose.
@@ -1019,16 +1036,22 @@ def apply_page_plan(plan: PagePlan, tally: SeedTally, dry_run: bool) -> None:
         tally.reword_names.append(plan.label)
     if plan.target.is_file() and plan.target.read_bytes() == payload:
         tally.skipped += 1
-        return
+        return "skipped"
+    if plan.target.is_file():
+        tally.overwritten += 1
+        if not force:
+            tally.refused += 1
+            return "refused"
     if dry_run:
         tally.written += 1
-        return
+        return "written"
     plan.target.parent.mkdir(parents=True, exist_ok=True)
     plan.target.write_bytes(payload)
     if not plan.target.read_bytes().endswith(plan.body):
         tally.mismatched += 1
     else:
         tally.written += 1
+    return "written"
 
 
 def copy_ledger(legacy: Path, dry_run: bool) -> tuple[int, str]:
@@ -1076,13 +1099,30 @@ def cmd_seed(args: argparse.Namespace) -> int:
         print(f"seed plan failed: {exc}", file=sys.stderr)
         return 2
     tally = SeedTally()
+    refused_labels: list[str] = []
     for plan in plans:
-        apply_page_plan(plan, tally, not args.apply)
-    rows, digest = copy_ledger(legacy, not args.apply)
+        # The returned status is what lets this name the pages: `refused` alone says
+        # "1 page", and an operator with 494 pages cannot act on that.
+        if apply_page_plan(plan, tally, dry_run=not args.apply,
+                           force=args.force) == "refused":
+            refused_labels.append(plan.label)
     print(("" if args.apply else "dry-run: nothing written\n") + tally.line())
-    print(f"ledger_rows={rows} ledger_sha={digest} snapshot={snapshot} target={WIKI}")
     if tally.reword_names:
         print("reworded: " + ", ".join(tally.reword_names))
+    if tally.refused:
+        print(f"seed refused to overwrite {tally.refused} page(s) whose bytes differ from "
+              "the export — those are edited pages, and overwriting them is a rollback, "
+              "not a refresh. Pass --force if you truly mean to restore the export.",
+              file=sys.stderr)
+        print("edited pages: " + ", ".join(sorted(refused_labels)), file=sys.stderr)
+        # Returns *before* `copy_ledger`, which is the whole of it: 0 pages shipped but
+        # the export's ledger rows written would leave a tree claiming 8 pages published.
+        # The `ledger_rows=` line is skipped for the same reason — printing it would say
+        # the copy ran. rc 2 is this tool's refusal code; 1 stays reserved for "the work
+        # ran and did not reconcile" (the `mismatched` exit below).
+        return 2
+    rows, digest = copy_ledger(legacy, not args.apply)
+    print(f"ledger_rows={rows} ledger_sha={digest} snapshot={snapshot} target={WIKI}")
     if not args.apply:
         print("pass --apply to publish")
     return 0 if tally.mismatched == 0 else 1
@@ -2603,6 +2643,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                       help="40-hex commit the export was generated at "
                            "(default: read from its metadata once, then never again)")
     seed.add_argument("--apply", action="store_true", help="write; without it, plan and report only")
+    seed.add_argument("--force", action="store_true",
+                      help="overwrite pages whose bytes differ from the export")
     seed.set_defaults(func=cmd_seed)
 
     stale = sub.add_parser("stale", help="print the rewrite queue (reads only; writes nothing)")
