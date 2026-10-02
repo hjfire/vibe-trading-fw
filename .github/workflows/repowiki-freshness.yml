@@ -6,7 +6,8 @@ name: repowiki-freshness
 # editing .github/workflows/test.yml.
 #
 # 控制器裁定（写进计划，不许执行者自己翻案）：套件步骤是硬步骤，它第一天就该绿，
-# 所以那一步不配任何容错开关；只有水位门禁那一步是软的（spec §9.1：首周只观察）。
+# 所以那一步不配任何容错开关；只有水位门禁那一步是软的（spec §9.1 给的观察窗口是两周，
+# 「首周只观察、再改阻断」是把两周收小的 Task 5 裁定，见计划 :832）。
 # 因此全文件里那个容错开关只允许出现一行 —— tools/test_wiki_drift.py 的
 # test_the_fork_workflow_collects_the_suite_and_only_softens_the_water_level 就是钉这一行的，
 # 两步都软等于一个从不报警的绿灯。

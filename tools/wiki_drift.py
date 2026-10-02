@@ -84,11 +84,11 @@ Usage::
 Exit codes are three, not two, and a gate has to tell them apart. 0: the check ran and
 reconciled (even when pages are stale — staleness is the subject, not the failure).
 1: the work ran and a comparison did not hold — ``index --check`` found a different
-``INDEX.md``, or a seeded body, *after* being written, does not reconcile against the plan
-payload (``sha_mismatch > 0``; the pre-write refusal below is a different thing and exits 2).
-(``tools/wiki_freshness_gate.sh``
-exits 1 on the same reading: water level above ``WIKI_STALE_MAX``, or an ``index --check``
-leg that did not come back 0). 2: the tool refused to do the work at all — a usage or
+``INDEX.md``, or a seeded body, *after* being written, does not reconcile against the
+plan payload (``sha_mismatch > 0``; the pre-write refusal below is a different thing
+and exits 2).  ``tools/wiki_freshness_gate.sh`` exits 1 on the same reading: water
+level above ``WIKI_STALE_MAX``, or an ``index --check`` leg that did not come back 0.
+2: the tool refused to do the work at all — a usage or
 environment error, a read-only root layout, a ``--page`` outside the content tree, an
 unavailable baseline, or ``seed`` refusing to overwrite an edited page. So ``2`` means
 "nothing was measured" and ``1`` means "it was measured and disagrees"; chaining this
@@ -2279,9 +2279,9 @@ def build(args: argparse.Namespace) -> tuple[dict, list[PageReport], list[Change
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "head": head,
         # `baseline`, not `metadata_baseline`: the value is only sometimes the metadata's,
-        # and `baseline_source` names which of the three supplied it. Every printer reads
-        # these two fields — `render_markdown`, `cmd_report`, `stale --json` — so no
-        # surface can re-grow a guess of its own.
+        # and `baseline_source` names which of the three supplied it. The report surfaces
+        # (`render_markdown`, `cmd_report`) read both fields, so neither can re-grow a
+        # guess; `stale --json`'s queue carries `baseline` with no source — a known M4 gap.
         "baseline": fallback,
         "baseline_source": baseline_source,
         "summary": {
