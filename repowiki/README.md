@@ -89,6 +89,10 @@ bash tools/wiki_freshness_gate.sh                                              #
    行号登记在 `项目档案.md`）**保持原样、如实登记**，不做运行时拼接改写 —— 它们不在执法面上，
    把它们改掉等于把「内部计划文档可以如实讨论这条政策」改成「必须藏起来」，是超出政策自身
    要求的动作。
+3. **这条裁定挂在上游现有的 `--exclude-dir=docs` 上，不是无条件成立**。上游若把这个排除项摘掉，
+   上面那 5 处立刻进入执法面、门 (b) 会变红。因此每次同步上游之后都要重跑
+   `bash tools/ci_grep_gates.sh` 并按「在 `@<commit>` 实测」重新登记命中数；真红了，动作是
+   **重新确认作用域**（并如实改写本节），而不是悄悄给 `docs/` 补第二份实现去绕门。
 
 ## 播种的三张映射表（M2）
 
@@ -172,7 +176,7 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki report   # 现在无需 
   `--baseline <40-hex>`，显式值优先于任何回落；取不到众数时它也是唯一出路。
   M3-T7 之后这层回落是**两个函数**：众数扫描抽成了 `page_mode_baseline()`，
   `tree_baseline()` 是 `page_mode_baseline() or metadata_baseline()`。出版本时点的那条路径
-  （`build()`）直接问前者，因为它要在载荷里写下这个数**是谁 supplied 的**（`baseline` ＋
+  （`build()`）直接问前者，因为它要在载荷里写下这个数**是谁提供的**（`baseline` ＋
   `baseline_source`，见「与 spec §6 的一处偏离」末段）—— 问后者拿到的是一个真值，但真值
   证明不了它是众数还是躲在后面的 metadata，那正是 M3 之前机器可读面撒的那个谎。
 - 四个接受 `--page` 的动词（`report`、`mark`、`reanchor`，M3 起再加 `stale`）都必须落在**活动根的
@@ -256,7 +260,8 @@ M3 给这棵树装了三个问题各自的答案。它们读的是同一批页�
 `.github/workflows/repowiki-freshness.yml`（**fork 自有**的新文件；上游的 `test.yml` 一个字节
 没动，因为 `pyproject.toml` 的 `testpaths` 是上游地籍、只收 `agent/tests`）。两步的软硬是
 裁定过的：**套件那步是硬的**（第一天就该绿，不配任何容错开关），**只有水位门禁那步是软的**
-（spec §9.1「首周只观察」）—— 全文件里那个容错开关只允许出现一行，这条由
+（spec §9.1 给的观察窗口是**两周**；「首周只观察、再改阻断」是 Task 5 的裁定，落在计划
+`docs/superpowers/plans/2026-10-02-repo-wiki-m3-freshness.md:832`）—— 全文件里那个容错开关只允许出现一行，这条由
 `test_the_fork_workflow_collects_the_suite_and_only_softens_the_water_level` 钉着；两步都软
 等于一个从不报警的绿灯。CI 用的选择器是 `-m "not local_archive"`：在 `@1067870e` 实测
 **227 passed, 3 deselected**，同文件不带 `-m` 是 **230 passed**（本地那 3 条真跑不跳）。
@@ -332,6 +337,11 @@ M1 的老行为。完整次序与理由写在 `tree_baseline()` 的 docstring �
 
 M3-T7 起这层回落是**两个函数**：众数扫描抽在 `page_mode_baseline()`，`tree_baseline()` ＝
 `page_mode_baseline() or metadata_baseline()`。必须写明出处的调用方（`build()` —— 它把
-`baseline` 与 `baseline_source` 一起发进 `drift.json`／`DRIFT.md`／`stale --json`）问的是
-前者，因为一个真值只证明「这棵树同意」，证明不了它是页上的众数还是躲在 `or` 后面的 metadata
+`baseline` 与 `baseline_source` 一起发进 `drift.json` 与 `DRIFT.md` 这两个面）问的是前者，
+因为一个真值只证明「这棵树同意」，证明不了它是页上的众数还是躲在 `or` 后面的 metadata
 SHA。**「没删」不等于「没动」**：动的是拆分与出处命名，末位兜底的位置没变。
+
+**第三个机器可读面还没跟上（写明，不留成隐性缺口）**：`stale --json` 打的是队列载荷，顶层键实测
+只有 `baseline`／`count`／`head`／`reasons`／`queue`（`@1067870e`），**没有** `baseline_source`，
+它的守卫用例也只断 `rows["baseline"]`。也就是说队列发布了一个不带出处的基线。把出处补进队列载荷
+是 M4/T10 的一条候选，不在本轮 —— 本轮只保证文档不再声称它已经做了。

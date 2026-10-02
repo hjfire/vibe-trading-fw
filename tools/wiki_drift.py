@@ -84,7 +84,9 @@ Usage::
 Exit codes are three, not two, and a gate has to tell them apart. 0: the check ran and
 reconciled (even when pages are stale — staleness is the subject, not the failure).
 1: the work ran and a comparison did not hold — ``index --check`` found a different
-``INDEX.md``, or a seeded body landed with different bytes (``tools/wiki_freshness_gate.sh``
+``INDEX.md``, or a seeded body, *after* being written, does not reconcile against the plan
+payload (``sha_mismatch > 0``; the pre-write refusal below is a different thing and exits 2).
+(``tools/wiki_freshness_gate.sh``
 exits 1 on the same reading: water level above ``WIKI_STALE_MAX``, or an ``index --check``
 leg that did not come back 0). 2: the tool refused to do the work at all — a usage or
 environment error, a read-only root layout, a ``--page`` outside the content tree, an
