@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
+import io
 import json
 import os
 import re
@@ -1788,7 +1790,7 @@ def test_help_advertises_the_archive_not_the_retired_root(capsys):
     top = _help(["--help"])
     assert archive in top
     _assert_no_bare_legacy_root(top, "--help")
-    for verb in ("report", "mark", "reanchor"):
+    for verb in ("report", "mark", "reanchor", "stale"):
         out = _help([verb, "--help"])
         assert archive in out, verb
         _assert_no_bare_legacy_root(out, f"{verb} --help")
@@ -2408,6 +2410,169 @@ def test_queue_reason_prefers_the_reason_that_carries_the_most_work(repo_wired):
     assert wiki_drift.queue_reason(rep) is None
     rep.state = "ledger-void"
     assert wiki_drift.queue_reason(rep) == "prose-unverified"
+
+
+def _stale_json(baseline: str) -> dict:
+    """Run `cmd_stale --json` in-process and parse what it printed.
+
+    `baseline` is required because the fixture supplies no tree-wide baseline (see
+    `_args`), and the JSON branch must be exercised through `cmd_stale`, not by
+    re-deriving the rows.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = wiki_drift.cmd_stale(_args(json=True, baseline=baseline))
+    assert rc == 0
+    return json.loads(buf.getvalue())
+
+
+def test_commits_since_counts_the_commits_that_moved_a_pages_sources(repo_wired):
+    """Two commits touch the cited file, so the page's queue row must say 2 — the field
+    is what M5 shards the rewrite by, and a row that reads 0 would look finished."""
+    for i in range(2):
+        (repo_wired["root"] / "src" / "mod.py").write_text(
+            (repo_wired["root"] / "src" / "mod.py").read_text(encoding="utf-8")
+            + f"\n# drift {i}\n", encoding="utf-8")
+        _git(repo_wired["root"], "add", "-A")
+        _git(repo_wired["root"], "commit", "-m", f"drift {i}")
+    page = repo_wired["page"]
+    page.write_text(page.read_text(encoding="utf-8").replace(
+        "#L3-L4", "#L9-L10"), encoding="utf-8")
+    _git(repo_wired["root"], "add", "-A")
+    _git(repo_wired["root"], "commit", "-m", "move the citation")
+    rows = _stale_json(baseline=repo_wired["base"])
+    row = [r for r in rows["queue"] if r["page"] == "前端应用/模块说明.md"]
+    assert row, rows["queue"]
+    assert row[0]["commits_since"] >= 2, row[0]
+
+
+def test_stale_makes_one_git_log_per_distinct_baseline_not_per_page(repo_wired, monkeypatch):
+    """Anti-N-plus-1: 450 pages x a subprocess each is minutes, and the spec forbids it.
+
+    The cache is what makes the batch real, so this counts `git log` calls while every
+    page in the tree shares one baseline: one call, not one per page. Without the
+    assertion, a future refactor could move the lookup inside the page loop and every
+    behavioural test above would still pass — just slowly.
+    """
+    for i in range(4):
+        extra = repo_wired["content"] / f"额外{i}.md"
+        extra.write_text(
+            "# 额外\n\n<cite>\n- [alpha](file://src/mod.py#L3-L4)\n</cite>\n", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+    real_git = wiki_drift.git
+
+    def spy(*args: str) -> str:
+        calls.append(args)
+        return real_git(*args)
+
+    monkeypatch.setattr(wiki_drift, "git", spy)
+    assert wiki_drift.cmd_stale(_args(baseline=repo_wired["base"])) == 0
+    logs = [c for c in calls if c and c[0] == "log"]
+    assert len(logs) == 1, logs
+
+
+def test_the_json_reasons_tally_and_the_text_tally_read_one_counter(repo_wired, capsys):
+    """Both shapes must come from the SAME tally, in the SAME order.
+
+    The tally was recomputed three times over the queue, so a future edit to one branch
+    could drift from the other while both still printed a plausible line. Task 4's gate
+    reads the JSON `reasons`, and the stable key order (all four reasons, even the zero
+    ones) is part of that contract — the text view drops the zeros, so the two views are
+    equal exactly where the text view speaks.
+    """
+    (repo_wired["content"] / "断链.md").write_text(
+        "# 断链\n\n<cite>\n- [gone](file://src/never-existed.py#L1-L2)\n</cite>\n",
+        encoding="utf-8")
+    base = repo_wired["base"]
+    rows = _stale_json(baseline=base)
+    assert list(rows["reasons"]) == list(wiki_drift.QUEUE_REASONS), rows["reasons"]
+    assert sum(rows["reasons"].values()) == rows["count"], rows
+    assert rows["reasons"]["sources-changed"] == 1 and rows["reasons"]["refs-missing"] == 1
+
+    assert wiki_drift.cmd_stale(_args(baseline=base)) == 0
+    tally = [ln for ln in capsys.readouterr().out.splitlines() if "by reason:" in ln]
+    assert len(tally) == 1, tally
+    pairs = re.findall(r"([a-z][a-z-]*) (\d+)", tally[0].split("by reason:", 1)[1])
+    assert pairs == [(k, str(v)) for k, v in rows["reasons"].items() if v], (tally[0], rows)
+
+
+def test_a_negative_top_shows_no_rows_and_no_truncation_line(repo_wired, capsys):
+    """`--top -1` used to mean `queue[:-1]`: every row but the last, silently.
+
+    Chosen remedy is a clamp (`max(args.top, 0)`), not argparse rejection — the flag is
+    typed by hand in a CI log, and an exit-2 on a typo is worse than showing nothing.
+    The `... N more` line is now gated on rows having actually been shown, so `--top 0`
+    does not announce 3 hidden pages above an empty listing.
+    """
+    for i in range(2):
+        (repo_wired["content"] / f"队列{i}.md").write_text(
+            "# 队列\n\n<cite>\n- [alpha](file://src/mod.py#L3-L4)\n</cite>\n", encoding="utf-8")
+    base = repo_wired["base"]
+    assert _stale_json(baseline=base)["count"] == 3, "fixture lost its queue"
+
+    def run(**kw) -> list[str]:
+        assert wiki_drift.cmd_stale(_args(baseline=base, **kw)) == 0
+        return capsys.readouterr().out.splitlines()
+
+    for top in (0, -1, -445):
+        out = run(top=top)
+        assert [ln for ln in out if "state=" in ln] == [], (top, out)
+        assert not [ln for ln in out if "more (--top" in ln], (top, out)
+        assert out[-1] == "3", (top, out)
+
+    one = run(top=1)
+    assert len([ln for ln in one if "state=" in ln]) == 1, one
+    assert [ln for ln in one if "more (--top" in ln] == ["  ... 2 more (--top N)"], one
+    assert not [ln for ln in run(top=3) if "more (--top" in ln]
+
+
+def test_format_count_prints_one_integer_and_nothing_else(repo_wired, capsys):
+    """Task 4's gate runs `stale --format count | tail -1`, so this branch is a pipe
+    endpoint: exactly `<N>\\n`, no header, no tally, no trailing blank. The shape is
+    asserted against the JSON `count` so the two paths cannot disagree, and `--help` is
+    checked for the precedence note because `--json` silently beats `--format count`."""
+    base = repo_wired["base"]
+    assert wiki_drift.cmd_stale(_args(baseline=base, fmt="count")) == 0
+    out = capsys.readouterr().out
+    assert out == f"{_stale_json(baseline=base)['count']}\n", repr(out)
+    assert re.fullmatch(r"\d+\n", out), repr(out)
+
+    with pytest.raises(SystemExit):
+        main(["stale", "--help"])
+    help_text = capsys.readouterr().out
+    # The `--format` option's OWN help block, not the whole page: the usage line above
+    # the option list already contains `--json`, so a plain `in` test would pass on a
+    # help text that never mentions the precedence.
+    fmt_help = help_text.split("  --format", 1)[1].split("\n  --", 1)[0]
+    assert "--json" in fmt_help, help_text
+
+
+def test_an_empty_queue_and_a_dirty_only_page_both_read_zero(repo_wired, capsys):
+    """Two shapes of "nothing has been committed for this page", both must read 0.
+
+    With `--baseline head` the drift axis is empty, so the queue is empty and the text
+    view must still print its `by reason: empty` line plus the bare `0` the CI gate
+    tails — a green gate is this exact output, not an absence of output. And a page whose
+    cited file is only DIRTY (uncommitted) is queued as `sources-changed` while
+    `base..HEAD` holds no commit at all: `commits_since` 0 there is honest, not a bug,
+    because the work M5 shards by commits has not happened yet.
+    """
+    head = repo_wired["head"]
+    rows = _stale_json(baseline=head)
+    assert rows["count"] == 0 and rows["queue"] == [], rows
+    assert list(rows["reasons"]) == list(wiki_drift.QUEUE_REASONS)
+    assert all(v == 0 for v in rows["reasons"].values()), rows["reasons"]
+
+    assert wiki_drift.cmd_stale(_args(baseline=head)) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 3 and out[1] == "  by reason: empty" and out[-1] == "0", out
+
+    mod = repo_wired["root"] / "src" / "mod.py"
+    mod.write_text(mod.read_text(encoding="utf-8") + "\n# uncommitted\n", encoding="utf-8")
+    row = [r for r in _stale_json(baseline=head)["queue"]
+           if r["page"] == "前端应用/模块说明.md"][0]
+    assert row["reason"] == "sources-changed" and row["changed_sources"] == ["src/mod.py"], row
+    assert row["commits_since"] == 0, row
 
 
 # ---------------------------------------------------------------------------

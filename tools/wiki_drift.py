@@ -301,6 +301,26 @@ def diff_since(base: str) -> dict[str, Change]:
     return out
 
 
+def commits_touching(base: str) -> dict[str, list[str]]:
+    """path -> every commit that touched it in `base..HEAD`, from ONE git call.
+
+    `--no-renames` matches `diff_since()`, so a rename counts as delete+add for both
+    readings of history rather than disagreeing between the two. The sentinel on the
+    format line is why a path can never be mistaken for a hash.
+    """
+    out: dict[str, list[str]] = {}
+    current = ""
+    for line in git("log", "--format=\x01%H", "--name-only", "--no-renames",
+                    f"{base}..HEAD").splitlines():
+        if not line:
+            continue
+        if line.startswith("\x01"):
+            current = line[1:].strip()
+            continue
+        out.setdefault(line, []).append(current)
+    return out
+
+
 def worktree_delta() -> tuple[set[str], set[str]]:
     """Return (dirty tracked paths, untracked code paths) for uncommitted work."""
     dirty: set[str] = set()
@@ -1293,6 +1313,28 @@ def make_changes_for() -> Callable[[str], dict[str, Change]]:
     return get
 
 
+def make_commits_counter() -> Callable[[str, list[str]], int]:
+    """Per-baseline cache over `commits_touching` — the batch the spec asks for.
+
+    Pages overwhelmingly share a baseline (the tree's modal `verified_at`), so the
+    git-log count tracks distinct baselines, not the 450 pages that consume it.
+    """
+    cache: dict[str, dict[str, list[str]]] = {}
+
+    def count(base: str, paths: list[str]) -> int:
+        if not paths:
+            return 0
+        if base not in cache:
+            cache[base] = commits_touching(base)
+        by_path = cache[base]
+        touched: set[str] = set()
+        for p in paths:
+            touched.update(by_path.get(p, ()))
+        return len(touched)
+
+    return count
+
+
 # ---------------------------------------------------------------------------
 # coverage
 # ---------------------------------------------------------------------------
@@ -2245,13 +2287,16 @@ def cmd_stale(args: argparse.Namespace) -> int:
     """The M5 work queue: every page whose prose is not known-good at HEAD.
 
     Reads the same `build()` pass `report` uses — one batch of git calls per distinct
-    baseline, never one per page — and prints the subset in a stable order. It writes
-    nothing, so it is legal on a read-only root.
+    baseline, never one per page — and prints the subset in a stable order. The
+    per-page `commits_since` comes from that same batch (`make_commits_counter()`), so
+    450 rows cost one `git log` per distinct baseline. It writes nothing, so it is legal
+    on a read-only root.
     """
     built = build(args)
     if isinstance(built, int):
         return built
     payload, reports, _gaps = built
+    counter = make_commits_counter()
     queue = []
     for rep in reports:
         reason = queue_reason(rep)
@@ -2262,28 +2307,33 @@ def cmd_stale(args: argparse.Namespace) -> int:
             "reason": reason,
             "state": rep.state,
             "base": rep.base,
+            "commits_since": counter(rep.base, list(rep.stale)),
             "changed_sources": sorted(rep.stale),
             "missing_sources": sorted(rep.broken),
             "open_anchors": len(rep.anchors),
             "score": rep.score,
         })
     queue.sort(key=lambda row: (-len(row["changed_sources"]), row["page"]))
+    # One tally, read by both output shapes: they cannot disagree, and the JSON mapping
+    # keeps every `QUEUE_REASONS` key in that order (Task 4's gate indexes it by key)
+    # while the text view drops the zero-count reasons.
+    by_reason = Counter(row["reason"] for row in queue)
 
     if getattr(args, "json", False):
         print(json.dumps({"head": payload["head"], "baseline": payload["metadata_baseline"],
-                          "count": len(queue), "reasons": dict(
-                              (r, sum(1 for q in queue if q["reason"] == r))
-                              for r in QUEUE_REASONS),
+                          "count": len(queue),
+                          "reasons": {r: by_reason[r] for r in QUEUE_REASONS},
                           "queue": queue}, ensure_ascii=False, indent=2))
         return 0
     if args.fmt == "count":
         print(len(queue))
         return 0
 
-    shown = queue[: args.top]
-    tally = ", ".join(f"{r} {sum(1 for q in queue if q['reason'] == r)}"
-                      for r in QUEUE_REASONS
-                      if any(q["reason"] == r for q in queue))
+    # A negative `--top` used to reach `queue[:-1]` — "every row but the last", silently.
+    # Clamping to zero rows is the honest reading of a hand-typed typo; exiting 2 on it
+    # would be worse in a CI log.
+    shown = queue[: max(args.top, 0)]
+    tally = ", ".join(f"{r} {by_reason[r]}" for r in QUEUE_REASONS if by_reason[r])
     print(f"stale queue: {len(queue)} pages "
           f"(threshold-shaped count, not `report`'s needs_update {payload['summary']['needs_update']})")
     print(f"  by reason: {tally or 'empty'}")
@@ -2292,7 +2342,9 @@ def cmd_stale(args: argparse.Namespace) -> int:
         print(f"  {row['page']} [{row['reason']}] state={row['state']} "
               f"changed={changed} missing={len(row['missing_sources'])} "
               f"anchors={row['open_anchors']}")
-    if len(queue) > len(shown):
+    # Gated on rows having actually been shown: `--top 0` prints an empty listing, and a
+    # `... 445 more` line above it described a truncation of nothing.
+    if shown and len(queue) > len(shown):
         print(f"  ... {len(queue) - len(shown)} more (--top N)")
     print(len(queue))
     return 0
@@ -2438,10 +2490,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     stale = sub.add_parser("stale", help="print the rewrite queue (reads only; writes nothing)")
     stale.add_argument("--page", help="only pages whose path contains this substring")
     stale.add_argument("--baseline", help="override the wiki snapshot commit (40-hex)")
-    stale.add_argument("--top", type=int, default=25, help="rows printed (default 25)")
+    stale.add_argument("--top", type=int, default=25,
+                       help="rows printed (default 25; 0 or a negative value prints none)")
     stale.add_argument("--json", action="store_true", help="emit the queue as JSON")
     stale.add_argument("--format", dest="fmt", choices=("queue", "count"), default="queue",
-                       help="'count' prints one integer for the CI gate")
+                       help="'count' prints one integer for the CI gate "
+                            "(--json takes precedence over this flag)")
     stale.set_defaults(func=cmd_stale)
 
     # The same flag, also accepted after the verb. SUPPRESS is what makes the two
