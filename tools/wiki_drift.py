@@ -184,6 +184,37 @@ LEDGER: Path
 wiki_root: WikiRoot
 apply_wiki_root(WIKI_ROOT_DEFAULT)
 
+
+def root_is_read_only() -> bool:
+    """Whether the active root may be written to at all: the export's shape says no."""
+    return wiki_root.layout == "ide"
+
+
+def write_refusal(verb: str) -> str:
+    """Non-empty when a writing verb must stop: the reason, for the caller to print.
+
+    An IDE-layout root is the export as the generator left it. M2's final review measured
+    what an unguarded verb does to one: `mark` answered rc=0 and created
+    `update/ledger.jsonl` inside the snapshot, and `reanchor --apply` rc=0 with the page
+    bytes rewritten. Neither is undoable — `.qoder/` sits in `.git/info/exclude`, which is
+    exactly how the pre-M2 `DRIFT.md` was lost — so a root's shape decides whether this
+    tool may write there at all, not just whether `report` may add its two derived files.
+
+    The shape is read from `wiki_root`, which `apply_wiki_root()` derives from the same
+    resolution as `WIKI`/`CONTENT`/`UPDATE_DIR`/`LEDGER`: no CLI invocation can pair a
+    writable layout with an IDE-shaped tree. `stamp_frontmatter()` instead reads the shape
+    off the disk, because it is also reached with fixture-patched globals; the difference
+    is deliberate and documented in `repowiki/README.md`.
+    """
+    if not root_is_read_only():
+        return ""
+    return (
+        f"{verb} writes, and the active root {WIKI} has the IDE export's shape, which is "
+        "read-only by contract: its pages and `update/` sidecars are what the generator "
+        "wrote, and a change to them cannot be undone (`.qoder/` is git-excluded). Run the "
+        "writing verbs against the tracked publication root — the default, `repowiki/`."
+    )
+
 CODE_SUFFIXES = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".toml", ".yaml",
     ".yml", ".md", ".sql", ".html", ".css", ".sh",
@@ -1825,6 +1856,11 @@ def cmd_reanchor(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.apply:
+        refusal = write_refusal("reanchor --apply")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 2
     pages = collect_pages(args.page)
     fallback = args.baseline or tree_baseline()
     if fallback and not rev_reachable(fallback):
@@ -2131,13 +2167,13 @@ def cmd_report(args: argparse.Namespace) -> int:
     # used to write `update/DRIFT.md` + `update/drift.json` *into* the archive. That is
     # an unrecoverable side effect (`.qoder/` sits in `.git/info/exclude`, so git cannot
     # undo it) on the one snapshot of the pre-M2 state this repo has. The archive is
-    # read-only, exactly as M1 made its page bytes read-only in `stamp_frontmatter()`:
-    # `report` prints its summary and writes nothing, and `--json` is the documented way
-    # to take the payload away from it. The layout is the active root's own —
-    # `apply_wiki_root()` derives `WIKI`, `UPDATE_DIR` and `wiki_root` from one
-    # resolution, so no CLI invocation can pair a writes-allowed layout with an
-    # IDE-shaped tree.
-    writes_reports = wiki_root.layout != "ide"
+    # read-only for every verb, not just this one: `mark` and `reanchor --apply` refuse at
+    # entry on the same `root_is_read_only()` test. `report` prints its summary and writes
+    # nothing, and `--json` is the documented way to take the payload away from it. The
+    # layout is the active root's own — `apply_wiki_root()` derives `WIKI`, `UPDATE_DIR`
+    # and `wiki_root` from one resolution, so no CLI invocation can pair a writes-allowed
+    # layout with an IDE-shaped tree.
+    writes_reports = not root_is_read_only()
     if writes_reports:
         UPDATE_DIR.mkdir(parents=True, exist_ok=True)
         (UPDATE_DIR / "drift.json").write_text(
@@ -2188,6 +2224,10 @@ def cmd_mark(args: argparse.Namespace) -> int:
                                    archive=f"{LEGACY_EXPORT}/{EXPORT_ARCHIVE}"),
             file=sys.stderr,
         )
+        return 2
+    refusal = write_refusal("mark")
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     rel, page = page_arg_within_content(args.page)
     if not page.is_file():

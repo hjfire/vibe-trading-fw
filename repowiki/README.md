@@ -15,7 +15,13 @@
 - 非事实源：`.qoder/repowiki/**` 是 Qoder IDE 的导出物，冻结在 2026-08-14 的索引
   快照上，并被 `.git/info/exclude` 排除（git 不知道它存在，因此没有撤销能力）。
   正文已于 2026-10-02 改名归档进 `_ide-export-retired-2026-10-01/`，那份归档是**只读**的：
-  `--wiki-root` 指到 `ide` 布局根时 `report` 一个字都不写（它曾经会把报表写进归档里）。
+  `--wiki-root` 指到 `ide` 布局根时，三个会写盘的入口（`report` 的派生报表、`mark`、
+  `reanchor --apply`）一律 **rc=2 拒绝写入**，一个字节都不改。这条规则是事故换来的 ——
+  加门之前实测到 `report` 会把报表写进归档（M1 那份 `DRIFT.md` 因此没了）、`mark` 会在
+  归档里凭空创建 `update/ledger.jsonl`、`reanchor --apply` 会改写导出页的字节。
+  判据两处不同是有意的：命令入口读 `wiki_root`（`apply_wiki_root()` 一次解析同时导出
+  `WIKI`/`CONTENT`/`UPDATE_DIR`/`LEDGER`，CLI 拼不出「可写布局 ＋ IDE 形状」这对组合），
+  而 `stamp_frontmatter()` 直接按磁盘形状判定，因为它也被只改了部分全局量的 fixture 调用。
   `SearchKnowledge` 读的是那份 IDE 索引，所以它的 overview 会长期显示过期内容 —
   这是上游限制，只能标注，不能消除。
 
@@ -151,7 +157,8 @@ python -X utf8 tools/wiki_drift.py --wiki-root repowiki report   # 现在无需 
    的那些引用，所以永远写 `applied-only`。当年把 `applied-only` 当全页担保，414 条待判引用被读成「已在
    自己行上」，队列从 414 缩到 3 —— 工具把自己干不了的活藏了起来。
 2. **`partial` 不推进报表基线**：`mark --partial` 表示「引用已新、正文未核」，报表基线原地不动、只前移
-   锚点基线。423 个 `partial` 页就是这么留在队列里的，谁把它们盖章清掉谁就造出第二个 414。
+   锚点基线。2026-10-01 全仓扫描那天的读数里 423 个 `partial` 页就是这么留在队列里的（当日水位读数，
+   不是常量，跑一次 `report` 就会变），谁把它们盖章清掉谁就造出第二个 414。
 3. **`ledger-void` 由正文 sha 判定**：台账行的 `sha_after` 与页当前正文字节不符即作废，退回快照基线并
    在报表点名 —— 防「改过一页却冒充已核对」。哈希按字节算（`open(newline="")`），且 `repowiki/.gitattributes`
    把全树钉成 LF；两者任一失效，426 行台账会集体读成 `ledger-void`。

@@ -11,4 +11,9 @@
 # file rather than the repository root's .gitignore because that file belongs to
 # upstream and this fork's constraint is to leave it byte-for-byte alone — a deeper
 # .gitignore wins for its own subtree, exactly like the .gitattributes next to it.
-drift/
+#
+# Anchored with a leading slash on purpose. A bare `drift/` matches at any depth, so a
+# page directory that happens to be named `drift/` (a strategy note on drift regimes,
+# say) would vanish from `git status` without a word — the failure mode this whole
+# subtree is documented for.
+/drift/

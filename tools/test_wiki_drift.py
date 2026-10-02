@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -2211,14 +2212,63 @@ def test_ide_layout_root_stays_byte_identical(wired, monkeypatch):
     assert page.read_bytes() == before
 
 
-def test_mark_on_an_ide_root_leaves_the_page_bytes_alone(wired):
-    """Same contract through the command path: frontmatter belongs to the tracked
-    tree, and touching 450 IDE bytes would recreate the second source of truth."""
-    page = wired["content"] / "前端应用" / "模块说明.md"
-    before = page.read_bytes()
-    assert main(["mark", "--page", "前端应用/模块说明.md", "-m", "ledger only"]) == 0
-    assert page.read_bytes() == before
-    assert wiki_drift.load_ledger()["前端应用/模块说明.md"].note == "ledger only"
+def _tree_bytes(root: Path) -> dict:
+    """Every file under `root`, keyed by its slash-separated relative path.
+
+    A whole-tree snapshot, because the finding this guards was not about one page: an
+    ungated verb *created* `update/ledger.jsonl` beside the export's own files.
+    """
+    return {
+        str(p.relative_to(root)).replace("\\", "/"): p.read_bytes()
+        for p in sorted(root.rglob("*")) if p.is_file()
+    }
+
+
+def test_mark_on_an_ide_root_is_refused_before_anything_is_written(wired, monkeypatch, capsys):
+    """The archive is read-only for the *writing* verbs too, not only for `report`'s
+    derived files. Measured before the guard existed: `mark` on an IDE-shaped root
+    answered rc=0 and created `update/ledger.jsonl` inside it — an undo-less change,
+    since `.qoder/` is git-excluded, and the second source of truth M2 exists to remove.
+    """
+    _hold_path_globals(monkeypatch)
+    before = _tree_bytes(wired["wiki"])
+
+    assert main(["--wiki-root", str(wired["wiki"]), "mark",
+                 "--page", "前端应用/模块说明.md", "-m", "should never land"]) == 2
+    assert "read-only" in capsys.readouterr().err
+    assert _tree_bytes(wired["wiki"]) == before, "an IDE root keeps every byte it had"
+    assert not (wired["wiki"] / "update" / "ledger.jsonl").exists()
+
+
+def test_reanchor_apply_on_an_ide_root_is_refused_but_dry_run_still_reads(
+        wired, monkeypatch, capsys):
+    """`reanchor` is the documented way to *read* the archive (`--shifts` with no
+    `--apply`), so the gate belongs to `--apply` alone. Without it the pass reached
+    `page.write_text` and rewrote the export's own bytes: measured on a scratch IDE
+    root, a label fix alone changed `zh/content/探针/页.md`."""
+    _hold_path_globals(monkeypatch)
+    before = _tree_bytes(wired["wiki"])
+
+    assert main(["--wiki-root", str(wired["wiki"]), "reanchor", "--page", "前端应用",
+                 "--shifts", "--apply"]) == 2
+    assert "read-only" in capsys.readouterr().err
+    assert _tree_bytes(wired["wiki"]) == before
+
+    assert main(["--wiki-root", str(wired["wiki"]), "reanchor", "--page", "前端应用",
+                 "--shifts"]) == 0
+    assert "provable" in capsys.readouterr().out
+    assert _tree_bytes(wired["wiki"]) == before, "a dry pass must still leave nothing"
+
+
+def test_the_read_only_gate_follows_the_root_shape_not_the_verb(repo_wired, monkeypatch):
+    """The other half of the gate: a repo-shaped root taken through the same
+    `--wiki-root` path still writes. A `mark` that always returned 2 would satisfy both
+    refusal cases above, so the shape — not the verb — has to be what decides."""
+    _hold_path_globals(monkeypatch)
+    assert main(["--wiki-root", str(repo_wired["wiki"]), "mark",
+                 "--page", "前端应用/模块说明.md", "-m", "tracked root writes"]) == 0
+    assert (repo_wired["wiki"] / "ledger.jsonl").is_file()
+    assert wiki_drift.load_ledger()["前端应用/模块说明.md"].note == "tracked root writes"
 
 
 def test_anchor_axis_is_open_when_a_cite_was_refused():
@@ -3382,9 +3432,11 @@ def test_readme_states_the_conventions_a_reader_will_otherwise_violate():
     for contract in ("`cites` 担保范围", "不推进报表基线", "ledger-void",
                      "换行数+1", "越界分两类"):
         assert contract in text, contract
-    # …plus the two surfaces M2's review found undocumented: the reports are derived,
-    # and the archived export is read-only (`report` writes nothing into it).
-    for fact in ("repowiki/.gitignore", "一个字都不写"):
+    # …plus the surfaces M2's two reviews found undocumented: the reports are derived,
+    # the archived export is read-only for *every* writing verb, and the two places that
+    # decide "is this root writable" read the shape differently on purpose. A reader who
+    # misses the last one will "fix" the asymmetry and re-open the stale-global hole.
+    for fact in ("repowiki/.gitignore", "rc=2 拒绝写入", "按磁盘形状判定"):
         assert fact in text, fact
 
 
@@ -3454,6 +3506,60 @@ def test_mark_refuses_an_absolute_page_argument(repo_wired, capsys, spell):
     err = capsys.readouterr().err
     assert arg in err and str(repo_wired["content"]) in err, err
     assert _victim_bytes(victims) == before
+    assert not wiki_drift.LEDGER.exists()
+
+
+def _dir_link(request, link: Path, target: Path) -> None:
+    """Make `link` a directory that *reaches* `target` from inside the content tree.
+
+    Windows needs no privilege or developer mode for a junction; POSIX takes a symlink.
+    A platform that refuses both skips the case rather than passing vacuously — the
+    branch under test is the resolved comparison, and a suite that could not build the
+    escape route it is about would prove nothing by going green.
+    """
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        try:
+            os.symlink(str(target), str(link), target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"no directory-link primitive here: {exc}")
+    # The link goes first: `shutil.rmtree` walks a junction as if it were the plain
+    # directory it names, so leaving one behind invites a teardown that deletes through
+    # it into the tree the next case is about to rebuild.
+    request.addfinalizer(lambda: _drop_dir_link(link))
+
+
+def _drop_dir_link(link: Path) -> None:
+    try:
+        os.rmdir(link)  # unlinks the junction, never its target
+    except OSError:
+        pass
+
+
+def test_mark_refuses_a_page_that_reaches_the_tree_through_a_link(repo_wired, request, capsys):
+    """`resolve()` is the only check that can see a reparse point hop out of `topics/`.
+
+    Every textual test above feeds it an argument that already says `..` or an absolute
+    path, so those branches catch them and the last branch never runs — which is why
+    M2's mutation ledger recorded the resolved check as redundant duplication after
+    deleting it left the whole substring suite green. This argument is `..`-free,
+    absolute-free and nested, exactly like a legitimate key: only the resolved form
+    disagrees with the printed one.
+    """
+    outside = repo_wired["root"] / "elsewhere"
+    outside.mkdir(parents=True)
+    victim = outside / "页.md"
+    victim.write_text("# 页\n\n散文\n", encoding="utf-8")
+    _dir_link(request, repo_wired["content"] / "外链", outside)
+    before = victim.read_bytes()
+
+    assert main(["mark", "--page", "外链/页.md", "-m", "must never land"]) == 2
+    err = capsys.readouterr().err
+    assert "resolved path leaves the content tree" in err, err
+    assert victim.read_bytes() == before, "a refused --page must not touch a byte"
     assert not wiki_drift.LEDGER.exists()
 
 
@@ -3623,6 +3729,17 @@ def test_drift_reports_are_derived_and_not_tracked():
     assert len(provenance) == 2, provenance
     for line in provenance:
         assert "repowiki/.gitignore" in line and "drift/" in line, line
+    # …and the rule is anchored to the root of the subtree. An unanchored `drift/`
+    # matches at any depth, so a page directory named `drift` (a note on drift regimes,
+    # say) would be silently untrackable — the exact failure this tree documents.
+    proc = subprocess.run(
+        ["git", "-C", str(REAL_REPO), "check-ignore", "-v", "repowiki/topics/drift/页.md"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 1, (
+        f"a nested `drift/` directory must stay trackable, got "
+        f"rc={proc.returncode}: {proc.stdout.strip()}"
+    )
 
 
 def test_tracked_repowiki_tree_is_pages_plus_four_derivation_free_entries():
