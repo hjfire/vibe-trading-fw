@@ -16,6 +16,7 @@ Run with::
 
 from __future__ import annotations
 
+import argparse
 import ast
 import json
 import os
@@ -2314,6 +2315,99 @@ def test_a_refused_cite_keeps_the_anchor_axis_open(repo_wired):
     assert fm["anchors"] == "open" and "[mod.py:30-60](file://src/mod.py#L30-L60)" in (
         page.read_text(encoding="utf-8")
     )
+
+
+# ---------------------------------------------------------------------------
+# stale: the work queue, and the contract that it must not hide prose debt
+# ---------------------------------------------------------------------------
+
+
+def _args(**kw):
+    """An argparse-shaped namespace: `build()` reads attributes, not a dict.
+
+    `baseline` is deliberately NOT defaulted: the `repo_wired` fixture has no stamped page
+    and no metadata file, so `tree_baseline()` returns None and `build()` exits 2 with the
+    "no usable baseline" message. Every test that reaches `build()` names its own baseline.
+    `check` is here because Task 3's `cmd_index` reads it.
+    """
+    ns = argparse.Namespace(baseline=None, page=None, top=25, json=False, fmt="queue",
+                            check=False)
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
+
+
+def test_a_page_with_no_drift_but_unverified_prose_is_still_queued(repo_wired, capsys):
+    """The 414-to-3 trap, made permanent.
+
+    A page the ledger marks `partial` (anchors moved, prose never re-read) has score 0,
+    so `report`'s `needs_update` does not count it. If `stale` filtered on the same
+    score, the queue would read 22 while the water level is 445 and M5 would be handed
+    a list that quietly omits 423 pages — which is the exact failure this project has
+    already been burned by once, where a stamp hid work the tool could not do itself.
+
+    `--baseline head` is what makes the drift axis empty: with the tree's own HEAD as the
+    snapshot nothing has changed, so `prose-unverified` is the ONLY reason that can fire,
+    and a `queue_reason()` that forgot it would turn this red instead of passing quietly.
+    `sha_after` must be the live `body_sha(page)` — `effective_base()` only takes a
+    ledger row seriously when `head` AND `sha_after` are non-empty, and an empty
+    `sha_after` yields state `snapshot`, which is not in the queue at all.
+    """
+    head, page = repo_wired["head"], repo_wired["page"]
+    wiki_drift.LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    with wiki_drift.LEDGER.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "page": "前端应用/模块说明.md", "head": head,
+            "sha_after": wiki_drift.body_sha(page),
+            "note": "anchors only", "cites": "applied-only", "partial": True,
+        }, ensure_ascii=False) + "\n")
+    rc = wiki_drift.cmd_stale(_args(baseline=head))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "前端应用/模块说明.md" in out
+    assert "prose-unverified" in out
+    assert out.splitlines()[-1] == "1", out.splitlines()
+
+
+def test_the_queue_count_is_not_report_needs_update(repo_wired):
+    """Two different numbers, both honest: `count` counts prose debt, `needs_update`
+    counts drift. Pinning them apart is what stops a future refactor from merging the
+    two predicates and silently dropping 423 pages again.
+
+    Baseline is the FIRST commit here, so the cited file really has moved and at least
+    one page carries a score — a test whose loop body never runs would certify nothing.
+    """
+    built = wiki_drift.build(_args(baseline=repo_wired["base"]))
+    assert not isinstance(built, int), built
+    payload, reports, _ = built
+    queue = [r for r in reports if wiki_drift.queue_reason(r) is not None]
+    scored = [r for r in reports if r.score]
+    assert scored, "fixture lost its drift axis: this test would pass by asserting nothing"
+    assert payload["summary"]["needs_update"] == len(scored)
+    assert len(queue) >= payload["summary"]["needs_update"]
+    for rep in scored:
+        assert wiki_drift.queue_reason(rep) in (
+            "sources-changed", "refs-missing", "anchors-open"), rep.page
+
+
+def test_queue_reason_prefers_the_reason_that_carries_the_most_work(repo_wired):
+    """Order matters: a page with both changed sources and an open anchor is
+    `sources-changed`, because that is the reason that requires re-reading prose."""
+    changed = repo_wired["page"].with_name("漂移.md")
+    changed.write_text(
+        "# 漂移\n\n<cite>\n- [alpha](file://src/mod.py#L3-L4)\n</cite>\n", encoding="utf-8")
+    rep = wiki_drift.PageReport(
+        page="漂移.md", state="stale", base=repo_wired["head"], refs=1,
+        stale=["src/mod.py"], broken=["src/gone.py"], anchors=["L9"])
+    assert wiki_drift.queue_reason(rep) == "sources-changed"
+    rep.stale = []
+    assert wiki_drift.queue_reason(rep) == "refs-missing"
+    rep.broken = []
+    assert wiki_drift.queue_reason(rep) == "anchors-open"
+    rep.anchors = []
+    assert wiki_drift.queue_reason(rep) is None
+    rep.state = "ledger-void"
+    assert wiki_drift.queue_reason(rep) == "prose-unverified"
 
 
 # ---------------------------------------------------------------------------

@@ -2217,6 +2217,87 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+QUEUE_REASONS = ("sources-changed", "refs-missing", "anchors-open", "prose-unverified")
+
+
+def queue_reason(rep: PageReport) -> str | None:
+    """Why this page belongs in the rewrite queue, or None when it does not.
+
+    The order is a policy, not an accident: drift (a source moved) outranks an open
+    anchor, because the first needs a human to re-read prose and the second can be
+    fixed by `reanchor`. `prose-unverified` is the last test and catches the pages a
+    score-based filter would drop — a `partial` page with every link healthy is exactly
+    the shape M2 left 423 of, and a queue that hides it hands M5 a 22-page list and
+    calls the corpus clean.
+    """
+    if rep.stale:
+        return "sources-changed"
+    if rep.broken:
+        return "refs-missing"
+    if rep.anchors:
+        return "anchors-open"
+    if rep.state in ("partial", "ledger-void"):
+        return "prose-unverified"
+    return None
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    """The M5 work queue: every page whose prose is not known-good at HEAD.
+
+    Reads the same `build()` pass `report` uses — one batch of git calls per distinct
+    baseline, never one per page — and prints the subset in a stable order. It writes
+    nothing, so it is legal on a read-only root.
+    """
+    built = build(args)
+    if isinstance(built, int):
+        return built
+    payload, reports, _gaps = built
+    queue = []
+    for rep in reports:
+        reason = queue_reason(rep)
+        if reason is None:
+            continue
+        queue.append({
+            "page": rep.page,
+            "reason": reason,
+            "state": rep.state,
+            "base": rep.base,
+            "changed_sources": sorted(rep.stale),
+            "missing_sources": sorted(rep.broken),
+            "open_anchors": len(rep.anchors),
+            "score": rep.score,
+        })
+    queue.sort(key=lambda row: (-len(row["changed_sources"]), row["page"]))
+
+    if getattr(args, "json", False):
+        print(json.dumps({"head": payload["head"], "baseline": payload["metadata_baseline"],
+                          "count": len(queue), "reasons": dict(
+                              (r, sum(1 for q in queue if q["reason"] == r))
+                              for r in QUEUE_REASONS),
+                          "queue": queue}, ensure_ascii=False, indent=2))
+        return 0
+    if args.fmt == "count":
+        print(len(queue))
+        return 0
+
+    shown = queue[: args.top]
+    tally = ", ".join(f"{r} {sum(1 for q in queue if q['reason'] == r)}"
+                      for r in QUEUE_REASONS
+                      if any(q["reason"] == r for q in queue))
+    print(f"stale queue: {len(queue)} pages "
+          f"(threshold-shaped count, not `report`'s needs_update {payload['summary']['needs_update']})")
+    print(f"  by reason: {tally or 'empty'}")
+    for row in shown:
+        changed = ",".join(row["changed_sources"][:3]) or "-"
+        print(f"  {row['page']} [{row['reason']}] state={row['state']} "
+              f"changed={changed} missing={len(row['missing_sources'])} "
+              f"anchors={row['open_anchors']}")
+    if len(queue) > len(shown):
+        print(f"  ... {len(queue) - len(shown)} more (--top N)")
+    print(len(queue))
+    return 0
+
+
 def cmd_mark(args: argparse.Namespace) -> int:
     if not CONTENT.is_dir():
         print(
@@ -2354,10 +2435,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     seed.add_argument("--apply", action="store_true", help="write; without it, plan and report only")
     seed.set_defaults(func=cmd_seed)
 
+    stale = sub.add_parser("stale", help="print the rewrite queue (reads only; writes nothing)")
+    stale.add_argument("--page", help="only pages whose path contains this substring")
+    stale.add_argument("--baseline", help="override the wiki snapshot commit (40-hex)")
+    stale.add_argument("--top", type=int, default=25, help="rows printed (default 25)")
+    stale.add_argument("--json", action="store_true", help="emit the queue as JSON")
+    stale.add_argument("--format", dest="fmt", choices=("queue", "count"), default="queue",
+                       help="'count' prints one integer for the CI gate")
+    stale.set_defaults(func=cmd_stale)
+
     # The same flag, also accepted after the verb. SUPPRESS is what makes the two
     # positions coexist: without a default of its own the subparser cannot overwrite
     # a value the top-level parser already read.
-    for parser_ in (rep, mark, reanchor, seed):
+    for parser_ in (rep, mark, reanchor, seed, stale):
         parser_.add_argument(
             "--wiki-root",
             default=argparse.SUPPRESS,
