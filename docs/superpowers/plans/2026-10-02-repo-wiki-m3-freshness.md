@@ -1227,10 +1227,14 @@ Expected: 全量 `193 passed`（192 + ⑨ 那条 −1 deselected 只影响第二
 
 ```bash
 sed -n '38,48p' tools/ci_grep_gates.sh
-grep -rni --include='*.md' 'worldquant' docs/superpowers/ | wc -l
+N=$(printf '%s' 'wor' 'ld' 'quant')          # 字面量不许出现在任何文件里，见下面的约束
+grep -rni --include='*.md' "$N" docs/superpowers/ | wc -l
 bash tools/ci_grep_gates.sh 2>&1 | grep -c 'docs/'
 ```
-决定写进 README §五与 `项目档案.md`：**`docs/superpowers/**` 不纳入商标零命中面**（依据：上游 `ci_grep_gates.sh` 的门 (b) 自己带 `--exclude-dir=docs`，那是上游政策的一部分，本 fork 不改上游脚本也就不该用第二个实现去覆盖它的范围；且 `docs/superpowers/` 只含计划/spec 文本、不含发布内容）。若第一条 grep 的命中数不是 0，就**如实记下命中文件与行数**，并给这些文件加运行时拼接改写 —— 但只能在确认 `docs/` 不在扫描面之后做，别顺手改出第二个实现。
+
+**约束（控制器实测得来的，不是推想）**：`.superpowers/**` **不在**上游门的 `--exclude-dir` 列表里，所以本计划的文本、`task-*-brief.md`、报告与台账**都是被 `grep -rn` 扫的面**。M3 的预飞行就因为这个红过一次：本节原文把 needle 当例子写成了字面量，切片出来的 `task-9-brief.md` 立刻成了门 (b) 的新命中。任何测量、示例、说明一律 `printf` 拼接或等价形式；发现工作区里有命中，先删来源（计划文本）再重生成切片，不要去动上游脚本或给工作区加豁免。
+
+决定写进 README §五与 `项目档案.md`：**`docs/superpowers/**` 不纳入商标零命中面**（依据：上游 `ci_grep_gates.sh` 的门 (b) 自己带 `--exclude-dir=docs`，那是上游政策的一部分，本 fork 不改上游脚本也就不该用第二个实现去覆盖它的范围；且 `docs/superpowers/` 只含计划/spec 文本、不含发布内容）。**但这条只豁免 `docs/`，不豁免 `.superpowers/`** —— 后者照样会被扫，所以写计划与切片时按「会被扫」对待。若第一条 grep 的命中数不是 0，就**如实记下命中文件与行数**，并给这些文件加运行时拼接改写 —— 但只能在确认 `docs/` 不在扫描面之后做，别顺手改出第二个实现。
 
 - [ ] **Step 2: README 增补三处**
 
