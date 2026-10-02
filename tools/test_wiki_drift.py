@@ -4317,9 +4317,9 @@ def test_index_treats_a_list_shaped_verified_at_as_no_stamp_at_all(repo_wired):
 # M3-4: 新鲜度门禁脚本 —— 只读、阈值化，且不带商标门的模式串
 # ---------------------------------------------------------------------------
 #
-# `tools/wiki_freshness_gate.sh` 是 Task 5 的 CI 步骤消费的那份 rc 契约，所以这里的三条
-# 用例各自钉住一条分支：文件内容（政策不复刻）、阈值两个方向、以及工具没有输出时的
-# fail-closed 守卫。
+# `tools/wiki_freshness_gate.sh` 是 Task 5 的 CI 步骤消费的那份 rc 契约，所以这里的四条
+# 用例各自钉住一条分支：文件内容（政策不复刻）、阈值两个方向、两个非整数输入（读数与旋钮）
+# 的 fail-closed 守卫、以及「两条腿喂同一个失败累加器」这条没有行为用例的分支。
 
 
 def test_the_freshness_gate_is_readable_and_carries_no_brand_patterns():
@@ -4327,7 +4327,12 @@ def test_the_freshness_gate_is_readable_and_carries_no_brand_patterns():
     `ci_grep_gates.sh` (upstream-owned, unchangeable); copying their needles into a
     fork script is how a policy ends up half-updated."""
     src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
-    assert "WIKI_STALE_MAX" in src and "445" in src
+    # M-1: `"445" in src` was satisfied by the prose comment at the top of the file, so the
+    # shipped default could become 500 and this test would still pass. Pin the shape of the
+    # expansion, then its value separately, then that there is exactly one default to read.
+    assert re.search(r"\$\{WIKI_STALE_MAX:-445\}", src), "the default must be the measured water level"
+    defaults = re.findall(r"\$\{WIKI_STALE_MAX:-\d+\}", src)
+    assert len(defaults) == 1 and defaults[0] == "${WIKI_STALE_MAX:-445}", defaults
     assert "stale --format count" in src
     assert "index --check" in src
     # TM_NEEDLE (:1538) is the suite's already-lowercased brand needle; the point of
@@ -4373,6 +4378,14 @@ def test_the_gate_fails_loudly_when_the_tool_prints_nothing():
     false — the gate would print `ok` on a broken tool. The guard is asserted statically
     here because reaching it needs a stubbed `python` on PATH, which is the flaky half of
     a Windows Git Bash test; Task 10's MS-probes cover the behavioural half.
+
+    I-1: `$LIMIT` was the unguarded twin of that same comparison, and it failed OPEN rather
+    than closed — `[ 445 -gt 4o5 ]` returns 2 with its message only on stderr, so `if` took
+    the else branch and the gate printed `ok` / `all checks passed` and exited 0. A knob
+    misspelled once switched the gate off in silence. The threshold guard is pinned the same
+    static way (same fall-through property, and a behavioural run costs a full
+    `stale --format count` read because the guard sits after it by ruling); the real
+    `WIKI_STALE_MAX=4o5` rc is recorded in the Task 4 report.
     """
     src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
     guard = src.index('[[ "$STALE" =~ ^[0-9]+$ ]]')
@@ -4381,4 +4394,35 @@ def test_the_gate_fails_loudly_when_the_tool_prints_nothing():
     assert bail < compared, "a non-integer reading must stop the script, not fall through"
     assert guard < compared, "the integer guard must come before the comparison"
     assert "did not print one integer" in src
+    # M-2: this branch swallows the tool's own complaint (`2>/dev/null`), so the log has to
+    # name the reproduction command — otherwise a CI red here is undiagnosable remotely.
+    assert "  reproduce: python -X utf8 tools/wiki_drift.py stale --format count" in src
+    # I-1: the threshold gets the same bail. `bail < limit_guard` is what keeps the two
+    # assertions above reading the *reading* guard's own block instead of the new one.
+    limit_guard = src.index('[[ "$LIMIT" =~ ^[0-9]+$ ]]')
+    assert bail < limit_guard, "the reading guard keeps its own bail; the threshold guard is after it"
+    assert src.index("exit 1", limit_guard) < compared, "a non-integer threshold must not fall through"
+    assert "WIKI_STALE_MAX is not an integer" in src
+
+
+def test_both_legs_feed_the_same_failure_accumulator():
+    """A structural pin, because leg 2 has no behavioural test and cannot get one here.
+
+    Reaching `index --check`'s FAIL branch needs a mutated INDEX.md, and this gate is
+    read-only — no test in this file may write one. The reviewer measured the consequence:
+    deleting the `FAILED=1` from the `index --check` else-branch leaves every threshold and
+    shape test green while breaking half of the rc contract ("`index --check` 失败 ⇒ rc=1").
+    So this asserts the wiring instead of the behaviour: exactly two `FAILED=1` sites, one
+    inside each leg's failure branch, and the summary exiting non-zero off that same
+    accumulator. Task 10's mutation probes are the behavioural seat for this branch.
+    """
+    src = (REAL_REPO / "tools" / "wiki_freshness_gate.sh").read_text(encoding="utf-8")
+    assert src.count("FAILED=1") == 2, f"one per leg, found {src.count('FAILED=1')}"
+    leg1 = src.index('if [ "$STALE" -gt "$LIMIT" ]; then')
+    leg2 = src.index("if python -X utf8 tools/wiki_drift.py index --check; then")
+    summary = src.index('if [ "$FAILED" -ne 0 ]')
+    assert leg1 < src.index("FAILED=1") < leg2, "leg 1 must set the flag, not only print"
+    assert leg2 < src.index("FAILED=1", leg2) < summary, "leg 2 must set the flag, not only print"
+    bail = src.index("exit 1", summary)
+    assert summary < bail < src.index("all checks passed"), "the summary exits on the accumulator"
 

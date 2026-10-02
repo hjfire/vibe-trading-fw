@@ -19,6 +19,14 @@ STALE=$(python -X utf8 tools/wiki_drift.py stale --format count 2>/dev/null)
 if ! [[ "$STALE" =~ ^[0-9]+$ ]]; then
     echo "${RED}FAIL${NC}: stale --format count did not print one integer"
     echo "  got: '${STALE}'"
+    echo "  reproduce: python -X utf8 tools/wiki_drift.py stale --format count"
+    exit 1
+fi
+# The threshold is the same kind of input as the reading and it was the unguarded one: a
+# misspelled knob made `[ 445 -gt 4o5 ]` return 2 (message only on stderr), `if` took the
+# else branch, and the gate printed `ok` and exited 0 — fail-open on the tuning knob.
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+    echo "${RED}FAIL${NC}: WIKI_STALE_MAX is not an integer: '${WIKI_STALE_MAX:-}'"
     exit 1
 fi
 echo "wiki stale pages: $STALE (threshold ${LIMIT})"
