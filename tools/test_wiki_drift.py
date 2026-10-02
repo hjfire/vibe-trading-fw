@@ -3484,9 +3484,9 @@ def test_seed_apply_refuses_an_edited_page_until_force(tmp_path, monkeypatch, ca
     """The CLI contract an operator of Task 10 reads: exit 2 (the same code every other
     refusal in this tool uses — 1 is reserved for "the work ran and did not reconcile"),
     the count and `--force` named on stderr, the tally line still printed, and NOT one
-    ledger byte copied. A refused run that printed `ledger_rows=2` would be claiming a
-    published tree; and `exists()` proves nothing here, since the first apply already
-    put that file there — the bytes have to be identical."""
+    ledger byte copied. The bytes are compared against an export whose own ledger was
+    grown after that first apply, so "copied" and "did not copy" are different files —
+    `exists()` and a same-bytes comparison would both be vacuous here."""
     export, wiki = _seedable(tmp_path, monkeypatch)
     argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
     assert main([*argv, "--apply"]) == 0
@@ -3494,6 +3494,17 @@ def test_seed_apply_refuses_an_edited_page_until_force(tmp_path, monkeypatch, ca
     seeded = page.read_bytes()
     capsys.readouterr()
     page.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    # Make the ledger copy observable: the first apply already put the export's own rows
+    # in the target, so comparing target bytes against `ledger_before` is true in both
+    # worlds — copied and not copied. Growing the EXPORT side is what turns "no ledger
+    # byte copied" into a byte comparison that can fail: a run that copies now lands 3
+    # rows where the assertion reads 2, and mutation v_m3 goes red.
+    (export / "update" / "ledger.jsonl").write_text(
+        (export / "update" / "ledger.jsonl").read_text(encoding="utf-8")
+        + json.dumps({"page": "前端应用/页三.md", "head": "f" * 40,
+                      "sha_after": "0" * 64, "note": "n", "at": "t"}) + "\n",
+        encoding="utf-8",
+    )
     ledger = wiki / "ledger.jsonl"
     ledger_before = ledger.read_bytes()
     tree_before = {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))}
@@ -3516,7 +3527,7 @@ def test_seed_apply_refuses_an_edited_page_until_force(tmp_path, monkeypatch, ca
     assert forced == 0, out.err
     assert "overwritten=1" in out.out, out.out
     assert "pages_written=1" in out.out, out.out
-    assert "ledger_rows=2" in out.out, "the ledger only ships with the pages"
+    assert "ledger_rows=3" in out.out, "the ledger only ships with the pages"
     assert page.read_bytes() == seeded, "--force really does restore the export"
 
 
@@ -3524,13 +3535,23 @@ def test_seed_dry_run_reports_a_refused_page_instead_of_a_written_one(tmp_path, 
     """Dry-run's whole job is to predict `--apply` verbatim, so a page `--apply` would
     refuse must not be tallied as `written` here — the run that gets read for a decision
     is the one that would be false. The cost is honest and intended: a tree holding one
-    edited page exits 2 on a read-only preview. Nothing is written either way."""
+    edited page exits 2 on a read-only preview. Nothing is written either way, and that
+    is checked against an export ledger grown after the seeding apply, so a dry run that
+    wrote would not read as identical."""
     export, wiki = _seedable(tmp_path, monkeypatch)
     argv = ["--wiki-root", str(wiki), "seed", "--from", str(export), "--snapshot", "a" * 40]
     assert main([*argv, "--apply"]) == 0
     page = wiki / "topics" / "前端应用" / "页一.md"
     capsys.readouterr()
     page.write_bytes("## 重写过的正文，不是导出物\n".encode("utf-8"))
+    # Same trick, same hole closed: with the export side grown, a dry run that wrote
+    # anything would land 3 rows and this byte comparison would fail.
+    (export / "update" / "ledger.jsonl").write_text(
+        (export / "update" / "ledger.jsonl").read_text(encoding="utf-8")
+        + json.dumps({"page": "前端应用/页三.md", "head": "f" * 40,
+                      "sha_after": "0" * 64, "note": "n", "at": "t"}) + "\n",
+        encoding="utf-8",
+    )
     ledger_before = (wiki / "ledger.jsonl").read_bytes()
     tree_before = {p: p.read_bytes() for p in sorted(wiki.rglob("*.md"))}
 

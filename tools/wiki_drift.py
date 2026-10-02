@@ -996,8 +996,10 @@ class SeedTally:
     refused: int = 0
 
     def line(self) -> str:
-        # The two new fields are appended, never interleaved: spec §6 pins the names
-        # *and* the order of the first five pairs, and Task 10 greps this line by prefix.
+        # Appended, never interleaved: the suite reads this line by prefix and by
+        # substring (`pages_written=/pages_skipped=` as a prefix, `sha_mismatch=`,
+        # `no_sources=`, `origins={…}` as substrings), so a reorder breaks checks that
+        # are not about field order at all.
         return (f"pages_written={self.written} pages_skipped={self.skipped} "
                 f"sha_mismatch={self.mismatched} checked={self.checked} "
                 f"reworded={self.reworded} no_sources={self.no_sources} "
@@ -1101,8 +1103,8 @@ def cmd_seed(args: argparse.Namespace) -> int:
     tally = SeedTally()
     refused_labels: list[str] = []
     for plan in plans:
-        # The returned status is what lets this name the pages: `refused` alone says
-        # "1 page", and an operator with 494 pages cannot act on that.
+        # The returned status is what lets this name the pages: a bare `refused=1` says
+        # "one page", and nobody can act on a count they cannot locate.
         if apply_page_plan(plan, tally, dry_run=not args.apply,
                            force=args.force) == "refused":
             refused_labels.append(plan.label)
@@ -1116,10 +1118,10 @@ def cmd_seed(args: argparse.Namespace) -> int:
               file=sys.stderr)
         print("edited pages: " + ", ".join(sorted(refused_labels)), file=sys.stderr)
         # Returns *before* `copy_ledger`, which is the whole of it: 0 pages shipped but
-        # the export's ledger rows written would leave a tree claiming 8 pages published.
-        # The `ledger_rows=` line is skipped for the same reason — printing it would say
-        # the copy ran. rc 2 is this tool's refusal code; 1 stays reserved for "the work
-        # ran and did not reconcile" (the `mismatched` exit below).
+        # the export's ledger rows written leaves a tree whose ledger claims pages that
+        # were never published. The `ledger_rows=` line is skipped for the same reason —
+        # printing it would say the copy ran. rc 2 is this tool's refusal code; 1 stays
+        # reserved for "the work ran and did not reconcile" (the `mismatched` exit below).
         return 2
     rows, digest = copy_ledger(legacy, not args.apply)
     print(f"ledger_rows={rows} ledger_sha={digest} snapshot={snapshot} target={WIKI}")
