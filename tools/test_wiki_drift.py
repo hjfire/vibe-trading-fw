@@ -4056,6 +4056,7 @@ ARCHIVE_CONTENT = (
 EXTERNAL_BACKUP = "../wiki-content-backup-2026-10-01"
 
 
+@pytest.mark.local_archive
 def test_the_archived_export_still_holds_the_450_seeded_pages():
     """The archive is the only in-repo copy of what 450 pages were copied FROM.
 
@@ -4079,6 +4080,7 @@ def test_the_archived_export_still_holds_the_450_seeded_pages():
     )
 
 
+@pytest.mark.local_archive
 def test_every_seeded_topic_body_matches_the_archive_byte_for_byte():
     """Gate 6, made permanent: 450 pages, both directions named, no empty iteration.
 
@@ -4425,4 +4427,59 @@ def test_both_legs_feed_the_same_failure_accumulator():
     assert leg2 < src.index("FAILED=1", leg2) < summary, "leg 2 must set the flag, not only print"
     bail = src.index("exit 1", summary)
     assert summary < bail < src.index("all checks passed"), "the summary exits on the accumulator"
+
+
+# ---------------------------------------------------------------------------
+# M3-5: fork 自有工作流 ＋ 把两条本地归档用例从 CI 收集面里摘出去
+# ---------------------------------------------------------------------------
+#
+# 这套守卫从来没有被任何 CI 收过：上游 `pyproject.toml:276` 的 `testpaths` 是
+# `agent/tests`，而本仓的硬规则是上游文件逐字不动 —— 所以 fork 加一份自己的
+# 工作流文件，而不是去改 `.github/workflows/test.yml`。控制器裁定：套件步骤是
+# 硬步骤（不带 `continue-on-error`，第一天就该绿），只有水位门禁那一步是软的
+# （spec §9.1：首周只观察）。全文件里只允许出现一行 `continue-on-error`，
+# 第一条用例钉的就是这条，因为「两步都软」等价于一个从不报警的绿灯。
+#
+# 两条归档用例读的是 `.qoder/repowiki/_ide-export-retired-2026-10-01`：未入库、
+# 全新检出里根本不存在，所以在 CI 中它们「因构造而红」而非「因缺陷而红」。
+# 标 `local_archive` 让工作流能把其余用例收进来；标记本身注册在
+# `tools/conftest.py`（见该文件的理由）。
+
+
+def test_the_fork_workflow_collects_the_suite_and_only_softens_the_water_level():
+    """The reason this file exists: nothing upstream ever ran tools/test_wiki_drift.py
+    (`pyproject.toml:276` testpaths is upstream's). A workflow that softens both steps
+    would collect the whole suite and report nothing, which is the green-that-means-nothing
+    this project keeps having to design against."""
+    text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
+    assert "fetch-depth: 0" in text
+    assert 'schedule:' in text and "workflow_dispatch" in text
+    assert "wiki_freshness_gate.sh" in text
+    assert "not local_archive" in text
+    assert "-m \"not local_archive\"" in text or "-m 'not local_archive'" in text
+    # water level soft, suite hard:
+    gate_idx, suite_idx = text.index("wiki_freshness_gate.sh"), text.index("not local_archive")
+    hard = [l for l in text.splitlines() if "continue-on-error" in l]
+    assert len(hard) == 1, hard
+    assert text.index(hard[0]) < max(gate_idx, suite_idx)
+
+
+def test_the_two_archive_cases_are_marked_local_archive():
+    """They read `.qoder/repowiki/_ide-export-retired-2026-10-01`, which is untracked and
+    absent from a fresh checkout — so in CI they are red by construction, not by defect.
+    Marking them is what lets the workflow collect the rest."""
+    src = (REAL_REPO / "tools" / "test_wiki_drift.py").read_text(encoding="utf-8")
+    marked = re.findall(r'@pytest\.mark\.local_archive\ndef (test_\w+)', src)
+    assert len(marked) >= 2, marked
+    for name in ("test_the_archived_export_still_holds_the_450_seeded_pages",
+                 "test_every_seeded_topic_body_matches_the_archive_byte_for_byte"):
+        assert name in marked, marked
+    # The marker must be REGISTERED, or `-m "not local_archive"` warns-and-passes and a
+    # future typo in the marker name silently deselects nothing. Registration lives in
+    # tools/conftest.py, not in this module: a test module is imported too late for
+    # pytest_configure, so the mark stays unknown and every CI run prints
+    # PytestUnknownMarkWarning (measured here: 1 passed / 1 deselected / 1 warning from
+    # the module, and the same command clean from a conftest).
+    conftest = (REAL_REPO / "tools" / "conftest.py").read_text(encoding="utf-8")
+    assert "addinivalue_line" in conftest and "local_archive" in conftest
 

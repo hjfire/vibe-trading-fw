@@ -1,0 +1,57 @@
+name: repowiki-freshness
+
+# Fork-owned. Nothing upstream ever ran tools/test_wiki_drift.py
+# (pyproject.toml's testpaths is "agent/tests"), and this repository's rule is that
+# upstream files stay byte-for-byte alone — so the fork adds a file rather than
+# editing .github/workflows/test.yml.
+#
+# 控制器裁定（写进计划，不许执行者自己翻案）：套件步骤是硬步骤，它第一天就该绿，
+# 所以那一步不配任何容错开关；只有水位门禁那一步是软的（spec §9.1：首周只观察）。
+# 因此全文件里那个容错开关只允许出现一行 —— tools/test_wiki_drift.py 的
+# test_the_fork_workflow_collects_the_suite_and_only_softens_the_water_level 就是钉这一行的，
+# 两步都软等于一个从不报警的绿灯。
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'   # Mondays, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-repowiki-freshness
+  cancel-in-progress: false
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # fetch-depth 必须是 0：默认浅克隆只取 HEAD，而 `stale` 要数每页 frontmatter 里
+      # 那个 verified_at commit 之后有多少提交。历史不够时它打印的是空字节，门禁的整数
+      # 守卫随即 exit 1 —— 那读起来像 wiki 出了问题，实际只是克隆太浅。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # `stale` needs every page's verified_at commit reachable
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # 只装 pytest：这套守卫按设计只依赖标准库 + pytest，不引入任何新的第三方依赖。
+      - name: Install pytest only
+        run: python -m pip install --upgrade pytest
+      # 水位门禁（软）。阈值不留任何 padding：门禁现在对非整数取值 fail-closed，多一个
+      # 空格也算拼错的旋钮，直接 exit 1 而不是静默常绿。
+      # 用 `bash tools/...` 而不是 `./tools/...`：本仓 core.filemode=false，执行位没有记
+      # 进 git（对象是 100644），带 ./ 的写法在 runner 上会 Permission denied。
+      - name: Wiki freshness gate
+        continue-on-error: true
+        env:
+          WIKI_STALE_MAX: '445'
+        run: bash tools/wiki_freshness_gate.sh
+      # 套件（硬）。归档那两条用例带 local_archive 标记，读的是未入库的
+      # .qoder/repowiki/_ide-export-retired-2026-10-01，全新检出里必然红，所以在这里摘掉；
+      # 标记注册在 tools/conftest.py。门禁与工具在 CI 里始终只读 —— 本文件没有任何步骤
+      # 写 INDEX.md，也没有任何步骤提交产物。
+      - name: Wiki guard suite
+        run: python -X utf8 -m pytest tools/test_wiki_drift.py -q -m "not local_archive"
