@@ -3817,9 +3817,10 @@ def test_drift_json_says_the_metadata_file_supplied_the_baseline(wired):
 
 def test_the_two_surfaces_read_the_same_source_field(repo_wired, capsys):
     """`cmd_report` used to re-guess the provenance by comparing the payload against
-    `metadata_baseline()` — a second truth, which disagrees with `build()` the moment the
-    modal page stamp equals the metadata value. Both surfaces now read the payload's one
-    field, and this case is what stops them drifting apart again."""
+    `metadata_baseline()` — a second truth. This repo-layout case pins that both surfaces
+    print the payload's one field; it cannot itself catch the re-derivation, because this
+    fixture has no metadata file, so the old guess always fell through. The case that does
+    catch it is `test_the_report_surface_still_credits_the_page_when_metadata_agrees`."""
     _stamp_every_page(repo_wired, repo_wired["base"])
     built = wiki_drift.build(_args())
     assert not isinstance(built, int), built
@@ -3832,6 +3833,25 @@ def test_the_two_surfaces_read_the_same_source_field(repo_wired, capsys):
     # The readable half of the line is what M2 pinned; the machine field is added to it,
     # never swapped for it.
     assert f"baseline  {repo_wired['base']}  (tree: modal page verified_at)" in out, out
+
+
+def test_the_report_surface_still_credits_the_page_when_metadata_agrees(wired, capsys):
+    """Ruling 2's only observable regression. `cmd_report` used to re-derive provenance as
+    `metadata_baseline() == payload["baseline"]`, which lies in exactly ONE configuration: a
+    page stamp that happens to equal the metadata value, so page and metadata agree on the
+    *value* while `build()` still credits the page for the *provenance*. The `repo_wired`
+    twin cannot see this — that root ships no metadata file, so the guess always fell through.
+    This IDE-layout root has both, so if a second truth ever grows back, the surface would
+    print `metadata: repowiki-metadata.json` and this case goes red."""
+    _stamp_every_page(wired, wired["base"])
+    assert wiki_drift.page_mode_baseline() == metadata_baseline() == wired["base"]
+    built = wiki_drift.build(_args())
+    assert not isinstance(built, int), built
+    assert built[0]["baseline_source"] == "page-verified_at-mode"
+    assert cmd_report(_args()) == 0
+    out = capsys.readouterr().out
+    assert "(tree: modal page verified_at)  [page-verified_at-mode]" in out, out
+    assert "metadata: repowiki-metadata.json" not in out, "the surface must not re-derive"
 
 
 def test_stale_json_echoes_the_payloads_own_baseline(repo_wired):
