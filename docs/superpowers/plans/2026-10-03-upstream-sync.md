@@ -818,8 +818,18 @@ def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     loosening the guard under test would still leave this green. The committed `000651.SZ`
     window refuses at the plateau-shape guard (`:128-130`, `_plateau_spans(offset) is None`)
     because its last plateau is ONE bar — NOT because a 送转 crosses it. So the docstring
-    must not claim 送转: the drift branch (`:136-138`) is covered by
-    `agent/tests/test_additive_conversion.py`, not by this fixture. Refusing is only correct
+    must not claim 送转, and must not claim the drift branch is covered elsewhere either:
+    `:136-138` is an unreachable guard. `_plateau_spans` returns a span list only after its
+    edge/unc fold loop at `:86-89` has refused every window that still holds a one-bar
+    plateau, so any list reaching `:136` has `single_bar_spans == 0` and `:137` is
+    perpetually false (controller re-measure at 95e65087: 4000 randomized offset shapes plus
+    an exhaustive 55,980-case sweep over all integer offsets of length 2..6 on a 6-symbol
+    alphabet, zero surviving one-bar plateaus; the four hand-built drift shapes all came
+    back `_plateau_spans(...) is None`). Upstream's own
+    `test_additive_conversion.py:137 test_non_plateau_offsets_fail_closed` (`[95.0, 95.5,
+    96.0, 96.5]`) does refuse, but through that same `:86-89 -> :128-130` route, so the
+    `:138` line is covered by NEITHER file. Register that as an upstream reachability gap in
+    `项目档案.md` (Task 8); do not fix upstream code here. Refusing is only correct
     if the label then says additive — refusal and stamp are checked together or a loosened
     refusal rule turns into a mislabel with clean numbers."""
     import akshare as _ak  # noqa: F401  (fixture path needs no vendor import; kept explicit)

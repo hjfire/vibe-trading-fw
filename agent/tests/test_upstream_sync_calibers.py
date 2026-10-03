@@ -266,11 +266,16 @@ def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     because its last plateau is ONE bar — `_plateau_spans` returns None at `:86-89` (an
     edge one-bar plateau, the window's last bar being ex-date 2026-08-27) and
     `convert_additive_to_multiplicative` then returns None at `:128-130`. It is NOT the
-    ratio-series guard at `:136-138`: measured over 4000 randomized offset shapes,
-    `_plateau_spans` never returned a span list holding a one-bar plateau, so
-    `single_bar_spans` is 0 by the time `:137` reads it and a drifting offset series is
-    refused at `:86-89` instead — the same route as here, and the one upstream's
-    `test_additive_conversion.py:137 test_non_plateau_offsets_fail_closed` exercises.
+    ratio-series guard at `:136-138`: `_plateau_spans` only returns a span list once its
+    fold loop has refused every window still holding a one-bar plateau (`:86-89`), so
+    `single_bar_spans` is 0 by the time `:137` reads it and the `:138` return is unreachable
+    — measured over 4000 randomized offset shapes and an exhaustive 55,980-case sweep (all
+    integer offsets of length 2..6 over a 6-symbol alphabet), zero surviving one-bar
+    plateaus. A drifting offset series is refused at `:86-89` instead — the same route as
+    here, and the one upstream's `test_additive_conversion.py:137
+    test_non_plateau_offsets_fail_closed` exercises. So `:138` is covered by neither file;
+    that is an upstream reachability gap, recorded in `项目档案.md`, not something this
+    fixture can or should test.
     `manifest.refusal_cause` stays `unclassified`; this fixture claims nothing about the
     kind of corporate action. Refusal and label are checked together, because refusing is
     only honest if the label then says additive — a loosened refusal rule would otherwise
