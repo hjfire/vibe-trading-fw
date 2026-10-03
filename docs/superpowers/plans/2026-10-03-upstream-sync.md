@@ -586,6 +586,9 @@ PY
 
 Expected：每只打印 `max` / `p99` / `median` 相对残差。
 **钉阈值的规则（写死，不许事后放宽）**：`REL_TOL` = 三个 `max` 里最大的那个**向上取一个数量级**，且必须 `≤ 1e-6`；若 `> 1e-6` ⇒ **不是放阈值，是停下查明细**（大概率是窗口末端锚点日不同，或 derived 编码把 送转 当成现金红利塞进了 additive —— 这两种都是真缺陷，spec §5.3 说得很清楚：阈值要既能放过 2 位小数的舍入、又能抓住一个分红量级的偏差 `≈1e-3`）。把打印出的三个 `max` 与最终 `REL_TOL` 写进 ledger 和用例注释。
+**与 Step 2 的对账**：Step 2 骨架里的 `REL_TOL = 1e-10` 已由控制器在 `07b4eb2d` 的实测上预钉。
+若 Step 1 打印的最大 `max` 仍是 `1.044e-11` 量级 ⇒ 直接沿用，把三个数写进用例注释即可；若明显不同
+（差一个数量级以上）⇒ **不要改阈值去就它**，停下报 BLOCKED：要么盘上 fixture 变了，要么量的面不对。
 
 - [ ] **Step 2: 写失败用例（此时文件里没有实现读取路径，跑起来必红在 import/fixture 缺失或断言）**
 
@@ -615,13 +618,17 @@ from backtest.loaders.cn_adjust import apply_qfq
 FIXTURES = Path(__file__).parent / "fixtures" / "upstream_sync"
 COLS = ["open", "high", "low", "close", "volume"]
 
-# Max relative residual measured on the committed fixtures: <print the three maxes>.
-# Pinned one order of magnitude above it, capped at 1e-6 by spec §5.3: it must let
-# through 2-decimal vendor rounding over a 500-bar window and still catch a
-# dividend-sized error (~1e-3). Do NOT relax this number to make a run pass — a
-# residual above the cap is a defect in one of the two conversions, not a tolerance
-# that was set too tightly.
-REL_TOL = 1e-<N>
+# Face discipline: this tolerance is pinned from the RETURN-face residual measured by
+# Step 1 above, NOT from `manifest.json`'s `reverse_check_max_rel` — those are LEVEL-face
+# numbers (~2e-16 here) and they are 5 orders too tight for returns: a 2.3e-13 level gap
+# divided by a near-flat day's return (+2.1e-05 on 600519.SH, 2025-07-16) prints 1e-11.
+# Step 1's own three maxes, on fixtures as committed at 07b4eb2d: 600519.SH 1.044e-11,
+# 000001.SZ 2.631e-13, 601398.SH 1.739e-13. One order above the largest, capped at 1e-6
+# by spec §5.3: it must let through 2-decimal vendor rounding over a 500-bar window and
+# still catch a dividend-sized error (~1e-3, 7 orders away). Do NOT relax this number to
+# make a run pass — a residual above the cap is a defect in one of the two conversions,
+# not a tolerance that was set too tightly.
+REL_TOL = 1e-10  # 9.6x headroom over 1.044e-11 — one order of magnitude, rounded down
 
 _MANIFEST = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))
 SYMBOLS_CONVERTIBLE = tuple(c for c, v in _MANIFEST["symbols"].items() if v["bucket"] == "convertible")
@@ -805,14 +812,24 @@ def test_unstamped_additive_leaves_with_the_additive_label(monkeypatch) -> None:
 
 @pytest.mark.parametrize("code", SYMBOL_REFUSAL)
 def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
-    """`convert_additive_to_multiplicative` returns None for a 送转-crossing window (its
-    own docstring: offsets drift with the price level there, so it refuses rather than
-    convert on a wrong basis). Refusing is only correct if the label then says additive —
-    the refusal and the stamp must be checked together or a loosened refusal rule turns
-    into a mislabel with clean numbers."""
+    """`convert_additive_to_multiplicative` refuses the committed window at ONE named branch.
+    Which branch matters: bare `assert refused is None` is satisfied by nine unrelated
+    `return None` paths (`additive_conversion.py:117,119,125,130,138,149,153,159,168`), so
+    loosening the guard under test would still leave this green. The committed `000651.SZ`
+    window refuses at the plateau-shape guard (`:128-130`, `_plateau_spans(offset) is None`)
+    because its last plateau is ONE bar — NOT because a 送转 crosses it. So the docstring
+    must not claim 送转: the drift branch (`:136-138`) is covered by
+    `agent/tests/test_additive_conversion.py`, not by this fixture. Refusing is only correct
+    if the label then says additive — refusal and stamp are checked together or a loosened
+    refusal rule turns into a mislabel with clean numbers."""
     import akshare as _ak  # noqa: F401  (fixture path needs no vendor import; kept explicit)
+    from backtest.loaders.additive_conversion import _plateau_spans
     raw = _read_csv(FIXTURES / f"{code}_raw.csv", indexed=True)[COLS]
     additive = _read_csv(FIXTURES / f"{code}_qfq.csv", indexed=True)[COLS]
+    offset = (additive["close"] - raw["close"]).astype(float)
+    assert _plateau_spans(offset) is None, (
+        f"{code}: the offset series no longer trips the plateau-shape guard — the refusal "
+        f"sample drifted, and this test is now asserting a different branch than it names")
     refused = convert_additive_to_multiplicative(raw, additive)
     assert refused is None, f"{code}: the committed refusal window converted — bucket drifted"
     prov = _serving_frames(monkeypatch, additive)
