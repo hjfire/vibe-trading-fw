@@ -949,7 +949,7 @@ git status --porcelain
 **Files:**
 - Modify: `tools/wiki_freshness_gate.sh:16`（`LIMIT="${WIKI_STALE_MAX:-<N>}"`）与 `:5` 的 prose 读数
 - Modify: `.github/workflows/repowiki-freshness.yml:75`（`WIKI_STALE_MAX: '<N>'`）
-- Modify: `tools/test_wiki_drift.py:4811`（正则 `:-445}`）、`:4813`（`${WIKI_STALE_MAX:-445}` 字面量）、`:5044` 附近的工作流断言、`:5034` 的 prose「The other 445 pins」
+- Modify: `tools/test_wiki_drift.py:4811`（正则 `:-445}`）、`:4813`（`${WIKI_STALE_MAX:-445}` 字面量）、`:5044` 附近的工作流断言、`:5036` 的 prose「The other 445 pins」（**坐标更正，Task 7 实读**：原写 `:5034` 偏两行，`:5034` 实为同一条 docstring 上一句 `env:` value 的结尾；spec §7.2 的 `:4811-4813` ＋ `:5031`/`:5044` 本来就是对的）
 - Modify: `repowiki/README.md:234`（运维口径里的那个数）
 
 **Interfaces:**
