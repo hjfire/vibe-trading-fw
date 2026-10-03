@@ -127,17 +127,17 @@ def test_the_two_multiplicative_implementations_agree_on_returns(code: str) -> N
 
 
 def test_frame_caliber_prefers_the_frame_stamp_over_the_static_table() -> None:
-    """G1: upstream shipped `frame_caliber` (`registry.py:407`) plus 6 call sites, and no
-    test case in this repo NAMES it as the unit under test — measured on `d9e2f5a8`, this
-    case's parent: `git grep -l frame_caliber upstream/main -- agent/tests` rc=1 and the
-    same selector on `d9e2f5a8` rc=1. Do NOT re-run that second selector on HEAD: from this
-    commit on, the only test-side hit is this file itself, and the sentence would be
+    """G1: upstream shipped `frame_caliber` (`registry.py:407`) plus 6 call sites, and before
+    this commit no test case in this repo NAMED it as the unit under test — measured on
+    `d9e2f5a8`, this case's parent: `git grep -l frame_caliber upstream/main -- agent/tests`
+    rc=1 and the same selector on `d9e2f5a8` rc=1. Do NOT re-run that second selector on HEAD:
+    from this commit on, the only test-side hit is this file itself, and the sentence would be
     self-refuting. The one pre-existing repo-wide test-side hit is
     `tools/test_upstream_sync.py:148`, which pins the def line as TEXT and never calls it.
 
     Wording discipline (the same over-claim in `项目档案.md`'s G1 line — "zero coverage" —
-    was corrected at 7fb214aa, which touched that file and nothing else; do not widen it
-    back here either): the FALLBACK leg is asserted
+    was corrected at 7fb214aa, which touched that file and nothing else; do not widen it back
+    here either): the FALLBACK leg is asserted
     indirectly, by frames built without attrs (`test_price_caliber.py:23` `_df()`) in the
     tencent/sina cells (`test_price_caliber.py:275/:287/:301/:314`) and in the
     serving-source cells (`test_market_data_serving_source.py:19`, table at `:66-70`,
