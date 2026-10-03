@@ -29,6 +29,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from backtest.loaders import registry
 from backtest.loaders.additive_conversion import convert_additive_to_multiplicative
 from backtest.loaders.cn_adjust import apply_qfq
 
@@ -123,3 +124,216 @@ def test_the_two_multiplicative_implementations_agree_on_returns(code: str) -> N
         f"{code}: max relative return residual {rel.max():.3e} exceeds REL_TOL {REL_TOL:.0e} "
         f"at {rel.idxmax()} — a dividend-scale error, not rounding"
     )
+
+
+def test_frame_caliber_prefers_the_frame_stamp_over_the_static_table() -> None:
+    """G1: upstream shipped `frame_caliber` (`registry.py:407`) plus 6 call sites, and no
+    test case in this repo NAMES it as the unit under test — `git grep -l frame_caliber
+    upstream/main -- agent/tests` and the same selector on HEAD are both rc=1 (re-run on
+    this tree, 2026-10-03); the only repo-wide test-side hit is
+    `tools/test_upstream_sync.py:148`, which pins the def line as TEXT and never calls it.
+
+    Wording discipline (an earlier draft of this docstring over-claimed "zero coverage"
+    and was corrected at 7fb214aa — do not widen it back): the FALLBACK leg is asserted
+    indirectly, by frames built without attrs (`test_price_caliber.py:23` `_df()`) in the
+    tencent/sina cells (`test_price_caliber.py:275/:287/:301/:314`) and in the
+    serving-source cells (`test_market_data_serving_source.py:19`, table at `:66-70`,
+    assertion at `:71`), and the attrs-present leg is walked indirectly for
+    `source="tencent"` by `test_additive_conversion.py:233`. What was missing for the
+    `("akshare", "a_share")` cell is the leg that routes THROUGH `frame_caliber` — that
+    leg is what this test adds, called by name, with the table value it must beat pinned
+    alongside so the precedence is not a tautology.
+    """
+    converted = pd.DataFrame({"close": [9.0, 10.0]})
+    converted.attrs = {"adjustment": "split_dividend"}
+    # The unconverted shape is built FRESH, not copied: measured on pandas 2.3.3,
+    # `converted.copy()` and `converted.reset_index()` both carry `attrs` along, so a copy
+    # is an already-stamped frame. That propagation is what lets a loader stamp reach the
+    # serving layer at all (assertion 3 depends on it), and it is pinned one line below
+    # rather than assumed.
+    plain = pd.DataFrame({"close": [9.0, 10.0]})
+    assert "adjustment" not in plain.attrs
+    assert converted.copy().attrs["adjustment"] == "split_dividend"
+    # The static answer for this cell is the OTHER caliber, which is what makes this a
+    # real precedence test rather than a tautology.
+    assert registry.price_caliber("akshare", "a_share", "600519.SH") == "split_dividend_additive"
+    assert registry.frame_caliber(converted, "akshare", "a_share", "600519.SH") == "split_dividend"
+    assert registry.frame_caliber(plain, "akshare", "a_share", "600519.SH") == "split_dividend_additive"
+    # An empty-string stamp must not be honored: `attrs.get(...) or table` would read the
+    # same, `isinstance(...) and adjustment` is what the code actually does.
+    blank = pd.DataFrame({"close": [9.0, 10.0]})
+    blank.attrs = {"adjustment": ""}
+    assert registry.frame_caliber(blank, "akshare", "a_share", "600519.SH") == "split_dividend_additive"
+
+
+def _window(code: str) -> tuple[str, str]:
+    """The committed fixture's own first/last bar dates (`manifest.json`).
+
+    The serving and loader calls below take a date range, and a range invented for the
+    test would make "the sample is the data being asserted" untrue — the fake legs
+    ignore the dates, so nothing but this docstring would notice.
+    """
+    entry = _MANIFEST["symbols"][code]
+    return entry["first"], entry["last"]
+
+
+def _fixture_pair(code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``(raw, on-disk additive)`` for one committed fixture, with no conversion run.
+
+    Not `_lane_pair`: its third slot is the CONVERTED multiplicative output, not the
+    additive bars a qfq reply carries. Measured consequence of mixing the two up —
+    `convert_additive_to_multiplicative(raw, lane_additive)` returns `None`, because the
+    offset of a ratio-scaled series against raw is not a plateau series
+    (`_plateau_spans(...) is None`), so the "companion served" test would silently be
+    running the degrade branch instead. Same `_read_csv` + `COLS` route as `_lane_pair`,
+    no second parse path, and no `apply_qfq`/conversion work (the refusal window would
+    trip `_lane_pair`'s "committed convertible window was refused" assert).
+    """
+    raw = _read_csv(FIXTURES / f"{code}_raw.csv", indexed=True)[COLS]
+    additive = _read_csv(FIXTURES / f"{code}_qfq.csv", indexed=True)[COLS]
+    return raw, additive
+
+
+def _serving_frames(monkeypatch: pytest.MonkeyPatch, frame: pd.DataFrame, code: str) -> dict:
+    """Push one frame through the serving layer and return its provenance entry.
+
+    The double follows the shape upstream's own `test_additive_conversion.py:233` uses:
+    a stub loader class swapped into `LOADER_REGISTRY`/`FALLBACK_CHAINS` with
+    `_ensure_registered` neutralised, so `fetch_market_data(source="akshare")` resolves
+    to it and no vendor is contacted. `frame` is served verbatim — this helper asserts
+    what `_emit` READS off it (`market_data.py:464`, the `frame_caliber` call), not what
+    a loader did to it. The plan skeleton also patched `_ensure_registered` on the
+    loader module; that name does not exist there (`hasattr` = False), so the line was a
+    no-op and is not carried here.
+    """
+    from src.market_data import fetch_market_data
+
+    class Serving:
+        name = "akshare"
+        markets = {"a_share"}
+        volume_units: dict[str, str] = {}
+
+        def is_available(self) -> bool:
+            return True
+
+        def fetch(self, codes, start, end, interval="1D"):
+            return {c: frame for c in codes}
+
+    start, end = _window(code)
+    monkeypatch.setattr(registry, "_ensure_registered", lambda: None)
+    monkeypatch.setattr(registry, "LOADER_REGISTRY", {"akshare": Serving})
+    monkeypatch.setattr(registry, "FALLBACK_CHAINS", {"a_share": ["akshare"]})
+    out = fetch_market_data(codes=[code], start_date=start, end_date=end,
+                            source="akshare", include_provenance=True)
+    return out["_provenance"][code]
+
+
+def test_converted_frame_leaves_with_the_multiplicative_label(monkeypatch) -> None:
+    """The akshare cell, attrs-present, routed through `frame_caliber` BY the serving
+    layer: the caller of `fetch_market_data(include_provenance=True)` reads
+    `split_dividend`, so the stamp beats this cell's static table. Upstream walked that
+    precedence only for `source="tencent"` (`test_additive_conversion.py:233`); the
+    akshare row of the table (`registry.py:356`) is what has to lose here."""
+    _raw, _lane_factor, lane_additive = _lane_pair("600519.SH")
+    assert "adjustment" not in lane_additive.attrs  # the converter itself does not stamp
+    stamped = lane_additive.copy()
+    stamped.attrs = {"adjustment": "split_dividend"}
+    prov = _serving_frames(monkeypatch, stamped, "600519.SH")
+    assert prov["adjustment"] == "split_dividend"
+    assert prov["adjustment"] != registry.price_caliber("akshare", "a_share", "600519.SH")
+
+
+def test_unstamped_additive_leaves_with_the_additive_label(monkeypatch) -> None:
+    """The degrade/self-refusal seat G2 names: upstream asserts the additive series
+    passes through untouched (`test_additive_conversion.py:283` checks
+    `df["close"].tolist() == additive["close"].tolist()`), nobody asserted what the served
+    caliber says about it. Without this line a one-cell edit to the static table turns a
+    silent downgrade into a false label. The premise is checked first (the frame really
+    is unstamped), so the label assertion cannot quietly be reading a stamped frame."""
+    _raw, additive = _fixture_pair("600519.SH")
+    assert "adjustment" not in additive.attrs
+    prov = _serving_frames(monkeypatch, additive, "600519.SH")
+    assert prov["adjustment"] == "split_dividend_additive"
+
+
+@pytest.mark.parametrize("code", SYMBOL_REFUSAL)
+def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
+    """`convert_additive_to_multiplicative` refuses the committed window at ONE named
+    branch, and which branch matters: bare `assert refused is None` is satisfied by nine
+    unrelated `return None` paths (`additive_conversion.py:117,119,125,130,138,149,153,
+    159,168`), so loosening the guard under test would still leave this green. That is
+    why the plateau-shape pin comes FIRST: the committed `000651.SZ` window refuses
+    because its last plateau is ONE bar — `_plateau_spans` returns None at `:86-89` (an
+    edge one-bar plateau, the window's last bar being ex-date 2026-08-27) and
+    `convert_additive_to_multiplicative` then returns None at `:128-130`. It is NOT the
+    ratio-series guard at `:136-138`: measured over 4000 randomized offset shapes,
+    `_plateau_spans` never returned a span list holding a one-bar plateau, so
+    `single_bar_spans` is 0 by the time `:137` reads it and a drifting offset series is
+    refused at `:86-89` instead — the same route as here, and the one upstream's
+    `test_additive_conversion.py:137 test_non_plateau_offsets_fail_closed` exercises.
+    `manifest.refusal_cause` stays `unclassified`; this fixture claims nothing about the
+    kind of corporate action. Refusal and label are checked together, because refusing is
+    only honest if the label then says additive — a loosened refusal rule would otherwise
+    mint a mislabel with clean numbers."""
+    from backtest.loaders.additive_conversion import _plateau_spans
+
+    raw, additive = _fixture_pair(code)
+    offset = (additive["close"] - raw["close"]).astype(float)
+    assert _plateau_spans(offset) is None, (
+        f"{code}: the offset series no longer trips the plateau-shape guard — the refusal "
+        f"sample drifted, and this test is now asserting a different branch than it names")
+    refused = convert_additive_to_multiplicative(raw, additive)
+    assert refused is None, f"{code}: the committed refusal window converted — bucket drifted"
+    prov = _serving_frames(monkeypatch, additive, code)
+    assert prov["adjustment"] == "split_dividend_additive"
+
+
+def test_companion_fetch_failure_degrades_loudly_and_stays_additive(monkeypatch, caplog) -> None:
+    """Loader-level seat: the real #1541 branch, fed with committed bars, companion
+    forced to fail. Three things at once — no attrs written, additive caliber out the
+    door, and a warning attributed to the akshare loader's own logger. Any one alone is
+    satisfiable by accident; upstream's sibling case
+    (`test_additive_conversion.py:283 test_akshare_raw_failure_serves_additive`) checks
+    none of the three, only the close passthrough on a synthetic `_two_action_series()`."""
+    import logging
+
+    from backtest.loaders import akshare_loader as mod
+
+    _raw, additive = _fixture_pair("600519.SH")
+    start, end = _window("600519.SH")
+
+    def fake_cached(*, source, symbol, timeframe, start_date, end_date, fields, fetch):
+        if fields == ["raw"]:
+            raise RuntimeError("probe: raw companion unavailable")
+        return additive.copy()
+
+    monkeypatch.setattr(mod, "cached_loader_fetch", fake_cached)
+    with caplog.at_level(logging.WARNING, logger="backtest.loaders.akshare_loader"):
+        out = mod.DataLoader().fetch(["600519.SH"], start, end)
+    frame = out["600519.SH"]
+    assert frame is not None and not frame.empty
+    assert "adjustment" not in frame.attrs
+    assert registry.frame_caliber(frame, "akshare", "a_share", "600519.SH") == "split_dividend_additive"
+    assert any(r.name == mod.logger.name and r.levelno >= logging.WARNING for r in caplog.records), (
+        f"the degrade path went silent: {caplog.text!r}")
+    assert "serving additive" in caplog.text, caplog.text
+
+
+def test_companion_success_stamps_multiplicative(monkeypatch) -> None:
+    """Same branch with the companion served: the real 424-bar fixture conversion, and —
+    unlike upstream's `test_additive_conversion.py:197 test_akshare_converts_and_stamps`,
+    which stops at `df.attrs["adjustment"]` on a synthetic 8-bar `_two_action_series()` —
+    the stamp read back through `frame_caliber`, i.e. the label a caller actually gets."""
+    from backtest.loaders import akshare_loader as mod
+
+    raw, additive = _fixture_pair("600519.SH")
+    start, end = _window("600519.SH")
+
+    def fake_cached(*, source, symbol, timeframe, start_date, end_date, fields, fetch):
+        return raw.copy() if fields == ["raw"] else additive.copy()
+
+    monkeypatch.setattr(mod, "cached_loader_fetch", fake_cached)
+    out = mod.DataLoader().fetch(["600519.SH"], start, end)
+    frame = out["600519.SH"]
+    assert frame.attrs["adjustment"] == "split_dividend"
+    assert registry.frame_caliber(frame, "akshare", "a_share", "600519.SH") == "split_dividend"
