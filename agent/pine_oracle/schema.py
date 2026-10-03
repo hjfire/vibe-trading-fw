@@ -35,24 +35,51 @@ TOLERANCE_TIERS: dict[str, float] = {"exact": 0.0, "tight": 1e-12, "loose": 1e-9
 #: the last bar: tick is one scalar per run, so when it changes it can move rounding
 #: anywhere inside the slice. ``PineRunOptions.lowerBars`` (`pineRuntime.ts:176-189`) is
 #: what lets MTF output see a different aligned series at all. Spec §4 puts both in the
-#: contract; no line in the first batch is in either class (all 18 exemptions are
-#: ``strict``), which is why ``tick_guarded`` is reserved but unused here, and the
-#: provenance gate asserts that rather than letting it drift.
+#: contract; no line in the first batch is planned to be in either class — "all 18
+#: first-batch exemptions are ``strict``" is a PLANNING expectation for fixtures that do
+#: not exist yet, not a measurement made here, and the Task 4 / Task 7 provenance gates
+#: are what pin it against the generated manifest. That is why ``tick_guarded`` is
+#: reserved but unused here rather than asserted from this module.
 EXEMPTION_CLASSES: tuple[str, ...] = ("strict", "tick_guarded", "mtf_guarded")
-NA_ENCODING = "empty"
+NA_ENCODING: str = "empty"
 
 BAR_COLUMNS: tuple[str, ...] = ("bar_index", "time", "open", "high", "low", "close", "volume")
 BARS_INTRADAY_EXTRA_COLUMNS: tuple[str, ...] = ("session",)
 VALUE_HEADER: tuple[str, ...] = ("bar_index", "expected")
 
+#: The manifest keys both sides of the harness read. This list is the contract: the JS
+#: gate's ``OracleManifest`` declares the same 11 keys — ``pineOracleFixtures.ts`` is
+#: created in Task 3 (plan `2026-10-04-pine-oracle-harness.md:768`, type body ``:829-841``)
+#: and written by Task 4's generator — so a manifest that satisfies this tuple but not
+#: that type hands the JS gate `undefined` where it aligns line names.
+#: `generated_at`, `generator` and `head_sha` are deliberately NOT listed: they are
+#: generator metadata owned by the Task 4 / Task 7 provenance gate, not read fields —
+#: the narrowness here is a ruling, not an oversight.
 _REQUIRED_MANIFEST_KEYS: tuple[str, ...] = (
     "na_encoding",
     "line_ending",
+    "period",
+    "seed",
+    "shape",
+    "scripts",
+    "lines",
     "tolerance_tier",
     "exemption",
     "external_anchors",
     "files",
 )
+
+#: Required keys whose value must be a container of a specific kind, never null and
+#: never a look-alike of the wrong kind. Declared separately because `validate_manifest`
+#: rejects a present-but-null value: a null container would silently iterate zero lines.
+#: `external_anchors` is a LIST (an empty list is the honest reading for batches that
+#: declare no anchor yet — spec §9 R-B), so a `{}` there is a shape error, not "empty".
+_REQUIRED_CONTAINER_KINDS: dict[str, tuple[tuple[type, ...], str]] = {
+    "tolerance_tier": ((dict,), "a mapping"),
+    "exemption": ((dict,), "a mapping"),
+    "external_anchors": ((list,), "a list"),
+    "files": ((dict,), "a mapping"),
+}
 
 
 def fmt_float(x: float) -> str:
@@ -100,19 +127,37 @@ def load_manifest(path: Path) -> dict[str, Any]:
 
 
 def validate_manifest(data: dict[str, Any]) -> list[str]:
-    """Return contract errors for ``data``; an empty list means it is well formed."""
+    """Return contract errors for ``data``; an empty list means it is well formed.
+
+    A key that is present with a null/empty value is an error, not a pass: Task 4 calls
+    this as the only gate before committing fixture CSVs, and a manifest whose
+    ``tolerance_tier`` came out ``{}`` or ``None`` would be written anyway, letting the
+    JS gate iterate zero lines and go green while comparing nothing. Tiers and exemption
+    classes may only be tightened here, never relaxed.
+    """
     errors: list[str] = []
     for key in _REQUIRED_MANIFEST_KEYS:
         if key not in data:
             errors.append(f"manifest: missing required key {key!r}")
-    for name, tier in (data.get("tolerance_tier") or {}).items():
-        if tier not in TOLERANCE_TIERS:
-            errors.append(f"manifest tolerance_tier[{name}]={tier!r} is not a tier name")
-    for line, cls in (data.get("exemption") or {}).items():
-        if cls not in EXEMPTION_CLASSES:
-            errors.append(f"manifest exemption[{line}]={cls!r} is not a class")
-    if data.get("na_encoding") not in (None, NA_ENCODING):
+    for key, (kinds, kind_name) in _REQUIRED_CONTAINER_KINDS.items():
+        if key in data and not isinstance(data[key], kinds):
+            errors.append(
+                f"manifest: {key} must be {kind_name}, got {type(data[key]).__name__}"
+            )
+    tiers = data.get("tolerance_tier")
+    if isinstance(tiers, dict) and not tiers:
+        errors.append("manifest: tolerance_tier is empty — no line would be compared")
+    if isinstance(tiers, dict):
+        for name, tier in tiers.items():
+            if tier not in TOLERANCE_TIERS:
+                errors.append(f"manifest tolerance_tier[{name}]={tier!r} is not a tier name")
+    exemptions = data.get("exemption")
+    if isinstance(exemptions, dict):
+        for line, cls in exemptions.items():
+            if cls not in EXEMPTION_CLASSES:
+                errors.append(f"manifest exemption[{line}]={cls!r} is not a class")
+    if "na_encoding" in data and data["na_encoding"] != NA_ENCODING:
         errors.append(f"manifest na_encoding={data['na_encoding']!r}, expected {NA_ENCODING!r}")
-    if data.get("line_ending") not in (None, "lf"):
+    if "line_ending" in data and data["line_ending"] != "lf":
         errors.append(f"manifest line_ending={data['line_ending']!r}, expected 'lf'")
     return errors
