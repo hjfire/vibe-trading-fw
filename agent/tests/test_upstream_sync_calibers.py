@@ -66,6 +66,12 @@ REL_TOL = 1e-10  # 9.6x headroom over 1.044e-11 — one order of magnitude, roun
 _MANIFEST = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))
 SYMBOLS_CONVERTIBLE = tuple(c for c, v in _MANIFEST["symbols"].items() if v["bucket"] == "convertible")
 SYMBOL_REFUSAL = tuple(c for c, v in _MANIFEST["symbols"].items() if v["bucket"] == "refusal")
+# Both tuples are DERIVED from the manifest, which is right — but an empty one turns every
+# parametrize over it into a single skip with zero assertions run and rc=0. That is this
+# project's known false-green shape (an empty universe passing vacuously), so the emptiness
+# itself has to be red, here rather than in a report.
+assert SYMBOLS_CONVERTIBLE, "manifest has no convertible bucket — the return assertion would skip, not test"
+assert SYMBOL_REFUSAL, "manifest has no refusal bucket — Task 6's refusal assertion would skip, not test"
 
 
 def _read_csv(path: Path, indexed: bool) -> pd.DataFrame:
@@ -99,11 +105,19 @@ def test_the_two_multiplicative_implementations_agree_on_returns(code: str) -> N
     are what every downstream metric actually reads. The additive leg here is `derived`
     from the same factor table, so a pass says the two encodings agree — not that either
     encoding was verified against a vendor (ledger R-12)."""
-    _raw, lane_factor, lane_additive = _lane_pair(code)
+    raw, lane_factor, lane_additive = _lane_pair(code)
     r_factor = lane_factor["close"].pct_change().dropna()
     r_additive = lane_additive["close"].pct_change().dropna()
     pd.testing.assert_index_equal(r_factor.index, r_additive.index)
-    assert len(r_factor) >= 200, f"{code}: fixture window too short to mean anything ({len(r_factor)})"
+    # Exact coverage, not a floor: both lanes copy `raw`'s index, so a bar dropped by BOTH
+    # of them would leave the floor green while the residual quietly skipped that bar.
+    assert len(r_factor) == len(raw) - 1, (
+        f"{code}: returns cover {len(r_factor)} of {len(raw) - 1} bars — a lane lost bars to "
+        f"dropna() and the residual is not measuring the whole window")
+    # The clip makes the metric relative down to |r| = 1e-12 and absolute below it: an
+    # exactly-flat bar prints |Δr|/1e-12, so a 1-ulp gap (~2.2e-16) reads 2.2e-4 and is
+    # ~6 orders over REL_TOL. A red on a bar whose own return is under ~2.2e-6 (= 2.2e-16
+    # / REL_TOL) is a flat-bar artifact to be explained, NOT a reason to touch REL_TOL.
     rel = (r_factor - r_additive).abs() / r_factor.abs().clip(lower=1e-12)
     assert rel.max() <= REL_TOL, (
         f"{code}: max relative return residual {rel.max():.3e} exceeds REL_TOL {REL_TOL:.0e} "
