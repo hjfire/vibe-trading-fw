@@ -48,7 +48,7 @@
   - `sha256_of(path: Path) -> str`（读字节、`\r\n`→`\n` 后哈希）
   - `write_text_lf(path: Path, text: str) -> None`
   - `load_manifest(path: Path) -> dict`、`dump_manifest(data: dict) -> str`
-  - `validate_manifest(data: dict) -> list[str]`（返回错误列表，空即合法）
+  - `validate_manifest(data: dict) -> list[str]`（返回错误列表，空即合法）——**「在场」不等于「有值」**：11 个必需键逐个查值（9 容器种类＋8 非空映射＋2 标量精确相等），`external_anchors` 是唯一允许为空的容器。详见文末「执行期对账」。
 
   **manifest 的键约定（后续所有任务与 JS 门共用，写在这里以免各自发明）**：`tolerance_tier` 与 `exemption` 都以 **line 名**为键（即 Pine `plot(..., title="X")` 的 `X`，也是 `values/<line>@<variant>.csv` 的 `<line>` 部分）；一个 line 一档，与 bar 形态无关。
 
@@ -3161,3 +3161,24 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 | 双针 | `:957` 去掉下限 ＋ `:429` 放行负下标 | `close[-1]` vs `close` 差异 `[4..59]`（前 4 根是 sma warm-up，两侧同 na）；前缀(40) vs 完整(60) 差异 `[39]` ⇒ 未来函数只暴露在前缀**末棒**，`comparePrefix` 与那条下限守卫都看得见。`pineRuntime.ts` sha `66a6bbdbd2c2`，还原后 `byte-identical: True` |
 
 这次实跑改掉的是**设计侧的一处不可达**：spec §8 第 5 条写「把某函数改成用 `bars[b+1]` 的未来函数形态」，而本仓的 `ta.*` 是逐棒 stateful step，步骤函数拿不到 bar 数组，那句按字面无法执行；真正可达的注入点是序列下标求值，MUT-PI-2 就钉在那里，已把这条回写进 spec §11 第五行。同一趟跑还挖出一条**此前无人看守的门**：`:957` 那个下限在任何 `pine*.test.ts` 里都没有用例（grep 实测零命中；`indicatorLang.test.ts:163` 测的是另一套求值器，那里 `close[-1]` 断言成 `NaN`，与本运行时不同），而它正是「无未来函数」这句话的机器保证——所以 Task 3 Step 2 新增了一条永久 `it`，判据一的期望条数各 +1（Task 3 `25→26`、Task 6 `33→34`），MUT-PI-1 临时段所在的那次跑则报 `27 passed`。
+
+---
+
+## 执行期对账（不改动上方任何行号坐标）
+
+**为什么单列在文末**：Task 1 落地后经两轮评审偏离了本计划的代码块，而把实码就地换回来会让下方 2800 余行整体位移——被 `agent/pine_oracle/schema.py:52,79,81,84` 与 `agent/tests/pine_oracle/test_schema.py:231-234` 引用的 15 处坐标（`:698` `:768` `:829-841` `:1358` `:1366-1376` `:1422` `:1479-1502` `:1519` `:1601`）会全部指错。实跑验过一次：就地替换那段 120 行代码块后，`:841` 落到了 `Run: pytest …` 那行、`:1601` 落到了 `if __name__ == "__main__":`。所以本节只做**追加**，上方坐标保持有效；实码是权威，本计划的 Step 1/3/4 代码块是计划期产物。
+
+**Task 1 的实际终态与计划差异（逐条，含可核对坐标）**：
+
+| 项 | 计划期 | 落仓实码 | 定性 |
+|---|---|---|---|
+| `validate_manifest` 对「键齐值空」 | 用 `(data.get(…) or {})` 吞类型，空映射返 `[]` | 11 必需键逐个查值：`_REQUIRED_CONTAINER_KINDS`（`schema.py:88-98`，9 键）钉容器种类，`_NON_EMPTY_MANIFEST_KEYS`（`:109-118`，8 档映射须非空），2 个标量字面量精确相等 | **加严**。这是对计划文本的授权偏离，裁定理由：Task 4 把它当写盘前唯一的门，空 `tolerance_tier` 会让 JS 门迭代零条 line 而绿，属全局约束点名的「空集合真空通过是缺陷不是绿」 |
+| `_REQUIRED_MANIFEST_KEYS` | 6 键 | 11 键（并入 `period/seed/shape/scripts/lines`，`schema.py:58-70`） | **加严**。JS 门 `OracleManifest` 声明的正是这 11 键（`:829-841`）；两侧名单必须同源 |
+| `NA_ENCODING` | `NA_ENCODING = "empty"` | `NA_ENCODING: str = "empty"`（`:44`） | 仅类型标注，值未变 |
+| 豁免类注释 | 声称「首批 18 条全 `strict`」当既成事实，并断言 tick 差异「仅末棒可不同」 | 措辞改为「计划期预期，由 Task 4/7 的 provenance 门钉住」（`:38-42`），并撤销「仅末棒」这一条 | **文档诚实纪律**。spec §11 更正六；tick 是每次 run 的一个标量，没有证据它只砸末棒 |
+| `estimateTick` 坐标 | `pineRuntime.ts:344-349`，且说「从整条序列估」 | `pineRuntime.ts:344` 是调用点，定义在 `pineOrders.ts:86-96`，`:88` 的扫描上限是 `Math.min(bars.list.length, 500)` | **计划原文坐标错**，由实现者实测指出、我复验、评审者独立复验 |
+| Step 5 期望条数 | `23 passed` | `52 passed`（`23 → 34 → 52`；round 1 `+11` = I-1 全 null 文档 1 ＋ I-4 落盘字节 1 ＋ M-3 往返 1 ＋ M-5 float 补形状 3 ＋ I-2 缺键参数化 6→11 共 5；round 2 `+18` = 结构钉 1 ＋ 空映射参数化 8 ＋ 值形状参数化 8 ＋ 真实产物形态正证 1） | 计划期的 23 保留不改成实际数，是为「执行时报实际数」留一个可对照的原值 |
+
+**给 Task 4 的两条前置事实**（本轮把「将来会撞」换成了常驻用例）：`_task4_generated_manifest()`（`test_schema.py:227-…`）逐键照 `:1479-1502` 的字面量构造真实产物形态并断 `validate_manifest(doc) == []`，**生成器落的是 14 键**（11 契约 + `generated_at`/`generator`/`head_sha`），不是 11——多出的 3 个是生成器元数据，被有意排除在必需键名单外。Task 5 追加的 `convention`（`:2113`）与 Task 6 填充的 `external_anchors` 元素都不落在被收紧的判据上，仍合法。若 Task 4 的产物被这道门拒了，先怀疑生成器，门是有意严的。
+
+**仍未做且已裁定的**（不是遗漏）：`lines` 批内值类型、`seed`/`period` 值类型、`files` 值是否 64-hex、`external_anchors` 元素形状——由 Task 4/7 的 provenance 门在真文件上把关；不可 hash 的 tier 值（`tolerance_tier: {"x": []}`）仍抛 `TypeError` 而非返错误列表，登记在 ledger 为 parked。
