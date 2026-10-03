@@ -18,7 +18,7 @@
 - `docs/` 被 `.gitignore:124` 忽略 ⇒ spec 与本计划都要 `git add -f`（既有 4 个 docs 文件就是这么进来的）。
 - 探针纪律（本仓既有）：needle 唯一 + `finally` 字节还原 + sha256 前后校验；**禁用 `git checkout --` / `git restore` / `git stash` 还原**（脏树上会冲掉别人的工作）。
 - Windows 本机：一律 `python -X utf8`；bash 脚本用 `bash tools/xxx.sh`（`core.filemode=false`，`./` 写法在 runner 上 Permission denied）；`core.autocrlf=true`。
-- 全量套件基线（`f90473e2` 实测）：**17043 passed / 169 skipped / 11 failed / 11 errors**，529.96s；22 条红里 20 处 `OSError [WinError 1314]`（无符号链接特权），余 2 条是文件锁与时钟时限。失败必须**逐条按成因归类**，对不上基线的单列「本轮新增红」并停下修。
+- 全量套件基线（`f90473e2` 实测）：**17043 passed / 169 skipped / 11 failed / 11 errors**，529.96s；22 条红里 20 处 `OSError [WinError 1314]`（无符号链接特权），余 2 条是文件锁与时钟时限。失败必须**逐条按成因归类**，对不上基线的单列「本轮新增红」并停下修。**注意**：这条基线是合并**前**的；Task 1 报告实测从仓库根跑的 deselected 计数在合并前后是 **17227 → 17386**（差 159，上游那 7 个新测试文件带来的），所以 `17043 passed` 这个总数在 Task 8 不可逐字引用 —— 能对上的只有「22 条红的成因清单」，归类按成因、不按总数。
 - `tools/` 那台机器只用 stdlib + pytest（fork 工作流只 `pip install pytest`）；`agent/tests/` 那台**刻意破这条纪律**，因为收益率对账离不开 pandas/numpy，它由上游 `test.yml` 经 `testpaths` 收集。
 - 数值断言只读入库 fixture，**CI 里不取网络**。真取数只出现在 Task 3 的一次性只读探针与 Task 4 的一次性采集脚本里，两者都不提交脚本本体。
 - 商标/敏感词针脚不许字面写进被扫描面（`.superpowers/**`、`tools/`、`repowiki/`、`.github/`、`项目档案.md`）；`docs/` 被 `ci_grep_gates.sh:66` 的 `--exclude-dir=docs` 豁免。
@@ -57,7 +57,7 @@
 
 ```bash
 git fetch upstream
-git rev-parse --short HEAD upstream/main
+git rev-parse --short HEAD; git rev-parse --short upstream/main
 git rev-list --left-right --count upstream/main...HEAD
 git merge-base upstream/main HEAD
 git merge-tree --write-tree HEAD upstream/main | head -1; echo "merge-tree rc=$?"
@@ -71,13 +71,13 @@ Expected：`35 / <N>`（`N` 记录实际值，本计划写作时是 236）；mer
 - [ ] **Step 2: 采合并前门禁面读数**（Task 8 要比对，必须先留底）
 
 ```bash
-python -X utf8 -m pytest -q -k upstream_owned 2>&1 | tail -3
+python -X utf8 -m pytest tools/test_wiki_drift.py -q -k upstream_owned 2>&1 | tail -3
 bash tools/ci_grep_gates.sh > /tmp/gates_before.txt 2>&1; echo "rc=$?"
 python -X utf8 tools/wiki_drift.py stale --format count
 python -X utf8 tools/wiki_drift.py index --check >/dev/null 2>&1; echo "index rc=$?"
 ```
 
-Expected：`-k upstream_owned` 收到 **1** 条并通过；`ci_grep_gates.sh` rc=1（既有形状：19 行输出、`docs/` 0 行、`./.qoder/` 恰 1 条）；stale 读数 **445**；`index --check` rc=0。把四行读数写进 ledger 的 `Task 1: pre-merge readings` 段。
+Expected：`-k upstream_owned` 收到 **1** 条并通过（**必须指名文件**：`pyproject.toml:276` 的 `testpaths = ["agent/tests"]` 让从仓库根跑的 `-k` 永远收不到 `tools/` 下的用例 —— 在合并后的 `d9a2fdc5` 实测：从根跑 `7 skipped, 17386 deselected`，指名文件 `1 passed, 229 deselected`）；`ci_grep_gates.sh` rc=1（既有形状：19 行输出、`docs/` 0 行、`./.qoder/` 恰 1 条）；stale 读数 **445**；`index --check` rc=0。把四行读数写进 ledger 的 `Task 1: pre-merge readings` 段。
 
 - [ ] **Step 3: 建分支并合并**
 
@@ -96,12 +96,12 @@ Expected：`git status --porcelain` 空；`git log --oneline -1` 是 `Merge remo
 ```bash
 git grep -c "frame_caliber(" -- agent/src/market_data.py agent/backtest/runner.py
 git grep -n "def frame_caliber" -- agent/backtest/loaders/registry.py
-git grep -n 'attrs\["adjustment"\]' -- agent/backtest/loaders/akshare_loader.py
+git grep -n '"adjustment": "split_dividend"' -- agent/backtest/loaders/akshare_loader.py
 git grep -n '("akshare", "a_share")' -- agent/backtest/loaders/registry.py
 python -X utf8 -c "import sys; sys.path[:0]=['agent']; from backtest.loaders import registry; print(registry.frame_caliber.__doc__.splitlines()[0])"
 ```
 
-Expected：`market_data.py` 命中 **1**、`runner.py` 命中 **5**；`def frame_caliber` 在 `registry.py` 存在；akshare loader 有 `attrs["adjustment"]` 写入点；表里有 `("akshare", "a_share")` 那一格；末行打印出函数 docstring 首句。
+Expected：`market_data.py` 命中 **1**、`runner.py` 命中 **5**；`def frame_caliber` 在 `registry.py` 存在；akshare loader 有 `"adjustment": "split_dividend"` 写入点（合并树实测在 `akshare_loader.py:371`，形状是 `converted.attrs = {**getattr(df, "attrs", {}), "adjustment": "split_dividend",}` 的字典字面量，**不是** `attrs["adjustment"] = …` 的下标赋值 —— 原判据按字面写法 grep 会 0 命中，那是判据写错不是合并丢了东西）；表里有 `("akshare", "a_share")` 那一格；末行打印出函数 docstring 首句。
 **任何一条不成立 ⇒ 本计划的 Task 5/6 前提失效，停下重读 spec §3.1，不要改代码去凑。**
 
 - [ ] **Step 5: 复测门禁面（合并后）**
@@ -924,7 +924,7 @@ python -X utf8 tools/wiki_drift.py stale --format count
 ```
 
 Expected：一个整数 `N`。spec §7.1：`N` 只会往 450 方向走（HEAD 前移 ⇒ `tree_baseline()` 众数回落点变新）。
-- `N ≤ 445` ⇒ 门本来就绿，**不改任何数**，跳过 Step 2~5，直接 Step 6 记录「本轮无需重钉，读数 `<N>` @ `<SHA>`」。
+- `N ≤ 445` ⇒ 门本来就绿，**不改任何数**，跳过 Step 2~5，直接 Step 6 记录「本轮无需重钉，读数 `<N>` @ `<SHA>`」。**记录必须带上天花板说明**：Task 1 实测合并前后都是 445，而 445 距全树 450 只差 5 页 ⇒ 这个数「没变」是**接近天花板**、不是「上游改动与 Wiki 无关」的证据；判据形状是 `tools/wiki_freshness_gate.sh:33` 的 `[ "$STALE" -gt "$LIMIT" ]`（严格大于 ⇒ 445 恰好不红，450 必红）。下一次任何 HEAD 前移都可能把它推到 450，那时本分支的结论作废、按 `N == 450` 分支走。
 - `N > 445` ⇒ 继续。
 - `N == 450`（全树皆 stale）⇒ **接受门红着等 M5**，把读数与决定写进档案，不改判据形状、不放宽阈值消音（spec §7.3）。
 
@@ -1041,7 +1041,7 @@ Expected：与基线 **11 failed / 11 errors** 对比，逐条按成因归类：
 - [ ] **Step 2: 门禁面收口**
 
 ```bash
-python -X utf8 -m pytest -q -k upstream_owned 2>&1 | tail -3
+python -X utf8 -m pytest tools/test_wiki_drift.py -q -k upstream_owned 2>&1 | tail -3
 bash tools/ci_grep_gates.sh > /tmp/gates_final.txt 2>&1; echo "rc=$?"
 sed -E 's/\b[0-9a-f]{6,40}\b/SHA/g' /tmp/gates_final.txt > /tmp/gates_final_norm.txt
 diff /tmp/gates_before_norm.txt /tmp/gates_final_norm.txt && echo "gates identical to pre-merge"
