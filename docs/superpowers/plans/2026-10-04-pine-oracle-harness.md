@@ -354,6 +354,7 @@ git commit -s -m "test(pineOracle): fixture 契约模块——na 编码/LF 归�
   - `DAILY_BAR_COUNT = 120`、`INTRADAY_SESSIONS = 5`、`FIRST_SESSION_ID = 1`
   - `pine_oracle.emit_bars.emit(out_dir: Path = FIXTURE_DIR) -> list[tuple[Path, str]]`（写四份 bar 夹具，返回 `(路径, sha256)`；Task 4 的 `emit_fixtures` 复用它，一条命令即可重生全部夹具）
   - `BARS_BASENAMES: tuple[str, ...]` = 四个不带扩展名的 bar 名，Task 3/4 的 JS 门与 manifest 都从这里取
+  - `BAR_JOBS: tuple[tuple[str, list[dict], bool], ...]`（bar 名 → 已生成的行 → 是否带 `session`）与 `BARS_META: dict[str, tuple[int, str]]`（bar 名 → `(seed, shape)`）**都定义在 `emit_bars.py`，不是 `bars.py`**——Task 4 的 `emit_fixtures.py` 从 `pine_oracle.emit_bars` 一并导入它们写进 manifest 的 `seed`/`shape`
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1145,7 +1146,7 @@ git commit -s -m "test(pineOracle): 判据一——前缀不变式门（6 脚本
 - Test: `agent/tests/pine_oracle/test_reference_batch1.py`、`test_pine_oracle_provenance.py`
 
 **Interfaces:**
-- Consumes: `pine_oracle.bars.BAR_JOBS` / `BARS_BASENAMES` / `make_daily_bars` / `make_intraday_bars` / `emit_bars.emit`、`pine_oracle.schema.*`（含 `REPO_ROOT`、`FIXTURE_DIR`、`VALUE_HEADER`、`dump_manifest`）
+- Consumes: `pine_oracle.bars.make_daily_bars` / `make_intraday_bars`、`pine_oracle.emit_bars.BAR_JOBS` / `BARS_BASENAMES` / `BARS_META` / `emit`（三者定义处见 Task 2 Step 4 的代码块）、`pine_oracle.schema.*`（含 `REPO_ROOT`、`FIXTURE_DIR`、`VALUE_HEADER`、`dump_manifest`）
 - Produces（批次二/三继续往里加函数，签名形状固定，三个批次必须是同一个形状）：
   - 每个参考函数返回 `np.ndarray`（`float64`，长度 = 输入长度，warm-up 处 `np.nan`）
   - `ta_sma(src, n)` / `ta_ema(src, n)` / `ta_rma(src, n)` / `ta_stdev(src, n, biased=True)`
