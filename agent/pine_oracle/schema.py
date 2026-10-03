@@ -69,17 +69,53 @@ _REQUIRED_MANIFEST_KEYS: tuple[str, ...] = (
     "files",
 )
 
-#: Required keys whose value must be a container of a specific kind, never null and
-#: never a look-alike of the wrong kind. Declared separately because `validate_manifest`
-#: rejects a present-but-null value: a null container would silently iterate zero lines.
-#: `external_anchors` is a LIST (an empty list is the honest reading for batches that
-#: declare no anchor yet — spec §9 R-B), so a `{}` there is a shape error, not "empty".
+#: Required keys whose value must be a container of a specific kind — never null, never
+#: a look-alike of the wrong kind. Declared separately because `validate_manifest`
+#: rejects a present-but-null value: a null container iterates zero lines, which reads as
+#: "every line passed" downstream. Together with the two scalar literals checked by exact
+#: equality below, this covers ALL 11 required keys, so "present" is never "present with a
+#: value that carries no information".
+#: The kinds are read off the generator, not guessed: Task 4's ``emit()``
+#: (`2026-10-04-pine-oracle-harness.md:1479-1502`) writes ``period`` = ``{"default":
+#: PERIOD}``, ``seed``/``shape`` as comprehension-built dicts from ``BARS_META``
+#: (``:698``, ``dict[str, tuple[int, str]]``), ``scripts`` = ``SCRIPTS`` (``dict[str,
+#: str]``, ``:1366``) and ``lines`` = ``lines_by_batch`` (``dict[str, list[str]]``);
+#: the JS side declares the same five as ``Record``s and ``external_anchors`` as
+#: ``OracleAnchor[]`` (``:829-841``).
+#: `external_anchors` is a LIST and the only one allowed to be empty (an empty list is the
+#: honest reading for batches that declare no anchor yet — spec §9 R-B), so a `{}` there is
+#: a shape error, not "empty".
 _REQUIRED_CONTAINER_KINDS: dict[str, tuple[tuple[type, ...], str]] = {
+    "period": ((dict,), "a mapping"),
+    "seed": ((dict,), "a mapping"),
+    "shape": ((dict,), "a mapping"),
+    "scripts": ((dict,), "a mapping"),
+    "lines": ((dict,), "a mapping"),
     "tolerance_tier": ((dict,), "a mapping"),
     "exemption": ((dict,), "a mapping"),
-    "external_anchors": ((list,), "a list"),
     "files": ((dict,), "a mapping"),
+    "external_anchors": ((list,), "a list"),
 }
+
+#: Required mappings that must carry at least one entry. An empty mapping is not a pass
+#: but a vacuous gate: Task 4's provenance assertions iterate ``manifest["exemption"]``
+#: and ``all(cls == "strict" for …)``, and the JS gate iterates ``tolerance_tier`` /
+#: ``lines`` / ``files`` — on ``{}`` all of them compare nothing and report green. This is
+#: the same defect class round 1 caught for ``tolerance_tier`` alone, applied to every key
+#: that has a reader which iterates it.
+#: `external_anchors` is deliberately NOT listed: an empty anchor list stays legal until
+#: Task 6 fills anchors (round 1's ruling; pinned by test so a later pass cannot sweep it
+#: up by accident).
+_NON_EMPTY_MANIFEST_KEYS: tuple[str, ...] = (
+    "period",
+    "seed",
+    "shape",
+    "scripts",
+    "lines",
+    "tolerance_tier",
+    "exemption",
+    "files",
+)
 
 
 def fmt_float(x: float) -> str:
@@ -129,11 +165,15 @@ def load_manifest(path: Path) -> dict[str, Any]:
 def validate_manifest(data: dict[str, Any]) -> list[str]:
     """Return contract errors for ``data``; an empty list means it is well formed.
 
-    A key that is present with a null/empty value is an error, not a pass: Task 4 calls
-    this as the only gate before committing fixture CSVs, and a manifest whose
-    ``tolerance_tier`` came out ``{}`` or ``None`` would be written anyway, letting the
-    JS gate iterate zero lines and go green while comparing nothing. Tiers and exemption
-    classes may only be tightened here, never relaxed.
+    A key that is present with a null, wrong-kinded or empty value is an error, not a
+    pass: Task 4 calls this as the only gate before committing fixture CSVs, and a
+    manifest whose containers came out ``None``, ``[]`` or ``{}`` would be written
+    anyway, letting the JS gate iterate zero lines and go green while comparing nothing.
+    Every one of the 11 required keys is therefore checked for presence *with a real
+    value* — the 9 containers against `_REQUIRED_CONTAINER_KINDS`, the 8 mappings in
+    `_NON_EMPTY_MANIFEST_KEYS` again for emptiness, the 2 scalar literals for exact
+    equality. `external_anchors` is the one container that may stay an empty list.
+    Tiers and exemption classes may only be tightened here, never relaxed.
     """
     errors: list[str] = []
     for key in _REQUIRED_MANIFEST_KEYS:
@@ -144,9 +184,13 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
             errors.append(
                 f"manifest: {key} must be {kind_name}, got {type(data[key]).__name__}"
             )
+    for key in _NON_EMPTY_MANIFEST_KEYS:
+        value = data.get(key)
+        if isinstance(value, dict) and not value:
+            errors.append(
+                f"manifest: {key} is empty — a gate that iterates it compares nothing"
+            )
     tiers = data.get("tolerance_tier")
-    if isinstance(tiers, dict) and not tiers:
-        errors.append("manifest: tolerance_tier is empty — no line would be compared")
     if isinstance(tiers, dict):
         for name, tier in tiers.items():
             if tier not in TOLERANCE_TIERS:
