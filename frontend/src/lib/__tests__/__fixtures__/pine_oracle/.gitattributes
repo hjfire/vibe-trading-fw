@@ -1,0 +1,5 @@
+# Oracle fixtures are hashed over LF-normalised bytes (schema.sha256_of), and
+# this machine runs core.autocrlf=true. Pinning eol=lf here keeps the checked-out
+# bytes equal to the hashed bytes instead of relying on the normalisation.
+*.csv text eol=lf
+*.json text eol=lf
