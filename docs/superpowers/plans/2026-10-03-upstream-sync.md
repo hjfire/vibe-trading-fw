@@ -813,8 +813,9 @@ def test_unstamped_additive_leaves_with_the_additive_label(monkeypatch) -> None:
 @pytest.mark.parametrize("code", SYMBOL_REFUSAL)
 def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     """`convert_additive_to_multiplicative` refuses the committed window at ONE named branch.
-    Which branch matters: bare `assert refused is None` is satisfied by nine unrelated
-    `return None` paths (`additive_conversion.py:117,119,125,130,138,149,153,159,168`), so
+    Which branch matters: bare `assert refused is None` is satisfied by eight
+    `return None` paths (`additive_conversion.py:117,119,125,130,149,153,159,168` — `:138`
+    would be a ninth but it cannot fire, see the paragraph below), so
     loosening the guard under test would still leave this green. The committed `000651.SZ`
     window refuses at the plateau-shape guard (`:128-130`, `_plateau_spans(offset) is None`)
     because its last plateau is ONE bar — NOT because a 送转 crosses it. So the docstring

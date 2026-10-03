@@ -128,13 +128,16 @@ def test_the_two_multiplicative_implementations_agree_on_returns(code: str) -> N
 
 def test_frame_caliber_prefers_the_frame_stamp_over_the_static_table() -> None:
     """G1: upstream shipped `frame_caliber` (`registry.py:407`) plus 6 call sites, and no
-    test case in this repo NAMES it as the unit under test — `git grep -l frame_caliber
-    upstream/main -- agent/tests` and the same selector on HEAD are both rc=1 (re-run on
-    this tree, 2026-10-03); the only repo-wide test-side hit is
+    test case in this repo NAMES it as the unit under test — measured on `d9e2f5a8`, this
+    case's parent: `git grep -l frame_caliber upstream/main -- agent/tests` rc=1 and the
+    same selector on `d9e2f5a8` rc=1. Do NOT re-run that second selector on HEAD: from this
+    commit on, the only test-side hit is this file itself, and the sentence would be
+    self-refuting. The one pre-existing repo-wide test-side hit is
     `tools/test_upstream_sync.py:148`, which pins the def line as TEXT and never calls it.
 
-    Wording discipline (an earlier draft of this docstring over-claimed "zero coverage"
-    and was corrected at 7fb214aa — do not widen it back): the FALLBACK leg is asserted
+    Wording discipline (the same over-claim in `项目档案.md`'s G1 line — "zero coverage" —
+    was corrected at 7fb214aa, which touched that file and nothing else; do not widen it
+    back here either): the FALLBACK leg is asserted
     indirectly, by frames built without attrs (`test_price_caliber.py:23` `_df()`) in the
     tencent/sina cells (`test_price_caliber.py:275/:287/:301/:314`) and in the
     serving-source cells (`test_market_data_serving_source.py:19`, table at `:66-70`,
@@ -148,9 +151,9 @@ def test_frame_caliber_prefers_the_frame_stamp_over_the_static_table() -> None:
     converted.attrs = {"adjustment": "split_dividend"}
     # The unconverted shape is built FRESH, not copied: measured on pandas 2.3.3,
     # `converted.copy()` and `converted.reset_index()` both carry `attrs` along, so a copy
-    # is an already-stamped frame. That propagation is what lets a loader stamp reach the
-    # serving layer at all (assertion 3 depends on it), and it is pinned one line below
-    # rather than assumed.
+    # is an already-stamped frame. Pinned one line below as measured behaviour — nothing
+    # here depends on it (the loader writes the stamp itself, `akshare_loader.py:369-372`,
+    # and the serving layer passes frames by reference), but the skeleton assumed it.
     plain = pd.DataFrame({"close": [9.0, 10.0]})
     assert "adjustment" not in plain.attrs
     assert converted.copy().attrs["adjustment"] == "split_dividend"
@@ -259,9 +262,10 @@ def test_unstamped_additive_leaves_with_the_additive_label(monkeypatch) -> None:
 @pytest.mark.parametrize("code", SYMBOL_REFUSAL)
 def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     """`convert_additive_to_multiplicative` refuses the committed window at ONE named
-    branch, and which branch matters: bare `assert refused is None` is satisfied by nine
-    unrelated `return None` paths (`additive_conversion.py:117,119,125,130,138,149,153,
-    159,168`), so loosening the guard under test would still leave this green. That is
+    branch, and which branch matters: bare `assert refused is None` is satisfied by eight
+    live `return None` paths (`additive_conversion.py:117,119,125,130,149,153,159,168`;
+    the listed ninth, `:138`, cannot fire — see below), so loosening the guard under test
+    would still leave this green. That is
     why the plateau-shape pin comes FIRST: the committed `000651.SZ` window refuses
     because its last plateau is ONE bar — `_plateau_spans` returns None at `:86-89` (an
     edge one-bar plateau, the window's last bar being ex-date 2026-08-27) and
@@ -274,8 +278,10 @@ def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     plateaus. A drifting offset series is refused at `:86-89` instead — the same route as
     here, and the one upstream's `test_additive_conversion.py:137
     test_non_plateau_offsets_fail_closed` exercises. So `:138` is covered by neither file;
-    that is an upstream reachability gap, recorded in `项目档案.md`, not something this
-    fixture can or should test.
+    that is an upstream reachability gap. `项目档案.md` rule 61 asks for unreachable guards
+    to be either reached or deleted, but this one lives in an upstream file and this round
+    takes zero upstream edits, so the disposition is registration (Task 8 writes the entry) —
+    not something this fixture can or should test.
     `manifest.refusal_cause` stays `unclassified`; this fixture claims nothing about the
     kind of corporate action. Refusal and label are checked together, because refusing is
     only honest if the label then says additive — a loosened refusal rule would otherwise
@@ -283,6 +289,11 @@ def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
     from backtest.loaders.additive_conversion import _plateau_spans
 
     raw, additive = _fixture_pair(code)
+    # Pinned before the shape guard: the offset below is a direct column subtraction, while
+    # the converter's is taken off an inner join (`additive_conversion.py:121-127`). Equal
+    # indexes are what keep those two the same series, and what rules out the join-length
+    # `return None` at `:125` from the eight live paths.
+    assert raw.index.equals(additive.index), f"{code}: the two fixture legs no longer share a calendar"
     offset = (additive["close"] - raw["close"]).astype(float)
     assert _plateau_spans(offset) is None, (
         f"{code}: the offset series no longer trips the plateau-shape guard — the refusal "
@@ -321,6 +332,12 @@ def test_companion_fetch_failure_degrades_loudly_and_stays_additive(monkeypatch,
     assert registry.frame_caliber(frame, "akshare", "a_share", "600519.SH") == "split_dividend_additive"
     assert any(r.name == mod.logger.name and r.levelno >= logging.WARNING for r in caplog.records), (
         f"the degrade path went silent: {caplog.text!r}")
+    # The two faces are deliberately different kinds of pin. The line above is the SEMANTIC
+    # one (a WARNING-level record attributed to this loader's own logger). This one is a
+    # TEXT needle into upstream's wording (`akshare_loader.py:362-366`): if upstream rewords
+    # the message this case goes RED, which is the right failure direction (a false alarm,
+    # never a false green) — "not silent" includes saying so in words. Do not "fix" a red
+    # here by relaxing it to the level-only check; re-pin the new wording.
     assert "serving additive" in caplog.text, caplog.text
 
 
