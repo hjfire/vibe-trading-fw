@@ -139,17 +139,24 @@ diff /tmp/gates_before_norm.txt /tmp/gates_after_norm.txt && echo "gates identic
 ```bash
 python -X utf8 - <<'PY'
 import subprocess, re
+# 坐标必须写死成字面 sha：合并之后 merge-base(upstream/main, HEAD) == upstream/main，
+# 于是 `git diff HEAD...upstream/main` 变成**空集**，`upstream/main...HEAD` 变成「我们对
+# 上游的全部差」。照字面跑会得到一张空锚点表，而守卫对空表是**真空通过**的 —— 本项目
+# 已知的第二种假绿形状。M/OURS/THEIRS 三方都来自 Task 1 的 ledger。
+M, OURS, THEIRS = "18027a0c", "518d793f", "f21aa13d"
 FILES = subprocess.run(
-    ["git", "diff", "--name-only", "upstream/main...HEAD"], capture_output=True, text=True, encoding="utf-8"
+    ["git", "diff", "--name-only", f"{M}..{OURS}"], capture_output=True, text=True, encoding="utf-8"
 ).stdout.split()
-THEIRS = set(subprocess.run(
-    ["git", "diff", "--name-only", "HEAD...upstream/main"], capture_output=True, text=True, encoding="utf-8"
+THEIRS_FILES = set(subprocess.run(
+    ["git", "diff", "--name-only", f"{M}..{THEIRS}"], capture_output=True, text=True, encoding="utf-8"
 ).stdout.split())
-OVERLAP = [f for f in FILES if f in THEIRS]
+OVERLAP = [f for f in FILES if f in THEIRS_FILES]
+assert THEIRS_FILES and OVERLAP, "empty theirs/overlap set -> the table would be vacuously green"
+assert len(OVERLAP) == 14, (len(OVERLAP), OVERLAP)   # Task 1 实测；不等于 14 就停下报读数
 RULE = {".py": re.compile(r"^\s*(async def |def |class )"), ".md": re.compile(r"^#{1,6} ")}
 
 def added(side, path):
-    rng = "upstream/main...HEAD" if side == "ours" else "HEAD...upstream/main"
+    rng = f"{M}..{OURS}" if side == "ours" else f"{M}..{THEIRS}"
     out = subprocess.run(["git", "diff", rng, "--", path], capture_output=True, text=True, encoding="utf-8").stdout
     lines = [l[1:] for l in out.splitlines() if l.startswith("+") and not l.startswith("+++")]
     rx = RULE["." + path.rsplit(".", 1)[-1]]
@@ -176,7 +183,7 @@ print("\ntotal anchors =", tot)
 PY
 ```
 
-Expected：打印出 `n = 14` 与两份表。
+Expected：打印出 `n = 14` 与两份表，`total anchors` 是一个**非零**整数。
 **`MISSING` 的处理**（不许留空装作有）：先跑放宽规则 —— 同一函数里再取「新增的模块级常量赋值行」`^\s*[A-Z][A-Z0-9_]{3,}(: .*)? = `；仍为空则手工挑**一条在合并后文件里逐字唯一、长度 ≥25、不含 `"` 的新增行**；挑不出来才把该文件登记进 `NO_ANCHORS[side]`，并在集合旁写一行**理由注释**（例如「该侧只删不增」或「改动是 badge 行，标题层无新增」）。把每一步的实得计数记进 ledger。
 
 - [ ] **Step 2: 写守卫文件**
@@ -225,6 +232,10 @@ def test_the_anchor_table_is_a_declared_partition_of_the_overlap_set(side: str) 
     covered = set(ANCHORS[side]) | set(NO_ANCHORS[side])
     assert covered == set(OVERLAP_FILES), sorted(set(OVERLAP_FILES) - covered)
     assert not set(ANCHORS[side]) & set(NO_ANCHORS[side]), "a file cannot be both pinned and excused"
+    for rel, needles in ANCHORS[side].items():
+        # An empty tuple in ANCHORS is the OTHER vacuous pass: the file looks covered,
+        # the per-file loop below asserts nothing, and the partition test stays green.
+        assert needles, f"{side}/{rel} is declared as pinned with zero needles"
 
 
 def test_the_anchor_table_has_not_been_thinned() -> None:
