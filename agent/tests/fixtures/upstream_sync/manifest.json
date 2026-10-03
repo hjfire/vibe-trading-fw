@@ -1,0 +1,370 @@
+{
+  "captured_at": "2026-10-03",
+  "branch": "sync/upstream-2026-10",
+  "base_sha": "7fb214aa",
+  "merge_sha": "d9a2fdc5",
+  "upstream_main_sha": "f21aa13d",
+  "merge_base_ours_theirs": "18027a0c",
+  "merge_base_upstream_main_head": "f21aa13d",
+  "coordinates_note": "base_sha is the branch tip the capture ran on (Task 4 BASE); merge_sha is the upstream merge commit; merge_base_ours_theirs is git merge-base upstream/main 518d793f (the pre-merge fork tip), while merge_base_upstream_main_head is upstream/main itself because the merge commit made it an ancestor of HEAD",
+  "window": [
+    "2025-01-01",
+    "2026-10-03"
+  ],
+  "window_note": "the three convertible symbols use this window; the refusal symbol uses its own window, recorded per symbol - its last bar is an ex-date, which is what makes production refuse it",
+  "additive_source": "derived",
+  "additive_source_ruling": "Task 3 probe @7fb214aa: eastmoney push2his stock_zh_a_hist unreachable in the ambient environment (fqt=1 0/12, fqt=0 1/11, ProxyError <- RemoteDisconnected in 0.2-0.4s) while Sina stock_zh_a_daily(adjust='') and stock_zh_a_hfq_factor were stable, so the additive frame is synthesized from the Sina factor steps instead of served by a vendor",
+  "interval": "1D",
+  "volume_units": "lots (Sina shares / 100, as akshare's a_share loader serves them)",
+  "columns": {
+    "raw": "trade_date,open,high,low,close,volume (index column, as-traded prices)",
+    "hfq": "trade_date,adj_factor, one row per bar in the window (Sina hfq-factor forward-filled)",
+    "qfq": "trade_date,open,high,low,close,volume (additive levels synthesized from the factor steps)"
+  },
+  "how_to_load": "pd.read_csv(path, parse_dates=[\"trade_date\"]).set_index(\"trade_date\") for raw/qfq; the hfq frame keeps trade_date as a column, which is the (trade_date, adj_factor) shape cn_adjust.apply_qfq expects",
+  "dtype_notes": [
+    "trade_date is datetime64 on both sides here; Sina's raw daily frame carries a date object and its factor table a datetime64, so both were normalized through the loader before writing",
+    "Sina's published hfq-factor table is reversed, string-typed, always 33 rows (window params ignored) and carries a 1900-01-01 sentinel row; loader._sina_factor sorts, casts and forward-fills it onto the window, which is what adj_factor holds here",
+    "Sina's adj_factor is a rising cumulative multiplier; brief Step 3's helper detects downward steps, so it is fed the exact divisor 1/adj_factor (g_next/g_prev == f_prev/f_next)"
+  ],
+  "reading_notes": [
+    "offset_distinct is the exact-float count of qfq.close - raw.close (brief Step 1's formula) and counts last-ulp cancellation noise, so it is above plateau_spans (the 1e-6 grouped plateau count); the on-disk pair is offset_distinct_on_disk / plateau_spans_on_disk. Assert plateaus, not exact float counts - the CSV text round trip moves the first number, not the second",
+    "pandas' default read_csv float parser is not bit-exact (csv_max_abs_gap_vs_capture is 1e-15 to 1e-13 on the levels); pass float_precision='round_trip' when the bits must match the capture",
+    "qfq.volume equals raw.volume by design: an additive vendor frame does not move volume, and it is the converter that divides it by the cumulative ratio",
+    "no symbol here is a 送转 window: on the derived path a bonus issue would be re-encoded as a cash plateau, so the converter's price-drift refusal signature cannot appear (see derived_path_limitation)"
+  ],
+  "provenance": {
+    "source": "Sina via akshare stock_zh_a_daily(adjust='') + stock_zh_a_daily(adjust='hfq-factor')",
+    "loader_entry": "backtest.loaders.akshare_loader.DataLoader.fetch_raw_with_factor",
+    "akshare_version": "1.18.81",
+    "pandas_version": "2.3.3",
+    "eastmoney_vendor_path": "not used - unreachable in this environment, see additive_source_ruling"
+  },
+  "derived_path_limitation": "the additive frames in this directory are re-encoded from the same Sina factor table the multiplicative path uses, so these fixtures check that two encodings of one corporate-action history agree (consistency reconciliation); they do NOT independently prove either encoding, and they hold no real refusal sample of the 送转 kind",
+  "symbols_convertible": [
+    "600519.SH",
+    "000001.SZ",
+    "601398.SH"
+  ],
+  "symbol_refusal": "000651.SZ",
+  "refusal_drift_floor": 20,
+  "refusal_candidate_scan": {
+    "window": [
+      "2025-01-01",
+      "2026-10-03"
+    ],
+    "candidates": [
+      "600519.SH",
+      "000001.SZ",
+      "601398.SH",
+      "600036.SH",
+      "000651.SZ"
+    ],
+    "convertible": 5,
+    "refused": 0,
+    "note": "all five brief-window candidates convert; the refusal sample below was found by moving the window END onto a real ex-date (a second real fetch of the same source, the START stays 2025-01-01), not by inventing bars"
+  },
+  "symbols": {
+    "600519.SH": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 3,
+      "offset_distinct": 4,
+      "plateau_spans": 4,
+      "plateau_lengths": [
+        114,
+        120,
+        122,
+        68
+      ],
+      "ex_dates": [
+        "2025-06-26",
+        "2025-12-19",
+        "2026-06-26"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-06-26",
+          "implied_cash": 27.6,
+          "implied_yield": 0.019222
+        },
+        {
+          "ex": "2025-12-19",
+          "implied_cash": 23.957,
+          "implied_yield": 0.016741
+        },
+        {
+          "ex": "2026-06-26",
+          "implied_cash": 28.02423,
+          "implied_yield": 0.02312
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 1.9283766720700147e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "high": {
+          "max_rel": 1.8969442894771867e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "low": {
+          "max_rel": 1.9396255359904233e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "close": {
+          "max_rel": 1.9272908743942995e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "volume": {
+          "max_rel": 2.1566030852042874e-16,
+          "max_abs": 2.9103830456733704e-11
+        }
+      },
+      "reverse_check_max_rel": 2.1566030852042874e-16,
+      "files": {
+        "raw": "600519.SH_raw.csv",
+        "hfq": "600519.SH_hfq.csv",
+        "qfq": "600519.SH_qfq.csv"
+      },
+      "offset_distinct_on_disk": 7,
+      "plateau_spans_on_disk": 4,
+      "csv_max_abs_gap_vs_capture": 2.2737367544323206e-13,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.1566030852042874e-16
+    },
+    "000001.SZ": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 4,
+      "offset_distinct": 5,
+      "plateau_spans": 5,
+      "plateau_lengths": [
+        104,
+        83,
+        160,
+        73,
+        4
+      ],
+      "ex_dates": [
+        "2025-06-12",
+        "2025-10-15",
+        "2026-06-12",
+        "2026-09-24"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-06-12",
+          "implied_cash": 0.362,
+          "implied_yield": 0.030549
+        },
+        {
+          "ex": "2025-10-15",
+          "implied_cash": 0.236,
+          "implied_yield": 0.020398
+        },
+        {
+          "ex": "2026-06-12",
+          "implied_cash": 0.36,
+          "implied_yield": 0.031858
+        },
+        {
+          "ex": "2026-09-24",
+          "implied_cash": 0.249,
+          "implied_yield": 0.021466
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 1.782376549956251e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "high": {
+          "max_rel": 1.7556742795449216e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "low": {
+          "max_rel": 1.817140842458432e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "close": {
+          "max_rel": 1.7943159144057188e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "volume": {
+          "max_rel": 2.2163096657061147e-16,
+          "max_abs": 4.656612873077393e-10
+        }
+      },
+      "reverse_check_max_rel": 2.2163096657061147e-16,
+      "files": {
+        "raw": "000001.SZ_raw.csv",
+        "hfq": "000001.SZ_hfq.csv",
+        "qfq": "000001.SZ_qfq.csv"
+      },
+      "offset_distinct_on_disk": 9,
+      "plateau_spans_on_disk": 5,
+      "csv_max_abs_gap_vs_capture": 1.7763568394002505e-15,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.432330614776577e-16
+    },
+    "601398.SH": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 4,
+      "offset_distinct": 6,
+      "plateau_spans": 5,
+      "plateau_lengths": [
+        3,
+        123,
+        104,
+        95,
+        99
+      ],
+      "ex_dates": [
+        "2025-01-07",
+        "2025-07-14",
+        "2025-12-15",
+        "2026-05-13"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-01-07",
+          "implied_cash": 0.1434,
+          "implied_yield": 0.021244
+        },
+        {
+          "ex": "2025-07-14",
+          "implied_cash": 0.1646,
+          "implied_yield": 0.020549
+        },
+        {
+          "ex": "2025-12-15",
+          "implied_cash": 0.1414,
+          "implied_yield": 0.017742
+        },
+        {
+          "ex": "2026-05-13",
+          "implied_cash": 0.1689,
+          "implied_yield": 0.02258
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "high": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "low": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "close": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "volume": {
+          "max_rel": 2.1877724009100665e-16,
+          "max_abs": 1.862645149230957e-09
+        }
+      },
+      "reverse_check_max_rel": 2.2646508130356016e-16,
+      "files": {
+        "raw": "601398.SH_raw.csv",
+        "hfq": "601398.SH_hfq.csv",
+        "qfq": "601398.SH_qfq.csv"
+      },
+      "offset_distinct_on_disk": 8,
+      "plateau_spans_on_disk": 5,
+      "csv_max_abs_gap_vs_capture": 8.881784197001252e-16,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.2646508130356016e-16
+    },
+    "000651.SZ": {
+      "bucket": "refusal",
+      "window": [
+        "2025-01-01",
+        "2026-08-27"
+      ],
+      "bars": 401,
+      "first": "2025-01-02",
+      "last": "2026-08-27",
+      "factor_steps": 4,
+      "offset_distinct": 5,
+      "plateau_spans": 5,
+      "plateau_lengths": [
+        85,
+        75,
+        97,
+        143,
+        1
+      ],
+      "ex_dates": [
+        "2025-05-15",
+        "2025-08-29",
+        "2026-01-23",
+        "2026-08-27"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-05-15",
+          "implied_cash": 0.997096,
+          "implied_yield": 0.02126
+        },
+        {
+          "ex": "2025-08-29",
+          "implied_cash": 1.994192,
+          "implied_yield": 0.042205
+        },
+        {
+          "ex": "2026-01-23",
+          "implied_cash": 0.997096,
+          "implied_yield": 0.024409
+        },
+        {
+          "ex": "2026-08-27",
+          "implied_cash": 1.999823,
+          "implied_yield": 0.048096
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": null,
+      "reverse_check_max_rel": null,
+      "files": {
+        "raw": "000651.SZ_raw.csv",
+        "hfq": "000651.SZ_hfq.csv",
+        "qfq": "000651.SZ_qfq.csv"
+      },
+      "refusal_cause": "unclassified",
+      "refusal_observed": "the offset plateau on the window's last bar is a single bar (the window ends on ex-date 2026-08-27), which _plateau_spans refuses at a window edge rather than guess",
+      "offset_distinct_on_disk": 8,
+      "plateau_spans_on_disk": 5,
+      "csv_max_abs_gap_vs_capture": 7.105427357601002e-15,
+      "volume_identical_to_raw_on_disk": true
+    }
+  }
+}
