@@ -217,13 +217,17 @@ FIXTURE_DIR: Path = (
 
 TOLERANCE_TIERS: dict[str, float] = {"exact": 0.0, "tight": 1e-12, "loose": 1e-9}
 #: The two guarded classes each name one engine fact that would make the prefix gate
-#: red for a reason that is NOT lookahead: ``this.tick = estimateTick(bars)`` (call
-#: site ``pineRuntime.ts:344``; definition ``pineOrders.ts:86-96``, which scans
-#: ``Math.min(bars.list.length, 500)`` bars) is estimated from the series it is handed, so a sliced run can
-#: legitimately differ on the last bar of a price-tick-quantised output, and
-#: ``PineRunOptions.lowerBars`` (`pineRuntime.ts:176-189`) is what lets MTF output
-#: see a different aligned series at all. Spec §4 puts both in the contract; no line
-#: in the first batch is in either class (all 18 exemptions are ``strict``), and the
+#: red for a reason that is NOT lookahead. ``this.tick = estimateTick(bars)`` is the
+#: call site (`pineRuntime.ts:344`); the definition is `pineOrders.ts:86-96`, whose :88
+#: caps the scan at ``Math.min(bars.list.length, 500)`` bars. So tick is estimated from
+#: the series the run is handed — never from the whole history — and a sliced run can
+#: legitimately see a different tick, which alone can move price-grid-dependent output
+#: (`strategy.*` fills). What this does NOT promise is that the difference lands only on
+#: the last bar: tick is one scalar per run, so when it changes it can move rounding
+#: anywhere inside the slice. ``PineRunOptions.lowerBars`` (`pineRuntime.ts:176-189`) is
+#: what lets MTF output see a different aligned series at all. Spec §4 puts both in the
+#: contract; no line in the first batch is in either class (all 18 exemptions are
+#: ``strict``), which is why ``tick_guarded`` is reserved but unused here, and the
 #: provenance gate asserts that rather than letting it drift.
 EXEMPTION_CLASSES: tuple[str, ...] = ("strict", "tick_guarded", "mtf_guarded")
 NA_ENCODING = "empty"
