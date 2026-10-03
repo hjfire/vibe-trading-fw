@@ -24,7 +24,7 @@
 |---|---|---|
 | `runPine(src: string, bars: PineBars, opts?: PineRunOptions): PineResult` | `frontend/src/lib/pineRuntime.ts:2376` | 纯函数、bar 数组入参 ⇒ 切片即得前缀判据，无需改引擎 |
 | `PineRunOptions = { params, opLimit, strict, lowerBars }` | `pineRuntime.ts:176-189` | `lowerBars` 是 MTF 类输出的豁免来源 |
-| `this.tick = estimateTick(bars)` 从**整条序列**估 tick；`OrderSim(bars, this.tick, …)` | `pineRuntime.ts:344-349` | 切片改变 tick ⇒ 价格档相关输出**合法地**变，必须分类豁免 |
+| `this.tick = estimateTick(bars)`；`OrderSim(bars, this.tick, …)`——tick 从**传进来的那条序列**估（定义 `pineOrders.ts:86-96`，扫描上限 `Math.min(bars.list.length, 500)` 在 `:88`） | 调用点 `pineRuntime.ts:344`；定义 `pineOrders.ts:86-96` | 切片改变 tick ⇒ 价格档相关输出**合法地**变，必须分类豁免。首批每份夹具 120 根 bar < 500，故切片长度就是扫描长度，豁免理由在夹具上真实成立 |
 | `PineBars = { list, open, high, low, close, volume, time }`，`toBars(list)` | `pineTypes.ts:308-328` | fixture 的列定义照此 |
 | `PineResult.lines[i] = { name, values: number[], style, offset }` | `pineTypes.ts:122-132`、`:284` | `values` 就是可比对序列；`na` 表示为 `NaN` |
 | `compilePine(code, bars, opts)`，`artifact()/produced()/lastPlotted()` helper | `pineScript.ts:177`；`__tests__/pineBuiltins.test.ts:90/96/103`，`makeBars` 在 `:64` | 新门沿用同一读取姿势，不发明第二套 harness |
@@ -77,7 +77,7 @@
 | 类 | 允许什么 | 允许理由（须引用 §2 坐标） |
 |---|---|---|
 | `strict` | 什么都不允许，必须逐位等 | 默认。首批 12 个函数的所有 line 全部先按 `strict` 要求 |
-| `tick_guarded` | 仅**末棒**可不同 | `estimateTick(bars)`（`pineRuntime.ts:344`）随切片变；只给 `strategy.*`/价格档相关输出 |
+| `tick_guarded` | 价格档相关输出可不同——**不保证只落在末棒**：tick 是每次 run 的一个标量，切片改变它就可能改动切片内任意一根的取整（执行期实测：定义 `pineOrders.ts:86-96`，扫描上限 `Math.min(len, 500)` 在 `:88`，调用点 `pineRuntime.ts:344`） | 切片改变 tick ⇒ 价格档相关输出**合法地**变；真启用本档前必须先量出受影响下标集，不许拿「末棒」当默认形状；只给 `strategy.*`/价格档相关输出 |
 | `mtf_guarded` | 末棒的 HTF 聚合可不同，带宽 = 1 个 HTF 周期 | `PineRunOptions.lowerBars`（`:188`）与部分成交 HTF 棒；**首批无函数使用，但 schema 先占位**，避免日后现编 |
 
 分类结果本身要守卫：`test_pine_oracle_provenance.py` 断言「判据二 18 条 line 全是 `strict`」，任何未来把函数挪出 `strict` 的改动都必须同时改这条断言——挪档要留痕，不许静默。
@@ -153,7 +153,7 @@
 | tick/MTF 豁免被滥用 | 有 bug 的输出被挪进 `guarded` 就永远绿 | §4 挪档需同步改 provenance 断言 ＋ manifest 归类进 git diff 可见 |
 | 日内 session 锚定与引擎的会话判定不一致 | **已实测：引擎根本没有会话锚定**（`pineTa.ts:960-971` 整段累加，源码注释自己承认与 TV 不同并发 warning） | 判据二对 `vwap` 断言的是**累加语义**（两侧同式），不假装验了会话锚；「缺会话锚定」作为已知偏差写进 `COVERAGE.md` 的 backlog，改引擎与否是独立决定 |
 
-## 11. 计划自检对本设计的五处更正（2026-10-04，写计划后、执行前）
+## 11. 对本设计的六处更正（前五处出自 2026-10-04 写计划后的自检，第六处出自执行期 Task 1）
 
 设计获批后按 writing-plans 的自检逐条回查 `pineTa.ts`，发现 §6 有四行**把 Pine 的口径记反了**。它们不是文字问题：照原样实现，判据二会在第一批就红，而红的原因是参考实现错，不是引擎错——这种红会把人推向「放宽容差」或「改引擎迁就」两个都错的方向。四处均已就地改在 §6，并在此留痕。**第五处改的不是 §6 而是 §8 的第 5 条**（可红性探针的字面形态在本仓不可执行），它同样是被实跑逼出来的，一并列在下表：
 
@@ -163,7 +163,8 @@
 | 更正二 | `vwap` 的 session 锚定可由判据二对账 | `pineTa.ts:960-971` 无 `session` 参数、整段累加，源码注释自陈与 TV 不同 | `ta_vwap` 参考实现改为「按传入 price/volume 累加」，会话锚定缺失转入 backlog 登记；`session` 列保留，用途改为「让参考实现能表达 TV 语义、并让门能量出两者之差」 |
 | 更正三 | 首批 12 个函数全部进判据二 | `sar` 的初始化与反转次序**没有单一公开规范**（引擎 `:716-745` 自带 `i<2` 支路），独立参考实现只能表达「另一种意见」 | **R-C 裁定**：`sar` 只受判据一约束，判据二不覆盖，并在 `COVERAGE.md` 点名这条边界。理由是「一条红了无法解释的门不是门」——宁可少一道，不要造一道需要裁定的 |
 | 更正四 | `rsi` 的 warm-up 首值在下标 `n`（`na,na,na,100,100`）；`stoch` 的单调上涨 raw K「恒 100（非 na）」 | `pineTa.ts:550-552`：`changeStep` 在 bar 0 给 NA，rsi 立刻把 NA 折成 `0` 喂进 `up`/`dn` 两路 rma，播种窗因此含这个 0 ⇒ 首值在 **n-1**；`highestStep`/`lowestStep`（`:212-222`）无 `full()` 门 ⇒ ramp 上 bar 0 的 na 来自 `hh==ll`，不是 warm-up。两条都由参考实现 2026-10-04 实跑确认（`[1..5],n=3` → `na,na,100,100,100`；ramp → `na,100,100,100,100`） | §6 那两行的锚点已按实跑读数改写。这一处的意义在于**方向**：若照设计稿写参考实现，`rsi` 会在前 n 根整段错位而对尾部收敛——正是本轮最想让门抓住、又最容易被「宽容差」掩盖的那类错 |
-| 更正五 | §8 第 5 条：「把某函数改成用 `bars[b+1]` 的未来函数形态，前缀不变式必须红」 | 本仓的 `ta.*` 是逐棒 stateful step，步骤函数**拿不到 bar 数组**，那句按字面无法执行。可达的注入点是序列下标求值：`readIdx` 的 `Math.max(0, Math.trunc(k))`（`pineRuntime.ts:957`）与 `readBack` 的 `k <= 0` 钳位（`:429`）——TV 的「下一根棒」写法 `close[-1]` 正是从这里被夹回当前棒的。2026-10-04 实跑：只改 `:429` 时两轮读数逐字节相同（**等价变异**，`:957` 先把负数夹掉了）；两处同改后 `ta.sma(close[-1],5)` 与 `ta.sma(close,5)` 在 60 根棒上差异 `[4..59]`，前缀(40) 对完整(60) 差异 `[39]`（未来函数只暴露在末棒，与 §4 的 `tick_guarded`「仅末棒可不同」同形）。顺带实测：这个下限**此前无任何 `pine*.test.ts` 覆盖**（`indicatorLang.test.ts:163` 是另一套求值器，那里 `close[-1]` 断言为 `NaN`） | §8 第 5 条已按两条探针改写（比较器正证 ＋ 双针引擎级注入），并新增一条永久守卫「`close[-1] ≡ close`」——「无未来函数」这句话从此有机器保证，而不是只靠判据一的绿。判据一的期望条数各 +1（25→26、33→34） |
+| 更正五 | §8 第 5 条：「把某函数改成用 `bars[b+1]` 的未来函数形态，前缀不变式必须红」 | 本仓的 `ta.*` 是逐棒 stateful step，步骤函数**拿不到 bar 数组**，那句按字面无法执行。可达的注入点是序列下标求值：`readIdx` 的 `Math.max(0, Math.trunc(k))`（`pineRuntime.ts:957`）与 `readBack` 的 `k <= 0` 钳位（`:429`）——TV 的「下一根棒」写法 `close[-1]` 正是从这里被夹回当前棒的。2026-10-04 实跑：只改 `:429` 时两轮读数逐字节相同（**等价变异**，`:957` 先把负数夹掉了）；两处同改后 `ta.sma(close[-1],5)` 与 `ta.sma(close,5)` 在 60 根棒上差异 `[4..59]`，前缀(40) 对完整(60) 差异 `[39]`（那一次的差异只暴露在末棒，但这是这一组针脚的形状，不是通则——见更正六）。顺带实测：这个下限**此前无任何 `pine*.test.ts` 覆盖**（`indicatorLang.test.ts:163` 是另一套求值器，那里 `close[-1]` 断言为 `NaN`） | §8 第 5 条已按两条探针改写（比较器正证 ＋ 双针引擎级注入），并新增一条永久守卫「`close[-1] ≡ close`」——「无未来函数」这句话从此有机器保证，而不是只靠判据一的绿。判据一的期望条数各 +1（25→26、33→34） |
+| 更正六（执行期，Task 1 实现者实测发现） | §2 与 §4 把 tick 豁免写成「`estimateTick` 从**整条序列**估」（坐标 `pineRuntime.ts:344-349`）、把 `tick_guarded` 的可红形状写成「仅**末棒**可不同」 | `estimateTick` 的定义不在 `pineRuntime.ts`——那是调用点（`:344`），定义在 `pineOrders.ts:86-96`，其 `:88` 的 `Math.min(bars.list.length, 500)` 把扫描面截在 500 根。坐标写错是真的；「仅末棒」是无证据的加严：tick 是一次 run 的一个标量，切片改变它并不保证只动末棒（更正五那次注入恰好只动末棒，是那一组针脚的形状，不是通则） | §2/§4 两处坐标已就地改对并补上 500 根上限；`tick_guarded` 的容许形状改为「价格档相关输出可不同，启用前必须先量出受影响下标集」。首批 18 条 line 全是 `strict`、无一使用本档，所以**没有任何断言因此变松**——本轮判据读数不受影响；改的是日后真要用这一档时会不会拿一个没证过的形状当默认 |
 
 顺带发现并已吸收的两条：`ta.stoch` 的六参重载是**平滑 K 不是 D**（`:596-618` 第 5 参 `smoothK`，第 6 参不消费），故 D 必须在 Pine 侧用 `ta.sma(k, n)` 显式求；`ta.supertrend` 的 `src` 是 `hl2`，与已入仓的 TV 官方脚本（`pineRealWorld.test.ts:67`）一致，而 TA-Lib 用 `hlc3`——抄后者即错。
 

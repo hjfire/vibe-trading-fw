@@ -217,8 +217,9 @@ FIXTURE_DIR: Path = (
 
 TOLERANCE_TIERS: dict[str, float] = {"exact": 0.0, "tight": 1e-12, "loose": 1e-9}
 #: The two guarded classes each name one engine fact that would make the prefix gate
-#: red for a reason that is NOT lookahead: ``this.tick = estimateTick(bars)`` is
-#: estimated from the WHOLE series (`pineRuntime.ts:344-349`), so a sliced run can
+#: red for a reason that is NOT lookahead: ``this.tick = estimateTick(bars)`` (call
+#: site ``pineRuntime.ts:344``; definition ``pineOrders.ts:86-96``, which scans
+#: ``Math.min(bars.list.length, 500)`` bars) is estimated from the series it is handed, so a sliced run can
 #: legitimately differ on the last bar of a price-tick-quantised output, and
 #: ``PineRunOptions.lowerBars`` (`pineRuntime.ts:176-189`) is what lets MTF output
 #: see a different aligned series at all. Spec §4 puts both in the contract; no line
@@ -3114,7 +3115,7 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 
 - **spec §2 的 17 行现状事实全部被消费**（实测 `rows: 17` —— 早先这里写的是「14 行」，是把表头与分隔行一起数、又漏了三行的错读；核对方法：取出 `## 2.` 小节里以 `|` 开头的行，减表头减分隔行，得 17）。曾经有两行只有坐标没有落点、一行落点写歪，现已补成真消费：
   - `已有闭式点值断言的先例` → Task 4 Step 1 开头的三行理由，把「手算值 + `toBeCloseTo(x, 10)`」按本仓既有写法引用。注意引用姿势：`:18/:35/:48` 是三个 `it(...)` 的**起始行**，实际断言值在 `:23`(100)、`:32`(25)、`:40/:45`(5/7)、`:53`(20)——第一版把这两个体系混成了一个，已按读回原文的结果改正。
-  - `PineRunOptions.lowerBars` 与 `estimateTick` 两行 → Task 1 `schema.py` 里 `EXEMPTION_CLASSES` 上方的注释，各自带 `pineRuntime.ts:176-189` / `:344-349` 坐标；「首批 18 条 line 无一属于 `tick_guarded`/`mtf_guarded`」不是沉默假设，由 Task 4 与 Task 7 两条 provenance 断言钉住。
+  - `PineRunOptions.lowerBars` 与 `estimateTick` 两行 → Task 1 `schema.py` 里 `EXEMPTION_CLASSES` 上方的注释，各自带 `pineRuntime.ts:176-189` / 调用点 `pineRuntime.ts:344`（定义与 500 根扫描上限在 `pineOrders.ts:86-96` 的 `:88`）坐标；「首批 18 条 line 无一属于 `tick_guarded`/`mtf_guarded`」不是沉默假设，由 Task 4 与 Task 7 两条 provenance 断言钉住。
   - `语料 harness「NOT a gate」` → Task 3 `pineOracleFixtures.ts` 的头注释（缺失必须 fail，绝不 skip）＋ Task 8 Step 1 的藏 fixture 探针。
   - 三行收集面（上游 vitest / Python `testpaths` / fork 自有工作流）与 `frontend/.gitignore` 一行 → Task 8 Step 5 的四条命令加三句话，坐标实测：`test.yml:105`（`pip install -e`，numpy 来自 `pyproject.toml:39`）、`:136`（裸 `pytest` 走 `testpaths`）、`:169`（`cd frontend && npx vitest run`）、`vitest.config.ts:14`、`repowiki-freshness.yml:65-67` 与 `:85`、`git check-ignore` 对 fixture 路径 `rc=1`。
 - spec §4 的三档豁免 → Task 1 schema 常量（含上条注释）+ Task 3 判据 + Task 4/Task 7 的「全 `strict`」与挪档审计守卫。
