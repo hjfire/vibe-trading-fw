@@ -1093,7 +1093,8 @@ Expected：`upstream_owned` 仍 1 条绿（**它证明本轮没动四前缀**，
 
 ```bash
 git log --oneline --first-parent -8
-git log --merges --oneline upstream/main..HEAD | wc -l      # 期望 1（只有那一个 merge 提交）
+git log --merges --oneline main..HEAD --first-parent | wc -l   # 期望 1（本轮只做一个 merge；Task 8 实测形状）
+git log --merges --oneline upstream/main..HEAD | wc -l         # 实得 37 ＝ 36 条继承来的 + 1 条本轮，见下方更正
 git diff --name-only HEAD...upstream/main -- .gitignore tools/ci_grep_gates.sh .github/workflows/test.yml wiki/ | wc -l
 python -X utf8 -m pytest agent/tests/test_upstream_sync_calibers.py tools/test_upstream_sync.py -q
 bash tools/wiki_freshness_gate.sh; echo "gate rc=$?"
@@ -1101,6 +1102,8 @@ git status --porcelain
 ```
 
 Expected：merge 提交恰 1；四前缀 0；两个新测试文件全绿；`gate rc=0`；工作树空。DoD 第 5 条（§6 裁定落档）核对 Task 3 的档案段是否存在；DoD 第 6 条核对 Task 7 的数与档案/README 里的数一致。
+
+> **Step 3 的 merge 计数选择器更正（Task 8 在 `@5f40e61e` 实测）**：本条原只有一行 `git log --merges --oneline upstream/main..HEAD | wc -l  # 期望 1`，实跑 **37**，与「期望 1」直接冲突 —— 但它不是回归。分解：`upstream/main..main` 里本来就有 **36** 条 merge 提交（历次同步带进来的上游 PR merge，`git rev-list --count --merges upstream/main..main` 实测），本轮只加了自己的 `d9a2fdc5`（parents `518d793f` × `f21aa13d`），36 + 1 = 37。DoD 第 1 条要证的是「**我们这一支只做了一个 merge**」，只有沿 first-parent 才成立，所以按上面那两行分开取数，档案里两个数都要带坐标写，不许只留一个。
 
 - [ ] **Step 4: 档案落档（追加，不重排既有行）**
 
@@ -1124,7 +1127,10 @@ Expected：merge 提交恰 1；四前缀 0；两个新测试文件全绿；`gate
   `grounding/identity_checks`）无对应 topic 页 ⇒ 转 M5 名单（任务 #16），并附 `refs_broken` 的新读数。
 
   ```bash
-  python -X utf8 tools/wiki_drift.py report --json 2>/dev/null | python -X utf8 -c "import json,sys; d=json.load(sys.stdin); print({k: d[k] for k in ('uncovered','refs_broken','partial','ledger_void','count') if k in d})"
+  # 更正（Task 8 @5f40e61e 实测）：载荷的七个顶层键是 generated_at/head/baseline/baseline_source/
+  # summary/pages/uncovered，计数全在 summary 里，顶层 uncovered 才是那份**清单**；载荷里没有 count 键，
+  # 所以旧写法那句 `if k in d` 会把七个计数一个都不打印（静默空读数），并把顶层 uncovered 当计数读。
+  python -X utf8 tools/wiki_drift.py report --json 2>/dev/null | python -X utf8 -c "import json,sys; d=json.load(sys.stdin); s=d['summary']; print({k: s[k] for k in ('pages','needs_update','clean','partial','reconciled','ledger_void','distinct_refs','refs_changed','refs_broken','uncovered')}); print('head',d['head'],'baseline',d['baseline'],'baseline_source',d['baseline_source']); print('len(uncovered list)=',len(d['uncovered']),'len(pages list)=',len(d['pages']))"
   ```
 
 - **交付的永久闸门**：以后每次同步跑 `pytest tools/test_upstream_sync.py agent/tests/test_upstream_sync_calibers.py -q`
