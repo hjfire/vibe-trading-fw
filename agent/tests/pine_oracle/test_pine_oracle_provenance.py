@@ -50,9 +50,54 @@ def test_regenerated_files_are_bytewise_identical(tmp_path: Path) -> None:
         assert _lf(tmp_path / rel) == _lf(FIXTURE_DIR / rel), rel
 
 
+#: Manifest keys that describe the run rather than the fixture, so they legitimately
+#: move between invocations and are the ONLY keys excluded below.
+RUNTIME_METADATA_KEYS: frozenset[str] = frozenset({"generated_at", "head_sha"})
+
+
+def test_committed_manifest_derived_keys_match_regeneration(tmp_path: Path) -> None:
+    """Every manifest key except the two run-metadata ones must equal what the generator
+    derives today — ``test_regenerated_files_are_bytewise_identical`` only walks ``files``,
+    and ``manifest.json`` itself is not in ``files``, so the rest of it used to be unchecked.
+
+    Hand-editing ``scripts.batch_1`` (``ta.sma(close, 5)`` -> ``7``) left every Python test
+    green while the JS gate ran a script no committed source declares, and hand-editing
+    ``tolerance_tier.sma`` from ``tight`` to ``loose`` widened the measured margin
+    (5.797e-15 against 1e-12) about 1.7e5-fold in silence. Both are red here.
+
+    The exclusion list is asserted to be present in BOTH manifests, so a key cannot be
+    hidden from this comparison by renaming it into the runtime set, and the compared key
+    set is asserted to be the same on both sides and non-empty — a manifest whose derived
+    keys had all drifted away would otherwise compare nothing and pass.
+    """
+    committed = load_manifest(FIXTURE_DIR / "manifest.json")
+    regenerated = emit(out_dir=tmp_path)
+    assert RUNTIME_METADATA_KEYS <= set(committed), sorted(committed)
+    assert RUNTIME_METADATA_KEYS <= set(regenerated), sorted(regenerated)
+    derived = set(committed) - RUNTIME_METADATA_KEYS
+    assert derived, "no derived manifest keys to compare — an empty set is a defect, not a green"
+    assert derived == set(regenerated) - RUNTIME_METADATA_KEYS, (
+        "manifest key set differs from the regenerated one: "
+        f"committed-only={sorted(derived - (set(regenerated) - RUNTIME_METADATA_KEYS))} "
+        f"regenerated-only={sorted((set(regenerated) - RUNTIME_METADATA_KEYS) - derived)}"
+    )
+    for key in sorted(derived):
+        assert committed[key] == regenerated[key], (
+            f"manifest.{key} is not what the reference implementations derive; regenerate "
+            "the fixtures with `python -X utf8 -m pine_oracle.emit_fixtures` or fix the "
+            "committed value — whichever side is actually wrong"
+        )
+
+
 def test_every_declared_line_is_strict_and_tiered_from_the_two_allowed_sets() -> None:
-    """A tier or class that quietly loosens defeats the whole harness; this test is
-    the audit trail the design's "only ever tighten" rule requires (spec §5)."""
+    """Membership check, nothing more: every declared tier and exemption class is one of
+    the names ``schema`` allows, and every line is ``strict``.
+
+    This is NOT the design's "only ever tighten" audit trail — it cannot see a loosening,
+    because ``loose`` is a legal tier name and this test has no earlier manifest to
+    compare against. Direction (a tier or class moving the wrong way between commits) is
+    Task 7's tighten-only gate's job, which is the only place that has a baseline to diff.
+    """
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
     for line, cls in manifest["exemption"].items():
         assert cls in EXEMPTION_CLASSES, line

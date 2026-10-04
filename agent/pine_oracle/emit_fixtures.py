@@ -31,8 +31,13 @@ from pine_oracle.schema import (
     write_text_lf,
 )
 
-#: One-pass computations (a mean, a deviation over a fixed window) are ``tight``;
-#: everything iterative or cumulative is ``loose``. Spec §5, tighten-only.
+#: A statistic decided by one pass over a fixed window — one mean, one deviation
+#: over the trailing ``n`` bars — is ``tight``; anything that carries recursion or
+#: state across bars is ``loose``. The classification is by the *quantity*, not by
+#: the code shape: ``ta_sma`` happens to be written with a prefix-sum difference,
+#: which is still one mean over a fixed window, so ``sma`` is tight even though the
+#: implementation accumulates. ``ema`` / ``rma`` are the recursive ones and stay
+#: loose. Spec §5, tighten-only.
 TIGHT_LINES: frozenset[str] = frozenset(
     {"sma", "stdev", "stdev_sample", "bb_basis", "bb_upper", "bb_lower"}
 )

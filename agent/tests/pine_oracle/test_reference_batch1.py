@@ -76,9 +76,75 @@ def test_stdev_biased_false_is_the_sample_one() -> None:
     assert not math.isclose(sample[4], float(np.std([3.0, 4.0, 5.0])), rel_tol=1e-9)
 
 
+def test_stdev_sample_at_n_one_is_na_because_pine_divides_by_zero_into_na() -> None:
+    """``ta.stdev(src, 1, false)`` divides by ``n - 1 = 0`` — Pine's arithmetic answers na.
+
+    The warrant is Pine's own convention that a division by zero yields na, so writing
+    a number at that index would be asserting a value precisely where the language
+    declines to give one. It is NOT "because ``stdStep`` returns NA" — the engine is
+    consultable for parameter defaults and ``na`` rules only, and a reference that
+    borrows an engine branch to justify itself stops being a reference.
+
+    The asymmetry below is the whole point of the case: at ``n = 1`` the population
+    form has a value and the sample form does not. One point deviates from itself by
+    zero, which is a defined statistic; one point has no unbiased spread, since the
+    divisor is ``count - 1 = 0``. Unreachable from any committed fixture (``PERIOD``
+    is 5, so both denominators are >= 1) — which is exactly why it is pinned here
+    rather than left for a gate that cannot reach it.
+    """
+    src = np.array([1.0, 2.0, 3.0])
+    sample = ta_stdev(src, 1, biased=False)
+    assert all(math.isnan(v) for v in sample), sample        # denom = 1 - 1 = 0 -> na
+    population = ta_stdev(src, 1)
+    assert not any(math.isnan(v) for v in population), population
+    assert population == pytest.approx([0.0, 0.0, 0.0]), population  # denom = n = 1
+
+
 def test_windows_use_the_trailing_n_values_inclusive_of_the_current_bar() -> None:
     src = np.array([10.0, 20.0, 30.0, 40.0])
     assert ta_sma(src, 2)[3] == pytest.approx(35.0)
     # window [30,40]: mean 35, deviations ±5, squares 25+25=50
     assert ta_stdev(src, 2)[3] == pytest.approx(5.0)                    # 50/2 -> sqrt 25
     assert ta_stdev(src, 2, biased=False)[3] == pytest.approx(7.0710678118654755)  # 50/1
+
+
+def test_deviation_sma_na_input_poisons_every_later_bar() -> None:
+    """DEVIATION from Pine, pinned on purpose: a na in ``src`` is never recovered from.
+
+    This is not Pine semantics and is not claimed to be. Pine's ``ta.sma`` is per
+    window: only a window that contains an na is na, so bar 5 below — window
+    ``[4, 5, 6]``, no na in it — has a mean of 5.0. The reference computes the same
+    quantity from one prefix sum, whose tail is poisoned by the na at index 2, so it
+    answers na at bar 5 as well. See the module docstring of ``pine_oracle.reference``.
+
+    The case exists to be red-able: if anyone rewrites ``ta_sma`` with per-window na
+    semantics, ``out[5]`` stops being na and this assertion goes red. That red is the
+    visible decision "the deviation was removed", which is the only honest way for
+    this to change — the alternative is the gate silently proving something else.
+    """
+    src = np.array([1.0, 2.0, np.nan, 4.0, 5.0, 6.0])
+    out = ta_sma(src, 3)
+    assert all(math.isnan(v) for v in out), out
+    # 0/1 are warm-up, 2/3/4 hold the na — 5 is the bar whose window is clean and is
+    # still na. Asserted separately so a partial fix cannot slip past the blanket line.
+    assert math.isnan(out[5]), out
+
+
+def test_deviation_ema_na_input_poisons_the_rest_of_the_recursion() -> None:
+    """DEVIATION from Pine, same shape as the ``sma`` case above: the state is not reset.
+
+    ``prev`` becomes na at index 2 and ``alpha * src + (1 - alpha) * prev`` therefore
+    stays na for every later bar, including bars 3/4/5 whose own close is finite.
+    Pine's smoothing carries on from the last finite value (the engine reseeds — cited
+    only as the documented ``na`` rule this module departs from, not as the warrant
+    for the assertion), so a bar after an na would have a number here. Naming that a
+    deviation is the point: it is a property of THIS reference, not of Pine.
+
+    Red-able the same way: per-window/reseeding semantics make ``out[3]`` finite and
+    this case fails, which is the visible decision that the deviation was removed.
+    """
+    src = np.array([1.0, 2.0, np.nan, 4.0, 5.0, 6.0])
+    out = ta_ema(src, 3)
+    assert not math.isnan(out[0]) and not math.isnan(out[1]), out   # seed-at-bar-0 form
+    assert all(math.isnan(v) for v in out[2:]), out                 # tail: never recovers
+    assert math.isnan(out[5]), out

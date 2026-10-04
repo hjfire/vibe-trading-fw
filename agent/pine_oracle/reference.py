@@ -9,6 +9,31 @@ whole harness exists to prevent.
 Two seedings coexist and are NOT interchangeable (spec §6, §11 更正一): ``ema``
 starts on the first bar, ``rma`` waits for a full window and seeds on its mean.
 Any "unify the warm-up" refactor here silently changes what the gate proves.
+
+A third difference is a DEVIATION of this module, not a reading of Pine, and it is
+named here so it cannot be mistaken for semantics: an ``np.nan`` in ``src``
+propagates **permanently from the bar where it first appears**. ``ta_sma`` builds
+its trailing windows out of one prefix sum, so a single NaN poisons every later
+window of that sum; ``ta_ema`` and ``ta_rma`` carry a recursive state that is
+never reset, so once the state turns NaN it stays NaN. Pine's rule is per window
+— a window without an na has a mean, whatever happened earlier — and the engine
+follows it (na per window at ``pineTa.ts:46-55``, state reseeded after an na at
+``:134-145`` and ``:147-170``; those coordinates are cited only as the na RULE
+this module deliberately departs from, never as evidence for an assertion). The
+deviation is pinned by ``test_deviation_sma_na_input_poisons_every_later_bar`` and
+``test_deviation_ema_na_input_poisons_the_rest_of_the_recursion`` in
+``test_reference_batch1.py``: whoever rewrites these helpers to per-window
+semantics turns those cases red, and that red is the visible decision that the
+deviation was removed — which is the point, since a silently removed deviation
+would also silently change what the gate proves. For now it is unreachable from
+any committed byte: every numeric cell of all four bar fixtures is finite (400
+rows, open/high/low/close/volume, re-measured), so no reference call ever sees an
+na in its input — the blanks in the emitted ``values/*.csv`` are warm-up only and
+are not produced by this propagation. It becomes reachable in batch 2, where
+``ta.sma(rsi(...))`` and ``ta.rma(hlc3, n)`` feed a series that carries warm-up na
+into a filter; if per-window semantics are wanted there, Task 5 writes
+``_sma_na_propagating`` as a new helper rather than editing these three functions
+in place.
 """
 
 from __future__ import annotations
@@ -74,7 +99,15 @@ def ta_stdev(src: np.ndarray, n: int, biased: bool = True) -> NanArray:
         window = src[i - n + 1 : i + 1]
         mean = float(window.mean())
         ss = float(((window - mean) ** 2).sum())
-        out[i] = (ss / denom) ** 0.5 if denom > 0 else 0.0
+        # The guard is Pine's own arithmetic convention — a division by zero is na —
+        # not a port of any engine branch. ``ta.stdev(src, 1, false)`` divides by
+        # ``n - 1 = 0``, so it has no value to report and na is the honest reading;
+        # answering ``0.0`` there would assert a number precisely where Pine says na.
+        # The population form keeps ``denom = n = 1`` and does answer 0.0, because a
+        # one-point window really has zero deviation. That asymmetry is the semantics
+        # being claimed (spec §11 更正一: the default is the population form, ddof=0),
+        # and the unit case named in test_reference_batch1.py pins it — not the engine.
+        out[i] = (ss / denom) ** 0.5 if denom >= 1 else np.nan
     return out
 
 
