@@ -35,6 +35,16 @@ const SCRIPTS: Record<string, string> = {
   // undefined variable. The three arguments are the engine's own defaults
   // (`pineTa.ts:716-719`), so this is the same recursion, spelled honestly.
   sar: "//@version=5\nindicator(\"p\")\nplot(ta.sar(0.02, 0.02, 0.2), title=\"sar\")",
+  // Both outputs of one Pine call: the band AND the sign. A repainting sign flip is
+  // the failure mode the oracle cannot see (the reference carries the same convention).
+  supertrend:
+    "//@version=5\nindicator(\"p\")\n[band, dir] = ta.supertrend(3.0, 10)\nplot(band, title=\"supertrend\")\nplot(dir, title=\"st_direction\")",
+  // The cumulative branch: appending bars must extend the running sums, not rebase them.
+  // `hlc3` is spelled out because a bare `ta.vwap` never reaches the ta.* dispatcher
+  // (that branch is on the CALL path, `pineRuntime.ts:1537-1541`); the engine's own
+  // default source for an argument-less call is hlc3 (`pineTa.ts:963`), so this is the
+  // same series the oracle batch plots, written where this runtime can actually read it.
+  vwap: "//@version=5\nindicator(\"p\")\nplot(ta.vwap(hlc3), title=\"vwap\")",
 };
 
 /** Compare two series with NaN-equals-NaN; report the worst relative divergence. */
@@ -73,12 +83,23 @@ describe("prefix invariance (no-lookahead gate)", () => {
     stdev: ["stdev"],
     stdev_sample: ["stdev_sample"],
     sar: ["sar"],
+    supertrend: ["st_direction", "supertrend"],
+    vwap: ["vwap"],
   };
 
   /** How many `na` entries each script's full-series line carries, exactly — the
    * warm-up blanks of a length-5 sma/rma/stdev (4 bars), against ema and sar, which
-   * this engine answers from bar 0 (0 blanks). These are measured readings; the
+   * this engine answers from bar 0 (0 blanks), supertrend's two lines (9 blanks each:
+   * its ATR is `rma(tr, 10)`, which this engine seeds at index 9 — `pineTa.ts:683`,
+   * and BOTH outputs stay na through that warm-up because it returns `[NA, NA]` at
+   * `:694` before the bands are stored), and vwap (0 blanks, the running pv/v ratio
+   * exists from bar 0 on these fixtures, whose volumes are all positive — `:969`'s
+   * `st.v === 0 ? NA` branch is never taken here). These are measured readings; the
    * evidence that they can go red is in `task-3-report.md`, 「Fix round 1」.
+   *
+   * The warm-up count is THIS ENGINE's rule, stated as a fixture fact, not as Pine
+   * semantics: what Pine itself does across an na boundary (carry, poison or reseed)
+   * is still an open external-anchor question (`EXTERNAL_ANCHORS.md`).
    *
    * This is the strict form of "a compared line must have something to compare"
    * (I-1): NaN matches NaN, so a line whose values are blank compares equal to
@@ -92,6 +113,8 @@ describe("prefix invariance (no-lookahead gate)", () => {
     stdev: 4,
     stdev_sample: 4,
     sar: 0,
+    supertrend: 9,
+    vwap: 0,
   };
 
   function naCount(values: number[]): number {
