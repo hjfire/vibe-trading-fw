@@ -160,6 +160,13 @@ def render() -> str:
         "参考实现照引擎的口径写（`ref_batch_3` 收下并忽略 `session` 列），"
         "会话锚定的缺失留作功能 backlog。",
         "- `sar`：判据二不覆盖，理由见上表的备注行。",
+        "- **容差地板表 `TIER_FLOOR` 是人工棘轮，机器只守住它的一半**：它抄在"
+        "`agent/tests/pine_oracle/test_pine_oracle_provenance.py`，本轮新增的等值钉"
+        "（`test_the_floor_table_is_the_tier_table_the_generator_derives`）拒的是「单独挪地板表」；"
+        "把「地板表 ＋ `emit_fixtures` 的 `EXACT_LINES`/`TIGHT_LINES` ＋ 入库 `manifest.json` ＋ "
+        "重生本台账」**四处一起改松**仍然没有任何门红（评审轮针 c 在 `32fe0754` 实测：119 Python ＋ "
+        "118 JS 零红），而注释里那句「放宽需要书面裁定」在代码里没有执法点。"
+        "⇒ 放宽容差今天仍是四次看得见的编辑、不是一道红；这条盲区在此显式登记，不写成已封闭。",
         "- **na carry / poison / reseed 在 Pine 侧未锚定**：输入出现 `na` 时，"
         "批次一/二的参考实现是**永久中毒**（`reference.py` 模块 docstring 自记的 DEVIATION），"
         "引擎是按窗口重播（`pineTa.ts:46-55`、`:134-145`、`:147-170`），而 Pine 自己走哪一条"

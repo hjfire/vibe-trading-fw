@@ -196,8 +196,22 @@ def test_values_header_and_na_encoding_are_the_declared_contract() -> None:
 
 
 #: The loosest tier each line may be shipped at. A tolerance is a promise, not a knob:
-#: tightening is free, loosening needs a written ruling in 项目档案.md and an explicit
-#: edit to this table (the gate below refuses otherwise).
+#: tightening is free, and loosening costs an explicit edit to THIS table — which from
+#: this round on is refused unless ``emit_fixtures``' own tier sets move with it
+#: (``test_the_floor_table_is_the_tier_table_the_generator_derives``), and THAT move
+#: cannot land without regenerating the committed manifest.
+#:
+#: WHAT THIS TABLE DOES NOT LOCK — the previous wording promised a written ruling and
+#: got a comment (review round B-IMP-1: 「:198-200 注释承诺的『放宽需要书面裁定』无机器执法」):
+#: there is no machine gate anywhere in this harness that demands a 项目档案.md ruling.
+#: A loosening can still be pushed through as FOUR coordinated edits — this table,
+#: ``emit_fixtures.EXACT_LINES``/``TIGHT_LINES``, the committed ``manifest.json`` and one
+#: re-run of ``emit_coverage`` — after which every gate reads green (measured at
+#: ``32fe0754`` by the review round's 针 c: 119 Python + 118 JS, zero red). This is
+#: therefore a HUMAN ratchet whose channel has been narrowed, not a machine ceiling: what
+#: no longer passes in silence is a lone edit to the floor table (the 针 form this round
+#: added the pin for). The blind spot is registered out loud in ``COVERAGE.md``'s
+#: 已知偏离 section rather than being described as closed.
 #:
 #: WHAT THESE 18 VALUES ARE — the previous wording ("the readings taken when the
 #: fixtures were first generated") overstated them. `TIER_FLOOR` equals
@@ -246,6 +260,45 @@ def test_no_line_is_looser_than_the_tier_it_was_measured_at() -> None:
     assert tiers, "tolerance_tier 为空——下面的逐档比较一个数都不比"
     for line, floor in TIER_FLOOR.items():
         assert TIER_ORDER[tiers[line]] <= TIER_ORDER[floor], (line, tiers[line], floor)
+
+
+def test_the_floor_table_is_the_tier_table_the_generator_derives(tmp_path: Path) -> None:
+    """``TIER_FLOOR`` may not be looser than what ``emit_fixtures`` derives, item for item.
+
+    The gate above reads the committed manifest, so it refuses a *declared* tier moving
+    past the floor — but it never looked at the floor's own 18 values, and
+    ``grep -rn TIER_FLOOR agent/`` had zero readers outside this file (review round
+    B-IMP-1). That asymmetry is what made "the ratchet is tighten-only" a statement about
+    a table nobody guarded: moving one floor entry a tier looser changed nothing anybody
+    could observe. Re-planted this round at ``32fe0754`` (改
+    ``test_pine_oracle_provenance.py`` 的 ``"sma": "tight"`` → ``"loose"``，其余文件一律不动):
+    ``121 passed``, zero red.
+
+    Pinning equality against the generator's derived tier map narrows the channel instead
+    of closing it — the four-edit path described above the table still exists and is
+    registered as a known blind spot in ``COVERAGE.md``. Direction is checked in the only
+    direction that can loosen anything: a floor entry looser than the generator's own
+    announcement is refused, while a floor at or tighter than it stays green, so a future
+    tightening of a line does not have to be announced twice.
+
+    The comparison is against ``emit()``'s output in a temporary directory OUTSIDE the
+    repository (``tmp_path``) — the committed fixture is never written to, because
+    ``emit_fixtures`` stamps ``head_sha``/``generated_at`` and those lines cannot be
+    restored with the commands this round forbids.
+    """
+    derived = emit(out_dir=tmp_path)["tolerance_tier"]
+    assert TIER_FLOOR, "地板表为空——下面的逐项比较一个档都不比"
+    assert derived, "生成器导出的档表为空——同样比不出东西"
+    assert set(TIER_FLOOR) == set(derived), set(TIER_FLOOR) ^ set(derived)
+    looser = {
+        line: (TIER_FLOOR[line], derived[line])
+        for line in TIER_FLOOR
+        if TIER_ORDER[TIER_FLOOR[line]] > TIER_ORDER[derived[line]]
+    }
+    assert not looser, (
+        "地板表比生成器宣告的档位更松——放宽一档现在是「挪这张表 + 挪 emit_fixtures 的档集 + "
+        f"重生 manifest + 重生台账」四次可见的编辑，不再是一次静默的手滑：{looser}"
+    )
 
 
 def test_no_line_may_be_exempted_out_of_strict_without_an_audit_trail() -> None:

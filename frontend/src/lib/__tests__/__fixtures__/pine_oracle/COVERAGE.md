@@ -70,6 +70,7 @@
 
 - `vwap`：引擎按整段加载区间累积 hlc3×volume，不接受 session 参；TradingView 每个会话重新锚定累计量。本项目**不**把这条当成已通过——参考实现照引擎的口径写（`ref_batch_3` 收下并忽略 `session` 列），会话锚定的缺失留作功能 backlog。
 - `sar`：判据二不覆盖，理由见上表的备注行。
+- **容差地板表 `TIER_FLOOR` 是人工棘轮，机器只守住它的一半**：它抄在`agent/tests/pine_oracle/test_pine_oracle_provenance.py`，本轮新增的等值钉（`test_the_floor_table_is_the_tier_table_the_generator_derives`）拒的是「单独挪地板表」；把「地板表 ＋ `emit_fixtures` 的 `EXACT_LINES`/`TIGHT_LINES` ＋ 入库 `manifest.json` ＋ 重生本台账」**四处一起改松**仍然没有任何门红（评审轮针 c 在 `32fe0754` 实测：119 Python ＋ 118 JS 零红），而注释里那句「放宽需要书面裁定」在代码里没有执法点。⇒ 放宽容差今天仍是四次看得见的编辑、不是一道红；这条盲区在此显式登记，不写成已封闭。
 - **na carry / poison / reseed 在 Pine 侧未锚定**：输入出现 `na` 时，批次一/二的参考实现是**永久中毒**（`reference.py` 模块 docstring 自记的 DEVIATION），引擎是按窗口重播（`pineTa.ts:46-55`、`:134-145`、`:147-170`），而 Pine 自己走哪一条**没有取到第三方原文**（`EXTERNAL_ANCHORS.md`「放弃的条目」）。判据二在这条上仍然全绿**不是**因为两边规则一致，而是因为四份夹具的输入里**一个 `na` 都没有**（实测 `high`/`low`/`close` 全长有限、`bars_*.csv` 无空字段、`ta_tr` 无 nan）⇒ na 边界从没被这条门走到；它记为 backlog，不记为通过。
 - **`supertrend` warm-up 段的 `nz()`／na 条件语义同样未锚定**（Task 6 新登记）：第一棒没有 `upperBand[1]`/`lowerBand[1]`/`close[1]` 时，字面 `nz(na)` 读法与 NaN-guard 读法在 bar 0 给出的线不同（四份夹具上只在 index 0 不同，`supertrend` 的 na 计数 8 对 9）。本实现与引擎同取 NaN-guard（`pineTa.ts:700-713`），在取到原文之前**两种读法都不许写成 Pine 的规则**。
 
