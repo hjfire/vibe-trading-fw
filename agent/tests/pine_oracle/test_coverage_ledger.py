@@ -101,9 +101,18 @@ def test_the_covered_table_marks_each_gate_for_each_function(builtins: frozenset
 def test_the_vwap_session_deviation_is_written_as_backlog_not_a_pass() -> None:
     """The engine has no session re-anchoring, so TV and this harness differ for real.
     Recording that in a gate that passes would launder a known deviation into a
-    green tick; the ledger has to carry the words."""
+    green tick; the ledger has to carry the words.
+
+    Two pins, not one. The doc-level regex alone is satisfied from either place — the
+    covered table's note OR the 已知偏离 paragraph — so it cannot see the note being
+    rewritten; the row pin below is the one dispatch-notes 第 10 条 names as the live
+    dependency (``convention["vwap"]`` has no 会话 in it, so the table note is the only
+    place the covered list says this out loud).
+    """
     doc = COVERAGE_DOC.read_text(encoding="utf-8")
     assert re.search(r"vwap[^\n]*会话锚定", doc), "vwap 的会话锚定偏离必须写在台账里"
+    row = next((line for line in doc.splitlines() if line.startswith("| `vwap` |")), None)
+    assert row is not None and "会话锚定" in row, f"已覆盖表的 vwap 行必须自带「无会话锚定」：{row}"
 
 
 def test_the_witness_table_names_every_priced_line_within_its_own_tier(manifest: dict) -> None:
