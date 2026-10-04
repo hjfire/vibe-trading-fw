@@ -343,7 +343,7 @@ def ta_supertrend(
         # `not np.isfinite`, not `np.isnan`: the engine's cold start is
         # ``if (!Number.isFinite(prevAtr)) dir = 1`` (pineTa.ts:708), so a +/-inf previous
         # ATR means "no usable previous ATR" there and would otherwise keep the recursion
-        # here. Same alignment :330-331 already makes for the previous BANDS (M-4's
+        # here. Same alignment :334-335 already makes for the previous BANDS (M-4's
         # pattern, third site; X-1). Unreachable on the committed bars: ``ta_tr``'s bar-0
         # ``pc`` is ``close[0]``, so every value fed into the ATR rma is finite and no
         # ``prev_atr`` is ever +/-inf — this moves no CSV byte (76/76 sha256 equal,
