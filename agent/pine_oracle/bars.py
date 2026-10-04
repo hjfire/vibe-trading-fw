@@ -5,10 +5,16 @@ numpy and without any dependency on the host's float print settings. Bars live
 in the committed CSV, never re-derived in JS — see the header of
 ``test_bars.py`` for why that matters.
 
-The noise and drift terms are not decorative: ``test_gap_shape_injects_exactly_
-five_jump_bars`` counts bars moving >=1%, which is only an exact count while the
-per-bar noise stays under that threshold. Changing ``_BODY_STEP`` silently turns
-that test into noise, so the bound is asserted there rather than here.
+The injected-gap count is exact because of a constructive invariant, not a noise
+bound: ``price = close`` carries the *unrounded* close into the next bar's open,
+so on a bar with no injected gap ``open[i]`` and ``close[i-1]`` are the same
+float run through the same ``round(value, 6)``. The overnight ratio
+``open[i] / close[i-1] - 1`` is therefore identically 0.0 there whatever
+``_BODY_STEP`` is — only the injected jumps can reach a 1% threshold.
+``test_non_injected_bars_open_equals_previous_close`` pins that invariant.
+
+``time`` is ``DAY_ZERO_MS + i * DAY_MS`` over consecutive calendar days, not the
+A-share trading calendar, so the committed daily fixtures contain weekend bars.
 """
 
 from __future__ import annotations
@@ -26,7 +32,10 @@ INTRADAY_SESSIONS = 5
 FIRST_SESSION_ID = 1
 BARS_PER_SESSION = 8
 
-#: Per-bar body step. |shock| <= _BODY_STEP/2 < 1%, so a >=1% move is a gap.
+#: Per-bar body step: without a bias the bar body stays within
+#: ``|close/open - 1| <= _BODY_STEP/2``; ``trend`` adds ``_TREND_BIAS`` on top of
+#: the draw, so its bodies run larger. This constant scales the body only — the
+#: gap count measures the overnight ratio, which it cannot move (module docstring).
 _BODY_STEP = 0.012
 #: Upward bias added to the LCG draw in ``trend`` shape (compounds to ~2.3x over 120 bars).
 _TREND_BIAS = 0.6

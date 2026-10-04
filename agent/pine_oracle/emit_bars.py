@@ -10,6 +10,7 @@ automatically (root ``pyproject.toml:277``). The target directory comes from
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pine_oracle.bars import (
     DAILY_BAR_COUNT,
@@ -20,23 +21,33 @@ from pine_oracle.bars import (
 )
 from pine_oracle.schema import FIXTURE_DIR, sha256_of, write_text_lf
 
-#: ``(basename, rows, writes_the_session_column)`` for each committed bar fixture.
-BAR_JOBS: tuple[tuple[str, list[dict], bool], ...] = (
-    ("bars_daily_trend", make_daily_bars(11, DAILY_BAR_COUNT, "trend"), False),
-    ("bars_daily_oscillating", make_daily_bars(17, DAILY_BAR_COUNT, "oscillate"), False),
-    ("bars_daily_gapped", make_daily_bars(23, DAILY_BAR_COUNT, "gap"), False),
-    ("bars_intraday_vwap", make_intraday_bars(13, INTRADAY_SESSIONS), True),
+#: Single source for "which seed and shape produced which committed fixture". Both
+#: public views below are derived from this table, so a seed change cannot leave the
+#: manifest describing bars that no longer exist.
+_JOBS: tuple[tuple[str, int, str], ...] = (
+    ("bars_daily_trend", 11, "trend"),
+    ("bars_daily_oscillating", 17, "oscillate"),
+    ("bars_daily_gapped", 23, "gap"),
+    ("bars_intraday_vwap", 13, "intraday"),
 )
 
-#: basename -> (seed, shape). The manifest declares these, and it derives them from
-#: here rather than restating them, so a seed change cannot leave the manifest
-#: describing bars that no longer exist.
-BARS_META: dict[str, tuple[int, str]] = {
-    "bars_daily_trend": (11, "trend"),
-    "bars_daily_oscillating": (17, "oscillate"),
-    "bars_daily_gapped": (23, "gap"),
-    "bars_intraday_vwap": (13, "intraday"),
-}
+
+def _rows_for(seed: int, shape: str) -> list[dict[str, Any]]:
+    """``intraday`` is the only shape that is not a daily one, and it is also the
+    only fixture that writes the ``session`` column — so the same string dispatches
+    the generator and the header."""
+    if shape == "intraday":
+        return make_intraday_bars(seed, INTRADAY_SESSIONS)
+    return make_daily_bars(seed, DAILY_BAR_COUNT, shape)
+
+
+#: ``(basename, rows, writes_the_session_column)`` for each committed bar fixture.
+BAR_JOBS: tuple[tuple[str, list[dict], bool], ...] = tuple(
+    (name, _rows_for(seed, shape), shape == "intraday") for name, seed, shape in _JOBS
+)
+
+#: basename -> (seed, shape), derived from ``_JOBS`` (see the note there).
+BARS_META: dict[str, tuple[int, str]] = {name: (seed, shape) for name, seed, shape in _JOBS}
 
 BARS_BASENAMES: tuple[str, ...] = tuple(name for name, _, _ in BAR_JOBS)
 

@@ -27,10 +27,24 @@ def test_lcg_is_deterministic_and_in_unit_interval() -> None:
 
 
 def test_daily_bar_shape_and_counts() -> None:
-    rows = make_daily_bars(seed=11, n=DAILY_BAR_COUNT, shape="trend")
-    assert len(rows) == DAILY_BAR_COUNT
-    assert set(rows[0]) == {"time", "open", "high", "low", "close", "volume"}
-    for r in rows:
+    """Row invariants over every shape the committed fixtures use, intraday
+    included: each daily shape has its own wick draw and ``make_intraday_bars``
+    has a third set of row formulas, from which batch one's VWAP reference values
+    are computed — checking only ``trend`` would leave two of them unguarded."""
+    for shape in ("trend", "oscillate", "gap"):
+        rows = make_daily_bars(seed=11, n=DAILY_BAR_COUNT, shape=shape)
+        assert len(rows) == DAILY_BAR_COUNT
+        assert set(rows[0]) == {"time", "open", "high", "low", "close", "volume"}
+        for r in rows:
+            assert r["high"] >= max(r["open"], r["close"])
+            assert r["low"] <= min(r["open"], r["close"])
+            assert r["volume"] > 0
+    # sessions=1 is enough: the row formulas don't depend on the session index,
+    # and 8 bars keeps this case as cheap as the three 120-bar shapes above.
+    intraday = make_intraday_bars(seed=13, sessions=1)
+    assert len(intraday) == 8
+    assert set(intraday[0]) == {"time", "open", "high", "low", "close", "volume", "session"}
+    for r in intraday:
         assert r["high"] >= max(r["open"], r["close"])
         assert r["low"] <= min(r["open"], r["close"])
         assert r["volume"] > 0
@@ -68,14 +82,32 @@ def test_wicks_are_not_pinned_to_adjacent_closes() -> None:
 
 
 def test_gap_shape_injects_exactly_five_jump_bars() -> None:
-    """The 1% threshold must isolate the *injected* jumps, not the noise. With the
-    daily noise term bounded by ±0.6% (see ``make_daily_bars``), any bar moving
-    >=1% is one of the 5 injected gaps — so this is an exact count, not a floor."""
+    """The 1% threshold isolates the *injected* jumps because the non-injected
+    overnight ratio is exactly 0.0, not because the body noise happens to stay
+    under 1% — see ``test_non_injected_bars_open_equals_previous_close``. So this
+    is an exact count, not a floor."""
     rows = make_daily_bars(seed=11, n=DAILY_BAR_COUNT, shape="gap")
     jumped = [
         i for i in range(1, len(rows)) if abs(rows[i]["open"] / rows[i - 1]["close"] - 1) >= 0.01
     ]
     assert jumped == [22, 45, 68, 91, 114], jumped
+
+
+def test_non_injected_bars_open_equals_previous_close() -> None:
+    """The invariant the gap count above rests on. ``price = close`` stores the
+    *unrounded* close and the next bar opens from it, so ``open[i]`` and
+    ``close[i-1]`` are one float passed through one ``round(value, 6)``: exact
+    equality, never an approximation. Rounding either side to a different
+    precision breaks it, and no noise bound can put it back."""
+    rows = make_daily_bars(seed=11, n=DAILY_BAR_COUNT, shape="gap")
+    injected = {22, 45, 68, 91, 114}
+    for i in range(1, len(rows)):
+        if i not in injected:
+            assert rows[i]["open"] == rows[i - 1]["close"], i
+    for shape in ("trend", "oscillate"):
+        rows = make_daily_bars(seed=11, n=DAILY_BAR_COUNT, shape=shape)
+        for i in range(1, len(rows)):
+            assert rows[i]["open"] == rows[i - 1]["close"], (shape, i)
 
 
 def test_intraday_sessions_and_bar_count() -> None:
