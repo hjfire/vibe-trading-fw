@@ -15,11 +15,14 @@ named here so it cannot be mistaken for semantics: an ``np.nan`` in ``src``
 propagates **permanently from the bar where it first appears**. ``ta_sma`` builds
 its trailing windows out of one prefix sum, so a single NaN poisons every later
 window of that sum; ``ta_ema`` and ``ta_rma`` carry a recursive state that is
-never reset, so once the state turns NaN it stays NaN. Pine's rule is per window
-— a window without an na has a mean, whatever happened earlier — and the engine
-follows it (na per window at ``pineTa.ts:46-55``, state reseeded after an na at
-``:134-145`` and ``:147-170``; those coordinates are cited only as the na RULE
-this module deliberately departs from, never as evidence for an assertion). The
+never reset, so once the state turns NaN it stays NaN. The engine's rule is per
+window — a window without an na has a mean, whatever happened earlier (na per
+window at ``pineTa.ts:46-55``, state reseeded after an na at ``:134-145`` and
+``:147-170``; cited as the rule this module deliberately departs from, never as
+evidence for an assertion). What Pine itself does — carry, poison or reseed — is
+an open Task 6 external-anchor question, and this module takes no position on it:
+no gate depends on the answer, because nothing in the harness runs an na through
+these three helpers (see the reachability note below). The
 deviation is pinned by ``test_deviation_sma_na_input_poisons_every_later_bar`` and
 ``test_deviation_ema_na_input_poisons_the_rest_of_the_recursion`` in
 ``test_reference_batch1.py``: whoever rewrites these helpers to per-window
@@ -29,11 +32,16 @@ would also silently change what the gate proves. For now it is unreachable from
 any committed byte: every numeric cell of all four bar fixtures is finite (400
 rows, open/high/low/close/volume, re-measured), so no reference call ever sees an
 na in its input — the blanks in the emitted ``values/*.csv`` are warm-up only and
-are not produced by this propagation. It becomes reachable in batch 2, where
-``ta.sma(rsi(...))`` and ``ta.rma(hlc3, n)`` feed a series that carries warm-up na
-into a filter; if per-window semantics are wanted there, Task 5 writes
-``_sma_na_propagating`` as a new helper rather than editing these three functions
-in place.
+are not produced by this propagation. It is also unreachable from the planned
+batches: every later call site feeds these three helpers either a raw price
+column or an na-free derived series — ``ta_rsi`` replaces bar 0's na ``change``
+with ``0`` before smoothing, so both ``ta_rma`` streams are finite; ``ta_tr`` is
+finite from bar 0, which is what ``ta_atr`` and Supertrend's rma consume;
+``ta_bb`` smooths ``close``; ``ta_macd`` smooths a dense ema-minus-ema. The one
+planned smoothing over an na-carrying series is ``stoch_d``
+(``ta.sma(k5, d_len)``), and the plan answers it with the separate per-window
+helper ``_sma_na_propagating`` rather than by editing these three functions in
+place.
 """
 
 from __future__ import annotations

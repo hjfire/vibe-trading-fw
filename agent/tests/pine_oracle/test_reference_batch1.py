@@ -27,7 +27,7 @@ def test_ema_seeds_on_the_first_value_and_has_no_warmup() -> None:
     TA-Lib would instead SMA-seed at index n-1 and return na before it, i.e.
     [na, na, 2, 3, 4]. Spec §11 更正一 adjudicated that the engine's convention is
     the one under test, so the reference writes the seed-at-bar-0 form. The
-    divergence is pinned by ``test_ema_is_not_thelibralib_seed_form`` below rather
+    divergence is pinned by ``test_ema_is_not_the_talib_seed_form`` below rather
     than left to be discovered by a red gate.
     """
     # alpha = 0.5: 1, 0.5*2+0.5*1, 0.5*3+0.5*1.5, 0.5*4+0.5*2.25, 0.5*5+0.5*3.125
@@ -111,11 +111,13 @@ def test_windows_use_the_trailing_n_values_inclusive_of_the_current_bar() -> Non
 def test_deviation_sma_na_input_poisons_every_later_bar() -> None:
     """DEVIATION from Pine, pinned on purpose: a na in ``src`` is never recovered from.
 
-    This is not Pine semantics and is not claimed to be. Pine's ``ta.sma`` is per
-    window: only a window that contains an na is na, so bar 5 below — window
-    ``[4, 5, 6]``, no na in it — has a mean of 5.0. The reference computes the same
-    quantity from one prefix sum, whose tail is poisoned by the na at index 2, so it
-    answers na at bar 5 as well. See the module docstring of ``pine_oracle.reference``.
+    This is not Pine semantics and is not claimed to be. The engine's ``smaStep`` is
+    per window (``pineTa.ts:46-55``): only a window that contains an na is na, so bar
+    5 below — window ``[4, 5, 6]``, no na in it — has a mean of 5.0 there. The
+    reference computes the same quantity from one prefix sum, whose tail is poisoned
+    by the na at index 2, so it answers na at bar 5 as well. What Pine's own ``ta.sma``
+    does with an na in the window is a Task 6 anchor question, not settled here. See
+    the module docstring of ``pine_oracle.reference``.
 
     The case exists to be red-able: if anyone rewrites ``ta_sma`` with per-window na
     semantics, ``out[5]`` stops being na and this assertion goes red. That red is the
@@ -135,10 +137,12 @@ def test_deviation_ema_na_input_poisons_the_rest_of_the_recursion() -> None:
 
     ``prev`` becomes na at index 2 and ``alpha * src + (1 - alpha) * prev`` therefore
     stays na for every later bar, including bars 3/4/5 whose own close is finite.
-    Pine's smoothing carries on from the last finite value (the engine reseeds — cited
-    only as the documented ``na`` rule this module departs from, not as the warrant
-    for the assertion), so a bar after an na would have a number here. Naming that a
-    deviation is the point: it is a property of THIS reference, not of Pine.
+    The engine carries on from the last finite value (its reseed rule at
+    ``pineTa.ts:134-145`` is the documented ``na`` rule this module departs from —
+    cited as the rule being departed from, not as the warrant for the assertion), so
+    a bar after an na has a number there and not here. What Pine's own recursion does
+    is a Task 6 anchor question; naming the difference a deviation of THIS reference
+    is the point, and that claim needs no external authority to be true.
 
     Red-able the same way: per-window/reseeding semantics make ``out[3]`` finite and
     this case fails, which is the visible decision that the deviation was removed.

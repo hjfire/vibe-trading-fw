@@ -63,7 +63,8 @@ def test_committed_manifest_derived_keys_match_regeneration(tmp_path: Path) -> N
     Hand-editing ``scripts.batch_1`` (``ta.sma(close, 5)`` -> ``7``) left every Python test
     green while the JS gate ran a script no committed source declares, and hand-editing
     ``tolerance_tier.sma`` from ``tight`` to ``loose`` widened the measured margin
-    (5.797e-15 against 1e-12) about 1.7e5-fold in silence. Both are red here.
+    (5.797e-15 against 1e-12, about 172-fold) from 1e-12 to 1e-9, i.e. to roughly
+    1.7e5-fold of headroom, in silence. Both are red here.
 
     The exclusion list is asserted to be present in BOTH manifests, so a key cannot be
     hidden from this comparison by renaming it into the runtime set, and the compared key
