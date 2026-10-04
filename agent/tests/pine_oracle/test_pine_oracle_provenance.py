@@ -10,6 +10,7 @@ fact R-46. Content differences are still caught byte for byte.
 
 from pathlib import Path
 
+from pine_oracle import emit_fixtures
 from pine_oracle.emit_fixtures import BARS_SETS, FIXTURE_DIR, PERIOD, emit
 from pine_oracle.schema import (
     EXEMPTION_CLASSES,
@@ -176,6 +177,12 @@ def test_exact_tier_is_only_for_the_declared_integer_lines() -> None:
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
     exact = {line for line, t in manifest["tolerance_tier"].items() if t == "exact"}
     assert exact == {"st_direction"}, sorted(exact)
+    # The same claim read off a SECOND, independent source: the generator's own set,
+    # not reverse-engineered from the committed manifest it just wrote.
+    assert emit_fixtures.EXACT_LINES == frozenset({"st_direction"})
+    # A name in both sets would make the tier a function of which `if` comes first in
+    # emit() — one key, two tiers, no visible conflict.
+    assert not (emit_fixtures.EXACT_LINES & emit_fixtures.TIGHT_LINES)
 
 
 def test_values_header_and_na_encoding_are_the_declared_contract() -> None:

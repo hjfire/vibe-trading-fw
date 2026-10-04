@@ -32,6 +32,7 @@
 | `stdev` / `bb` 的 ddof（Pine 默认是总体式 ddof=0） | TA-Lib `STDEV` 文档、Stack Overflow「stdev() differences between talib and pine script versions」 | 未取到，已放弃（stackoverflow.com → `403 Forbidden`） |
 | `atr` 的 Wilder 播种（首值 = 前 n 根 TR 均值） | Wilder 原著表述 / TA-Lib `ATR` 文档 | 未取到，已放弃（同上，抓取失败） |
 | `vwap` 会话锚定的 TradingView 官方原文 | tradingview.com pine-script-docs / scripts 页 | 未取到，已放弃（`fetch failed`；改以仓内 `scriptLibrary.ts:160` 的中文表述记同一件事） |
+| `supertrend` **warm-up 段**的 `nz()`／na 条件语义（第一棒没有 `upperBand[1]`/`lowerBand[1]`/`close[1]` 时，`nz(na)` 取 0 后三元走 `prev` 支，还是 na 把整个三元污染成 na） | tv-pine 文档（`Pine Script® v5 reference`／language manual 的 `nz()` 与 `na` 传播条目）、TradingView 支持页 `43000502040-supertrend-indicator` | 未取到，已放弃（tradingview.com 那条本机 `WebFetch` → `fetch failed`，原文错误见下一节；文档侧无其他可抄来源）。**这条是开口**：本实现与引擎在首棒同取 NaN-guard（`pineTa.ts:700-713`），字面 `nz()` 读法在 bar 0 给出的线不同（5 棒表上 `[0.0, 14.0, 12.0, 8.0, 8.0]` 对 `[11.0, 11.0, 11.0, 8.0, 8.0]`；四份夹具上只在 index 0 不同，`supertrend` na 计数 8 对 9），读数见 `ta_supertrend` docstring 与 task-6 报告「Fix round 1」——在取到原文之前，两种读法谁都不许写成 Pine 的规则 |
 | Pine 自身对 **na carry/poison/reseed** 的行为 | Pine 文档对 `na` 传播的说明 | 未取到，已放弃。**这条仍然是开口**：批次一/二里「输入出现 na 时参考实现永久中毒」是本模块自记的 DEVIATION，引擎的规则是按窗口重播（`pineTa.ts:46-55`、`:134-145`、`:147-170`），而 Pine 自己怎么处理仍待外部锚点；本任务的 na 边界差异一律先怀疑参考实现的选择，不开引擎缺陷单 |
 
 抓取失败的原文错误（2026-10-04 在本机实测，逐字）：
@@ -48,7 +49,7 @@ HTTP ERROR: Fetching https://stackoverflow.com/questions/65901574/... returned 4
 
 ## 后续批次的补法（给 Task 7 与之后）
 
-1. 换一台能出网的环境重跑 Step 8，把上面五条的**原文引句**抄进本文件，再往 `EXTERNAL_ANCHORS`
+1. 换一台能出网的环境重跑 Step 8，把上表各条（Task 6 fix round 1 之后为 **7 条**）的**原文引句**抄进本文件，再往 `EXTERNAL_ANCHORS`
    里加条目；`value` 仍是字符串（例如 `"2.09"`），别写裸浮点。
 2. 每加一条，同步在 `test_reference_batch3.py`（或对应批次测试）里落一条点值断言，
    让锚点与点值测试成对出现——孤立数字会被删掉而无人报警。

@@ -281,9 +281,29 @@ def ta_supertrend(
       - the cold start is ``if na(atr[1]) direction := 1``, not "compare close to hl2";
       - ``-1`` is the uptrend (line = lower band).
 
-    The body wraps the previous bands in ``nz()``, which makes the first bar's ratchet
-    a no-op for positive prices; the NaN guard below reproduces that. The equivalence
-    holds only while prices stay positive — every bar fixture does, by construction.
+    The warm-up reading is THIS IMPLEMENTATION'S CHOICE, not Pine's rule. On the first
+    bar there is no ``upperBand[1]`` / ``lowerBand[1]`` / ``close[1]``; this port guards
+    the previous band with ``np.isfinite``, the same reading the engine takes
+    (``pineTa.ts:700-713``). Pine's own behaviour there is NOT ANCHORED — whether
+    ``nz(na)`` answering 0 makes the reassignment pick its ``prev`` arm, or the na
+    comparison poisons the ternary — and the third-party fetch for it failed, recorded
+    as 「未取到，已放弃」 in ``EXTERNAL_ANCHORS.md``. Taking the body's ``nz()`` literally
+    instead produces a different line. Measured on this module's own five-bar table
+    (period=1, factor=1.0, high=[10,12,11,20,19], low=[8,10,9,11,10],
+    close=[9,11,10,19,18]; recomputed in task-6-report.md 「Fix round 1」):
+      - NaN guard (this implementation): line [11.0, 11.0, 11.0, 8.0, 8.0]
+      - literal ``nz()``, na comparison takes the false arm: [0.0, 14.0, 12.0, 8.0, 8.0]
+      - literal ``nz()``, na poisons the ternary: [na, 8.0, 8.0, 8.0, 8.0]
+    So bar 0 is 11.0 only under the guard; the wrong reason for it (``nz()`` as a no-op
+    "while prices stay positive") is not a reason at all — bar 0 differs because the
+    previous bar is missing, and positive prices cannot fix that. On the four committed
+    bar fixtures at ``ST_PERIOD``/``ST_FACTOR`` the false-arm reading differs from the
+    committed ``supertrend`` CSVs at index 0 alone (0.0 where the CSV is empty), i.e. 8
+    na there against 9 committed, on all four shapes; the same reading answers +/-1
+    through the whole ATR warm-up where both sides of the gate leave na (``st_direction``
+    0 na against 9). Direction on the five-bar table is [1, 1, 1, -1, -1] under the guard
+    AND under the false-arm reading, while the poisoned-ternary variant moves bars 1-3 to
+    -1 — which is exactly why no reading of the un-anchored warm-up gets called Pine's.
     """
     src = (np.asarray(high, dtype="float64") + np.asarray(low, dtype="float64")) / 2.0
     close = np.asarray(close, dtype="float64")
@@ -296,11 +316,19 @@ def ta_supertrend(
     prev_line = np.nan
     for i in range(n):
         if np.isnan(atr_[i]):
-            continue                       # the body returns [na, na] before ATR warms up
+            # This implementation leaves na through the ATR warm-up. The published body
+            # has NO early return there — it keeps evaluating, and what it answers depends
+            # on the un-anchored nz()/na reading (see the docstring), so na here is THIS
+            # port's chosen equivalent, not something the body states.
+            continue
         ub = float(src[i]) + float(multiplier) * float(atr_[i])
         lb = float(src[i]) - float(multiplier) * float(atr_[i])
-        prev_ub = float(upper[i - 1]) if i > 0 and not np.isnan(upper[i - 1]) else np.nan
-        prev_lb = float(lower[i - 1]) if i > 0 and not np.isnan(lower[i - 1]) else np.nan
+        # np.isfinite, not `not np.isnan`: the engine guards the previous band with
+        # Number.isFinite (pineTa.ts:700-713), so a +/-inf previous band counts as
+        # unusable on both sides. Unreachable on the committed bars (test_bars.py
+        # asserts finiteness), so this alignment moves no CSV byte.
+        prev_ub = float(upper[i - 1]) if i > 0 and np.isfinite(upper[i - 1]) else np.nan
+        prev_lb = float(lower[i - 1]) if i > 0 and np.isfinite(lower[i - 1]) else np.nan
         prev_close = float(close[i - 1]) if i > 0 else np.nan
         if not np.isnan(prev_ub) and not (ub < prev_ub or prev_close > prev_ub):
             ub = prev_ub
@@ -328,8 +356,19 @@ def ta_vwap(
     ``session=None`` is the reading the gate uses, because the engine's ``ta.vwap``
     takes no session argument and accumulates over the whole loaded range
     (``pineTa.ts:960-970``, whose own comment notes the TV difference as a warning).
-    Passing a session column re-anchors at each change — TradingView's behaviour, and
-    the known deviation COVERAGE.md lists as a backlog item rather than a passing gate.
+    Passing a session column re-anchors at each change; that per-session form is what
+    THIS REPO already asserts of TradingView — ``scriptLibrary.ts:160``,
+    「按整段区间累计（TV 为逐日锚定）」 — and TradingView's own documentation for it was
+    NOT retrieved (``EXTERNAL_ANCHORS.md`` logs the fetch as 未取到，已放弃), so it is a
+    citation of an in-repo assertion, not an anchored external fact. COVERAGE.md carries
+    the difference as a backlog item rather than a passing gate.
+
+    The na-price branch below (a bar whose price is na is skipped but still emits the
+    ratio accumulated through the PREVIOUS bar, mirroring ``pineTa.ts:960-970``) is
+    UNREACHABLE on the committed fixtures: hlc3 is finite on all four shapes and volume
+    is always positive, so the gate prints ``na=0`` for ``vwap`` everywhere and 判据二
+    never exercises this branch. It is pinned by a unit test instead
+    (``test_vwap_an_na_price_bar_carries_the_previous_running_ratio``).
     """
     price = np.asarray(price, dtype="float64")
     volume = np.asarray(volume, dtype="float64")

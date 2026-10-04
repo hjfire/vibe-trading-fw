@@ -8,6 +8,14 @@ the fork's transcription is faithful, which is the surface this harness exists t
 hold. It does NOT re-prove TV's algorithm, and the report must not claim that.
 
 ``sar`` is deliberately absent — see the note above the steps (spec §11 更正三).
+
+One scope limit on that claim: the body fixes the BRANCHES, but it does not settle what
+happens on the FIRST bar, where ``upperBand[1]``/``lowerBand[1]``/``close[1]`` are all
+missing. Reading Pine's ``nz()`` literally diverges from the NaN guard this port (and
+the engine) take, and Pine's own warm-up behaviour is un-anchored
+(``ENGINE_CONVENTION["supertrend"]``, ``ta_supertrend``'s docstring, and the
+「未取到，已放弃」 row of ``EXTERNAL_ANCHORS.md``). So the warm-up reading below is
+THIS implementation's choice, not something the published body implies.
 """
 
 import math
@@ -19,28 +27,37 @@ from pine_oracle.reference import ref_batch_3, ta_supertrend, ta_vwap
 
 # TV's body has three branches and a ratchet; this five-bar table walks all of them
 # with period=1 (so atr == tr, dense from bar 0) and multiplier=1.0 (so every number
-# below is doable on a calculator). Derived on paper, bar by bar:
+# below is doable on a calculator). Worked on paper, bar by bar, UNDER THE NaN GUARD:
+# the `line` row is that reading, NOT a reading the body implies — the three Pine na
+# readings of bar 0 diverge here (literal nz() with the na comparison taking the false
+# arm gives [0.0, 14.0, 12.0, 8.0, 8.0]; letting na poison the ternary gives
+# [na, 8.0, 8.0, 8.0, 8.0]; see ENGINE_CONVENTION["supertrend"]).
 #   high  = [10, 12, 11, 20, 19]
 #   low   = [ 8, 10,  9, 11, 10]
 #   close = [ 9, 11, 10, 19, 18]
-#   tr    = [ 2,  3,  2,  9,  9]      bar 0 collapses to high-low (pineTa.ts:536)
+#   tr    = [ 2,  3,  2, 10,  9]      bar 0 collapses to high-low (pineTa.ts:536);
+#                                     bar 3's 10 is |high - close[1]| = |20 - 10|, not
+#                                     high - low = 9 — taking that second candidate IS
+#                                     the point of bar 3 (max(9, 10, 1) = 10)
 #   hl2   = [ 9, 11, 10, 15.5, 14.5]
-#   raw ub/lb = hl2 +/- tr = [11/7, 14/8, 12/8, 24.5/6.5, 23.5/5.5]
+#   raw ub/lb = hl2 +/- tr = [11/7, 14/8, 12/8, 25.5/5.5, 23.5/5.5]
 #   after the ratchet: ub = [11, 11, 11, 11, 23.5]   lb = [7, 8, 8, 8, 8]
-#   direction (TV: -1 is UP) = [1, 1, 1, -1, -1]     line = [11, 11, 11, 8, 8]
+#   direction (TV: -1 is UP) = [1, 1, 1, -1, -1]     line = [11, 11, 11, 8, 8]  <- guard
+#   (the sign line is shared by the guard and the false-arm nz() reading; raw ub 25.5 /
+#    raw lb 5.5 never reach the line at bar 3, the ratchet holds 11 and 8)
 H5 = np.array([10.0, 12.0, 11.0, 20.0, 19.0])
 L5 = np.array([8.0, 10.0, 9.0, 11.0, 10.0])
 C5 = np.array([9.0, 11.0, 10.0, 19.0, 18.0])
 
 
-def test_supertrend_matches_the_published_body_bar_by_bar() -> None:
+def test_supertrend_matches_the_published_body_under_the_nan_guard_reading_bar_by_bar() -> None:
     out = ta_supertrend(H5, L5, C5, period=1, multiplier=1.0)
     assert out["supertrend"] == pytest.approx([11.0, 11.0, 11.0, 8.0, 8.0])
     assert out["st_direction"] == pytest.approx([1.0, 1.0, 1.0, -1.0, -1.0])
 
 
 def test_supertrend_bands_only_ratchet_one_way() -> None:
-    """Bar 1's raw upper band is 14.0, but the body keeps the previous 11.0 because
+    """Bar 1's raw upper band is 14.0, but the guard keeps the previous 11.0 because
     neither ``ub < prevUb`` nor ``close[1] > prevUb`` holds. A port that assigns the
     raw band gets a line 3.0 too high here and never notices."""
     out = ta_supertrend(H5, L5, C5, period=1, multiplier=1.0)["supertrend"]
@@ -95,6 +112,26 @@ def test_vwap_zero_volume_is_na_not_a_division_by_zero() -> None:
     """Engine: ``return st.v === 0 ? NA : st.pv / st.v`` (pineTa.ts:969)."""
     out = ta_vwap(np.array([1.0, 2.0]), np.array([0.0, 0.0]))["vwap"]
     assert np.all(np.isnan(out))
+
+
+def test_vwap_an_na_price_bar_carries_the_previous_running_ratio() -> None:
+    """reference.py's na-price branch (``if not np.isnan(price[i])`` guards the
+    accumulation, while the bar still reports ``num / den`` from the previous bars) is
+    the shape ``pineTa.ts:960-970`` has too: an na-price bar contributes NOTHING and
+    the running ratio is carried forward unchanged.
+
+    Unreachable on the committed fixtures — hlc3 is finite on all four shapes and the
+    volume column is always positive, so 判据二 prints ``vwap ... na=0`` everywhere and
+    never walks this branch. That is why it is pinned here instead.
+    """
+    out = ta_vwap(np.array([2.0, np.nan]), np.array([1.0, 5.0]))["vwap"]
+    assert out[0] == pytest.approx(2.0)
+    assert out[1] == pytest.approx(2.0)                    # carried, not averaged in
+    # The skip covers the VOLUME too, which the next finite bar exposes: had the na
+    # bar contributed its 5.0, bar 2 would read (2 + 20) / 6 = 3.666... instead.
+    carried = ta_vwap(np.array([2.0, np.nan, 4.0]), np.array([1.0, 5.0, 1.0]))["vwap"]
+    assert carried[2] == pytest.approx(3.0)                # (2*1 + 4*1) / (1 + 1)
+    assert not np.isnan(carried).any()
 
 
 def test_ref_batch_3_ignores_the_session_column_by_design() -> None:
