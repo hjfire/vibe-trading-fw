@@ -270,9 +270,13 @@ def test_the_floor_table_is_the_tier_table_the_generator_derives(tmp_path: Path)
     ``grep -rn TIER_FLOOR agent/`` had zero readers outside this file (review round
     B-IMP-1). That asymmetry is what made "the ratchet is tighten-only" a statement about
     a table nobody guarded: moving one floor entry a tier looser changed nothing anybody
-    could observe. Re-planted this round at ``32fe0754`` (改
-    ``test_pine_oracle_provenance.py`` 的 ``"sma": "tight"`` → ``"loose"``，其余文件一律不动):
-    ``121 passed``, zero red.
+    could observe. Re-planted this round (本文件 ``"sma": "tight"`` → ``"loose"``，其余
+    文件一律不动): before this pin existed the tree read ``121 passed``, zero red — and
+    121 is the 88-``def test_`` state (one commit before this test was written), NOT the
+    ``32fe0754`` baseline, where the three review seats counted 119. With the pin in place
+    the same needle lands here: re-run on the controller's box at ``641647a5`` ⇒
+    ``1 failed, 12 passed``, message naming ``{'sma': ('loose', 'tight')}``; the file was
+    then restored byte-identical to the committed blob.
 
     Pinning equality against the generator's derived tier map narrows the channel instead
     of closing it — the four-edit path described above the table still exists and is
