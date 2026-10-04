@@ -259,6 +259,112 @@ def ta_stoch(
     return {"stoch_k": k, "stoch_d": _sma_na_propagating(k, d_len)}
 
 
+#: Supertrend's published parameters — TV's body inputs ``atrPeriod = 10``,
+#: ``factor = 3.0``, and Pine's two-argument form takes them as (factor, atrPeriod).
+#: Consumed by BOTH ``ref_batch_3`` and SCRIPTS["batch_3"] like every other length.
+ST_PERIOD = 10
+ST_FACTOR = 3.0
+
+
+def ta_supertrend(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = ST_PERIOD,
+    multiplier: float = ST_FACTOR,
+) -> dict[str, NanArray]:
+    """Transcribed from TradingView's published Pine body, not from the engine.
+
+    Three things a naive port gets wrong, each named by a test above:
+      - the trend state is keyed on ``prevSuperTrend == prevUpperBand``, not a boolean
+        flag, and the flip test uses *this* bar's close against the *ratcheted* band;
+      - the cold start is ``if na(atr[1]) direction := 1``, not "compare close to hl2";
+      - ``-1`` is the uptrend (line = lower band).
+
+    The body wraps the previous bands in ``nz()``, which makes the first bar's ratchet
+    a no-op for positive prices; the NaN guard below reproduces that. The equivalence
+    holds only while prices stay positive — every bar fixture does, by construction.
+    """
+    src = (np.asarray(high, dtype="float64") + np.asarray(low, dtype="float64")) / 2.0
+    close = np.asarray(close, dtype="float64")
+    atr_ = ta_rma(ta_tr(high, low, close), period)
+    n = close.shape[0]
+    upper = np.full(n, np.nan)
+    lower = np.full(n, np.nan)
+    line = np.full(n, np.nan)
+    direction = np.full(n, np.nan)
+    prev_line = np.nan
+    for i in range(n):
+        if np.isnan(atr_[i]):
+            continue                       # the body returns [na, na] before ATR warms up
+        ub = float(src[i]) + float(multiplier) * float(atr_[i])
+        lb = float(src[i]) - float(multiplier) * float(atr_[i])
+        prev_ub = float(upper[i - 1]) if i > 0 and not np.isnan(upper[i - 1]) else np.nan
+        prev_lb = float(lower[i - 1]) if i > 0 and not np.isnan(lower[i - 1]) else np.nan
+        prev_close = float(close[i - 1]) if i > 0 else np.nan
+        if not np.isnan(prev_ub) and not (ub < prev_ub or prev_close > prev_ub):
+            ub = prev_ub
+        if not np.isnan(prev_lb) and not (lb > prev_lb or prev_close < prev_lb):
+            lb = prev_lb
+        upper[i], lower[i] = ub, lb
+        prev_atr = float(atr_[i - 1]) if i > 0 else np.nan
+        if np.isnan(prev_atr):
+            d = 1.0
+        elif prev_line == prev_ub:
+            d = -1.0 if close[i] > ub else 1.0
+        else:
+            d = 1.0 if close[i] < lb else -1.0
+        direction[i] = d
+        prev_line = lb if d == -1.0 else ub
+        line[i] = prev_line
+    return {"supertrend": line, "st_direction": direction}
+
+
+def ta_vwap(
+    price: np.ndarray, volume: np.ndarray, session: Optional[np.ndarray] = None
+) -> dict[str, NanArray]:
+    """Running ``sum(price*volume) / sum(volume)`` — unanchored unless a session is given.
+
+    ``session=None`` is the reading the gate uses, because the engine's ``ta.vwap``
+    takes no session argument and accumulates over the whole loaded range
+    (``pineTa.ts:960-970``, whose own comment notes the TV difference as a warning).
+    Passing a session column re-anchors at each change — TradingView's behaviour, and
+    the known deviation COVERAGE.md lists as a backlog item rather than a passing gate.
+    """
+    price = np.asarray(price, dtype="float64")
+    volume = np.asarray(volume, dtype="float64")
+    out = np.full(price.shape, np.nan)
+    cur: Optional[int] = None
+    num = den = 0.0
+    for i in range(price.shape[0]):
+        s = 0 if session is None else int(session[i])
+        if s != cur:
+            cur, num, den = s, 0.0, 0.0
+        if not np.isnan(price[i]):
+            num += float(price[i]) * float(volume[i])
+            den += float(volume[i])
+        out[i] = num / den if den != 0.0 else np.nan
+    return {"vwap": out}
+
+
+def ref_batch_3(
+    cols: dict[str, NanArray], period: int, session: Optional[np.ndarray] = None
+) -> dict[str, NanArray]:
+    """Three lines, same Pine call signature on all four bar shapes.
+
+    ``session`` is accepted and ignored on purpose (see ``ta_vwap`` and the batch-3
+    test): the engine reads no session parameter, so honouring it here would compare
+    a different function to the engine and call the gap a pass. ``period`` (the
+    harness-wide ``PERIOD``) is likewise not Supertrend's length — TV's published
+    inputs are ``ST_PERIOD``/``ST_FACTOR``, and the Pine text below passes those same
+    constants, so no length can disagree between the two sides.
+    """
+    out = ta_supertrend(cols["high"], cols["low"], cols["close"], ST_PERIOD, ST_FACTOR)
+    hlc3 = (cols["high"] + cols["low"] + cols["close"]) / 3.0
+    out.update(ta_vwap(hlc3, cols["volume"]))
+    return out
+
+
 def ref_batch_2(
     cols: dict[str, NanArray], period: int, session: Optional[np.ndarray] = None
 ) -> dict[str, NanArray]:
@@ -293,6 +399,7 @@ def ref_batch_1(
 
 REFERENCE: dict[str, Callable[..., dict[str, NanArray]]] = {"batch_1": ref_batch_1}
 REFERENCE["batch_2"] = ref_batch_2
+REFERENCE["batch_3"] = ref_batch_3
 
 #: The Pine source text the JS gate runs, per reference batch. Plot titles are the
 #: ``line`` keys in the emitted ``values/*.csv`` — one file per (title, bars variant).
@@ -330,4 +437,25 @@ SCRIPTS["batch_2"] = (
     f'k5 = ta.stoch(close, high, low, {PERIOD})\n'
     'plot(k5, title="stoch_k")\n'
     f'plot(ta.sma(k5, {STOCH_D_LEN}), title="stoch_d")\n'
+)
+
+# Batch 3's Pine text. Supertrend's two outputs are read with a destructuring tuple,
+# the same form the in-repo TV corpus already exercises (``pineRealWorld.test.ts:97``'s
+# ``[stBuiltin, dirBuiltin] = ta.supertrend(factor, atrPeriod)``), and the two arguments
+# are Pine's v5 order (factor, atrPeriod) — ``pineTa.ts:674-678`` reads them in that
+# order, so ``ST_FACTOR`` comes first here and in ``ta_supertrend``'s call below.
+# ``ta.vwap`` is written with its source spelled out: the engine answers the bare
+# builtin with hlc3 (``pineTa.ts:960-970``, ``src = args.length ? ... : hlc3``), but a
+# bare member access never reaches the ``ta.*`` dispatcher (that branch lives on the
+# CALL path, ``pineRuntime.ts:1537-1541``), and no in-repo corpus writes it that way —
+# the only live use is ``scriptLibrary.ts:165``'s ``ta.vwap(hlc3)``. Passing hlc3
+# explicitly is the same function on both sides of the gate, so the argument list
+# states what is compared instead of leaning on a default the runtime cannot see.
+SCRIPTS["batch_3"] = (
+    "//@version=5\n"
+    'indicator("oracle batch 3")\n'
+    f'[stBand, stDir] = ta.supertrend({ST_FACTOR}, {ST_PERIOD})\n'
+    'plot(stBand, title="supertrend")\n'
+    'plot(stDir, title="st_direction")\n'
+    'plot(ta.vwap(hlc3), title="vwap")\n'
 )
