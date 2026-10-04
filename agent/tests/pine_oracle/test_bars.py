@@ -4,7 +4,17 @@ The JS gate never regenerates bars (a different float operation order in JS woul
 make the bar arrays themselves differ in the last bit, which voids the
 comparison). Instead the CSV is the single truth — these tests pin that it is
 deterministic, well-formed, and that wicks are independent of adjacent closes.
+
+The last test is the only one that reads the COMMITTED ``bars_*.csv``; everything
+above it checks rows the generator just built in memory. That distinction is the
+whole point of it: ``reference.py`` documents a cold-start branch as unreachable
+"on the committed bars", and that claim is about bytes in the fixture directory,
+not about what ``make_daily_bars`` returns today.
 """
+
+import csv
+
+import numpy as np
 
 from pine_oracle.bars import (
     DAILY_BAR_COUNT,
@@ -14,9 +24,17 @@ from pine_oracle.bars import (
     make_daily_bars,
     make_intraday_bars,
 )
-from pine_oracle.schema import sha256_of, write_text_lf
+from pine_oracle.schema import FIXTURE_DIR, sha256_of, write_text_lf
 
 HALF_HOUR = 30 * 60_000
+
+#: The five priced columns of a bar CSV. These are the columns whose finiteness every
+#: batch of ``reference.py`` assumes: an empty cell is Pine ``na`` (``schema.NA_ENCODING
+#: == "empty"``, decoded by ``schema.parse_float`` straight into ``float("nan")``) and a
+#: signed-infinity cell parses fine and then satisfies every row invariant below —
+#: ``high >= max(open, close)`` and ``volume > 0`` are both TRUE for ``inf``, so the
+#: in-memory shape checks cannot be the finiteness guard.
+PRICED_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 
 
 def test_lcg_is_deterministic_and_in_unit_interval() -> None:
@@ -158,3 +176,58 @@ def test_generated_file_is_bytewise_reproducible(tmp_path) -> None:
     for p in (p1, p2):
         write_text_lf(p, bars_csv_text(make_daily_bars(seed=11, n=30, shape="oscillate")))
     assert sha256_of(p1) == sha256_of(p2)
+
+
+def priced_cells_from_csv(text: str) -> dict[str, list[str]]:
+    """The five priced columns of one bar CSV, read from TEXT and kept as raw cells.
+
+    Two deliberate choices, both so this gate can be disproved without touching a
+    fixture:
+      * it takes text, not a path — ``bars_*.csv`` are frozen, so the "it would go red"
+        evidence is fed as a bad sample (a copy outside the repo, or a rewritten
+        string) and the committed bytes stay byte-identical;
+      * it returns STRINGS, not floats — coercing here would raise ``ValueError`` on an
+        empty field before the gate could name the file and column it is refusing,
+        and it would quietly swallow the other shape worth pinning, ``"inf"``.
+    """
+    rows = list(csv.reader(text.splitlines()))
+    header, body = rows[0], rows[1:]
+    missing = [name for name in PRICED_COLUMNS if name not in header]
+    if missing:
+        raise ValueError(f"bar CSV header carries none of {missing}: {header!r}")
+    index = {name: header.index(name) for name in PRICED_COLUMNS}
+    columns: dict[str, list[str]] = {name: [] for name in PRICED_COLUMNS}
+    for row in body:
+        for name, position in index.items():
+            # a row too short to reach the column IS an empty field: Pine `na` is
+            # encoded as an empty cell, so never invent a value for a missing cell.
+            columns[name].append(row[position] if position < len(row) else "")
+    return columns
+
+
+def test_the_committed_bar_csvs_are_finite_and_have_no_empty_price_field() -> None:
+    """The committed ``bars_*.csv``: every priced column finite, no empty cell.
+
+    This closes a reference that pointed at a gate which did not exist. Until now
+    ``reference.py`` explained its cold-start branch as "Unreachable on the committed
+    bars (test_bars.py asserts finiteness)", while this file asserted no finiteness at
+    all (``grep -n -i -E "finite|nan|inf"`` over it: zero hits) and every test above it
+    builds rows in memory with ``make_daily_bars()``/``make_intraday_bars()``, comparing
+    not one committed byte. The in-memory invariants are not a substitute either:
+    ``high >= max(open, close)``, ``low <= min(open, close)`` and ``volume > 0`` are all
+    TRUE for ``inf``, so a +/-inf price walked straight through them — which is why the
+    promise is now pinned where it is actually made, in the four CSVs, against both
+    shapes the JS reader trips over: the empty field (Pine ``na``, ``schema.NA_ENCODING``)
+    and any non-finite float.
+    """
+    paths = sorted(FIXTURE_DIR.glob("bars_*.csv"))
+    assert len(paths) == 4, [p.name for p in paths]
+    for path in paths:
+        columns = priced_cells_from_csv(path.read_text(encoding="utf-8"))
+        for column, cells in columns.items():
+            assert cells, (path.name, column, "no rows parsed at all")
+            empty = [i for i, cell in enumerate(cells) if cell == ""]
+            assert not empty, (path.name, column, "empty cell (Pine na) at rows", empty)
+            values = np.asarray([float(cell) for cell in cells], dtype="float64")
+            non_finite = [i for i, value in enumerate(values) if not np.isfinite(value)]
+            assert not non_finite, (path.name, column, "non-finite value at rows", non_finite)

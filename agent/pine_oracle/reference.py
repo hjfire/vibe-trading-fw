@@ -325,8 +325,12 @@ def ta_supertrend(
         lb = float(src[i]) - float(multiplier) * float(atr_[i])
         # np.isfinite, not `not np.isnan`: the engine guards the previous band with
         # Number.isFinite (pineTa.ts:700-713), so a +/-inf previous band counts as
-        # unusable on both sides. Unreachable on the committed bars (test_bars.py
-        # asserts finiteness), so this alignment moves no CSV byte.
+        # unusable on both sides. Unreachable on the committed bars — and the gate that
+        # says so is named, not gestured at:
+        # ``test_bars.py::test_the_committed_bar_csvs_are_finite_and_have_no_empty_price_field``
+        # reads the four committed ``bars_*.csv`` and refuses any empty cell or
+        # non-finite value in open/high/low/close/volume. So this alignment moves no
+        # CSV byte.
         prev_ub = float(upper[i - 1]) if i > 0 and np.isfinite(upper[i - 1]) else np.nan
         prev_lb = float(lower[i - 1]) if i > 0 and np.isfinite(lower[i - 1]) else np.nan
         prev_close = float(close[i - 1]) if i > 0 else np.nan
