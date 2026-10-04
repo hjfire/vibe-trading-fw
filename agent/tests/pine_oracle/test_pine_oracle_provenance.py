@@ -128,6 +128,29 @@ def test_batch_one_lines_are_emitted_for_every_variant() -> None:
             assert f"values/{line}@{bars}.csv" in manifest["files"], (line, bars)
 
 
+def test_line_names_are_unique_across_batches() -> None:
+    """Two batches using one title would merge into a single tier and one CSV — the
+    fixture would then be checking one of them twice."""
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    all_lines = [line for names in manifest["lines"].values() for line in names]
+    assert len(all_lines) == len(set(all_lines)), sorted(all_lines)
+
+
+def test_declared_engine_conventions_are_the_exact_adjudicated_set() -> None:
+    """Adopting the engine's convention over the textbook one is allowed, but only
+    for the lines that have been argued about by name. New adoption => new entry,
+    in git, next to a point-value test that writes down both numbers.
+
+    The second assertion is the one that keeps the table honest about its own scope:
+    a convention may only be declared for a line the manifest actually tiers, so an
+    entry cannot name a line that no batch emits (a key set alone would still pass
+    while the table drifted away from the fixture it describes).
+    """
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    assert set(manifest["convention"]) == {"ema", "macd", "rsi", "stoch_k"}
+    assert set(manifest["convention"]) <= set(manifest["tolerance_tier"])
+
+
 def test_values_header_and_na_encoding_are_the_declared_contract() -> None:
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
     rel = f"values/sma@{next(iter(BARS_SETS))}.csv"

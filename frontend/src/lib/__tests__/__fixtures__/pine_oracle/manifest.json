@@ -1,10 +1,26 @@
 {
+  "convention": {
+    "ema": "seeded on src[0] with no na warm-up; TA-Lib SMA-seeds at n-1 (pineTa.ts:134-145)",
+    "macd": "all three outputs are dense from bar 0 because the underlying emas are (pineTa.ts:622-632)",
+    "rsi": "bar-0 change enters both rma streams as 0, so the first value is at n-1 and the seed window includes that 0; na-propagation would start at n (pineTa.ts:550-552)",
+    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na (pineTa.ts:212-222)"
+  },
   "exemption": {
+    "atr": "strict",
+    "bb_basis": "strict",
+    "bb_lower": "strict",
+    "bb_upper": "strict",
     "ema": "strict",
+    "macd": "strict",
+    "macd_hist": "strict",
+    "macd_signal": "strict",
     "rma": "strict",
+    "rsi": "strict",
     "sma": "strict",
     "stdev": "strict",
-    "stdev_sample": "strict"
+    "stdev_sample": "strict",
+    "stoch_d": "strict",
+    "stoch_k": "strict"
   },
   "external_anchors": [],
   "files": {
@@ -12,14 +28,46 @@
     "bars_daily_oscillating.csv": "35441afa24c71de0868061f7ba9960994b3e6b7b8269432f8b6ae0d8f3687a1d",
     "bars_daily_trend.csv": "cca364cadeeaeda3827c5a947143bfe572ef3e3851fce86152b38e572166b006",
     "bars_intraday_vwap.csv": "0c261a2a6692386ea600a7809a8851cf37057cbe9c5f9cab995a65a2de7bd925",
+    "values/atr@bars_daily_gapped.csv": "3a496f4af6bc41c6d95593bd413fa5190db4a7aec120acf1c3855e86baee81b5",
+    "values/atr@bars_daily_oscillating.csv": "777bce07c34c77c777d5424991746d070b0d5a30573ae44194d824a73fdeb0a5",
+    "values/atr@bars_daily_trend.csv": "0d75230fa54509d69ce111c2933f8c340a28cd22c0e1c53b2025572c5c1b09bc",
+    "values/atr@bars_intraday_vwap.csv": "0c4ba991b18c76cfbc23312bb0a16d2386dea41b5884d61b284e8096b166835b",
+    "values/bb_basis@bars_daily_gapped.csv": "7c3077585ff6f9a8abe207eac9aba638d91065ef1556df091fecf25fb175deeb",
+    "values/bb_basis@bars_daily_oscillating.csv": "c379a3e514aa24f301deba7876fb3187245aef40695e2a2c0bd757fe3f95f1a3",
+    "values/bb_basis@bars_daily_trend.csv": "75245ea58c7f3d14d10055b14e8674615ccf9cde655ba82c094084b33039d6e7",
+    "values/bb_basis@bars_intraday_vwap.csv": "530ef683cd2907cfac171385e68af0d44ae52a651aa11879c3b902a20e5434a1",
+    "values/bb_lower@bars_daily_gapped.csv": "bd27fc900b7fb6fa322d62318b1032ee70abc5f006ffc7a65a003e81931e9f20",
+    "values/bb_lower@bars_daily_oscillating.csv": "85332689fed79036104861ca0837be34ceef6617c825ac83e6e5a11734246776",
+    "values/bb_lower@bars_daily_trend.csv": "7f434175c7cbdead821863d0298deda4d6628aa4a2aab7aff53b88f9ea652a58",
+    "values/bb_lower@bars_intraday_vwap.csv": "1712e18a0f3c5c43862315fe8d12d97aaa5a67edfae03804c65a9589d1b331c7",
+    "values/bb_upper@bars_daily_gapped.csv": "c1a3de4bb3590bbd9c216e06224aea4efeaca77056bc1933c83e1f79378cfe47",
+    "values/bb_upper@bars_daily_oscillating.csv": "e3c00d4cdfa7132e89a05402ec673a1a73f81b0e7f7eb333a7f379ec8ea4bb1e",
+    "values/bb_upper@bars_daily_trend.csv": "d39205d604ef49a70e375ed40fe3eebcd66dfd36ed75cf7c9277095286375f5a",
+    "values/bb_upper@bars_intraday_vwap.csv": "675f579f8dded0ac543cac3a01535b928d9c807bb52ecf9a0d534852ebb11fb1",
     "values/ema@bars_daily_gapped.csv": "9081984457085f2ebe314df6292425662b6873e2b84d89f2ad78ccf112355f4c",
     "values/ema@bars_daily_oscillating.csv": "511991fc09b69f7b25fc9a9755f0698b3c6f663534d50a86a1f1093f21e4302b",
     "values/ema@bars_daily_trend.csv": "5373c20f25c603a5f647718b913404fa82670b1a70ded8f1a282583febaa3b3e",
     "values/ema@bars_intraday_vwap.csv": "36da9dfb9bb3925493291a01caa8f04acfa58435c9537ee1a3c7f0644f479f95",
+    "values/macd@bars_daily_gapped.csv": "c2511081234aa76ac406e8974ca0ecca783d5acd5a7b34a28529caf602dd6a37",
+    "values/macd@bars_daily_oscillating.csv": "542e68260f63c634f2a560e779ded77e3318dfa220bbbb1d8c3746f00e755a32",
+    "values/macd@bars_daily_trend.csv": "f7b90c8ffb62ea07630a0df8f30b38b8a9acbf9892a9c6e3984bd9e5185a7a33",
+    "values/macd@bars_intraday_vwap.csv": "022825fd63e5115778e4faeeb31ca07543dca2a99ba42dce4d4f9ab24abf5a1f",
+    "values/macd_hist@bars_daily_gapped.csv": "8289cbc86ed939b5209411beb265fbe88adf00d18253e44838622e207248cb23",
+    "values/macd_hist@bars_daily_oscillating.csv": "728413a890a118e1759ec2aed3d87803cbfb77b23d08fec7c3033cb98f32a70a",
+    "values/macd_hist@bars_daily_trend.csv": "55a4e8dac4ad032a67571eb7c4044364a8df27063d1de5b4a70b09d84842918f",
+    "values/macd_hist@bars_intraday_vwap.csv": "d1a7a9cac073312764834d2170f1023bd163a2470d038e091e8c8161674734b7",
+    "values/macd_signal@bars_daily_gapped.csv": "9f4b5521fc1e750c48f779b94bc993a1c46940b933578a2319a298c9b26d4742",
+    "values/macd_signal@bars_daily_oscillating.csv": "eef19a4b70e18b859a140f49dfd80346987639c20e5ef26922c8d42029267b67",
+    "values/macd_signal@bars_daily_trend.csv": "5af3529410b150d4d7fc18ef9e10fc80ba310725b8d70e62c24162b14dae11fc",
+    "values/macd_signal@bars_intraday_vwap.csv": "b9fa4c81104bdc8e4321f950b0a0e286a4ed2bffeafe958fa17822332f349a57",
     "values/rma@bars_daily_gapped.csv": "f1e09a31bb7a99f84da9bbf16c4de4323d31e515c6bcac95c5e6c89ed12382b7",
     "values/rma@bars_daily_oscillating.csv": "d5470002d08e0a6a58ebf7891b13a8f30658a9dda4366339c7eb8992650da1b5",
     "values/rma@bars_daily_trend.csv": "00a1223f5aa3276fec69eef7b067dfa4b36a82c1dc784f0c1aad24a744f80953",
     "values/rma@bars_intraday_vwap.csv": "9837f7619d4124e97b924f923bf25f7a8df2ccdf9f36e74b8792897f8501dadd",
+    "values/rsi@bars_daily_gapped.csv": "e7b245561d4aefcd7223b4cb5ef267c83a63d0855609dd406a74245c87faa03b",
+    "values/rsi@bars_daily_oscillating.csv": "04a9d1a75aded646062a1fa435673d58e3c70aeb4eb6388ab02bdb3c6bdbee69",
+    "values/rsi@bars_daily_trend.csv": "a7f17c8e4711a16d67e9b8a9e7fbb60e0f1a979ef6db2e1489166dbe6131b270",
+    "values/rsi@bars_intraday_vwap.csv": "501c796a27efed33032ad303d7b0a96f4390507de68aff5b07ce7a5aae62fa4c",
     "values/sma@bars_daily_gapped.csv": "7c3077585ff6f9a8abe207eac9aba638d91065ef1556df091fecf25fb175deeb",
     "values/sma@bars_daily_oscillating.csv": "c379a3e514aa24f301deba7876fb3187245aef40695e2a2c0bd757fe3f95f1a3",
     "values/sma@bars_daily_trend.csv": "75245ea58c7f3d14d10055b14e8674615ccf9cde655ba82c094084b33039d6e7",
@@ -31,11 +79,19 @@
     "values/stdev_sample@bars_daily_gapped.csv": "59f56e8deb108b90c0251093e2b9a7dbe9b954fa3b0944cae9211e93f22c2a07",
     "values/stdev_sample@bars_daily_oscillating.csv": "800a9abde2422a40cefede5bca9e004b3782c07a8017ac324dd56d6c85f7b45e",
     "values/stdev_sample@bars_daily_trend.csv": "9ec6d808c24880b729bf527221fc5b10eab553fef09f4ab7471d83fedc98c79a",
-    "values/stdev_sample@bars_intraday_vwap.csv": "026391adf7a52d90fde2714c6193dc5b239924ca3cb8d0a1f8af5b482d49b1b2"
+    "values/stdev_sample@bars_intraday_vwap.csv": "026391adf7a52d90fde2714c6193dc5b239924ca3cb8d0a1f8af5b482d49b1b2",
+    "values/stoch_d@bars_daily_gapped.csv": "a9297bc58643975cf7fb37643694b6469cc175b84804b4f37e882a23af417886",
+    "values/stoch_d@bars_daily_oscillating.csv": "d10ed0e716bba4f640d12c276d3d73abe8e9094d388b98af9541ba71306869d9",
+    "values/stoch_d@bars_daily_trend.csv": "bc5a8065b1bb454a0148f98a17b04dacb50c7fa85d4a94a53d50e0347a814c04",
+    "values/stoch_d@bars_intraday_vwap.csv": "573f28b26965f559eed95dcf7671ad765b0776c9d9bacc14687d09d5fb4f07fa",
+    "values/stoch_k@bars_daily_gapped.csv": "dd1f20b6ca05c64eef864f2c266274f15e2eef9dae986e1e89d2f5ab2a9f32a2",
+    "values/stoch_k@bars_daily_oscillating.csv": "9b6d27dc4bb1748329d66b323dcfd188d2f8756e71d1c398f67d057b76413365",
+    "values/stoch_k@bars_daily_trend.csv": "c5aa0712efdda6bf600a66304a59eb506f937e8459f65b174682838db2102f0f",
+    "values/stoch_k@bars_intraday_vwap.csv": "0e92d4f5f8d64a9eb39275c6d36817de42e318acab99cc5ead5fa5450d70be64"
   },
   "generated_at": "2026-10-04",
   "generator": "agent/pine_oracle/emit_fixtures.py",
-  "head_sha": "14417efa",
+  "head_sha": "3ad43ae7",
   "line_ending": "lf",
   "lines": {
     "batch_1": [
@@ -44,6 +100,18 @@
       "sma",
       "stdev",
       "stdev_sample"
+    ],
+    "batch_2": [
+      "atr",
+      "bb_basis",
+      "bb_lower",
+      "bb_upper",
+      "macd",
+      "macd_hist",
+      "macd_signal",
+      "rsi",
+      "stoch_d",
+      "stoch_k"
     ]
   },
   "na_encoding": "empty",
@@ -51,7 +119,8 @@
     "default": 5
   },
   "scripts": {
-    "batch_1": "//@version=5\nindicator(\"oracle batch 1\")\nplot(ta.sma(close, 5), title=\"sma\")\nplot(ta.ema(close, 5), title=\"ema\")\nplot(ta.rma(close, 5), title=\"rma\")\nplot(ta.stdev(close, 5), title=\"stdev\")\nplot(ta.stdev(close, 5, false), title=\"stdev_sample\")\n"
+    "batch_1": "//@version=5\nindicator(\"oracle batch 1\")\nplot(ta.sma(close, 5), title=\"sma\")\nplot(ta.ema(close, 5), title=\"ema\")\nplot(ta.rma(close, 5), title=\"rma\")\nplot(ta.stdev(close, 5), title=\"stdev\")\nplot(ta.stdev(close, 5, false), title=\"stdev_sample\")\n",
+    "batch_2": "//@version=5\nindicator(\"oracle batch 2\")\nplot(ta.rsi(close, 14), title=\"rsi\")\nplot(ta.atr(5), title=\"atr\")\n[basis, upper, lower] = ta.bb(close, 5, 2.0)\nplot(basis, title=\"bb_basis\")\nplot(upper, title=\"bb_upper\")\nplot(lower, title=\"bb_lower\")\n[macdLine, macdSig, macdHist] = ta.macd(close, 12, 26, 9)\nplot(macdLine, title=\"macd\")\nplot(macdSig, title=\"macd_signal\")\nplot(macdHist, title=\"macd_hist\")\nk5 = ta.stoch(close, high, low, 5)\nplot(k5, title=\"stoch_k\")\nplot(ta.sma(k5, 3), title=\"stoch_d\")\n"
   },
   "seed": {
     "bars_daily_gapped": 23,
@@ -66,10 +135,20 @@
     "bars_intraday_vwap": "intraday"
   },
   "tolerance_tier": {
+    "atr": "loose",
+    "bb_basis": "tight",
+    "bb_lower": "tight",
+    "bb_upper": "tight",
     "ema": "loose",
+    "macd": "loose",
+    "macd_hist": "loose",
+    "macd_signal": "loose",
     "rma": "loose",
+    "rsi": "loose",
     "sma": "tight",
     "stdev": "tight",
-    "stdev_sample": "tight"
+    "stdev_sample": "tight",
+    "stoch_d": "loose",
+    "stoch_k": "loose"
   }
 }

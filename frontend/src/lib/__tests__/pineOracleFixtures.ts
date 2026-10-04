@@ -58,6 +58,15 @@ export interface OracleAnchor {
 export interface OracleManifest {
   tolerance_tier: Record<string, string>;
   exemption: Record<string, string>;
+  /**
+   * Lines whose committed reference value follows THIS engine's convention rather
+   * than the TA-Lib/textbook one, each entry stating what the other convention would
+   * have produced. Written by ``emit_fixtures.ENGINE_CONVENTION``; the Python
+   * provenance gate pins the exact key set, so this is the JS-side read of that
+   * record (the gate itself does not branch on it — an absent field here would
+   * nevertheless show up as a red Python guard).
+   */
+  convention: Record<string, string>;
   scripts: Record<string, string>;
   lines: Record<string, string[]>;
   external_anchors: OracleAnchor[];

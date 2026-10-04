@@ -119,6 +119,157 @@ def ta_stdev(src: np.ndarray, n: int, biased: bool = True) -> NanArray:
     return out
 
 
+#: --- batch 2 parameters: one definition each, consumed by BOTH ref_batch_2 and
+#: SCRIPTS["batch_2"], so the Pine text the JS gate runs and the numpy series the
+#: fixture stores cannot quietly disagree about a length.
+RSI_LEN = 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIG = 9
+BB_COEF = 2.0
+STOCH_D_LEN = 3
+
+
+def ta_tr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> NanArray:
+    """True range, bar 0 included.
+
+    The engine's ``pc`` at bar 0 is ``close[0]`` (pineTa.ts:536), not a missing
+    value; for any bar with ``low <= close <= high`` the three candidates collapse
+    to ``high - low``, which is what the folklore rule states.
+    """
+    out = np.empty(high.shape, dtype="float64")
+    out[0] = max(
+        float(high[0]) - float(low[0]),
+        abs(float(high[0]) - float(close[0])),
+        abs(float(low[0]) - float(close[0])),
+    )
+    for i in range(1, high.shape[0]):
+        pc = float(close[i - 1])
+        out[i] = max(
+            float(high[i]) - float(low[i]),
+            abs(float(high[i]) - pc),
+            abs(float(low[i]) - pc),
+        )
+    return out
+
+
+def ta_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> NanArray:
+    return ta_rma(ta_tr(high, low, close), n)
+
+
+def ta_rsi(src: np.ndarray, n: int) -> NanArray:
+    """RSI on the engine's seeding rule (see the batch-2 note above).
+
+    ``change`` is na at bar 0, but the engine feeds ``0`` into both rma streams
+    there, so the seeding window is ``[0, c1, .. c(n-1)]`` and the first non-na
+    output is at index ``n-1``. ``dn == 0`` -> 50 when ``up`` is also 0, else 100.
+    """
+    src = np.asarray(src, dtype="float64")
+    out = np.full(src.shape, np.nan)
+    L = src.shape[0]
+    if n < 1 or L < n:
+        return out
+    change = np.full(L, np.nan)
+    change[1:] = np.diff(src)
+    up = np.where(np.isnan(change) | (change < 0), 0.0, change)
+    down = np.where(np.isnan(change) | (change > 0), 0.0, -change)
+    r_up, r_down = ta_rma(up, n), ta_rma(down, n)
+    for i in range(L):
+        if np.isnan(r_up[i]) or np.isnan(r_down[i]):
+            continue
+        u, d = float(r_up[i]), float(r_down[i])
+        if d == 0.0:
+            out[i] = 50.0 if u == 0.0 else 100.0
+        elif u == 0.0:
+            out[i] = 0.0
+        else:
+            out[i] = 100.0 - 100.0 / (1.0 + u / d)
+    return out
+
+
+def ta_bb(src: np.ndarray, n: int, coef: float) -> dict[str, NanArray]:
+    """Bollinger on the engine's stdev default: the deviation is the POPULATION one."""
+    src = np.asarray(src, dtype="float64")
+    basis = ta_sma(src, n)
+    dev = coef * ta_stdev(src, n)
+    return {"bb_basis": basis, "bb_upper": basis + dev, "bb_lower": basis - dev}
+
+
+def ta_macd(src: np.ndarray, fast: int, slow: int, sig: int) -> dict[str, NanArray]:
+    """Three dense series from bar 0: line = ema(fast) - ema(slow), signal = ema(line).
+
+    Because this engine's ``ema`` seeds at the first bar, nothing here is na during
+    warm-up — the histogram is exactly ``line - signal``.
+    """
+    src = np.asarray(src, dtype="float64")
+    line = ta_ema(src, fast) - ta_ema(src, slow)
+    signal = ta_ema(line, sig)
+    return {"macd": line, "macd_signal": signal, "macd_hist": line - signal}
+
+
+def _sma_na_propagating(src: np.ndarray, n: int) -> NanArray:
+    """A trailing mean that answers only for a window with no na in it.
+
+    This is the rule THIS helper states — "a window holding an na has no mean" — and
+    it is deliberately not the batch-1 ``ta_sma`` cumsum form, whose prefix sum is
+    poisoned permanently by the first na (see the module docstring's DEVIATION note).
+    The engine's ``smaStep`` is per window: it returns NA the moment a value in the
+    *current* window is NA (pineTa.ts:46-54), which is what pushes the second stoch
+    stage one bar later per na it inherits. What Pine's own ``ta.sma`` does with an
+    na in the window is a Task 6 external-anchor question, not a claim made here.
+    """
+    out = np.full(src.shape, np.nan)
+    for i in range(n - 1, src.shape[0]):
+        window = src[i - n + 1 : i + 1]
+        if not np.any(np.isnan(window)):
+            out[i] = float(window.mean())
+    return out
+
+
+def ta_stoch(
+    src: np.ndarray, high: np.ndarray, low: np.ndarray, n: int, d_len: int
+) -> dict[str, NanArray]:
+    """%K from the trailing high/low window (partial from bar 0); %D = sma(%K, d_len).
+
+    ``hh == ll`` -> na (no divide-by-zero). The engine's four-argument overload
+    returns %K only and its fifth argument is ``smoothK`` (pineTa.ts:596-610), so
+    %D is produced on the Pine side by an explicit ``ta.sma`` — never by a six
+    argument call, which would silently be a smoothed K.
+    """
+    src = np.asarray(src, dtype="float64")
+    high = np.asarray(high, dtype="float64")
+    low = np.asarray(low, dtype="float64")
+    k = np.full(src.shape, np.nan)
+    for i in range(src.shape[0]):
+        # No full-window gate (pineTa.ts:212-222): bar 0 is measured over one bar.
+        start = max(0, i - n + 1)
+        hh = float(np.max(high[start : i + 1]))
+        ll = float(np.min(low[start : i + 1]))
+        if hh == ll:
+            continue
+        k[i] = 100.0 * (float(src[i]) - ll) / (hh - ll)
+    return {"stoch_k": k, "stoch_d": _sma_na_propagating(k, d_len)}
+
+
+def ref_batch_2(
+    cols: dict[str, NanArray], period: int, session: Optional[np.ndarray] = None
+) -> dict[str, NanArray]:
+    """Batch 2's ten lines. ``session`` is unused: none of these builtins is session-aware.
+
+    The engine's own ``ta.atr``/``ta.tr`` likewise read only high/low/close
+    (pineTa.ts:532-545), so there is no session branch to mirror here.
+    """
+    close = cols["close"]
+    out: dict[str, NanArray] = {
+        "rsi": ta_rsi(close, RSI_LEN),
+        "atr": ta_atr(cols["high"], cols["low"], close, period),
+    }
+    out.update(ta_bb(close, period, BB_COEF))
+    out.update(ta_macd(close, MACD_FAST, MACD_SLOW, MACD_SIG))
+    out.update(ta_stoch(close, cols["high"], cols["low"], period, STOCH_D_LEN))
+    return out
+
+
 def ref_batch_1(
     cols: dict[str, NanArray], period: int, session: Optional[np.ndarray] = None
 ) -> dict[str, NanArray]:
@@ -133,6 +284,7 @@ def ref_batch_1(
 
 
 REFERENCE: dict[str, Callable[..., dict[str, NanArray]]] = {"batch_1": ref_batch_1}
+REFERENCE["batch_2"] = ref_batch_2
 
 #: The Pine source text the JS gate runs, per reference batch. Plot titles are the
 #: ``line`` keys in the emitted ``values/*.csv`` — one file per (title, bars variant).
@@ -147,3 +299,27 @@ SCRIPTS: dict[str, str] = {
         f'plot(ta.stdev(close, {PERIOD}, false), title="stdev_sample")\n'
     ),
 }
+
+# Batch 2's Pine text. ``ta.stoch`` here is the FOUR-argument overload, which returns
+# %K only (its fifth argument is smoothK, pineTa.ts:596-610); %D is therefore an
+# explicit ``ta.sma`` on the K, matching ``ta_stoch``'s ``_sma_na_propagating`` stage.
+# The three-value destructurings below are the shape Pine documents and the engine
+# implements (bb -> [basis, upper, lower], macd -> [line, signal, hist]); tuple
+# returns already have committed precedent in ``pineRealWorld.test.ts:90/97``.
+SCRIPTS["batch_2"] = (
+    "//@version=5\n"
+    'indicator("oracle batch 2")\n'
+    f'plot(ta.rsi(close, {RSI_LEN}), title="rsi")\n'
+    f'plot(ta.atr({PERIOD}), title="atr")\n'
+    f'[basis, upper, lower] = ta.bb(close, {PERIOD}, {BB_COEF})\n'
+    'plot(basis, title="bb_basis")\n'
+    'plot(upper, title="bb_upper")\n'
+    'plot(lower, title="bb_lower")\n'
+    f'[macdLine, macdSig, macdHist] = ta.macd(close, {MACD_FAST}, {MACD_SLOW}, {MACD_SIG})\n'
+    'plot(macdLine, title="macd")\n'
+    'plot(macdSig, title="macd_signal")\n'
+    'plot(macdHist, title="macd_hist")\n'
+    f'k5 = ta.stoch(close, high, low, {PERIOD})\n'
+    'plot(k5, title="stoch_k")\n'
+    f'plot(ta.sma(k5, {STOCH_D_LEN}), title="stoch_d")\n'
+)

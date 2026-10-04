@@ -42,6 +42,21 @@ TIGHT_LINES: frozenset[str] = frozenset(
     {"sma", "stdev", "stdev_sample", "bb_basis", "bb_upper", "bb_lower"}
 )
 
+#: Lines whose reference value follows THIS engine's convention rather than the
+#: TA-Lib/textbook one. Each entry states what the other convention would have
+#: produced, so the adoption is a record, not a forgetting. Provenance asserts this
+#: exact key set: a new entry (or a removal) has to be made in git, visibly.
+ENGINE_CONVENTION: dict[str, str] = {
+    "ema": "seeded on src[0] with no na warm-up; TA-Lib SMA-seeds at n-1 (pineTa.ts:134-145)",
+    "rsi": "bar-0 change enters both rma streams as 0, so the first value is at n-1 and the "
+           "seed window includes that 0; na-propagation would start at n (pineTa.ts:550-552)",
+    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose "
+               "partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only "
+               "via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na "
+               "(pineTa.ts:212-222)",
+    "macd": "all three outputs are dense from bar 0 because the underlying emas are (pineTa.ts:622-632)",
+}
+
 #: basename -> (rows, writes_the_session_column), taken from emit_bars so the seeds
 #: and shapes cannot be restated wrong here.
 BARS_SETS: dict[str, tuple[list[dict[str, Any]], bool]] = {
@@ -105,6 +120,8 @@ def emit(out_dir: Path = FIXTURE_DIR) -> dict[str, Any]:
         "lines": lines_by_batch,
         "tolerance_tier": tier,
         "exemption": exemption,
+        # 每一处「采纳引擎约定而非教科书/TA-Lib 约定」都在这张表里留名（见其定义处）。
+        "convention": ENGINE_CONVENTION,
         # 外部锚点在 Task 5/6 逐批填；空数组是诚实读数，不是失败（spec §9 R-B）。
         "external_anchors": [],
         "generated_at": date.today().isoformat(),
