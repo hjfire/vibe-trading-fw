@@ -3182,3 +3182,23 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 **给 Task 4 的两条前置事实**（本轮把「将来会撞」换成了常驻用例）：`_task4_generated_manifest()`（`test_schema.py:227-…`）逐键照 `:1479-1502` 的字面量构造真实产物形态并断 `validate_manifest(doc) == []`，**生成器落的是 14 键**（11 契约 + `generated_at`/`generator`/`head_sha`），不是 11——多出的 3 个是生成器元数据，被有意排除在必需键名单外。Task 5 追加的 `convention`（`:2113`）与 Task 6 填充的 `external_anchors` 元素都不落在被收紧的判据上，仍合法。若 Task 4 的产物被这道门拒了，先怀疑生成器，门是有意严的。
 
 **仍未做且已裁定的**（不是遗漏）：`lines` 批内值类型、`seed`/`period` 值类型、`files` 值是否 64-hex、`external_anchors` 元素形状——由 Task 4/7 的 provenance 门在真文件上把关；不可 hash 的 tier 值（`tolerance_tier: {"x": []}`）仍抛 `TypeError` 而非返错误列表，登记在 ledger 为 parked。
+
+### Task 2 执行期对账（同上一条：只追加，上方坐标不动）
+
+| 项 | 计划期 | 落仓实码 | 定性 |
+|---|---|---|---|
+| `emit_bars.py` 的 seed 声明 | `BAR_JOBS` 调用实参写一份 seed，`BARS_META` 字面量再写一份，注释声称「派生而非重述」 | 私有表 `_JOBS`（`emit_bars.py:27-32`）单点声明，`BAR_JOBS` 与 `BARS_META` 都由它派生；`BARS_BASENAMES` 仍从 `BAR_JOBS` 取 | **加严**。计划文本的假声明在 Task 4 里抓不到：它只断言名字集合相等（`:1431`），seed 错配会产出一份「声称 seed=X 可重生、字节实来自 seed=Y」的 manifest |
+| 「恰好 5 根跳棒」的理由 | `bars.py` docstring 归因于「棒内噪声 <1%」 | 归因改为构造性不变式，并新增第 12 条用例 `test_non_injected_bars_open_equals_previous_close` 用 `==` 精确钉住它 | **加严**＋文字归真。评审探针实测 `_BODY_STEP` 取 0.012/0.12/0.6/1.2 时计数四次全为 `[22,45,68,91,114]`，旧理由是假的；新用例经两根针证可红（`round(open_, 6)`→`round(open_, 2)` 时旧计数用例仍绿） |
+| OHLC 括号与 volume 正性 | 只对 `shape="trend"` 逐行断言 | 同一循环扩到 `trend/oscillate/gap` ＋ `make_intraday_bars(seed=13, sessions=1)` | **加严**，用例条数不变。Task 4 的 `vwap` 参考值正是从日内 `high/low/close/volume` 算（`:1438-1444`） |
+| Step 7 期望条数 | `34 passed`（23＋11） | **64 passed**（Task 1 实际 52 ＋ Task 2 实际 12） | 计划期两个数都已过期，见上一条 Task 1 对账 |
+| Step 6 那句「`run1` 的 sha 与 Step 5 打印的第一行一致」 | 成立 | **不成立**：`emit()` 返回的元组被 `sorted(d for _, d in emit())` 排序，排的是 sha 串，`run1` 是第四份（vwap） | 计划文本缺陷，已在执行报告中纠正；Step 6 的命令本身照旧可跑 |
+| 日内 epoch 的时区独立性 | 靠「显式写 08:00 偏移」这句话保证 | 结构性保证：`bars.py` 全文只 import `__future__`/`typing.Any`/`pine_oracle.schema`，**没有 `datetime`/`zoneinfo`** | 比计划更强，无需改动 |
+| `lcg_stream(seed, n * 6)` 的第 1 带（`n..2n-1`） | 未说明 | 确实从未被读（实读带为 `i`/`2n+i`/`3n+i`/`4n+i`/`5n+i`） | **已裁定不改**：流长度一动就改四份已入库 CSV 的字节。登记为 parked，不是遗漏 |
+
+**四份 bar 夹具的字节基线**（后续任务不得改动；改动即重生成对账失败）：
+`wc -l` = `121 / 121 / 121 / 41`，sha12 前缀 `cca364cadeea`（trend）/ `35441afa24c7`（oscillating）/ `671b1f8d4aca`（gapped）/ `0c261a2a6692`（intraday），
+`git ls-files --eol` 四份均 `i/lf w/lf attr/text eol=lf`；gap 注入下标实测 `[22, 45, 68, 91, 114]`。
+
+**Task 4 的两条前置事实**：日线 `time` 排的是**连续日历日**（`DAY_ZERO_MS + i*DAY_MS`，120 天里含 34 根周末棒，日内 session 5 落在 2024-01-06 周六），期望值必须按实数据算，别按 A 股交易日历推；`BARS_META` 的 shape 值 `"intraday"` 不是 `make_daily_bars` 的合法 shape，若 Task 4 改从 `BARS_META` 重生成行（而不是用 `BAR_JOBS` 的行）需要特判。
+
+**给后续所有 Python 轮次的探针纪律（Task 2 一起真实事故换来的）**：变异针若与原文**同字节长度**，且源文件 mtime 与 size 都落回原值，CPython 会复用 mutant 编译出的 `.pyc`（`int(st_mtime)+size` 校验被骗过）。Task 2 的 `23→24` 那根针就因此让一次「提交后复证 CLI」把 `bars_daily_gapped.csv` 写成了 `583fac7d97d9`（坏字节从未进 git，按 `git cat-file blob HEAD:` 读回的原始字节写回）。**规则**：针脚还原后，凡该模块参与写已入库文件，先删其 `__pycache__/*.pyc` 或带 `-B` / `PYTHONDONTWRITEBYTECODE=1` 跑那一步。
