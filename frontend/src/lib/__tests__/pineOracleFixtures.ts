@@ -5,7 +5,10 @@
  * re-deriving the same float array in JS with a different operation order would
  * make the bars themselves differ in the last bit and void the comparison.
  * The gate must fail — never skip — when a fixture is missing: these files are
- * committed, so their absence is an incident, not a local-only corpus.
+ * committed, so their absence is an incident, not a local-only corpus. The same
+ * holds for a fixture's COLUMNS: a header the reader does not recognise throws
+ * (`requireColumn`) instead of being read at index -1 as a column of `na`, because
+ * an all-`na` series compares equal to itself and would hollow out every gate.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -37,6 +40,10 @@ const DIR = resolve(__dirname, "__fixtures__/pine_oracle");
 function readCsv(path: string): string[][] {
   // LF is pinned by the fixture dir's .gitattributes; accept CRLF anyway so a
   // hand-checkout on a core.autocrlf=true box cannot be mistaken for a value bug.
+  // Split on "," with NO quoting/escaping support: correct only because every CSV
+  // this generator writes is plain numeric fields. Task 6's external anchors are
+  // string-valued: a quoted field or an embedded comma would be sliced into extra
+  // columns by this line, and would need a real parser rather than this function.
   const text = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
   return text.split("\n").filter((l) => l.length > 0).map((l) => l.split(","));
 }
@@ -66,14 +73,42 @@ export function loadManifest(): OracleManifest {
   return JSON.parse(readFileSync(`${DIR}/manifest.json`, "utf8")) as OracleManifest;
 }
 
-function columnsOf(name: string): { header: string[][][0]; rows: string[][] } {
-  const rows = readCsv(`${DIR}/${name}.csv`);
-  return { header: rows[0], rows: rows.slice(1) };
+function columnsOf(name: string): {
+  file: string;
+  header: string[];
+  rows: string[][];
+} {
+  const file = `${DIR}/${name}.csv`;
+  const rows = readCsv(file);
+  return { file, header: rows[0], rows: rows.slice(1) };
+}
+
+/**
+ * ``key``'s index in the header, or a loud throw naming the file and the header.
+ *
+ * `header.indexOf` answers `-1` for a renamed or dropped column, and
+ * `Number(r[-1])` is `NaN`, so reading straight through degrades that whole column
+ * into `na` without any error. Measured on gate 1 (fix round 1, I-1): a bars header
+ * with `volume` spelled one character wrong still ran the whole suite at
+ * `26 passed`, `rc = 0`, because `comparePrefix` treats two blanks as agreement — an
+ * absent column is therefore an incident, not a value. `loadSession` is the one
+ * caller allowed to answer "no such column" (the `session` field really is optional
+ * per variant), so the check lives here rather than inside `columnsOf`.
+ */
+function requireColumn(file: string, header: string[], key: string): number {
+  const at = header.indexOf(key);
+  if (at < 0) {
+    throw new Error(
+      `${file}：表头缺少 "${key}" 列，实际表头 [${header.join(", ")}]。` +
+        "缺列不按 -1 静默读成 NaN——空集合在 NaN 对位比较下会真空通过。",
+    );
+  }
+  return at;
 }
 
 export function loadBars(name: string): PineBars {
-  const { header, rows } = columnsOf(name);
-  const col = (key: string) => header.indexOf(key);
+  const { file, header, rows } = columnsOf(name);
+  const col = (key: string) => requireColumn(file, header, key);
   const list: KLineData[] = rows.map((r) => ({
     timestamp: Number(r[col("time")]),
     open: Number(r[col("open")]),

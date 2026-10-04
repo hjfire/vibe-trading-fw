@@ -8,6 +8,11 @@ import { BARS_VARIANTS, loadBars, runScript, sliceBars } from "./pineOracleFixtu
  * series it produces on the full array, for every N we probe. NaN matches NaN
  * (a warm-up blank that turns into a number on a longer array is a repaint).
  *
+ * Two things beyond the comparison itself keep that sentence honest: a prefix run
+ * must return EXACTLY N values (I-2 — a longer one was leaking past the comparator),
+ * and the compared line must actually carry values (I-1 — an all-`na` line matches
+ * itself forever, so the warm-up blanks are pinned to an exact count).
+ *
  * These scripts are hand-written and independent of the oracle batches on purpose:
  * gate 1 must keep working if a reference batch is restructured, and comparing the
  * engine against itself needs no fixtures beyond the bars.
@@ -55,9 +60,43 @@ function comparePrefix(
 }
 
 describe("prefix invariance (no-lookahead gate)", () => {
-  /** How many lines each script must plot. A dropped or renamed `title=` would
-   * otherwise shrink the comparison set silently and the gate would still be green. */
-  const LINE_COUNT: Record<string, number> = { sma: 1, ema: 1, rma: 1, stdev: 1, stdev_sample: 1, sar: 1 };
+  /** Which lines each script must plot, by NAME (sorted for the comparison).
+   * Names, not a count (M-4): an untitled or renamed `plot()` is still exactly ONE
+   * line, so `lineNames.length === 1` stays green while the series actually being
+   * compared changes identity — this pin is what makes "逐 line 比对" mean a fixed
+   * set of series. It mirrors gate 2's alignment against `manifest.lines`. Adding a
+   * plot must therefore be a deliberate edit here, never an accident in a script. */
+  const EXPECTED_LINES: Record<string, string[]> = {
+    sma: ["sma"],
+    ema: ["ema"],
+    rma: ["rma"],
+    stdev: ["stdev"],
+    stdev_sample: ["stdev_sample"],
+    sar: ["sar"],
+  };
+
+  /** How many `na` entries each script's full-series line carries, exactly — the
+   * warm-up blanks of a length-5 sma/rma/stdev (4 bars), against ema and sar, which
+   * this engine answers from bar 0 (0 blanks). These are measured readings; the
+   * evidence that they can go red is in `task-3-report.md`, 「Fix round 1」.
+   *
+   * This is the strict form of "a compared line must have something to compare"
+   * (I-1): NaN matches NaN, so a line whose values are blank compares equal to
+   * itself forever, and every other pin in this gate — names, probes, `worst`, the
+   * fixture length — stays green on it. The floor below states that defect in its
+   * own words; the exact count above also catches a bar set quietly losing data. */
+  const EXPECTED_NA: Record<string, number> = {
+    sma: 4,
+    ema: 0,
+    rma: 4,
+    stdev: 4,
+    stdev_sample: 4,
+    sar: 0,
+  };
+
+  function naCount(values: number[]): number {
+    return values.filter((v) => Number.isNaN(v)).length;
+  }
 
   for (const variant of BARS_VARIANTS) {
     const full = loadBars(variant);
@@ -65,15 +104,33 @@ describe("prefix invariance (no-lookahead gate)", () => {
     for (const [name, src] of Object.entries(SCRIPTS)) {
       it(`${name} on ${variant}: no plotted value moves when bars are appended`, () => {
         const reference = runScript(src, full);
-        const lineNames = Object.keys(reference);
-        expect(lineNames.length, `${name} plotted lines`).toBe(LINE_COUNT[name]);
+        const lineNames = Object.keys(reference).sort();
+        expect(lineNames, `${name} plotted lines`).toEqual(EXPECTED_LINES[name]);
         // Every line of the script, not just the first: a multi-output script
         // (supertrend's band + direction, macd's triple) repaints per output.
         for (const lineName of lineNames) {
+          expect(reference[lineName].length, `${lineName} full-series length`).toBe(L);
+          expect(naCount(reference[lineName]), `${lineName} full-series na`).toBe(
+            EXPECTED_NA[name],
+          );
+          expect(
+            reference[lineName].length - naCount(reference[lineName]),
+            `${lineName} comparable points on the full series`,
+          ).toBeGreaterThan(0);
           let probes = 0;
           let worst = 0;
           for (let n = 16; n < L; n += 8) {
             const prefix = runScript(src, sliceBars(full, n));
+            // A prefix run must return EXACTLY n values (I-2). `comparePrefix` walks
+            // `prefix.length`, and past `n` the reference entry is `undefined`:
+            // `Number.isNaN(undefined)` is false, so the na-vs-value branch is
+            // skipped, `scale` is NaN, `diff` is NaN and `NaN > maxRelDiff` is
+            // false — an over-length tail used to be dropped in silence, which is
+            // precisely the shape of a look-ahead leak. The under-length direction
+            // already throws (`runScript` + `pineScript.ts:185-188`), so this was the
+            // one unguarded half. `?.` keeps a line dropped by the prefix run an
+            // assertion rather than a TypeError.
+            expect(prefix[lineName]?.length, `${lineName} N=${n} length`).toBe(n);
             const { mismatch, maxRelDiff } = comparePrefix(
               prefix[lineName],
               reference[lineName].slice(0, n),
@@ -82,8 +139,11 @@ describe("prefix invariance (no-lookahead gate)", () => {
             worst = Math.max(worst, maxRelDiff);
             probes += 1;
           }
-          // A gate that probed nothing would pass: pin the probe count to the bar
-          // count so shortening the fixture cannot silently hollow the test out.
+          // Loop-edit canary (M-3). This pins the COUNT of iterations, so weakening
+          // the walk (`n += 8` → `n += 16`, 7 vs 13) or narrowing its range goes red
+          // here. Shortening the FIXTURE is not this pin's job and never was: for
+          // L > 16 both sides of this expression derive from L, so a shorter CSV
+          // stays green here and is caught by the literal length assertion below.
           expect(probes, `${lineName} probes`).toBe(Math.ceil((L - 16) / 8));
           // Exact, not "within a tolerance": a causal recursion replays the same
           // operations in the same order, so any movement is a repaint, not noise.
@@ -107,8 +167,9 @@ describe("a Pine source in this engine cannot address a future bar", () => {
    * The engine makes that impossible in two places, and both are load-bearing for
    * every claim gate 1 makes: `readIdx` floors the offset with
    * `Math.max(0, Math.trunc(k))` (`pineRuntime.ts:957`), and `readBack` answers any
-   * `k <= 0` with the CURRENT bar (`pineRuntime.ts:429`). So `close[-1]` reads the
-   * same value as `close`, never bar+1.
+   * `k <= 0` with the CURRENT bar (`pineRuntime.ts:430`, the `if` itself — `:429` is
+   * only its signature line). So `close[-1]` reads the same value as `close`, never
+   * bar+1.
    *
    * This is pinned because no other `pine*.test.ts` exercises a negative offset at
    * all (checked by grep on 2026-10-04 across the pine suites), and the `indicatorLang`
