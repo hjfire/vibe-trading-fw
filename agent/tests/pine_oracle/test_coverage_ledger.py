@@ -25,6 +25,7 @@ from pine_oracle.coverage import (
     gate1_functions,
     gate1_script_keys_from_ts,
     gate1_scripts_keys_from_ts,
+    tier_values_from_ts,
 )
 from pine_oracle.emit_coverage import render
 from pine_oracle.schema import TOLERANCE_TIERS, FIXTURE_DIR, REPO_ROOT, load_manifest
@@ -189,6 +190,46 @@ def test_the_witness_table_names_every_priced_line_within_its_own_tier(manifest:
     assert "零残差＝只核对语义" in doc and "非零残差＝独立算术见证" in doc, (
         "台账必须写明恒零线只核对语义、不核对算术形式"
     )
+
+
+def test_the_js_tier_table_is_the_python_tier_table(manifest: dict) -> None:
+    """``TIER_VALUE`` (JS) == ``TOLERANCE_TIERS`` (Python), item for item, keys included.
+
+    The tier name → number mapping is written out twice, and the copy that ENFORCES is
+    the JS one: ``pineTaOracle.test.ts:134`` takes ``TIER_VALUE[...]`` and ``:144``
+    asserts against it, while ``schema.TOLERANCE_TIERS`` only ever feeds the Python
+    side's ledger arithmetic (``:179`` above, ``emit_coverage``'s margin column). Before
+    this pin the two had no witness at all — ``grep -rn TIER_VALUE agent/`` hit nothing
+    outside the JS file itself, and ``pineOracleFixtures.ts`` is not in
+    ``manifest.files`` (those 76 sha entries are bars/values CSVs), so it is not under
+    the provenance hash lock either. The review round's 针 a put a number on it:
+    ``loose: 1e-9`` -> ``1e-3``, three orders of magnitude on the enforcement side,
+    came back 119 Python + 118 JS green.
+
+    Three refusals, all tighten-only: equal KEY sets (dropping `exact` would otherwise
+    keep every name legal while a tier stopped resolving to a number at all), equal
+    VALUES (the widening itself), and every tier name the shipped manifest declares
+    present in the JS table — the file the gate reads its numbers from must be able to
+    name them.
+
+    Reading the text rather than importing the module is the whole point: the gate is
+    JS, the ledger is Python, and no dependency crosses that line to check.
+    """
+    js_tiers = tier_values_from_ts(ORACLE_FIXTURES.read_text(encoding="utf-8"))
+    assert js_tiers, "JS 档位表读为空——下面的逐项比较一个数都不比"
+    assert set(js_tiers) == set(TOLERANCE_TIERS), (
+        f"档位键集分叉：JS={sorted(js_tiers)} Python={sorted(TOLERANCE_TIERS)} "
+        f"对称差={sorted(set(js_tiers) ^ set(TOLERANCE_TIERS))}"
+    )
+    for name in sorted(TOLERANCE_TIERS):
+        assert js_tiers[name] == TOLERANCE_TIERS[name], (
+            name,
+            js_tiers[name],
+            TOLERANCE_TIERS[name],
+        )
+    shipped = set(manifest["tolerance_tier"].values())
+    assert shipped, "manifest 的档位宣告为空——上面那条子集断言比的是零个档名"
+    assert shipped <= set(js_tiers), sorted(shipped - set(js_tiers))
 
 
 def test_the_committed_ledger_is_what_the_generator_renders() -> None:

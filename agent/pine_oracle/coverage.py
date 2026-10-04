@@ -190,6 +190,40 @@ def gate1_functions() -> frozenset[str]:
     return frozenset(SCRIPT_TO_FUNCTION.get(name, name) for name in GATE1_SCRIPTS)
 
 
+# The numbers gate 2 ENFORCES live are this JS table, not ``schema.TOLERANCE_TIERS``
+# (``pineTaOracle.test.ts:134`` reads ``TIER_VALUE[manifest.tolerance_tier[line]]`` and
+# ``:144`` asserts ``worst <= tier``). The mapping is written out twice — once in
+# Python (``schema.py:27``), once here (``pineOracleFixtures.ts:28``) — and only the JS
+# copy is executed, while this `.ts` file is NOT inside the ``manifest.files`` sha lock
+# face (those 76 entries are bars/values CSVs only). Review round A-IMP-2 / C 席 针 a:
+# widening `loose` from 1e-9 to 1e-3 — three orders of magnitude on the enforcement
+# side — came back 119 Python + 118 JS green. So the JS copy gets a witness: read the
+# table out of the text and compare it item for item with the Python one.
+_TIER_VALUE_RE = re.compile(
+    r"export const TIER_VALUE: Record<string, number> = \{([^}]*)\}", re.S
+)
+_TIER_PAIR_RE = re.compile(
+    r"([A-Za-z_][A-Za-z_0-9]*)\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+)
+
+
+def tier_values_from_ts(ts_text: str) -> dict[str, float]:
+    """``TIER_VALUE`` from ``pineOracleFixtures.ts``, as tier name → float.
+
+    A dict, not a key set: the finding was about the VALUES (a silently widened
+    tolerance still has the same three keys). Empty is an error, never a pass — a
+    reader that matched nothing would compare nothing and read green, which is the
+    defect class ``schema._NON_EMPTY_MANIFEST_KEYS`` exists to refuse.
+    """
+    found = _TIER_VALUE_RE.search(ts_text)
+    if found is None:
+        raise ValueError("pineOracleFixtures.ts: no TIER_VALUE table to read")
+    tiers = {name: float(value) for name, value in _TIER_PAIR_RE.findall(found.group(1))}
+    if not tiers:
+        raise ValueError("pineOracleFixtures.ts: TIER_VALUE read as empty — that is not a pass")
+    return tiers
+
+
 # ``BARS_VARIANTS`` is an ARRAY of quoted names (`as const`), not a `key:` map, so it
 # needs its own pair of readers; the match runs to the first line-initial `]` for the
 # same reason `SCRIPTS` does — array elements are strings and could contain brackets.
