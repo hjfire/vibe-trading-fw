@@ -24,6 +24,7 @@ from pine_oracle.coverage import (
     gate1_functions,
     gate1_script_keys_from_ts,
 )
+from pine_oracle.emit_coverage import render
 from pine_oracle.schema import TOLERANCE_TIERS, FIXTURE_DIR, REPO_ROOT, load_manifest
 
 PINE_TA = REPO_ROOT / "frontend" / "src" / "lib" / "pineTa.ts"
@@ -146,4 +147,36 @@ def test_the_witness_table_names_every_priced_line_within_its_own_tier(manifest:
     # Ruling H's other half: the document has to say which witness it is showing.
     assert "零残差＝只核对语义" in doc and "非零残差＝独立算术见证" in doc, (
         "台账必须写明恒零线只核对语义、不核对算术形式"
+    )
+
+
+def test_the_committed_ledger_is_what_the_generator_renders() -> None:
+    """The committed ``COVERAGE.md`` IS the generator's rendering, byte for byte.
+
+    Every other test in this file checks the ledger *property by property* — each
+    backlog name has a row, each covered row carries the right ticks, each recorded
+    reading sits inside its tier — and all of them stay green while the document's
+    columns drift from ``coverage.py``, because a property check never compares the
+    whole rendering. The review round measured exactly that: four hand edits
+    (N-4b a tier column rewritten to ``loose``, N-5 ``sma``'s worst upper bound pushed
+    three orders of magnitude past its own ``tight``, N-6 the 读数分档 prose renumbered
+    14/4 → 18/0, N-8 a backlog line number rewritten to ``9999``) all came back
+    ``rc=0``.
+
+    One equality over the whole body is what those columns lacked, and it locks the
+    four column classes at once: 数值（``MEASURED_WORST`` 的 18×4 读数）、档位
+    （``manifest.tolerance_tier`` 的逐线宣告）、散文（读数分档的恒零/非零计数与 Ruling H
+    的说法）、行号（``pineTa.ts`` 的分派表行号）. A ledger can now only change by
+    re-running the generator.
+
+    This also promotes "the generated artefact is idempotent" from process discipline
+    (the report's 收尾 checklist, where a forgotten re-run was a mistake someone had to
+    remember to catch) into a machine gate: a stale ``COVERAGE.md`` is a red test.
+    """
+    committed = COVERAGE_DOC.read_text(encoding="utf-8")
+    assert committed.strip(), "台账正文为空——任何渲染比较都会在两份空文本上绿"
+    assert render() == committed, (
+        "COVERAGE.md 不是生成器的当前输出——重跑 "
+        "`PYTHONPATH=agent python -X utf8 -m pine_oracle.emit_coverage`；"
+        "数值/档位/散文/行号四类列只能由生成器改，手改正文就是这条门该红的东西"
     )

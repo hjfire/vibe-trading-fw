@@ -44,7 +44,19 @@ def _fmt(x: float) -> str:
     return f"{x:.3e}"
 
 
-def main() -> None:
+def render() -> str:
+    """The ledger body exactly as ``main()`` commits it — writes nothing, prints nothing.
+
+    This function exists so the document has something to be compared against. While
+    ``main()`` assembled the body itself, the only way to check ``COVERAGE.md`` was to
+    read the file back and assert properties of individual rows, which is how a ledger
+    whose tier column, recorded readings, reading-bucket prose or backlog line numbers
+    disagreed with ``coverage.py`` stayed green (review席 N-4b/N-5/N-6/N-8: four edits,
+    four ``rc=0``). ``test_coverage_ledger.py`` now compares
+    ``render() == COVERAGE_DOC.read_text()`` byte for byte, so those four columns are
+    machine-locked and "re-run the generator after you change a roster" stops being a
+    process discipline and becomes a gate.
+    """
     text = PINE_TA.read_text(encoding="utf-8")
     lines = text.splitlines()
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
@@ -166,8 +178,17 @@ def main() -> None:
     for name in sorted(builtins - COVERED):
         out.append(f"| `{name}` | `{row_line(name)}` |")
 
-    body = "\n".join(out) + "\n"
-    write_text_lf(OUT, body)
+    return "\n".join(out) + "\n"
+
+
+def main() -> None:
+    write_text_lf(OUT, render())
+    # The counters are re-read here instead of being returned by ``render()`` so the
+    # printed row stays byte-for-byte the row the brief fixed (`74 builtins, 12
+    # covered, 62 open, 7 conventions`): ``render()`` owns the document, ``main()``
+    # owns the disk and that one line of stdout.
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    builtins = builtins_from_source(PINE_TA.read_text(encoding="utf-8"))
     print(
         f"{len(builtins)} builtins, {len(COVERED)} covered, "
         f"{len(builtins) - len(COVERED)} open, {len(manifest['convention'])} conventions"
