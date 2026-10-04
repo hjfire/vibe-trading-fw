@@ -141,8 +141,9 @@ def test_stoch_monotonic_ramp_is_100_whatever_the_length() -> None:
     src = np.arange(1.0, 21.0)
     out = ta_stoch(src, src, src, 5, 3)
     # bar 0: hh == ll, so this helper's guard leaves it na (the engine's four-argument
-    # branch guards the same at pineTa.ts:617); from bar 1 the ramp's own spread carries
-    # it, and on a strictly increasing series (close == high == low) %K is 100 for any length.
+    # branch guards the same at pineTa.ts:608, and its three-argument overload at :617);
+    # from bar 1 the ramp's own spread carries it, and on a strictly increasing series
+    # (close == high == low) %K is 100 for any length.
     assert math.isnan(out["stoch_k"][0])
     assert out["stoch_k"][1:] == pytest.approx([100.0] * 19)
     # %D needs three finite %K, so it starts one bar after they are all there:
