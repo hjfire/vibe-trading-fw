@@ -1,0 +1,75 @@
+{
+  "exemption": {
+    "ema": "strict",
+    "rma": "strict",
+    "sma": "strict",
+    "stdev": "strict",
+    "stdev_sample": "strict"
+  },
+  "external_anchors": [],
+  "files": {
+    "bars_daily_gapped.csv": "671b1f8d4aca9200421d3c68d611875725e72c5ede66f9349d0afbe66b098897",
+    "bars_daily_oscillating.csv": "35441afa24c71de0868061f7ba9960994b3e6b7b8269432f8b6ae0d8f3687a1d",
+    "bars_daily_trend.csv": "cca364cadeeaeda3827c5a947143bfe572ef3e3851fce86152b38e572166b006",
+    "bars_intraday_vwap.csv": "0c261a2a6692386ea600a7809a8851cf37057cbe9c5f9cab995a65a2de7bd925",
+    "values/ema@bars_daily_gapped.csv": "9081984457085f2ebe314df6292425662b6873e2b84d89f2ad78ccf112355f4c",
+    "values/ema@bars_daily_oscillating.csv": "511991fc09b69f7b25fc9a9755f0698b3c6f663534d50a86a1f1093f21e4302b",
+    "values/ema@bars_daily_trend.csv": "5373c20f25c603a5f647718b913404fa82670b1a70ded8f1a282583febaa3b3e",
+    "values/ema@bars_intraday_vwap.csv": "36da9dfb9bb3925493291a01caa8f04acfa58435c9537ee1a3c7f0644f479f95",
+    "values/rma@bars_daily_gapped.csv": "f1e09a31bb7a99f84da9bbf16c4de4323d31e515c6bcac95c5e6c89ed12382b7",
+    "values/rma@bars_daily_oscillating.csv": "d5470002d08e0a6a58ebf7891b13a8f30658a9dda4366339c7eb8992650da1b5",
+    "values/rma@bars_daily_trend.csv": "00a1223f5aa3276fec69eef7b067dfa4b36a82c1dc784f0c1aad24a744f80953",
+    "values/rma@bars_intraday_vwap.csv": "9837f7619d4124e97b924f923bf25f7a8df2ccdf9f36e74b8792897f8501dadd",
+    "values/sma@bars_daily_gapped.csv": "7c3077585ff6f9a8abe207eac9aba638d91065ef1556df091fecf25fb175deeb",
+    "values/sma@bars_daily_oscillating.csv": "c379a3e514aa24f301deba7876fb3187245aef40695e2a2c0bd757fe3f95f1a3",
+    "values/sma@bars_daily_trend.csv": "75245ea58c7f3d14d10055b14e8674615ccf9cde655ba82c094084b33039d6e7",
+    "values/sma@bars_intraday_vwap.csv": "530ef683cd2907cfac171385e68af0d44ae52a651aa11879c3b902a20e5434a1",
+    "values/stdev@bars_daily_gapped.csv": "8aab45dbebe179163b4da81f7c4c0ae0c0fa201c9790b96911d4614dc7befa3a",
+    "values/stdev@bars_daily_oscillating.csv": "b1da31d8455c847044ebc71699952dbd4b2bf37252a3bff2c10a6d7c08d2d1e9",
+    "values/stdev@bars_daily_trend.csv": "7b253f513f4d4efa66ea922d2d23cefcc1330bf96856ee662c2ce5ae294fb155",
+    "values/stdev@bars_intraday_vwap.csv": "eee6e6c6549b01ee8876189d7132a88b7b04727b0b1a31bf26ab2a10eb0460bd",
+    "values/stdev_sample@bars_daily_gapped.csv": "59f56e8deb108b90c0251093e2b9a7dbe9b954fa3b0944cae9211e93f22c2a07",
+    "values/stdev_sample@bars_daily_oscillating.csv": "800a9abde2422a40cefede5bca9e004b3782c07a8017ac324dd56d6c85f7b45e",
+    "values/stdev_sample@bars_daily_trend.csv": "9ec6d808c24880b729bf527221fc5b10eab553fef09f4ab7471d83fedc98c79a",
+    "values/stdev_sample@bars_intraday_vwap.csv": "026391adf7a52d90fde2714c6193dc5b239924ca3cb8d0a1f8af5b482d49b1b2"
+  },
+  "generated_at": "2026-10-04",
+  "generator": "agent/pine_oracle/emit_fixtures.py",
+  "head_sha": "14417efa",
+  "line_ending": "lf",
+  "lines": {
+    "batch_1": [
+      "ema",
+      "rma",
+      "sma",
+      "stdev",
+      "stdev_sample"
+    ]
+  },
+  "na_encoding": "empty",
+  "period": {
+    "default": 5
+  },
+  "scripts": {
+    "batch_1": "//@version=5\nindicator(\"oracle batch 1\")\nplot(ta.sma(close, 5), title=\"sma\")\nplot(ta.ema(close, 5), title=\"ema\")\nplot(ta.rma(close, 5), title=\"rma\")\nplot(ta.stdev(close, 5), title=\"stdev\")\nplot(ta.stdev(close, 5, false), title=\"stdev_sample\")\n"
+  },
+  "seed": {
+    "bars_daily_gapped": 23,
+    "bars_daily_oscillating": 17,
+    "bars_daily_trend": 11,
+    "bars_intraday_vwap": 13
+  },
+  "shape": {
+    "bars_daily_gapped": "gap",
+    "bars_daily_oscillating": "oscillate",
+    "bars_daily_trend": "trend",
+    "bars_intraday_vwap": "intraday"
+  },
+  "tolerance_tier": {
+    "ema": "loose",
+    "rma": "loose",
+    "sma": "tight",
+    "stdev": "tight",
+    "stdev_sample": "tight"
+  }
+}
