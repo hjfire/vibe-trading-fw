@@ -1,0 +1,160 @@
+"""The coverage ledger's own vocabulary: which ``ta.*`` a gate really touches.
+
+Two artefacts read these sets — ``test_coverage_ledger.py`` (the machine gate) and
+``emit_coverage.py`` (the human list). One definition is what keeps them from
+drifting apart; a ledger that claims more than the gate checks is the failure mode
+this whole harness was built to catch.
+
+Nothing here is derived from the engine's *numbers*. ``builtins_from_source`` parses
+the engine's dispatch table so a newly added ``ta.*`` shows up as a coverage gap
+instead of as silence — the same rule the JS gate applies to its probe count.
+"""
+
+from __future__ import annotations
+
+import re
+
+#: The 11 functions whose reference values gate 2 (the oracle) prices against.
+GATE2_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        "sma",
+        "ema",
+        "rma",
+        "stdev",
+        "rsi",
+        "atr",
+        "bb",
+        "macd",
+        "stoch",
+        "supertrend",
+        "vwap",
+    }
+)
+
+#: Functions gate 1 proves but gate 2 does NOT price.
+#: ``sar``: a Parabolic SAR reference in numpy has to re-implement the reversal and
+#: acceleration state machine, and a "reference" that transcribes the code under test
+#: adds another place to be wrong rather than a second witness. Prefix invariance is
+#: the claim that needs no cross-implementation oracle, so ``sar`` carries gate 1
+#: alone — and the ledger must say so out loud (spec §11 R-C).
+GATE1_ONLY: frozenset[str] = frozenset({"sar"})
+
+#: Everything this round touches, gate 2 or gate 1.
+COVERED: frozenset[str] = GATE2_FUNCTIONS | GATE1_ONLY
+
+#: The eight script keys in ``pinePrefixInvariance.test.ts``. ``stdev_sample`` is the
+#: sample branch (``ta.stdev(..., false)``) of the same builtin, so it is a script,
+#: not a function — the branch map below is the only place that says so.
+GATE1_SCRIPTS: frozenset[str] = frozenset(
+    {"sma", "ema", "rma", "stdev", "stdev_sample", "sar", "supertrend", "vwap"}
+)
+SCRIPT_TO_FUNCTION: dict[str, str] = {"stdev_sample": "stdev"}
+
+#: Each gate-2 function's plotted line names, as they appear in ``manifest.json``.
+#: Written out (not derived by splitting on ``_``) because ``st_direction`` belongs to
+#: ``supertrend`` and no prefix rule sees that.
+FUNCTION_LINES: dict[str, tuple[str, ...]] = {
+    "sma": ("sma",),
+    "ema": ("ema",),
+    "rma": ("rma",),
+    "stdev": ("stdev", "stdev_sample"),
+    "rsi": ("rsi",),
+    "atr": ("atr",),
+    "bb": ("bb_basis", "bb_upper", "bb_lower"),
+    "macd": ("macd", "macd_signal", "macd_hist"),
+    "stoch": ("stoch_k", "stoch_d"),
+    "supertrend": ("supertrend", "st_direction"),
+    "vwap": ("vwap",),
+}
+
+#: Gate 2's measured divergence, one row per manifest line, four readings per row in
+#: ``pineOracleFixtures.BARS_VARIANTS`` order (trend, oscillating, gapped, intraday).
+#:
+#: These are READINGS taken off the printed ``[oracle]`` lines of the committed gate,
+#: not aspirations and not a re-derivation of the comparison:
+#:
+#:     cd frontend && npx.cmd vitest run src/lib/__tests__/pineTaOracle.test.ts
+#:
+#: taken on 2026-10-04 at HEAD ``575d3382`` (72 print lines = 18 lines x 4 variants).
+#: They are recorded because the *witness* a zero residual provides is a different
+#: thing from the witness a non-zero one does (Ruling H): two separately written
+#: implementations landing bit-for-bit on a line usually means the reference mirrors
+#: the engine's arithmetic form, so that line's cross-implementation pass pins
+#: SEMANTICS (seeding position, population-vs-sample choice, ``PERIOD`` wiring,
+#: line name <-> ``title=``) rather than arithmetic. A non-zero residual is the case
+#: where the two really do different arithmetic and still land inside the tier.
+#:
+#: This table is NOT the gate. ``pineTaOracle.test.ts`` asserts ``worst <= tier`` live
+#: on every run; if the engine moves, that gate goes red, and ``test_coverage_ledger``
+#: below then refuses a ledger whose recorded tier no longer matches the manifest.
+MEASURED_WORST: dict[str, tuple[float, ...]] = {
+    "sma": (2.991e-15, 3.785e-15, 5.797e-15, 9.337e-16),
+    "ema": (0.0, 0.0, 0.0, 0.0),
+    "rma": (0.0, 0.0, 0.0, 0.0),
+    "stdev": (0.0, 0.0, 0.0, 0.0),
+    "stdev_sample": (0.0, 0.0, 0.0, 0.0),
+    "rsi": (0.0, 0.0, 0.0, 0.0),
+    "atr": (0.0, 0.0, 0.0, 0.0),
+    "bb_basis": (2.991e-15, 3.785e-15, 5.797e-15, 9.337e-16),
+    "bb_upper": (2.972e-15, 3.765e-15, 5.496e-15, 9.280e-16),
+    "bb_lower": (3.009e-15, 3.806e-15, 6.132e-15, 9.394e-16),
+    "macd": (0.0, 0.0, 0.0, 0.0),
+    "macd_signal": (0.0, 0.0, 0.0, 0.0),
+    "macd_hist": (0.0, 0.0, 0.0, 0.0),
+    "stoch_k": (0.0, 0.0, 0.0, 0.0),
+    "stoch_d": (0.0, 0.0, 0.0, 0.0),
+    "supertrend": (0.0, 0.0, 0.0, 0.0),
+    "st_direction": (0.0, 0.0, 0.0, 0.0),
+    "vwap": (0.0, 0.0, 0.0, 0.0),
+}
+
+#: The four bar variants ``MEASURED_WORST`` columns are ordered by, kept here so the
+#: generator and the document name them instead of inventing a fifth order.
+MEASURED_WORST_VARIANTS: tuple[str, ...] = (
+    "bars_daily_trend",
+    "bars_daily_oscillating",
+    "bars_daily_gapped",
+    "bars_intraday_vwap",
+)
+
+_BUILTIN_RE = re.compile(r"^  ([a-z_][a-z_0-9]*): \(args", re.M)
+# Reads EXPECTED_LINES, not a count map: the gate landed as a ROSTER of line names
+# (``pinePrefixInvariance.test.ts:79-88``, whose own comment at :73-78 states
+# "Names, not a count (M-4)"), and no ``LINE_COUNT`` exists in the file. Reading the
+# roster is the stronger claim anyway — it is the same text the gate compares
+# ``Object.keys(reference).sort()`` against, and it still carries script -> line names.
+_EXPECTED_LINES_RE = re.compile(
+    r"const EXPECTED_LINES: Record<string, string\[\]> = \{([^}]*)\}", re.S
+)
+_KEY_RE = re.compile(r"([a-z_][a-z_0-9]*):")
+
+
+def builtins_from_source(ts_text: str) -> frozenset[str]:
+    """Every ``ta.*`` name in the engine's dispatch table."""
+    return frozenset(_BUILTIN_RE.findall(ts_text))
+
+
+def gate1_script_keys_from_ts(ts_text: str) -> frozenset[str]:
+    """The script names the prefix-invariance gate actually loops over.
+
+    Read from ``EXPECTED_LINES``, because that map is what the gate asserts its line
+    names against: a script deleted from ``SCRIPTS`` without deleting its entry here
+    is the hole this closes. The roster is read as NAMES, not as a count, because the
+    names are what the gate compares (``lineNames`` vs ``EXPECTED_LINES[name]``) — a
+    count would still pass while the compared series changed identity.
+    """
+    found = _EXPECTED_LINES_RE.search(ts_text)
+    if found is None:
+        raise ValueError("pinePrefixInvariance.test.ts: no EXPECTED_LINES roster to read")
+    return frozenset(_KEY_RE.findall(found.group(1)))
+
+
+def gate1_functions() -> frozenset[str]:
+    """The functions gate 1 touches, with script branches folded onto their builtin."""
+    return frozenset(SCRIPT_TO_FUNCTION.get(name, name) for name in GATE1_SCRIPTS)
+
+
+def worst_range(line: str) -> tuple[float, float]:
+    """(min, max) of the four recorded gate-2 readings for one line."""
+    readings = MEASURED_WORST[line]
+    return min(readings), max(readings)
