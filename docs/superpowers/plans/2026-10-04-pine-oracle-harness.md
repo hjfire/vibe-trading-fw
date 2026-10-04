@@ -3350,3 +3350,82 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 - **控制器自己的数字错（第 7 次同型，源头这次是我）**：上面第 ⑤ 条**原写**「判据一只兜住 11 个判据二函数里的 **7** 个」，被评审席 M-7 否证 ⇒ 实况是 **6 of 11**（`gate1_functions()` 的 7 个名字里 `sar` 属 `GATE1_ONLY`、不是判据二函数；表一判据一列 `✓` 7 行含 `sar`、`✗` 5 行）。复跑：`PYTHONPATH=agent python -B -X utf8 -c "from pine_oracle.coverage import gate1_functions, GATE2_FUNCTIONS; print(len(gate1_functions() & GATE2_FUNCTIONS))"` → **6**。`final-review-dispatch.md` 与本节第 ⑤ 条已就地更正并附该命令。
 - **落盘前自查抓到的第 8 处过期数（同型，未提交就已改掉）**：第 ⑥ 条原写「**9/11 条** `loose` 全零残差」——那是把 Task 5 收口读数搬进草稿（本节第 2 段「两处口径被实现者当场更正」里已经更正过一次，草稿的未修登记条目却漏改）。改前按入库台账逐行数过：`loose` 11 条恒零 ＋ `tight` 中 `stdev`／`stdev_sample` 2 条恒零 ＝ **14 恒零／4 非零**（`bb_basis`／`bb_lower`／`bb_upper`／`sma` 非零，量级 `5.5e-15`～`6.1e-15`，对 `tight` 档余量 163×～182×）。⇒ 教训与本仓已登记那条同构：**一份草稿里同一数字出现两次就要各改各处**，改正文不等于改了脚注。
 - **本轮的可信度欠账（必须留档）**：修复轮 1 的 scoped re-review **没有独立评审席**——派发在平台额度上限处被拦（该席未产生任何产物、工作树与 HEAD 未动），按用户既定的「额度到了降级跑」由控制器按同一判据自跑，报告落 `task-7-rereview-r1.md`（六条全 ADDRESSED，新引入 2 条 Minor：`coverage.py:132-135` 的注释理由把 `SCRIPTS` 的值说成模板字符串而实况是转义双引号串；`main()` 为守住打印行而二次读文件）。⇒ **独立性欠账转 Task 8 之后的全分支最终评审席**，其派发词第 4 件事本就要求该席自己补变异针验门的活性。
+
+### Task 8 执行期对账（只追加，上方坐标不动）
+
+**执行者归属**：按 Ruling J，本任务由控制器自跑，未派实现者，因此没有「实现者报告 ＋ 评审席」这一对产物；
+正确性的独立复核座位在**其后的全分支最终评审席**（派发词 `final-review-dispatch.md`，七件事）。
+八个 Step 的原文读数逐条落盘在 `.superpowers/sdd/2026-10-04-pine-oracle-harness/t8-step{1,2,3,3b-failures,4,5}.log`
+与 `t8-s6gen.log`，档案条目正文＝`项目档案.md` 第六节（`171dc337` ＋更正 `957f3381`）。
+
+**Step 1（fixture 缺失必须红）＝ DoD 4**：把 `__fixtures__/pine_oracle/` 改名 → 两道 JS 门
+`Test Files 2 failed (2)`／`Tests no tests`／**rc=1**（**fail 而不是 skip**，这正是 DoD 4 的正证目标），
+报错原文 `ENOENT ... pine_oracle\manifest.json`，抛出点是 `pineOracleFixtures.ts:82` 的 `readFileSync`；
+`mv` 回位后 rc=0／`118 passed (118)`。还原完整性取证＝80 份入库件逐份 sha256 对 `git show HEAD:` blob ⇒ **byte-diff 0**、
+`git status` 0 行。**本步抓到驱动脚本自身的缺陷**：`t8_steps.sh` 的 `restore_fixdir` 用长绝对 POSIX 路径 `cd`，
+在本机间歇性失败 ⇒ `&&` 短路、`mv` 没执行、`trap EXIT` 走同一函数也救不回，一度留下 81 行脏；
+控制器只用 `mv` 还原（本仓禁用 `git checkout --`／`restore`／`stash`／`reset --hard`／`clean`），
+并把纪律改写成「**还原的判据是日志里有 `restore: mv 回位` 这一行，不是脚本跑完了**」。
+
+**Step 2（oracle 有可红性）＝ DoD 6**：针 `values/sma@bars_daily_trend.csv` 第 5 行
+`20.3841954` → `20.38419743841954`（改一位十进制），整文件 sha 三值 `75245ea58c7f`／`bdab57c0e9c3`／`75245ea58c7f`
+（改前＝改后），`pytest agent/tests/pine_oracle -q` 在该针下 **`2 failed, 10 passed`**，红的**正是**
+`test_manifest_lists_every_committed_data_file` 与 `test_regenerated_files_are_bytewise_identical` 两条，
+还原后 `restored byte-identical: True`。
+
+**Step 3（全量 pytest）＝ DoD 7 前半**：同一坐标连跑两次，A `-q -rs` ＝
+**`17 failed, 17316 passed, 168 skipped, 20 warnings, 11 errors in 535.80s`**，
+B `-q -rfE --tb=no` ＝ **`17 failed, 17315 passed, 169 skipped, 20 warnings, 11 errors in 521.53s`**。
+两次**只差 1 条 passed→skipped**，而 A 没留名单、B 没打 skip 清单 ⇒ 差集取不到 ⇒ 档案只写「一条环境条件型用例漂移」
+并记方法论「`-rs` 与 `-rfE` 必须**同一次**打开」。失败名单归属（运行 B 的 28 行 FAILED／ERROR，`grep -c pine_oracle` = **0**）＝
+Windows symlink 特权缺失（9 failed ＋ 11 errors，`factors/test_registry.py:91` 的 `symlink_to` 报
+`OSError: [WinError 1314] 客户端没有所需的特权。`）＋ README 工具计数漂移（7 个参数化）＋ 并发写 1 条 ⇒
+**全是本机既有欠项**。「新增红 0」的依据因此是**归属不是减法**（Task 1 开工前不存在全量快照，计划里的 `+80` 是计划期抽跑数）。
+另两条被登记为过程错误：①第一次只 `tail -60` ⇒ 把 FAILED 名单截掉，只能拿计数，故重跑 B；
+②`.pytest_cache/lastfailed` 不可当归属证据（97 个键里含 `.qoder/tmp/mut*` 探针残留，且缺了几条本轮并未红的项）⇒ 弃用。
+
+**Step 4（前端全量）＝ DoD 7 后半**：`npm run test:run` ＝ **`Test Files 109 passed (109)`／`Tests 1738 passed (1738)`／`Duration 57.62s`**，
+跑后 `git status` 0 行。`vitest.config.ts:14` 的 include 把本轮两道门收进这一面（本仓 109 个测试文件里含它们）。
+
+**Step 5（白名单与收集面）＝ DoD 8**：判据按**集合差** A＼B 而非字面 `main...HEAD`——`main...HEAD` = **154** 里含
+**53** 个上游归属文件（基座前移 `30fb9ff3` 带入），照 brief 字面「回退」会回退上游同步本身，那是本仓明令保护的面；
+154 ＼ 53 ⇒ 自研 **101**，分组 `values` 72／fixture 内非 values 8／`frontend/src` 3／`agent/tests/pine_oracle` 8／
+`agent/pine_oracle` 8／`docs/superpowers` 2，**越界集 0 行**。机器正证 `-k upstream_owned` ＝ **`1 passed, 229 deselected in 0.46s`**。
+顺带澄清三处口径：①`agent/tests/pine_oracle` 的 8 ＝ `__init__.py` ＋ **7 个 `test_*.py`**（不是 8 个测试模块）；
+②`testpaths = ["agent/tests"]` 在 `pyproject.toml:276`，而**同一格 `:277` 还有 `pythonpath = ["agent"]`** ⇒
+本轮所有命令里那句 `PYTHONPATH=agent` 是**冗余而非承重**，CI 侧不需要额外配置就能 import；
+③**档案草稿里原本写的「CI 侧不跑本轮任何一道门」是错的，落档前抓住改正**：`.github/workflows/test.yml:136` 是全量 pytest、
+`:169` 是 `npx vitest run --reporter=verbose`，触发条件 `push`/`pull_request` 到 `main`（`:3-7`）⇒ 门**会**被 CI 收集，
+只是本分支从未 push ⇒ 今天的实际运行处只有本地；fork 自带的 `repowiki-freshness.yml:85` 只收 `tools/test_wiki_drift.py`。
+
+**Step 6（档案落档）＝ DoD 9**：`项目档案.md` 文末新开顶层 `## 六、` 节（原有一～五共五个 `## ` 节），
+含 6.1 分支与基座坐标／6.2 判据一／6.3 判据二／6.4 **第三重「权威点值」本轮实为空重**／6.5 DoD 九条逐条读数表／
+6.6 台账与生成物链／6.7 全量红的归属／6.8 过程记录／6.9 已知盲区／6.10 结转残项／**6.11 裁定记录**
+（R-C／Ruling D／G／**H 要求本档案落的那行纪律**／I-X-1／J／M ＋ Task 7 评审席 I-3 的 (a)／(b) 选定）。
+提交 **`171dc337`**＝`git add -f 项目档案.md` ＋ `git commit -s`，`git diff --cached --numstat` = **`223 0`**（纯插入零删除），
+`Signed-off-by` 计数 1。随后按「判据没成立就写在判据旁边」补 **`957f3381`**（10 插 7 删）：6.9 那条换行符登记
+原先只留了中途读数 CR 1194→1370，而 6.11 是裸 LF 追加 ⇒ 终态实测＝工作树 **1417 行（1376 CRLF ＋ 41 裸 LF，`i/lf w/mixed`）**、
+**入库 blob 仍 `i/lf`**，判据 ②（追加块纯 LF、不整文件重写）据此从「一半成立」改判为**没成立**，
+承重的是 ①改前 blob sha ＝ 工作树 LF 归一 sha（都 `bf90baf513ea…`）与 ③纯插入 ＋ `i/lf`。
+
+**Step 7（终态复跑，全部在 `957f3381` 上，04:42–04:43）**：`pytest agent/tests/pine_oracle -q` → **`119 passed`**；
+`pytest tools/test_wiki_drift.py -q` → **`230 passed in 83.23s`**（档案追加会动的唯一另一道门，实测不受影响）；
+两道 JS 门 → **`Tests 118 passed (118)`**（`pineTaOracle` 84 ＋ `pinePrefixInvariance` 34）；
+`python -B -X utf8 -m pine_oracle.emit_coverage` 连跑两次 → 逐字 **`74 builtins, 12 covered, 62 open, 7 conventions`**、
+`COVERAGE.md` sha256 两次都是 `f4d449fcce37e4ae3f16fe8d5425498b8346e4e9ad7d0db1d1906be9539c76b0` **且等于 `git show HEAD:` 的入库 blob**、
+`wc -l` = **141**、跑后 `git status` 0 行；`manifest` 的入库 blob 重读 ⇒ `exemption` **18/18 `strict`**、
+`tolerance_tier` **loose 11／tight 6／exact 1**、两段**键集合相等**、`convention` **7** 键、`head_sha` 仍 **`9f208048`**。
+一条通用读数：**`119 passed` 是计数，耗时在同一坐标出现过 1.63s／1.81s／5.17s** ⇒ 耗时不是判据，
+这也是变异针的「两轮读数不同」只准用 rc／passed·failed 计数／FAILED 用例名、不准用耗时文本的原因。
+
+**落档前自查抓住的三条不实（都是我自己写进草稿的，未提交即改）**：
+①L-5 盲区的**机制**写成「time 列没有跨会话零点」，实读是 `pineTa.ts:969` 的**零成交量分支** `st.v === 0 ? NA : …`，
+而 `test_bars.py:59`／`:68` 断言每根 `volume > 0` ⇒ 第一棒就把 `st.v` 抬离 0；与「会话锚定」无关，锚定差另记 6.10 第 2 条。
+②「CI 不跑本轮的门」（见上面 Step 5 第 ③ 条）。
+③本节抬头原写 `reference.py:339` 是 X-1 的改动位，实读当前在 **`reference.py:351`**——X-1 提交 `4356cee8` 的 hunk 是
+`@@ -336,7 +336,15 @@`，注释在改动行上方扩了 8 行 ⇒ 台账里的「`:338-339`」是**改前**坐标，档案按现号写并标明这一位移。
+
+**与 brief／计划的两处字面偏离（控制器裁定，理由在册）**：①备份位与还原手段（禁用 `git stash`／`checkout --` ⇒ 用 `mv` ＋
+逐份 sha 对 `git show HEAD:`）；②DoD 7 的「新增红 0」不报增量（无开工前快照）；③DoD 8 判据换集合差；④DoD 9 的 `CR 0` 换三条真判据。
+**Step 8 未做**：集成菜单（`finishing-a-development-branch` 的原文三选一）归控制器，且必须先过**全分支最终评审席**。
+合回 `main` 的连带后果已写进档案 6.1：本分支基座前移过 `30fb9ff3`，合 `main` 会一起带进 **35** 个上游提交。
