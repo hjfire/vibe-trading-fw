@@ -1014,7 +1014,7 @@ describe("a Pine source in this engine cannot address a future bar", () => {
    * The engine makes that impossible in two places, and both are load-bearing for
    * every claim gate 1 makes: `readIdx` floors the offset with
    * `Math.max(0, Math.trunc(k))` (`pineRuntime.ts:957`), and `readBack` answers any
-   * `k <= 0` with the CURRENT bar (`pineRuntime.ts:429`). So `close[-1]` reads the
+   * `k <= 0` with the CURRENT bar (`pineRuntime.ts:430`). So `close[-1]` reads the
    * same value as `close`, never bar+1.
    *
    * This is pinned because no other `pine*.test.ts` exercises a negative offset at
@@ -1049,8 +1049,8 @@ Expected: `26 passed`（6 脚本 × 4 变体 + 1 条 bar 数守卫 + 1 条 `clos
 
 spec §8 第 5 条要的是**引擎级**的未来函数探针。本仓的 `ta.*` 步骤函数只看得见已经推进来的值，
 「读下一根棒」这件事在这个引擎里唯一的入口是序列下标求值那条路，所以真正的未来函数注入点
-是 `readIdx`/`readBack`（`:957` 的下限与 `:429` 的钳位）——这也正是 Step 2 里那条 `close[-1]`
-守卫钉住的东西。**单针改动是等价变异**：计划期实测只把 `:429` 改掉时，两轮读数逐字节相同
+是 `readIdx`/`readBack`（`:957` 的下限与 `:430` 的钳位）——这也正是 Step 2 里那条 `close[-1]`
+守卫钉住的东西。**单针改动是等价变异**：计划期实测只把 `:430` 改掉时，两轮读数逐字节相同
 （`neg_offset_equals_current_bars` 与 `prefix_mismatch` 都是 `[]`），因为 `:957` 先把负数夹回了 0，
 那处改动根本没被执行到。探针因此带**两根针**，并断言两轮读数必须不同。
 
@@ -3157,8 +3157,8 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 | 注入 | 改了哪几处 | 读数 |
 |---|---|---|
 | 无（基线） | —— | `close[-1]` 与 `close` 的差异下标 `[]`；前缀(40) 与完整(60) 的差异下标 `[]` ⇒ 引擎把负下标钳在当前棒，**Pine 源无法读到未来** |
-| 单针 | `pineRuntime.ts:429` 的 `k <= 0` 钳位 | **两轮读数逐字节相同**——字节改了、代码路径没走到，因为 `:957` 的 `Math.max(0, Math.trunc(k))` 先把负数夹回 0。这就是本仓记忆里「变异探针集体失明」的等价变异成因，实测复刻了一次 |
-| 双针 | `:957` 去掉下限 ＋ `:429` 放行负下标 | `close[-1]` vs `close` 差异 `[4..59]`（前 4 根是 sma warm-up，两侧同 na）；前缀(40) vs 完整(60) 差异 `[39]` ⇒ 未来函数只暴露在前缀**末棒**，`comparePrefix` 与那条下限守卫都看得见。`pineRuntime.ts` sha `66a6bbdbd2c2`，还原后 `byte-identical: True` |
+| 单针 | `pineRuntime.ts:430` 的 `k <= 0` 钳位 | **两轮读数逐字节相同**——字节改了、代码路径没走到，因为 `:957` 的 `Math.max(0, Math.trunc(k))` 先把负数夹回 0。这就是本仓记忆里「变异探针集体失明」的等价变异成因，实测复刻了一次 |
+| 双针 | `:957` 去掉下限 ＋ `:430` 放行负下标 | `close[-1]` vs `close` 差异 `[4..59]`（前 4 根是 sma warm-up，两侧同 na）；前缀(40) vs 完整(60) 差异 `[39]` ⇒ 未来函数只暴露在前缀**末棒**，`comparePrefix` 与那条下限守卫都看得见。`pineRuntime.ts` sha `66a6bbdbd2c2`，还原后 `byte-identical: True` |
 
 这次实跑改掉的是**设计侧的一处不可达**：spec §8 第 5 条写「把某函数改成用 `bars[b+1]` 的未来函数形态」，而本仓的 `ta.*` 是逐棒 stateful step，步骤函数拿不到 bar 数组，那句按字面无法执行；真正可达的注入点是序列下标求值，MUT-PI-2 就钉在那里，已把这条回写进 spec §11 第五行。同一趟跑还挖出一条**此前无人看守的门**：`:957` 那个下限在任何 `pine*.test.ts` 里都没有用例（grep 实测零命中；`indicatorLang.test.ts:163` 测的是另一套求值器，那里 `close[-1]` 断言成 `NaN`，与本运行时不同），而它正是「无未来函数」这句话的机器保证——所以 Task 3 Step 2 新增了一条永久 `it`，判据一的期望条数各 +1（Task 3 `25→26`、Task 6 `33→34`），MUT-PI-1 临时段所在的那次跑则报 `27 passed`。
 
@@ -3202,3 +3202,25 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 **Task 4 的两条前置事实**：日线 `time` 排的是**连续日历日**（`DAY_ZERO_MS + i*DAY_MS`，120 天里含 34 根周末棒，日内 session 5 落在 2024-01-06 周六），期望值必须按实数据算，别按 A 股交易日历推；`BARS_META` 的 shape 值 `"intraday"` 不是 `make_daily_bars` 的合法 shape，若 Task 4 改从 `BARS_META` 重生成行（而不是用 `BAR_JOBS` 的行）需要特判。
 
 **给后续所有 Python 轮次的探针纪律（Task 2 一起真实事故换来的）**：变异针若与原文**同字节长度**，且源文件 mtime 与 size 都落回原值，CPython 会复用 mutant 编译出的 `.pyc`（`int(st_mtime)+size` 校验被骗过）。Task 2 的 `23→24` 那根针就因此让一次「提交后复证 CLI」把 `bars_daily_gapped.csv` 写成了 `583fac7d97d9`（坏字节从未进 git，按 `git cat-file blob HEAD:` 读回的原始字节写回）。**规则**：针脚还原后，凡该模块参与写已入库文件，先删其 `__pycache__/*.pyc` 或带 `-B` / `PYTHONDONTWRITEBYTECODE=1` 跑那一步。
+
+### Task 3 执行期对账（同上一条：只追加，上方坐标不动）
+
+| 项 | 计划期 | 落仓实码 | 定性 |
+|---|---|---|---|
+| Step 1 的夹具目录解析 | `fileURLToPath(new URL("./__fixtures__/pine_oracle", import.meta.url))` | `resolve(__dirname, "__fixtures__/pine_oracle")`（`pineOracleFixtures.ts:35`） | **计划文本与本仓 vitest 配置冲突**：`vitest.config.ts:12` 是 `environment: "jsdom"`，jsdom 下 `import.meta.url` 不是 `file:` scheme，模块加载期就 `TypeError: The URL must be of scheme file`，收集到 0 条用例。本仓读盘用例的既有写法一致（`Help.test.tsx:113-116`、`apiProxyCoverage.test.ts:21`、`viteProxy.test.ts:6`、`warehouseEntry.test.ts:15-17`）。brief 的**理由**（从模块定位、绝不从 `process.cwd()`）原样保留在 `:27-28`，改的只是拿路径的手段。**Task 4 的 JS 门若自己拼路径必须同样用 `__dirname`** |
+| Step 2 的 `sar` 脚本字面量 | `plot(ta.sar, title="sar")` | `plot(ta.sar(0.02, 0.02, 0.2), title="sar")`（`pinePrefixInvariance.test.ts:37`） | **计划文本的字面量在 v5 下无效**：裸 `ta.sar` 的兜底名单 `LEGACY_SERIES`（`pineRuntime.ts:94-100`）只含 `accdist/pvt/obv/nvi/pvi`，且整条路被 `if (this.ver <= 4)`（`:1169`）门控，实测 RED 是诚实中断「未定义的变量 "ta.sar"」。三个实参就是引擎默认值（`pineTa.ts:717-719`），`pineTa.ts:722-762` 是同一条 `c.state` 递归——脚本未删、`worst` 仍 `toBe(0)`、探针数学一根没少。判据二不覆盖 `ta.sar`（spec §11 R-C），所以它只有判据一这一条门，换成诚实写法没有削弱任何目标 |
+| `readBack` 钳位坐标 | 5 处写作 `pineRuntime.ts:429` / `` `:429` `` | 实际是 **`:430`**（`:429` 是签名行 `private readBack(name, k)`） | 计划原文坐标错一行，评审者实测指出、控制器回读确认。**已就地等长改成 `:430`**（`429`→`430` 同字符数，不动任何行号，被实码引用的 15 处坐标全部复验有效），落仓注释 `pinePrefixInvariance.test.ts:170-172` 同步 |
+| 缺列的处置 | `col = (key) => header.indexOf(key)`，取不到列就是 `r[-1]` | `requireColumn`（`pineOracleFixtures.ts:98-107`）缺列即抛，消息命名文件＋列名＋它真读到的 header；`loadBars` 的六列全部走它（`:110-119`）；`loadSession` 仍用 `indexOf`（`:126`）——它是唯一被允许回答「没有这一列」的调用方 | **加严**（评审 I-1 后半）。计划的全局约束点名「空集合真空通过是缺陷不是绿」，而计划代码块本身正是那条静默路径 |
+| 「这条线到底有没有可比点」 | 无任何断言 | 逐 line 钉 `EXPECTED_NA`（`:88-95`，`sma/ema/rma/stdev/stdev_sample/sar` = `4/0/4/4/4/0`）＋「可比点 > 0」下限（`:112-119`），另钉 `reference[lineName].length === L`（`:112`） | **加严**。取的是裁定允许的**严格形态**（精确 warm-up 数而非 `>=`）。代价已如实登记：判据一现在同时钉住了引擎的 warm-up 行为，一次正当的 `ema`/`sar` 播种变更会以「非重绘原因」把这条门判红 |
+| 前缀长度 | 只比 `prefix.length` 个位置，多出来的尾巴静默丢 | `expect(prefix[lineName]?.length).toBe(n)`（`:133`） | **加严**（评审 I-2）。计划里 `comparePrefix` 的 `checked` 算了又丢（`:77`），所以旧代码对「前缀 run 产出多于 n 个值」——恰好是前视泄漏的形状——是绿的；不足长那一侧本已由 `runScript` 在 `result.bars < n` 时抛错覆盖（`pineOracleFixtures.ts:106` ＋ `pineScript.ts:185-188`），缺的正是另一半 |
+| 比对集的钉法 | `LINE_COUNT`（只钉条数）＋注释声称能防「`title=` 丢了」 | `EXPECTED_LINES` 钉 line **名**（`:69-76`，断言 `:107-108`），注释改为只声称它做得到（`:63-68`） | **加严**＋文字归真。计划原注释是假声明：无 title 的 `plot()` 仍是一条线（引擎自动命名 `系列N`，`pineRuntime.ts:1720`），钉条数拦不住改名 |
+| `probes` 钉的注释 | 声称「夹具变短会静默掏空本用例」 | 注释改为「loop-edit canary」，并承认变短由 `:156-161` 的字面量长度钉抓到（`:142-146`） | **文字归真**（评审 M-3）：`L > 16` 时两侧同由 `L` 推导，这条钉按构造就是自指的；断言本体一字未动 |
+| Step 4 期望条数 | `26 passed` | **`26 passed` 成立**（两轮修复后控制器复跑仍 26；`npx tsc -b` exit 0；五条姊妹 pine 套件 160 passed） | 计划期唯一未被推翻的读数 |
+
+**控制器的一条裁定写错了机制，留痕**：我在 Task 3 的评审工作单里写「缺列 ⇒ 整条线全 `NaN` ⇒ 整道门在垃圾上绿，只有行数钉能活」。**这是假的**：`build()` 在 `pineRuntime.ts:2351` 把全 `NaN` 的 line 直接滤掉（并 warn「N 条 plot 全区间无数据，已隐藏」），`ensureLine`（`:1740-1742`）按 `bars.list.length` 分配长度，所以全空线根本进不到 `result.lines`，旧的条数钉当时就会红；实现者实测 `close`→`clsae` 那根针**修前也红**（21 failed / 5 passed，与 `:2351` 完全自洽：5 条 close 驱动脚本 × 4 变体＝20 条数钉红，加 `close[-1]` 那条 1 个 TypeError，剩 4 条 `sar`（high/low 驱动）与长度钉仍绿＝5 passed）。修复本身仍然是需要的，真正**可达**的洞是另外三个：门不比较的列（`volume`/`time`）静默全 `na` 而 26 全绿；某条线少掉一个数据点而全绿；以及红是靠巧合触发的、消息既不指文件也不指列。**规则化**：控制器把评审者的机制断言写进裁定词之前必须回读被点名的实码——这是本会话第二次犯同一类错（前一次是 Task 2 的 `n..2n-1` 带）。
+
+**引擎侧事实，Task 4/5/6 会直接用到**：① 无 title 的 `plot()` 自动命名 `系列N`（`pineRuntime.ts:1720`）；② 重名 title 自动加后缀 ` (2)`（`:1719-1724`），所以 `runScript` 的重名抛错（`pineOracleFixtures.ts:144-146`）只可能由非 `plot` 的 line 生产者触发；③ 某条参考批全 `na` 时这条线被 `:2351` 隐藏 ⇒ 判据二按 line 名取值时「线不存在」与「线全空」是同一种表象，Task 4 的门必须显式区分这两者，否则「参考实现一条没算出来」会伪装成「少一条 line」。
+
+**环境噪音（非本任务引入，已对照确认）**：任何 `npx vitest run` 都会先打一条 `(!) Your Vite config uses features that are unsupported by configLoader: 'native' … __dirname (vitest.config.ts:8:32)`。改一个本任务没碰的文件对照跑（`pineSeries.test.ts`）同样出现，故登记为仓级既有噪音，不算判据一的不纯净输出。Windows 下 `npx` 可能挂，用 `npx.cmd`。
+
+**parked（带向 Task 8 / 最终全分支评审，不是遗漏）**：M-6 夹具读盘发生在 collection 期（缺文件报 `Failed Suites`、非零退出，符合「绝不 skip」契约，但 CI 看不到逐条红）；M-8 `sar` 的 `st.up` 翻转在这四个变体上是否真发生过没有读数；`expectedColumn`（`pineOracleFixtures.ts:132-135`）仍按位置取 `r[1]` 不做 header 校验；`readCsv` 不校验每行字段数（截断行 ⇒ 一个静默 `na`）；`requireColumn` 的 doc 把 `volume` 针的红因写成「`comparePrefix` 视两个空位为相等」，与实现者自己 §R1.5-1 的正确说法（门根本不比较该列）矛盾，等长一行改词即可；`EXPECTED_NA` 缺一句「此处红是 warm-up/seeding 变更、不是重绘，别按判据一发现立案」；`EXPECTED_NA` 按脚本键取值却逐 line 断言，只在每脚本恰好一条 line 时成立（`EXPECTED_LINES` 目前确实如此）。
