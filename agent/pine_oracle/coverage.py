@@ -126,6 +126,19 @@ _BUILTIN_RE = re.compile(r"^  ([a-z_][a-z_0-9]*): \(args", re.M)
 _EXPECTED_LINES_RE = re.compile(
     r"const EXPECTED_LINES: Record<string, string\[\]> = \{([^}]*)\}", re.S
 )
+# The roster the gate LOOPS over: `for (const [name, src] of Object.entries(SCRIPTS))`
+# (:127) is what decides which script gets prefix-checked at all, so a set read only
+# from EXPECTED_LINES cannot see a script deleted here (review round I-2 — the hole
+# `gate1_script_keys_from_ts`'s docstring used to claim it closed). The values are
+# template strings whose bodies can contain `}` (`ta.supertrend`'s destructuring
+# comment, any future `${}`), so `[^}]*` is the wrong character class: the match runs
+# to the first line-initial `};`, which is how the block actually closes at :48.
+_SCRIPTS_RE = re.compile(r"const SCRIPTS: Record<string, string> = \{(.*?)\n\};", re.S)
+#: Keys only — a line-indented `ident:` at the start of a line. Comment lines start
+#: with `//` and value lines start with a quote, so neither is read as a key; the
+#: prose inside those comments contains `pineRuntime.ts:94-100`-style colons, which is
+#: why the roster keys are NOT read with the line-agnostic ``_KEY_RE``.
+_SCRIPT_KEY_RE = re.compile(r"^[ \t]*([a-z_][a-z_0-9]*):", re.M)
 _KEY_RE = re.compile(r"([a-z_][a-z_0-9]*):")
 
 
@@ -135,18 +148,41 @@ def builtins_from_source(ts_text: str) -> frozenset[str]:
 
 
 def gate1_script_keys_from_ts(ts_text: str) -> frozenset[str]:
-    """The script names the prefix-invariance gate actually loops over.
+    """The script keys of ``EXPECTED_LINES`` — the roster gate 1 compares LINE NAMES to.
 
-    Read from ``EXPECTED_LINES``, because that map is what the gate asserts its line
-    names against: a script deleted from ``SCRIPTS`` without deleting its entry here
-    is the hole this closes. The roster is read as NAMES, not as a count, because the
-    names are what the gate compares (``lineNames`` vs ``EXPECTED_LINES[name]``) — a
-    count would still pass while the compared series changed identity.
+    Read as NAMES, not as a count, because the names are what the gate compares
+    (``lineNames`` vs ``EXPECTED_LINES[name]``) — a count would still pass while the
+    compared series changed identity.
+
+    Scope, stated honestly: this map is the gate's *expectation* table, not its loop.
+    The loop authority is ``SCRIPTS`` (``Object.entries(SCRIPTS)``, :127), read by
+    :func:`gate1_scripts_keys_from_ts`. Neither function alone closes the
+    delete-a-script hole — ``EXPECTED_LINES`` cannot notice a script removed from
+    ``SCRIPTS``, and ``SCRIPTS`` cannot notice a renamed expected line. What closes it
+    is ``test_coverage_ledger.py::test_gate_1_loops_exactly_the_ledger_scripts``
+    requiring ``SCRIPTS keys == EXPECTED_LINES keys == GATE1_SCRIPTS``, so both
+    directions are refused from the same text in the same file.
     """
     found = _EXPECTED_LINES_RE.search(ts_text)
     if found is None:
         raise ValueError("pinePrefixInvariance.test.ts: no EXPECTED_LINES roster to read")
     return frozenset(_KEY_RE.findall(found.group(1)))
+
+
+def gate1_scripts_keys_from_ts(ts_text: str) -> frozenset[str]:
+    """The script keys of ``SCRIPTS`` — the roster gate 1 actually ITERATES over.
+
+    ``for (const [name, src] of Object.entries(SCRIPTS))`` (:127) is the only thing
+    that decides whether a script is prefix-checked at all: delete an entry here and
+    the gate silently runs one fewer script (vitest 34 → 30, and no test count pins
+    it), while a roster read off ``EXPECTED_LINES`` still reports eight and the ledger
+    keeps stamping that script "判据一 ✓". This is the half of the I-2 fix that makes
+    the docstring's promise true instead of rewording it.
+    """
+    found = _SCRIPTS_RE.search(ts_text)
+    if found is None:
+        raise ValueError("pinePrefixInvariance.test.ts: no SCRIPTS roster to read")
+    return frozenset(_SCRIPT_KEY_RE.findall(found.group(1)))
 
 
 def gate1_functions() -> frozenset[str]:

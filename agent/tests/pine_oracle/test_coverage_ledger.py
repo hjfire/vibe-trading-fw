@@ -23,6 +23,7 @@ from pine_oracle.coverage import (
     builtins_from_source,
     gate1_functions,
     gate1_script_keys_from_ts,
+    gate1_scripts_keys_from_ts,
 )
 from pine_oracle.emit_coverage import render
 from pine_oracle.schema import TOLERANCE_TIERS, FIXTURE_DIR, REPO_ROOT, load_manifest
@@ -71,8 +72,32 @@ def test_gate_2_priced_exactly_the_registered_functions(manifest: dict) -> None:
 
 
 def test_gate_1_loops_exactly_the_ledger_scripts() -> None:
+    """Three sets, both directions, from one read of the frozen gate.
+
+    ``SCRIPTS`` is what gate 1 ITERATES (``Object.entries(SCRIPTS)``,
+    ``pinePrefixInvariance.test.ts:127``); ``EXPECTED_LINES`` is what it compares each
+    script's plotted line NAMES against (:79-88); ``GATE1_SCRIPTS`` is the ledger's own
+    roster, which the covered table and the generator both render from. Reading only
+    ``EXPECTED_LINES`` — which is all this test did before the review round — left the
+    promise weaker than its docstring: delete a script from ``SCRIPTS`` and the gate
+    silently runs one fewer script (vitest 34 → 30, no test count attached) while the
+    ledger kept calling that script "判据一 ✓". Requiring all three to be equal closes
+    both directions from the same text, and stays one test case: the hole is a property
+    of this roster comparison, not a second subject worth its own case (and adding a
+    case here would move the suite count for a reason the count-sync note cannot
+    explain).
+    """
     ts = PREFIX_GATE.read_text(encoding="utf-8")
-    assert gate1_script_keys_from_ts(ts) == GATE1_SCRIPTS
+    looped = gate1_scripts_keys_from_ts(ts)
+    roster = gate1_script_keys_from_ts(ts)
+    assert looped, "SCRIPTS 键集为空——那意味着正则没读到东西，不是门通过了"
+    assert looped == roster, (
+        f"判据一的两张表分叉了：循环表 SCRIPTS={sorted(looped)} "
+        f"名单表 EXPECTED_LINES={sorted(roster)} 对称差={sorted(looped ^ roster)}"
+    )
+    assert roster == GATE1_SCRIPTS, (
+        f"台账名单与门的两张表不一致：对称差={sorted(roster ^ GATE1_SCRIPTS)}"
+    )
     assert gate1_functions() <= COVERED
     assert "sar" in gate1_functions(), "sar 只由判据一兜住，它必须真的在这条门的脚本表里"
 
