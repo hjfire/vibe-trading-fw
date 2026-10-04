@@ -77,8 +77,10 @@ def render() -> str:
         "名单与档位由 `agent/pine_oracle/coverage.py` 和 `manifest.json` 生成"
         f"（`PYTHONPATH=agent python -X utf8 -m pine_oracle.emit_coverage`），**不要手改本文件**。",
         "",
-        "行号取自 `pineTa.ts` 的当前工作树（"
-        f"head `{manifest['head_sha']}`，共 {len(builtins)} 个 `ta.*` 分派键），只作定位用。",
+        f"行号取自**当前工作树**的 `pineTa.ts`（共 {len(builtins)} 个 `ta.*` 分派键），只作定位用。"
+        f"两个头不是一回事，别混读：上面的行号属于**当前工作树**，"
+        f"而 `manifest.json` 里的 `head_sha = {manifest['head_sha']}` 是**夹具生成头**——"
+        "它不产出这些行号；`pineTa.ts` 前移而夹具未重生成时，行号跟工作树、这个头跟夹具。",
         "",
         f"## 已覆盖（{len(COVERED)} / {len(builtins)}）",
         "",

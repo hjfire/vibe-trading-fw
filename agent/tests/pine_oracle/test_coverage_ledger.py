@@ -20,6 +20,7 @@ from pine_oracle.coverage import (
     GATE2_FUNCTIONS,
     MEASURED_WORST,
     MEASURED_WORST_VARIANTS,
+    bars_variants_from_ts,
     builtins_from_source,
     gate1_functions,
     gate1_script_keys_from_ts,
@@ -30,6 +31,9 @@ from pine_oracle.schema import TOLERANCE_TIERS, FIXTURE_DIR, REPO_ROOT, load_man
 
 PINE_TA = REPO_ROOT / "frontend" / "src" / "lib" / "pineTa.ts"
 PREFIX_GATE = REPO_ROOT / "frontend" / "src" / "lib" / "__tests__" / "pinePrefixInvariance.test.ts"
+#: The frozen JS fixture reader that declares `BARS_VARIANTS` — the order
+#: `MEASURED_WORST`'s four columns are written in. Read, never written.
+ORACLE_FIXTURES = REPO_ROOT / "frontend" / "src" / "lib" / "__tests__" / "pineOracleFixtures.ts"
 COVERAGE_DOC = FIXTURE_DIR / "COVERAGE.md"
 
 
@@ -152,12 +156,24 @@ def test_the_witness_table_names_every_priced_line_within_its_own_tier(manifest:
     row compares one bar set and still reads as agreement); and every recorded reading
     inside THAT line's tier in ``schema.TOLERANCE_TIERS`` — a tier moved in the manifest
     without re-measuring shows up here as a stale claim, not as a silent pass.
+
+    The order itself is a fourth refusal, added after review round M-2: "four readings"
+    said nothing about WHICH bar set each column is, so swapping the four columns of a
+    row kept every reading inside its tier, kept ``worst_range``'s min/max排版 legal, and
+    let the ledger print one bar set's residual under another set's name. The authority
+    for that order is the JS fixture's own ``BARS_VARIANTS`` list, read from
+    ``pineOracleFixtures.ts`` text — the same "read the roster, don't restate it" move
+    FIX-2 makes for gate 1's script tables, and the reason ``coverage.py`` holds the
+    reader instead of this file.
     """
     tiers = manifest["tolerance_tier"]
     lines = {line for names in FUNCTION_LINES.values() for line in names}
     assert MEASURED_WORST, "见证表为空——下面的循环一个数都不比"
     assert set(MEASURED_WORST) == lines, set(MEASURED_WORST) ^ lines
     assert len(MEASURED_WORST_VARIANTS) == 4, MEASURED_WORST_VARIANTS
+    assert MEASURED_WORST_VARIANTS == bars_variants_from_ts(
+        ORACLE_FIXTURES.read_text(encoding="utf-8")
+    ), "MEASURED_WORST 的列顺序必须等于 pineOracleFixtures.ts 里 BARS_VARIANTS 的顺序"
     for line, readings in MEASURED_WORST.items():
         assert len(readings) == len(MEASURED_WORST_VARIANTS), (line, readings)
         assert max(readings) <= TOLERANCE_TIERS[tiers[line]], (

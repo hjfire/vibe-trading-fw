@@ -190,6 +190,32 @@ def gate1_functions() -> frozenset[str]:
     return frozenset(SCRIPT_TO_FUNCTION.get(name, name) for name in GATE1_SCRIPTS)
 
 
+# ``BARS_VARIANTS`` is an ARRAY of quoted names (`as const`), not a `key:` map, so it
+# needs its own pair of readers; the match runs to the first line-initial `]` for the
+# same reason `SCRIPTS` does — array elements are strings and could contain brackets.
+_BARS_VARIANTS_RE = re.compile(r"export const BARS_VARIANTS = \[(.*?)\n\]", re.S)
+_QUOTED_NAME_RE = re.compile(r'"([^"]+)"')
+
+
+def bars_variants_from_ts(ts_text: str) -> tuple[str, ...]:
+    """The bar-set order gate 2 iterates, read off ``pineOracleFixtures.ts``.
+
+    ``MEASURED_WORST``'s four columns are ordered by this list. Nothing compared that
+    order before: ``test_coverage_ledger.py`` pinned ``len(MEASURED_WORST_VARIANTS) == 4``
+    and "four readings per row", which stays green if someone reorders the columns —
+    min/max排版 then prints a different line's story while every number is still inside
+    its tier (review round M-2). Returning a TUPLE in document order is the point: a set
+    would pin the members and still let the order drift.
+    """
+    found = _BARS_VARIANTS_RE.search(ts_text)
+    if found is None:
+        raise ValueError("pineOracleFixtures.ts: no BARS_VARIANTS list to read")
+    order = tuple(_QUOTED_NAME_RE.findall(found.group(1)))
+    if not order:
+        raise ValueError("pineOracleFixtures.ts: BARS_VARIANTS read as empty — that is not a pass")
+    return order
+
+
 def worst_range(line: str) -> tuple[float, float]:
     """(min, max) of the four recorded gate-2 readings for one line."""
     readings = MEASURED_WORST[line]

@@ -195,11 +195,26 @@ def test_values_header_and_na_encoding_are_the_declared_contract() -> None:
     assert manifest["period"]["default"] == PERIOD
 
 
-#: The loosest tier each line has ever been measured to satisfy. A tolerance is a
-#: promise, not a knob: tightening is free, loosening needs a written ruling in
-#: 项目档案.md and an explicit edit to this table (the gate below refuses otherwise).
-#: These 18 values are the readings taken when the fixtures were first generated —
-#: they are not aspirations.
+#: The loosest tier each line may be shipped at. A tolerance is a promise, not a knob:
+#: tightening is free, loosening needs a written ruling in 项目档案.md and an explicit
+#: edit to this table (the gate below refuses otherwise).
+#:
+#: WHAT THESE 18 VALUES ARE — the previous wording ("the readings taken when the
+#: fixtures were first generated") overstated them. `TIER_FLOOR` equals
+#: `manifest["tolerance_tier"]` item for item (measured True at cfeeb66f by the review
+#: round and again at this round's HEAD), so it is a RATCHET ON THE DECLARED TIER: it
+#: refuses a line being shipped looser than the tier this repository announced. It is
+#: NOT a measurement ceiling and not "the tightest tier the residual supports" — 14 of
+#: the 18 lines are identically zero across all four bar sets and would therefore
+#: support `exact`, and 13 of them are announced `loose`/`tight` anyway (`st_direction`
+#: is the one zero line that is announced `exact`), because a tier states the SEMANTIC
+#: promise of that line (no cross-bar state; ledger L-3 and Ruling H), not what today's
+#: bars happened to measure. The readings live in one place and it is not this table:
+#: ``coverage.MEASURED_WORST``, guarded against these tiers by
+#: ``test_coverage_ledger.py``. Measured against the residual, 5 of the 18 floors
+#: coincide with the tightest tier it supports — `sma`/`bb_basis`/`bb_upper`/`bb_lower`,
+#: whose 1e-15-scale readings rule `exact` out, plus `st_direction` — and the other 13
+#: are looser than it by the announcement.
 TIER_FLOOR: dict[str, str] = {
     "sma": "tight",
     "ema": "loose",
