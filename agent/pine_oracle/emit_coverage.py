@@ -44,8 +44,8 @@ def _fmt(x: float) -> str:
     return f"{x:.3e}"
 
 
-def render() -> str:
-    """The ledger body exactly as ``main()`` commits it — writes nothing, prints nothing.
+def render() -> tuple[str, tuple[int, int, int, int]]:
+    """The ledger body exactly as ``main()`` commits it, plus the four stdout counters.
 
     This function exists so the document has something to be compared against. While
     ``main()`` assembled the body itself, the only way to check ``COVERAGE.md`` was to
@@ -53,9 +53,17 @@ def render() -> str:
     whose tier column, recorded readings, reading-bucket prose or backlog line numbers
     disagreed with ``coverage.py`` stayed green (review席 N-4b/N-5/N-6/N-8: four edits,
     four ``rc=0``). ``test_coverage_ledger.py`` now compares
-    ``render() == COVERAGE_DOC.read_text()`` byte for byte, so those four columns are
+    ``render()[0] == COVERAGE_DOC.read_text()`` byte for byte, so those four columns are
     machine-locked and "re-run the generator after you change a roster" stops being a
     process discipline and becomes a gate.
+
+    The counters come out with the text because ``main()`` used to re-read
+    ``pineTa.ts`` and ``manifest.json`` a second time to build its one stdout line, with
+    the reason 「so the printed row stays byte-for-byte the row the brief fixed」 written
+    next to it — a reason that did not hold (review round A-MIN-2: returning the
+    counters from here守得住 that row just as literally, since nothing about the printed
+    text changes). Two reads of a file render() had already read is one more window in
+    which the printed four numbers can disagree with the document that was just written.
     """
     text = PINE_TA.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -107,7 +115,8 @@ def render() -> str:
         f"## 采纳引擎／TV 约定（{len(manifest['convention'])} 处，逐字取自 manifest 的 `convention`）",
         "",
         "每一行都是「参考实现刻意跟着引擎约定走」的记录：**它让判据二可跑，但它本身不是判据二的证据**——"
-        "这些约定的独立正证是各自的手算点值测试与外部锚点。",
+        "这些约定的独立正证是各自的手算点值测试；外部锚点本轮只提供口径约定"
+        "（`EXTERNAL_ANCHORS.md`，第三方取数 0 条，两条锚点都是 in-repo 的符号口径而非点值）。",
         "",
         "| line | 采纳了什么、另一套约定会给什么（含源码坐标） |",
         "|---|---|",
@@ -195,20 +204,27 @@ def render() -> str:
     for name in sorted(builtins - COVERED):
         out.append(f"| `{name}` | `{row_line(name)}` |")
 
-    return "\n".join(out) + "\n"
+    text = "\n".join(out) + "\n"
+    # The four numbers `main()` prints, computed from what render() already read —
+    # re-reading `pineTa.ts`/`manifest.json` for them was A-MIN-2's finding.
+    counters = (
+        len(builtins),
+        len(COVERED),
+        len(builtins) - len(COVERED),
+        len(manifest["convention"]),
+    )
+    return text, counters
 
 
 def main() -> None:
-    write_text_lf(OUT, render())
-    # The counters are re-read here instead of being returned by ``render()`` so the
-    # printed row stays byte-for-byte the row the brief fixed (`74 builtins, 12
-    # covered, 62 open, 7 conventions`): ``render()`` owns the document, ``main()``
-    # owns the disk and that one line of stdout.
-    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
-    builtins = builtins_from_source(PINE_TA.read_text(encoding="utf-8"))
+    text, (n_builtins, n_covered, n_open, n_conventions) = render()
+    write_text_lf(OUT, text)
+    # The printed row is the row the brief fixed: `74 builtins, 12 covered,
+    # 62 open, 7 conventions` — same four numbers, now read from the same pass that
+    # produced the document instead of a second read of the same two files.
     print(
-        f"{len(builtins)} builtins, {len(COVERED)} covered, "
-        f"{len(builtins) - len(COVERED)} open, {len(manifest['convention'])} conventions"
+        f"{n_builtins} builtins, {n_covered} covered, "
+        f"{n_open} open, {n_conventions} conventions"
     )
 
 

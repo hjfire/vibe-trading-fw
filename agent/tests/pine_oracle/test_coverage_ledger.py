@@ -406,7 +406,9 @@ def test_the_committed_ledger_is_what_the_generator_renders() -> None:
     """
     committed = COVERAGE_DOC.read_text(encoding="utf-8")
     assert committed.strip(), "台账正文为空——任何渲染比较都会在两份空文本上绿"
-    assert render() == committed, (
+    rendered, counters = render()
+    assert sum(counters) > 0, counters  # 计数器全 0 ⇒ 渲染没吃到东西，不是通过
+    assert rendered == committed, (
         "COVERAGE.md 不是生成器的当前输出——重跑 "
         "`PYTHONPATH=agent python -X utf8 -m pine_oracle.emit_coverage`；"
         "数值/档位/散文/行号四类列只能由生成器改，手改正文就是这条门该红的东西"

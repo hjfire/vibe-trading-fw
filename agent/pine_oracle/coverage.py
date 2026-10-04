@@ -130,9 +130,15 @@ _EXPECTED_LINES_RE = re.compile(
 # (:127) is what decides which script gets prefix-checked at all, so a set read only
 # from EXPECTED_LINES cannot see a script deleted here (review round I-2 — the hole
 # `gate1_script_keys_from_ts`'s docstring used to claim it closed). The values are
-# template strings whose bodies can contain `}` (`ta.supertrend`'s destructuring
-# comment, any future `${}`), so `[^}]*` is the wrong character class: the match runs
-# to the first line-initial `};`, which is how the block actually closes at :48.
+# ESCAPED DOUBLE-QUOTED strings today (measured at 32fe0754: all 8 are `"…\"…"`; the
+# backticks inside this block are comment prose only), and the whole `const SCRIPTS`
+# block contains NO `}` at all — the earlier wording here claimed the opposite and
+# backed it with a non-instance (`ta.supertrend`'s destructure is `[band, dir]`, which
+# sits in a VALUE string and carries `]`, not `}`). So `[^}]*` would in fact work right
+# now, and it is still the wrong class to bet the roster on: the day one value becomes a
+# template string (any `${}`) that class truncates mid-body and the roster silently
+# shrinks. The match therefore runs to the first line-initial `};`, which is how the
+# block actually closes at :48.
 _SCRIPTS_RE = re.compile(r"const SCRIPTS: Record<string, string> = \{(.*?)\n\};", re.S)
 #: Keys only — a line-indented `ident:` at the start of a line. Comment lines start
 #: with `//` and value lines start with a quote, so neither is read as a key; the
