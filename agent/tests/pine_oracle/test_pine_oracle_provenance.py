@@ -193,3 +193,62 @@ def test_values_header_and_na_encoding_are_the_declared_contract() -> None:
     assert "nan" not in text.lower() and "null" not in text.lower(), rel
     assert manifest["na_encoding"] == "empty"
     assert manifest["period"]["default"] == PERIOD
+
+
+#: The loosest tier each line has ever been measured to satisfy. A tolerance is a
+#: promise, not a knob: tightening is free, loosening needs a written ruling in
+#: 项目档案.md and an explicit edit to this table (the gate below refuses otherwise).
+#: These 18 values are the readings taken when the fixtures were first generated —
+#: they are not aspirations.
+TIER_FLOOR: dict[str, str] = {
+    "sma": "tight",
+    "ema": "loose",
+    "rma": "loose",
+    "stdev": "tight",
+    "stdev_sample": "tight",
+    "rsi": "loose",
+    "atr": "loose",
+    "bb_basis": "tight",
+    "bb_upper": "tight",
+    "bb_lower": "tight",
+    "macd": "loose",
+    "macd_signal": "loose",
+    "macd_hist": "loose",
+    "stoch_k": "loose",
+    "stoch_d": "loose",
+    "supertrend": "loose",
+    "st_direction": "exact",
+    "vwap": "loose",
+}
+TIER_ORDER: dict[str, int] = {"exact": 0, "tight": 1, "loose": 2}
+
+
+def test_no_line_is_looser_than_the_tier_it_was_measured_at() -> None:
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    tiers = manifest["tolerance_tier"]
+    # the floor table covers every line, so a new batch line cannot dodge the gate
+    assert set(TIER_FLOOR) == set(tiers), set(TIER_FLOOR) ^ set(tiers)
+    assert tiers, "tolerance_tier 为空——下面的逐档比较一个数都不比"
+    for line, floor in TIER_FLOOR.items():
+        assert TIER_ORDER[tiers[line]] <= TIER_ORDER[floor], (line, tiers[line], floor)
+
+
+def test_no_line_may_be_exempted_out_of_strict_without_an_audit_trail() -> None:
+    """``exemption`` may not shrink away either: an empty dict makes ``non_strict`` empty
+    by accident, which is the vacuous-pass class this repo already logs (the ``all_lines``
+    pin in ``test_line_names_are_unique_across_batches`` is the same fix). The key-set
+    equality below is what refuses it — an exemption table that no longer names the
+    tiered lines is not an audit trail, it is an absent one.
+    """
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    non_strict = {k: v for k, v in manifest["exemption"].items() if v != "strict"}
+    assert manifest["exemption"], "exemption 为空——「全为 strict」的断言比较的是零条线"
+    assert set(manifest["exemption"]) == set(manifest["tolerance_tier"]), (
+        "exemption 与 tolerance_tier 的线名单不一致：豁免表必须逐条点名每一条被档住的线，"
+        f"exemption-only={sorted(set(manifest['exemption']) - set(manifest['tolerance_tier']))} "
+        f"tier-only={sorted(set(manifest['tolerance_tier']) - set(manifest['exemption']))}"
+    )
+    assert non_strict == {}, (
+        "把任何线挪出 strict 之前，必须在 项目档案.md 留下裁定行并在这里点名它："
+        f"{non_strict}"
+    )
