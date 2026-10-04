@@ -190,6 +190,44 @@ def gate1_functions() -> frozenset[str]:
     return frozenset(SCRIPT_TO_FUNCTION.get(name, name) for name in GATE1_SCRIPTS)
 
 
+#: One entry of ``EXPECTED_LINES``: the script key AND the line names it lists.
+#: ``gate1_script_keys_from_ts`` reads this block for NAMES ONLY (keys), which is what
+#: the roster comparison needs — but the VALUES are the second witness for
+#: ``FUNCTION_LINES``'s 函数→line 归属划分 (review round A-IMP-3 / C 席 针 b): that split
+#: is written out by hand here and again in ``pinePrefixInvariance.test.ts:79-88``, and
+#: the existing pins only covered the domain (``set(FUNCTION_LINES) == GATE2_FUNCTIONS``)
+#: and the union (18 lines), so swapping which function owns `stoch_d` and
+#: `st_direction` left the union intact, red nothing but the whole-document gate, and
+#: one re-run of the generator stamped the wrong attribution into COVERAGE.md.
+_EXPECTED_LINES_ENTRY_RE = re.compile(
+    r"^[ \t]*([a-z_][a-z_0-9]*):\s*\[([^\]]*)\]", re.M
+)
+
+
+def gate1_line_groups_from_ts(ts_text: str) -> dict[str, tuple[str, ...]]:
+    """``EXPECTED_LINES``' VALUES: script key → the line names that script must plot.
+
+    Tuples in the file's own order, and empty is refused twice over (no groups at all,
+    or a group that read as `[]`): a comparison over an empty grouping is the vacuous
+    green this harness keeps having to name explicitly.
+    """
+    found = _EXPECTED_LINES_RE.search(ts_text)
+    if found is None:
+        raise ValueError("pinePrefixInvariance.test.ts: no EXPECTED_LINES roster to read")
+    groups = {
+        name: tuple(_QUOTED_NAME_RE.findall(body))
+        for name, body in _EXPECTED_LINES_ENTRY_RE.findall(found.group(1))
+    }
+    if not groups:
+        raise ValueError(
+            "pinePrefixInvariance.test.ts: EXPECTED_LINES 分组读为空——那不是通过，是没读到"
+        )
+    empty = sorted(name for name, lines in groups.items() if not lines)
+    if empty:
+        raise ValueError(f"EXPECTED_LINES 里这些脚本没读出 line 名（空分组比不了东西）：{empty}")
+    return groups
+
+
 # The numbers gate 2 ENFORCES live are this JS table, not ``schema.TOLERANCE_TIERS``
 # (``pineTaOracle.test.ts:134`` reads ``TIER_VALUE[manifest.tolerance_tier[line]]`` and
 # ``:144`` asserts ``worst <= tier``). The mapping is written out twice — once in

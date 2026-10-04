@@ -20,9 +20,11 @@ from pine_oracle.coverage import (
     GATE2_FUNCTIONS,
     MEASURED_WORST,
     MEASURED_WORST_VARIANTS,
+    SCRIPT_TO_FUNCTION,
     bars_variants_from_ts,
     builtins_from_source,
     gate1_functions,
+    gate1_line_groups_from_ts,
     gate1_script_keys_from_ts,
     gate1_scripts_keys_from_ts,
     tier_values_from_ts,
@@ -65,6 +67,66 @@ def test_function_lines_are_exactly_the_manifest_lines(manifest: dict) -> None:
     lines = frozenset(line for names in FUNCTION_LINES.values() for line in names)
     assert lines == frozenset(manifest["tolerance_tier"]), lines ^ frozenset(manifest["tolerance_tier"])
     assert len(lines) == 18
+
+
+#: The one line whose owning function its own name does not disclose — the exact
+#: reason ``coverage.py:54-55`` says the split is written out instead of derived. Named
+#: here as the EXCEPTION, so the rule below has one documented escape and every other
+#: line is checked against the prefix rule by machine.
+PREFIX_RULE_EXCEPTIONS: dict[str, str] = {"st_direction": "supertrend"}
+
+
+def test_the_function_to_line_attribution_has_two_witnesses(manifest: dict) -> None:
+    """Who owns which line, compared per function — not just as a union of 18.
+
+    ``FUNCTION_LINES`` (:56-68) is a hand-written 函数→line 划分, and the two existing
+    pins only hold the DOMAIN (``set(FUNCTION_LINES) == GATE2_FUNCTIONS``, above) and the
+    UNION (18 lines, == the manifest's tier keys). A union is blind to a partition: move
+    `stoch_d` to `supertrend` and `st_direction` to `stoch` and every number stays 18,
+    every tier stays inside its floor, and only ``emit_coverage`` silently restamps
+    table 1's 「manifest line」 column and the 判据二 ✓/✗ marks (that module:91-95 reads
+    exactly this划分). Review 针 b (C 席) and this round's re-run both landed the wrong
+    partition into ``COVERAGE.md`` with 120 Python + 118 JS green after one regeneration.
+
+    Two independent witnesses, both tighter than what existed:
+    1. the JS side's grouping — ``EXPECTED_LINES``' VALUES read out of
+       ``pinePrefixInvariance.test.ts:79-88`` (until now that file's values had ZERO
+       readers in ``agent/``, only its keys), folded onto builtins through
+       ``SCRIPT_TO_FUNCTION``, required to equal ``FUNCTION_LINES`` per function;
+    2. the prefix rule inside Python — every line's owner is the text before its first
+       ``_``, except the single name in ``PREFIX_RULE_EXCEPTIONS``.
+
+    The counter proves the comparison is not vacuous: 8 of the 18 lines are cross-checked
+    against the JS roster (the six gate-2 functions gate 1 also scripts), and an empty
+    grouping makes ``gate1_line_groups_from_ts`` raise rather than pass.
+    """
+    groups = gate1_line_groups_from_ts(PREFIX_GATE.read_text(encoding="utf-8"))
+    assert groups, "EXPECTED_LINES 分组为空——下面的逐函数比较一个名字都不比"
+    folded: dict[str, set[str]] = {}
+    for script, names in groups.items():
+        folded.setdefault(SCRIPT_TO_FUNCTION.get(script, script), set()).update(names)
+    assert folded, "脚本分组折到函数后为空——没有东西可比"
+    checked_lines = 0
+    for name in sorted(folded):
+        if name in GATE1_ONLY:
+            continue  # sar: gate 2 never prices it, so it has no FUNCTION_LINES row
+        assert set(FUNCTION_LINES[name]) == folded[name], (
+            f"函数 {name} 的 line 归属与判据一名单表分叉："
+            f"JS={sorted(folded[name])} Python={sorted(FUNCTION_LINES[name])} "
+            f"对称差={sorted(set(FUNCTION_LINES[name]) ^ folded[name])}"
+        )
+        checked_lines += len(folded[name])
+    assert checked_lines == 8, checked_lines
+
+    owned = {line for names in FUNCTION_LINES.values() for line in names}
+    assert owned == set(manifest["tolerance_tier"]), owned ^ set(manifest["tolerance_tier"])
+    for name, lines in sorted(FUNCTION_LINES.items()):
+        for line in lines:
+            owner = PREFIX_RULE_EXCEPTIONS.get(line, line.split("_")[0])
+            assert owner == name, (
+                f"line {line!r} 记在函数 {name!r} 名下，但按前缀规则它属于 {owner!r}；"
+                f"唯一的例外是 {sorted(PREFIX_RULE_EXCEPTIONS)}——归属划分改动必须在这里留下理由"
+            )
 
 
 def test_gate_2_priced_exactly_the_registered_functions(manifest: dict) -> None:
