@@ -36,6 +36,21 @@ def test_tr_first_bar_reduces_to_high_minus_low() -> None:
     assert tr[4] == pytest.approx(3.5)
 
 
+def test_tr_is_total_on_an_empty_input_like_the_other_helpers() -> None:
+    """Zero-length in, zero-length out — no ``IndexError`` at the bar-0 assignment.
+
+    Every other helper in this module answers a too-short input with its all-na (or
+    empty) array through an ``n < 1 or shape[0] < n`` early return; ``ta_tr`` reads
+    ``high[0]`` unconditionally, so the empty case was the one partial function here.
+    Unreachable from the gate on purpose — all four bar fixtures carry 40 or 120 rows,
+    so this is the unit-layer guard and no committed byte depends on it.
+    """
+    empty = np.empty(0, dtype="float64")
+    out = ta_tr(empty, empty, empty)
+    assert out.shape == (0,)
+    assert out.dtype == np.float64
+
+
 def test_atr_is_rma_of_tr_seeded_at_n_minus_one() -> None:
     tr = ta_tr(HIGH5, LOW5, CLOSE5)                      # [1.5, 2.0, 2.5, 3.0, 3.5]
     out = ta_atr(HIGH5, LOW5, CLOSE5, 3)
@@ -108,21 +123,26 @@ def test_macd_signal_is_an_ema_of_the_macd_line_not_of_the_source() -> None:
 
 
 def test_stoch_uses_the_partial_window_from_bar_zero() -> None:
-    """Engine: highest/lowest have no full-window gate (pineTa.ts:212-222), so %K is
+    """Engine: highest/lowest have no full-window gate (pineTa.ts:212-224), so %K is
     defined at bar 0 from the one bar available. A strict n-bar warm-up would give
     na for the first n-1 bars. Adopted engine convention; ENGINE_CONVENTION["stoch_k"]."""
     out = ta_stoch(CLOSE5, HIGH5, LOW5, 5, 3)
     k = out["stoch_k"]
+    # bar 0: the window holds one bar, so hh = high[0] = 2.0 and ll = low[0] = 0.5.
     assert k[0] == pytest.approx(100.0 * (1.0 - 0.5) / (2.0 - 0.5))    # 33.333...
+    # bar 1: the window holds two bars — hh = max(2.0, 3.0) = 3.0 over the highs and
+    # ll = min(0.5, 1.0) = 0.5 over the lows, so the trailing aggregation itself is
+    # what this cell measures, which bar 0's single-bar window cannot see.
+    assert k[1] == pytest.approx(100.0 * (2.0 - 0.5) / (3.0 - 0.5))    # 60.0
     assert k[4] == pytest.approx(100.0 * (5.0 - 0.5) / (6.0 - 0.5))    # window of 5
-    assert not math.isnan(k[0])
 
 
 def test_stoch_monotonic_ramp_is_100_whatever_the_length() -> None:
     src = np.arange(1.0, 21.0)
     out = ta_stoch(src, src, src, 5, 3)
-    # bar 0: hh == ll -> na by rule; from bar 1 the ramp's own spread carries it, and
-    # on a strictly increasing series (close == high == low) %K is 100 for any length.
+    # bar 0: hh == ll, so this helper's guard leaves it na (the engine's four-argument
+    # branch guards the same at pineTa.ts:617); from bar 1 the ramp's own spread carries
+    # it, and on a strictly increasing series (close == high == low) %K is 100 for any length.
     assert math.isnan(out["stoch_k"][0])
     assert out["stoch_k"][1:] == pytest.approx([100.0] * 19)
     # %D needs three finite %K, so it starts one bar after they are all there:
@@ -142,7 +162,7 @@ def test_smoothed_stages_propagate_na_instead_of_skipping_it() -> None:
     """The second stage is per-window na, not "average whatever is available".
 
     The engine's ``smaStep`` — what ``ta.sma`` runs — answers NA as soon as the
-    *current* window holds an NA (pineTa.ts:46-54), and ``_sma_na_propagating``
+    *current* window holds an NA (pineTa.ts:46-55), and ``_sma_na_propagating``
     states that same per-window rule for the reference, so the smooth's first value
     is (first finite k) + d_len - 1, not just d_len - 1. An "average whatever is
     available" smoother would already answer at first_k, which is what makes this

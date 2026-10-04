@@ -130,9 +130,15 @@ def test_batch_one_lines_are_emitted_for_every_variant() -> None:
 
 def test_line_names_are_unique_across_batches() -> None:
     """Two batches using one title would merge into a single tier and one CSV — the
-    fixture would then be checking one of them twice."""
+    fixture would then be checking one of them twice.
+
+    The first assertion is the shape guard: ``len([]) == len(set([]))`` is true, so
+    without it an emptied ``lines`` map would compare nothing and pass — the very
+    defect class ``schema._NON_EMPTY_MANIFEST_KEYS`` exists to refuse.
+    """
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
     all_lines = [line for names in manifest["lines"].values() for line in names]
+    assert all_lines, "no line names to compare — an empty set is a defect, not a green"
     assert len(all_lines) == len(set(all_lines)), sorted(all_lines)
 
 

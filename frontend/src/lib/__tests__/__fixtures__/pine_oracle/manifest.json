@@ -1,9 +1,9 @@
 {
   "convention": {
     "ema": "seeded on src[0] with no na warm-up; TA-Lib SMA-seeds at n-1 (pineTa.ts:134-145)",
-    "macd": "all three outputs are dense from bar 0 because the underlying emas are (pineTa.ts:622-632)",
+    "macd": "all three outputs are dense from bar 0 because the underlying emas are; TA-Lib would leave the first slow-1 bars na (pineTa.ts:622-632)",
     "rsi": "bar-0 change enters both rma streams as 0, so the first value is at n-1 and the seed window includes that 0; na-propagation would start at n (pineTa.ts:550-552)",
-    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na (pineTa.ts:212-222)"
+    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na (pineTa.ts:212-224)"
   },
   "exemption": {
     "atr": "strict",
@@ -91,7 +91,7 @@
   },
   "generated_at": "2026-10-04",
   "generator": "agent/pine_oracle/emit_fixtures.py",
-  "head_sha": "3ad43ae7",
+  "head_sha": "43fc5dcf",
   "line_ending": "lf",
   "lines": {
     "batch_1": [

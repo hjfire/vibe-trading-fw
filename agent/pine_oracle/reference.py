@@ -136,8 +136,16 @@ def ta_tr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> NanArray:
     The engine's ``pc`` at bar 0 is ``close[0]`` (pineTa.ts:536), not a missing
     value; for any bar with ``low <= close <= high`` the three candidates collapse
     to ``high - low``, which is what the folklore rule states.
+
+    Total on an empty input, like the rest of this module's helpers: with no bar
+    there is no bar-0 candidate to read, so the answer is an empty result rather
+    than an ``IndexError``. Nothing on the gate depends on that branch (all four
+    bar fixtures carry 40 or 120 rows); it is here so the helper is a function on
+    every input the module's other helpers already accept.
     """
     out = np.empty(high.shape, dtype="float64")
+    if high.shape[0] == 0:
+        return out
     out[0] = max(
         float(high[0]) - float(low[0]),
         abs(float(high[0]) - float(close[0])),
@@ -214,7 +222,7 @@ def _sma_na_propagating(src: np.ndarray, n: int) -> NanArray:
     it is deliberately not the batch-1 ``ta_sma`` cumsum form, whose prefix sum is
     poisoned permanently by the first na (see the module docstring's DEVIATION note).
     The engine's ``smaStep`` is per window: it returns NA the moment a value in the
-    *current* window is NA (pineTa.ts:46-54), which is what pushes the second stoch
+    *current* window is NA (pineTa.ts:46-55), which is what pushes the second stoch
     stage one bar later per na it inherits. What Pine's own ``ta.sma`` does with an
     na in the window is a Task 6 external-anchor question, not a claim made here.
     """
@@ -241,7 +249,7 @@ def ta_stoch(
     low = np.asarray(low, dtype="float64")
     k = np.full(src.shape, np.nan)
     for i in range(src.shape[0]):
-        # No full-window gate (pineTa.ts:212-222): bar 0 is measured over one bar.
+        # No full-window gate (pineTa.ts:212-224): bar 0 is measured over one bar.
         start = max(0, i - n + 1)
         hh = float(np.max(high[start : i + 1]))
         ll = float(np.min(low[start : i + 1]))

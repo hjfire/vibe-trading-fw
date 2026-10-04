@@ -53,8 +53,9 @@ ENGINE_CONVENTION: dict[str, str] = {
     "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose "
                "partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only "
                "via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na "
-               "(pineTa.ts:212-222)",
-    "macd": "all three outputs are dense from bar 0 because the underlying emas are (pineTa.ts:622-632)",
+               "(pineTa.ts:212-224)",
+    "macd": "all three outputs are dense from bar 0 because the underlying emas are; TA-Lib "
+            "would leave the first slow-1 bars na (pineTa.ts:622-632)",
 }
 
 #: basename -> (rows, writes_the_session_column), taken from emit_bars so the seeds
