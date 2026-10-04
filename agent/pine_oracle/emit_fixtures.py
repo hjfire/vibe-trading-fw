@@ -56,7 +56,25 @@ ENGINE_CONVENTION: dict[str, str] = {
                "(pineTa.ts:212-224)",
     "macd": "all three outputs are dense from bar 0 because the underlying emas are; TA-Lib "
             "would leave the first slow-1 bars na (pineTa.ts:622-632)",
+    "supertrend": "cold start takes direction +1 (`if na(atr[1]) direction := 1`) and "
+                  "the band ratchet is guarded by nz(), whose no-op only equals a NaN "
+                  "guard while prices stay positive (pineTa.ts:700-713, TV body "
+                  "pineRealWorld.test.ts:65-93)",
+    "st_direction": "-1 is the UPTREND and the plotted line is the lower band; the "
+                    "folklore '+1 = up' reading is inverted (pineTa.ts:707-712)",
+    "vwap": "takes no session argument and accumulates over the whole loaded range; "
+            "TradingView re-anchors each session, and that difference is a backlog entry "
+            "in COVERAGE.md rather than a passing gate (pineTa.ts:960-970). The Pine text "
+            "passes hlc3 EXPLICITLY: that is the engine's own default source for an "
+            "argument-less call (pineTa.ts:963), while a bare `ta.vwap` never reaches the "
+            "ta.* dispatcher — that branch is on the call path only "
+            "(pineRuntime.ts:1537-1541) — and reads as an undefined variable (measured: "
+            "未定义的变量 \"ta.vwap\", task-6 report Step 7)",
 }
+
+#: Integer-valued outputs: a sign bit has no rounding to forgive, so the strictest
+#: tier is the honest one. Tighten-only (spec §5) — nothing may move out of this set.
+EXACT_LINES: frozenset[str] = frozenset({"st_direction"})
 
 #: basename -> (rows, writes_the_session_column), taken from emit_bars so the seeds
 #: and shapes cannot be restated wrong here.
@@ -108,7 +126,13 @@ def emit(out_dir: Path = FIXTURE_DIR) -> dict[str, Any]:
                 write_text_lf(path, values_csv(arr))
                 files[rel] = sha256_of(path)
                 emitted.add(line_name)
-                tier[line_name] = "tight" if line_name in TIGHT_LINES else "loose"
+                tier[line_name] = (
+                    "exact"
+                    if line_name in EXACT_LINES
+                    else "tight"
+                    if line_name in TIGHT_LINES
+                    else "loose"
+                )
                 exemption[line_name] = "strict"
         lines_by_batch[batch_name] = sorted(emitted)
     manifest: dict[str, Any] = {

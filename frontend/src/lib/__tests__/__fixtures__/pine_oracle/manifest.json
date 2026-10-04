@@ -3,7 +3,10 @@
     "ema": "seeded on src[0] with no na warm-up; TA-Lib SMA-seeds at n-1 (pineTa.ts:134-145)",
     "macd": "all three outputs are dense from bar 0 because the underlying emas are; TA-Lib would leave the first slow-1 bars na (pineTa.ts:622-632)",
     "rsi": "bar-0 change enters both rma streams as 0, so the first value is at n-1 and the seed window includes that 0; na-propagation would start at n (pineTa.ts:550-552)",
-    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na (pineTa.ts:212-224)"
+    "st_direction": "-1 is the UPTREND and the plotted line is the lower band; the folklore '+1 = up' reading is inverted (pineTa.ts:707-712)",
+    "stoch_k": "highest/lowest have no full-window gate, so %K exists from the first bar whose partial window has hh!=ll (on the ramp fixture that is bar 1, and bar 0 is na only via the hh==ll rule, not via warm-up); a strict n-bar warm-up leaves n-1 bars na (pineTa.ts:212-224)",
+    "supertrend": "cold start takes direction +1 (`if na(atr[1]) direction := 1`) and the band ratchet is guarded by nz(), whose no-op only equals a NaN guard while prices stay positive (pineTa.ts:700-713, TV body pineRealWorld.test.ts:65-93)",
+    "vwap": "takes no session argument and accumulates over the whole loaded range; TradingView re-anchors each session, and that difference is a backlog entry in COVERAGE.md rather than a passing gate (pineTa.ts:960-970). The Pine text passes hlc3 EXPLICITLY: that is the engine's own default source for an argument-less call (pineTa.ts:963), while a bare `ta.vwap` never reaches the ta.* dispatcher — that branch is on the call path only (pineRuntime.ts:1537-1541) — and reads as an undefined variable (measured: 未定义的变量 \"ta.vwap\", task-6 report Step 7)"
   },
   "exemption": {
     "atr": "strict",
@@ -17,10 +20,13 @@
     "rma": "strict",
     "rsi": "strict",
     "sma": "strict",
+    "st_direction": "strict",
     "stdev": "strict",
     "stdev_sample": "strict",
     "stoch_d": "strict",
-    "stoch_k": "strict"
+    "stoch_k": "strict",
+    "supertrend": "strict",
+    "vwap": "strict"
   },
   "external_anchors": [],
   "files": {
@@ -72,6 +78,10 @@
     "values/sma@bars_daily_oscillating.csv": "c379a3e514aa24f301deba7876fb3187245aef40695e2a2c0bd757fe3f95f1a3",
     "values/sma@bars_daily_trend.csv": "75245ea58c7f3d14d10055b14e8674615ccf9cde655ba82c094084b33039d6e7",
     "values/sma@bars_intraday_vwap.csv": "530ef683cd2907cfac171385e68af0d44ae52a651aa11879c3b902a20e5434a1",
+    "values/st_direction@bars_daily_gapped.csv": "8c302c837fe3789a8f8dc85afc8b2a66ad23621054d2e280fb911a7060941bf6",
+    "values/st_direction@bars_daily_oscillating.csv": "8c302c837fe3789a8f8dc85afc8b2a66ad23621054d2e280fb911a7060941bf6",
+    "values/st_direction@bars_daily_trend.csv": "a5e9696c9b74856d6b5794c49a6774827d42623e2a10e137e64829c847c26fb7",
+    "values/st_direction@bars_intraday_vwap.csv": "ea4f70bed565260352e93f272b6d5809f2c0a8033244dabf85ddf068e1e45dcf",
     "values/stdev@bars_daily_gapped.csv": "8aab45dbebe179163b4da81f7c4c0ae0c0fa201c9790b96911d4614dc7befa3a",
     "values/stdev@bars_daily_oscillating.csv": "b1da31d8455c847044ebc71699952dbd4b2bf37252a3bff2c10a6d7c08d2d1e9",
     "values/stdev@bars_daily_trend.csv": "7b253f513f4d4efa66ea922d2d23cefcc1330bf96856ee662c2ce5ae294fb155",
@@ -87,11 +97,19 @@
     "values/stoch_k@bars_daily_gapped.csv": "dd1f20b6ca05c64eef864f2c266274f15e2eef9dae986e1e89d2f5ab2a9f32a2",
     "values/stoch_k@bars_daily_oscillating.csv": "9b6d27dc4bb1748329d66b323dcfd188d2f8756e71d1c398f67d057b76413365",
     "values/stoch_k@bars_daily_trend.csv": "c5aa0712efdda6bf600a66304a59eb506f937e8459f65b174682838db2102f0f",
-    "values/stoch_k@bars_intraday_vwap.csv": "0e92d4f5f8d64a9eb39275c6d36817de42e318acab99cc5ead5fa5450d70be64"
+    "values/stoch_k@bars_intraday_vwap.csv": "0e92d4f5f8d64a9eb39275c6d36817de42e318acab99cc5ead5fa5450d70be64",
+    "values/supertrend@bars_daily_gapped.csv": "d67b6fdbaa77c892c05029efa9051fa8976778a4274264ef3a28ecc43be4366a",
+    "values/supertrend@bars_daily_oscillating.csv": "4f2e376c7478427e30c231962883e7fd4f9c12b98136a1c9a8efb83bee70c2c6",
+    "values/supertrend@bars_daily_trend.csv": "a0166eea7594e78cd56ea1c985d9277dedc009cde80fd7f239d465316f087334",
+    "values/supertrend@bars_intraday_vwap.csv": "9c445e221e7105d43339d2248a842831aa5167a7333552330401c0a4298fd7ad",
+    "values/vwap@bars_daily_gapped.csv": "aeeadb059d7441d3ed1c59a719c24593d7798d9ed63cf9571af2271f38974678",
+    "values/vwap@bars_daily_oscillating.csv": "6e9bd49d883d42e81bf510ce2d242a682f903c6a253998d98aad1ba00036f4ba",
+    "values/vwap@bars_daily_trend.csv": "9ab12768a028561f1856590cff1abdf7f2e137fb00e96b495b19a21df86c8e39",
+    "values/vwap@bars_intraday_vwap.csv": "c980736e8b15694f8498d6b9dc53582d75b1f800008f3ad0f2394b1762aaaa13"
   },
   "generated_at": "2026-10-04",
   "generator": "agent/pine_oracle/emit_fixtures.py",
-  "head_sha": "43fc5dcf",
+  "head_sha": "9b11456a",
   "line_ending": "lf",
   "lines": {
     "batch_1": [
@@ -112,6 +130,11 @@
       "rsi",
       "stoch_d",
       "stoch_k"
+    ],
+    "batch_3": [
+      "st_direction",
+      "supertrend",
+      "vwap"
     ]
   },
   "na_encoding": "empty",
@@ -120,7 +143,8 @@
   },
   "scripts": {
     "batch_1": "//@version=5\nindicator(\"oracle batch 1\")\nplot(ta.sma(close, 5), title=\"sma\")\nplot(ta.ema(close, 5), title=\"ema\")\nplot(ta.rma(close, 5), title=\"rma\")\nplot(ta.stdev(close, 5), title=\"stdev\")\nplot(ta.stdev(close, 5, false), title=\"stdev_sample\")\n",
-    "batch_2": "//@version=5\nindicator(\"oracle batch 2\")\nplot(ta.rsi(close, 14), title=\"rsi\")\nplot(ta.atr(5), title=\"atr\")\n[basis, upper, lower] = ta.bb(close, 5, 2.0)\nplot(basis, title=\"bb_basis\")\nplot(upper, title=\"bb_upper\")\nplot(lower, title=\"bb_lower\")\n[macdLine, macdSig, macdHist] = ta.macd(close, 12, 26, 9)\nplot(macdLine, title=\"macd\")\nplot(macdSig, title=\"macd_signal\")\nplot(macdHist, title=\"macd_hist\")\nk5 = ta.stoch(close, high, low, 5)\nplot(k5, title=\"stoch_k\")\nplot(ta.sma(k5, 3), title=\"stoch_d\")\n"
+    "batch_2": "//@version=5\nindicator(\"oracle batch 2\")\nplot(ta.rsi(close, 14), title=\"rsi\")\nplot(ta.atr(5), title=\"atr\")\n[basis, upper, lower] = ta.bb(close, 5, 2.0)\nplot(basis, title=\"bb_basis\")\nplot(upper, title=\"bb_upper\")\nplot(lower, title=\"bb_lower\")\n[macdLine, macdSig, macdHist] = ta.macd(close, 12, 26, 9)\nplot(macdLine, title=\"macd\")\nplot(macdSig, title=\"macd_signal\")\nplot(macdHist, title=\"macd_hist\")\nk5 = ta.stoch(close, high, low, 5)\nplot(k5, title=\"stoch_k\")\nplot(ta.sma(k5, 3), title=\"stoch_d\")\n",
+    "batch_3": "//@version=5\nindicator(\"oracle batch 3\")\n[stBand, stDir] = ta.supertrend(3.0, 10)\nplot(stBand, title=\"supertrend\")\nplot(stDir, title=\"st_direction\")\nplot(ta.vwap(hlc3), title=\"vwap\")\n"
   },
   "seed": {
     "bars_daily_gapped": 23,
@@ -146,9 +170,12 @@
     "rma": "loose",
     "rsi": "loose",
     "sma": "tight",
+    "st_direction": "exact",
     "stdev": "tight",
     "stdev_sample": "tight",
     "stoch_d": "loose",
-    "stoch_k": "loose"
+    "stoch_k": "loose",
+    "supertrend": "loose",
+    "vwap": "loose"
   }
 }

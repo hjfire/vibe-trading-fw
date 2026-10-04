@@ -153,8 +153,29 @@ def test_declared_engine_conventions_are_the_exact_adjudicated_set() -> None:
     while the table drifted away from the fixture it describes).
     """
     manifest = load_manifest(FIXTURE_DIR / "manifest.json")
-    assert set(manifest["convention"]) == {"ema", "macd", "rsi", "stoch_k"}
+    assert set(manifest["convention"]) == {
+        "ema",
+        "macd",
+        "rsi",
+        "stoch_k",
+        "st_direction",
+        "supertrend",
+        "vwap",
+    }
     assert set(manifest["convention"]) <= set(manifest["tolerance_tier"])
+
+
+def test_exact_tier_is_only_for_the_declared_integer_lines() -> None:
+    """``exact`` (tier value 0, i.e. bit-for-bit) is reserved for the integer-valued
+    outputs ``emit_fixtures.EXACT_LINES`` names — today just ``st_direction``, a sign
+    bit with no rounding to forgive. Declaring the set here as well is what keeps the
+    third tier from silently widening or narrowing: moving ``st_direction`` out of
+    ``EXACT_LINES`` loosens the JS gate to ``loose`` with no other test noticing, and
+    adding a float line to it would demand a new argument in git.
+    """
+    manifest = load_manifest(FIXTURE_DIR / "manifest.json")
+    exact = {line for line, t in manifest["tolerance_tier"].items() if t == "exact"}
+    assert exact == {"st_direction"}, sorted(exact)
 
 
 def test_values_header_and_na_encoding_are_the_declared_contract() -> None:
