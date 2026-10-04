@@ -8,7 +8,10 @@ task's dry-run proved that a cwd-relative path in a gate is a gate that reads a
 missing directory as "no data".
 """
 
+import os
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -292,6 +295,90 @@ def test_the_js_tier_table_is_the_python_tier_table(manifest: dict) -> None:
     shipped = set(manifest["tolerance_tier"].values())
     assert shipped, "manifest 的档位宣告为空——上面那条子集断言比的是零个档名"
     assert shipped <= set(js_tiers), sorted(shipped - set(js_tiers))
+
+
+#: Switch for the slow re-measuring gate below. Kept as an env var rather than a
+#: registered pytest marker because the root ``pyproject.toml`` is outside this round's
+#: whitelist — and an unregistered marker only warns, which is not a refusal.
+REMEASURE_ENV: str = "PINE_ORACLE_REMEASURE"
+#: `[oracle] batch_1/sma@bars_daily_trend worst=2.991e-15 na=4 checked=116`
+_ORACLE_PRINT_RE = re.compile(
+    r"\[oracle\] (\w+)/([^@\s]+)@(\S+) worst=(\S+) na=(\d+) checked=(\d+)"
+)
+
+
+@pytest.mark.skipif(
+    os.environ.get(REMEASURE_ENV) != "1",
+    reason=f"慢门：子进程重跑判据二本体才比得出「抄来的读数」是否过期；{REMEASURE_ENV}=1 手动跑",
+)
+def test_the_recorded_readings_are_what_the_gate_prints_today() -> None:
+    """`MEASURED_WORST`'s 72 numbers == the 72 `[oracle]` lines the JS gate prints NOW.
+
+    Every other pin on that table is a bound, not an equality: `:179` above checks
+    `max(readings) <= tier` (a floor the recorded numbers may sit anywhere under), and
+    the whole-document gate compares `COVERAGE.md` with `render()` — which eats the same
+    hand-transcribed table, so a stale reading and the document go stale together and
+    both stay green. Review round A-IMP-1 / 本席复现: changing
+    `"sma"`'s trend reading from `2.991e-15` to `2.500e-15` — a number that is neither
+    that row's min nor its max, so it does not even appear in the ledger's 下界/上界
+    columns — left 122 Python + 118 JS green without a regeneration.
+    Both review seats re-ran the live gate at `32fe0754` and found the table correct
+    today (A 席 72 rows, B 席 71/71 parsed cells); what was missing was any way for the
+    table to go RED when the engine or the reference implementation moves a residual
+    inside its own tier. This is that way.
+
+    Why it is opt-in: it spawns `vitest`, and this repo's three gates are run serially on
+    a ~2 GB box; default collection must keep the CI baseline the plan froze (119→122
+    green in ~2 s), so the case reports as skipped unless `PINE_ORACLE_REMEASURE=1`.
+    Run it as a manual DoD step:
+
+        PINE_ORACLE_REMEASURE=1 PYTHONPATH=agent python -X utf8 -m pytest \
+            agent/tests/pine_oracle/test_coverage_ledger.py -q
+
+    Shape guards, because a gate over an empty or truncated parse is not a gate: the run
+    must exit 0, the parse must yield exactly 18 x 4 = 72 (line, variant) cells and the
+    same key set the table declares, and mismatches are printed as `{cell: (recorded,
+    printed)}` so a red here names which reading went stale on which bar set.
+    """
+    npx = shutil.which("npx.cmd") or shutil.which("npx")
+    assert npx, "本机找不到 npx.cmd——慢门无法执行判据二本体，不能按跳过算通过"
+    proc = subprocess.run(
+        [npx, "vitest", "run", "src/lib/__tests__/pineTaOracle.test.ts"],
+        cwd=str(REPO_ROOT / "frontend"),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert proc.returncode == 0, (
+        f"判据二本体没有跑绿（rc={proc.returncode}）——先修它，再来问台账读数过不过期"
+    )
+    live: dict[tuple[str, str], str] = {}
+    for stream in (proc.stdout, proc.stderr):
+        for ln in (stream or "").splitlines():
+            found = _ORACLE_PRINT_RE.search(ln)
+            if found:
+                live[(found.group(2), found.group(3))] = found.group(4)
+    expected_cells = len(MEASURED_WORST) * len(MEASURED_WORST_VARIANTS)
+    assert expected_cells == 72, expected_cells
+    assert len(live) == expected_cells, (
+        f"当场只解析出 {len(live)} 个 [oracle] 读数，台账声明 {expected_cells} 个——"
+        "解析没拿到东西不是「一致」"
+    )
+    # the printed shape is JS `toExponential(3)`; zeros print `0.000e+0`, not `0.000e+00`
+    recorded = {
+        (line, variant): ("0.000e+0" if reading == 0 else f"{reading:.3e}")
+        for line, readings in MEASURED_WORST.items()
+        for variant, reading in zip(MEASURED_WORST_VARIANTS, readings)
+    }
+    assert set(live) == set(recorded), (
+        f"格集分叉：只在当场输出={sorted(set(live) - set(recorded))} "
+        f"只在台账={sorted(set(recorded) - set(live))}"
+    )
+    stale = {cell: (recorded[cell], live[cell]) for cell in recorded if recorded[cell] != live[cell]}
+    assert not stale, (
+        f"{len(stale)} 格台账读数与判据二当场输出不等（格式 {len(recorded)} 格全为当场打印）："
+        f"{stale}——要么重测后更新 coverage.MEASURED_WORST 并重生台账，要么这条门就是它的证据"
+    )
 
 
 def test_the_committed_ledger_is_what_the_generator_renders() -> None:

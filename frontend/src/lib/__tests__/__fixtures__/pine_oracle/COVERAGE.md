@@ -39,7 +39,7 @@
 
 ## 判据二的见证物性质（11 个函数、18 条 line 的当场读数）
 
-下表是 18 条 line 在四份 bar（bars_daily_trend、bars_daily_oscillating、bars_daily_gapped、bars_intraday_vwap）上当场复跑得出的相对残差区间，取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印（72 行 = 18 line × 4 bar 集），**不是**从 CSV 里反推的第二个数。它按裁定 Ruling H 回答一个门回答不了的问题：
+下表是 18 条 line 在四份 bar（bars_daily_trend、bars_daily_oscillating、bars_daily_gapped、bars_intraday_vwap）上**抄录**的相对残差区间（抄写坐标：`coverage.py` 的注释——HEAD `575d3382`、2026-10-04 当场复跑），取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印（72 行 = 18 line × 4 bar 集），**不是**从 CSV 里反推的第二个数。它按裁定 Ruling H 回答一个门回答不了的问题：
 （数值按 Python 的 `:.3e` 排版，零写作 `0.000e+00`；控制台是 JS 的 `toExponential(3)`，同一读数写作 `0.000e+0`——同值不同形，逐条数值已当场复核一致，见 task-7-report.md。）
 **恒零的线只核对语义（播种位置、总体/样本式选择、`PERIOD` 接线、line 名↔`title=`），不核对算术形式**——两条独立实现逐位相同，更可能说明参考实现照抄了引擎的运算顺序，而不是两套算术在容差内各自成立。非零残差才是「两套不同算术落进同一档位」的那种见证。
 
@@ -65,6 +65,8 @@
 | `vwap` | `loose` | 0.000e+00 | 0.000e+00 | —（恒零，无余量可言） | 零残差＝只核对语义 |
 
 读数分档（14 恒零 / 4 非零，18 条合计）：恒零者的判据二通过=**语义见证**，非零者的判据二通过=**独立算术见证**。本表不是门——门是 `pineTaOracle.test.ts` 当场断言 `worst ≤ 档位`；本表记录的是「这条门在这条线上到底见证了什么」。`test_coverage_ledger.py::test_the_witness_table_names_every_priced_line_within_its_own_tier` 钉住三件事：行数=18、每行 4 个读数、每个读数落在该线 manifest 档位的地板之内（档位被人改了而没重测 ⇒ 这条红）。
+
+这些读数是**手抄进 `coverage.MEASURED_WORST` 的字面量**，上面那条门只把它们钉在各自档位的地板之内、不钉它们与判据二当场输出的等值；整文档等值门比的是「文档 ↔ `render()`」，而 `render()` 吃的正是这份手抄数，所以它锁住的是渲染、不是数。等值由一条默认跳过的慢门守：`test_coverage_ledger.py::test_the_recorded_readings_are_what_the_gate_prints_today`（子进程重跑判据二、逐格比对 72 个 `[oracle]` 读数；`PINE_ORACLE_REMEASURE=1` 才跑，以免拖慢默认基线）。**本生成器自己不复跑判据二。**
 
 ## 已知偏离，记为 backlog 而不是通过的门
 

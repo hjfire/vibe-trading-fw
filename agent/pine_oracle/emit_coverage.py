@@ -119,8 +119,9 @@ def render() -> str:
         "",
         f"## 判据二的见证物性质（{len(GATE2_FUNCTIONS)} 个函数、{len(MEASURED_WORST)} 条 line 的当场读数）",
         "",
-        f"下表是 {len(MEASURED_WORST)} 条 line 在四份 bar（{('、'.join(MEASURED_WORST_VARIANTS))}）上当场复跑得出的"
-        f"相对残差区间，取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印"
+        f"下表是 {len(MEASURED_WORST)} 条 line 在四份 bar（{('、'.join(MEASURED_WORST_VARIANTS))}）上"
+        f"**抄录**的相对残差区间（抄写坐标：`coverage.py` 的注释——HEAD `575d3382`、2026-10-04 当场复跑），"
+        f"取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印"
         f"（{len(MEASURED_WORST) * len(MEASURED_WORST_VARIANTS)} 行 = {len(MEASURED_WORST)} line × {len(MEASURED_WORST_VARIANTS)} bar 集），"
         "**不是**从 CSV 里反推的第二个数。它按裁定 Ruling H 回答一个门回答不了的问题：",
         "（数值按 Python 的 `:.3e` 排版，零写作 `0.000e+00`；控制台是 JS 的 `toExponential(3)`，"
@@ -152,6 +153,13 @@ def render() -> str:
         f" 钉住三件事：行数={len(MEASURED_WORST)}、每行 {len(MEASURED_WORST_VARIANTS)} 个读数、"
         "每个读数落在该线 manifest 档位的地板之内"
         "（档位被人改了而没重测 ⇒ 这条红）。",
+        "",
+        "这些读数是**手抄进 `coverage.MEASURED_WORST` 的字面量**，上面那条门只把它们钉在各自档位的地板"
+        "之内、不钉它们与判据二当场输出的等值；整文档等值门比的是「文档 ↔ `render()`」，而 `render()` 吃的"
+        "正是这份手抄数，所以它锁住的是渲染、不是数。等值由一条默认跳过的慢门守："
+        "`test_coverage_ledger.py::test_the_recorded_readings_are_what_the_gate_prints_today`"
+        "（子进程重跑判据二、逐格比对 72 个 `[oracle]` 读数；`PINE_ORACLE_REMEASURE=1` 才跑，"
+        "以免拖慢默认基线）。**本生成器自己不复跑判据二。**",
         "",
         "## 已知偏离，记为 backlog 而不是通过的门",
         "",
