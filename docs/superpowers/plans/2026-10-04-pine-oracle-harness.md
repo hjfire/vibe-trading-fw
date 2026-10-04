@@ -3113,6 +3113,22 @@ git commit -s -m "docs(档案): Pine 护栏轮收口——两道门读数、12/7
 - `main` 领先 `origin/main` **77** 个提交（`git rev-list --count origin/main..main`）。
 - 同步轮分支 `sync/upstream-2026-10` 头 `2a50023d`，领先 `main` **65** 个提交，**尚未收口**。本轮若先合入 `main`，之后要按 spec §9 R-A 把 `feat/pine-oracle-harness` rebase 到新 `main` 上，预期冲突只集中在 `项目档案.md` 的尾部追加区与 `docs/superpowers/` 两处；rebase 属于改历史的操作，**必须由用户点头才做**。
 
+最终评审修复轮（2026-10-05 07:0x–07:1x，代码 HEAD `641647a5`）再补三条提醒，取证坐标见档案 6.10 第 6／7／9 条
+与档案 6.3 的「评审修复轮三支门读数」：
+
+- **修复轮自己的未测面**：本轮没跑前端全量套件（护栏轮收口跑过一次，档案 6.5 DoD 7 那行给的是
+  `Test Files 109 passed (109)`／`Tests 1738 passed (1738)`；修复席只跑两支
+  `pineTaOracle.test.ts` ＋ `pinePrefixInvariance.test.ts`，`Tests 118 passed (118)`）；`ruff` 本机未装
+  （`python -B -X utf8 -m ruff --version` → `No module named ruff`）⇒ lint 层无读数。
+  已补上读数的是 `tsc`：`npx.cmd tsc -p tsconfig.json` **`rc=0`、输出 0 行**（`tsconfig.json:12` 本就是
+  `"noEmit": true`，不落产物；没走 `npm run build` 那条 `tsc -b && vite build`，因为它会产出 `vite build` 的 `dist/`）。
+  修复轮零 `.ts` 源文件改动，类型面风险不新增，这条现在有读数而不是推断。
+- **护栏从未在 CI 环境跑过一次**：`test.yml` 只在 push/PR 到 `main` 时触发，而本分支从未 push ⇒ 合回并推送后，
+  全量 `pytest` 与 `npx vitest run` 会在 Linux ＋ `[dev,openbb,stats,anthropic]` extras 的环境里第一次跑这套护栏。
+- **park（Ruling P）＝ A-MIN-4**：`EXTERNAL_ANCHORS.md` 与 `manifest.external_anchors` 互不钉，两条 `source` 都是
+  `in-repo:` 口径符号、本轮第三方取数 **0 条** ⇒ 本轮不开这条门，结转档案 6.10 第 7 条（台账一句
+  `Task 8 final-review: park A-MIN-4`）。
+
 ---
 
 ## 自检表（覆盖自检：每条都写了核对方法，方法是跑过的）
