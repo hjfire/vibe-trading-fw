@@ -40,6 +40,7 @@
 ## 判据二的见证物性质（11 个函数、18 条 line 的当场读数）
 
 下表是 18 条 line 在四份 bar（bars_daily_trend、bars_daily_oscillating、bars_daily_gapped、bars_intraday_vwap）上当场复跑得出的相对残差区间，取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印（72 行 = 18 line × 4 bar 集），**不是**从 CSV 里反推的第二个数。它按裁定 Ruling H 回答一个门回答不了的问题：
+（数值按 Python 的 `:.3e` 排版，零写作 `0.000e+00`；控制台是 JS 的 `toExponential(3)`，同一读数写作 `0.000e+0`——同值不同形，逐条数值已当场复核一致，见 task-7-report.md。）
 **恒零的线只核对语义（播种位置、总体/样本式选择、`PERIOD` 接线、line 名↔`title=`），不核对算术形式**——两条独立实现逐位相同，更可能说明参考实现照抄了引擎的运算顺序，而不是两套算术在容差内各自成立。非零残差才是「两套不同算术落进同一档位」的那种见证。
 
 | line | 档位 | worst 下界 | worst 上界 | 距档位地板的余量 | 见证物性质 |

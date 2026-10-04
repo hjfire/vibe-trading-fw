@@ -109,6 +109,8 @@ def main() -> None:
         f"相对残差区间，取自 `pineTaOracle.test.ts:148` 的 `[oracle]` 打印"
         f"（{len(MEASURED_WORST) * len(MEASURED_WORST_VARIANTS)} 行 = {len(MEASURED_WORST)} line × {len(MEASURED_WORST_VARIANTS)} bar 集），"
         "**不是**从 CSV 里反推的第二个数。它按裁定 Ruling H 回答一个门回答不了的问题：",
+        "（数值按 Python 的 `:.3e` 排版，零写作 `0.000e+00`；控制台是 JS 的 `toExponential(3)`，"
+        "同一读数写作 `0.000e+0`——同值不同形，逐条数值已当场复核一致，见 task-7-report.md。）",
         "**恒零的线只核对语义（播种位置、总体/样本式选择、`PERIOD` 接线、line 名↔`title=`），"
         "不核对算术形式**——两条独立实现逐位相同，更可能说明参考实现照抄了引擎的运算顺序，"
         "而不是两套算术在容差内各自成立。非零残差才是「两套不同算术落进同一档位」的那种见证。",
