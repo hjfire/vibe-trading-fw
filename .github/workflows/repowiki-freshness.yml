@@ -82,4 +82,4 @@ jobs:
       # tools/conftest.py。门禁与工具在 CI 里始终只读 —— 本文件没有任何步骤写 INDEX.md，
       # 也没有任何步骤提交产物。
       - name: Wiki guard suite
-        run: python -X utf8 -m pytest tools/test_wiki_drift.py tools/test_upstream_sync.py -q -m "not local_archive"
+        run: python -X utf8 -m pytest tools/test_wiki_drift.py tools/test_wiki_qmind.py tools/test_upstream_sync.py -q -m "not local_archive"

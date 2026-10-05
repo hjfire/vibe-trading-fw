@@ -4452,18 +4452,17 @@ def test_drift_reports_are_derived_and_not_tracked():
     )
 
 
-def test_tracked_repowiki_tree_is_pages_plus_five_non_page_entries():
+def test_tracked_repowiki_tree_is_pages_plus_six_non_page_entries():
     """The publication's composition, re-measured rather than subtracted by hand.
 
-    494 pages (pinned by `test_seeded_tree_is_not_an_empty_set`) plus five items that are
+    494 pages (pinned by `test_seeded_tree_is_not_an_empty_set`) plus six items that are
     not pages: `/.gitattributes` (the LF pin the ledger hashes depend on), `/.gitignore`
-    (keeps `drift/` out of the tree), `/INDEX.md`, `/README.md`, `/ledger.jsonl`.
-    `/INDEX.md` is the one generated entry the tracked tree keeps on purpose — `index
-    --check` compares the shipped artifact against the tree, so it must be in the
-    artifact; the generated reports under `drift/` stay ignored. Adding a sixth tracked
-    non-page file is a decision, and this is where it has to be made — the count is
-    expressed from the two facts, so it cannot drift out of sync with the page count it is
-    quoted next to.
+    (keeps `drift/` out of the tree), `/.qmind-state.json` (M4's ingest ledger — data,
+    not output), `/INDEX.md`, `/README.md`, `/ledger.jsonl`. `/INDEX.md` is the one
+    generated entry kept on purpose — `index --check` compares the shipped artifact
+    against the tree, so it must be in the artifact; `drift/` reports stay ignored. Adding
+    a seventh non-page file is a decision made here — the count is expressed from the two
+    facts, so it cannot drift from the page count quoted beside it.
     """
     names = _ls_files("ls-files", "repowiki")
     non_pages = sorted(
@@ -4472,13 +4471,14 @@ def test_tracked_repowiki_tree_is_pages_plus_five_non_page_entries():
     assert non_pages == [
         "repowiki/.gitattributes",
         "repowiki/.gitignore",
+        "repowiki/.qmind-state.json",
         "repowiki/INDEX.md",
         "repowiki/README.md",
         "repowiki/ledger.jsonl",
     ], non_pages
     pages = [n for n in names if n not in non_pages]
     assert len(pages) == 494, len(pages)
-    assert len(names) == 494 + len(non_pages) == 499, len(names)
+    assert len(names) == 494 + len(non_pages) == 500, len(names)
 
 
 # ---------------------------------------------------------------------------

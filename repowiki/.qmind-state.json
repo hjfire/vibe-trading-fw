@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "notebook": "vibe-trading-repowiki",
+  "channel": {
+    "status": "unavailable",
+    "measured_at": "2026-10-05",
+    "reason": "QMind's tool face has no create_notebook, and the server rejects an unknown notebookId, so the 44 aggregation pages cannot be uploaded from here. Nothing in `sources` is invented: the map is empty because nothing has ever landed.",
+    "outstanding": "spec §8.1 step 1 — a human has to create the notebook `vibe-trading-repowiki` in QMind; afterwards run `python -B -X utf8 tools/wiki_qmind.py plan --json` to get the upload list, then `reconcile --from <list_sources dump> --apply` and the `sentinel` recall probe, and set this `channel.status` to `available` only from a lookup that actually returned the pages.",
+    "detail": [
+      {
+        "tool": "list_notebooks",
+        "code": "ok",
+        "message": "notebooks [] totalSize 0 — the account holds no notebook to write into",
+        "operationId": "8855174d-5dca-416d-bffd-10fa4da99869"
+      },
+      {
+        "tool": "add_source",
+        "code": "permission_denied",
+        "message": "The notebook is outside the current Agent Notebook scope.",
+        "operationId": "cc536aa9-6659-4835-8848-ac3b2368bb68"
+      },
+      {
+        "tool": "list_sources",
+        "code": "permission_denied",
+        "message": "The notebook is outside the current Agent Notebook scope.",
+        "operationId": "61aecdc8-9256-4720-a427-1bd1aa0bf4b3"
+      },
+      {
+        "tool": "retrieve",
+        "code": "permission_denied",
+        "message": "The notebook is outside the current Agent Notebook scope.",
+        "operationId": "84ed4076-0469-4780-8322-c6da8790408a"
+      },
+      {
+        "tool": "retrieve",
+        "code": "selection_required",
+        "message": "Use list_notebooks overview to select one to five relevant notebooks.",
+        "operationId": "4a3d9b66-4c4c-46d2-a51a-4622e6382664"
+      }
+    ]
+  },
+  "sources": {}
+}
