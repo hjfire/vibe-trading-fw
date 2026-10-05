@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router";
-import { Activity, BarChart3, BellRing, Bot, BookOpen, CalendarClock, CandlestickChart, Check, ChevronDown, Database, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BellRing, Bot, BookOpen, CalendarClock, CandlestickChart, Check, ChevronDown, Database, FileText, Grid2x2, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, TrendingUp, WalletCards } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -37,6 +37,10 @@ export function Layout() {
     { to: "/correlation", icon: BarChart3, label: t('layout.correlation') },
     // Local custom ⑧: KLineChart pro page (drawing tools + watchlist).
     { to: "/pro-chart", icon: TrendingUp, label: t('layout.proChart') },
+    // Multi-timeframe watch: four periods of one symbol, crosshair and time
+    // window aligned across them. Its own slot because a view reachable only by
+    // typing the URL is a view nobody finds (the complaint that closed ⑨).
+    { to: "/multi-chart", icon: Grid2x2, label: t('layout.multiChart', { defaultValue: '多周期看盘' }) },
     // Local custom ㉔: the usage manual. Its own nav slot is deliberate -- the
     // complaint that closed ⑨ was "找不到新功能", and a manual reachable only by
     // typing /help is a manual that does not exist.

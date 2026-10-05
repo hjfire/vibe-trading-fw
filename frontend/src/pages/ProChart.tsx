@@ -133,6 +133,7 @@ const PRESETS = [
 // would pull all of ProChart into that route's chunk. Re-exported so the call
 // sites and tests here keep resolving them through this module.
 import { intervalAllowed, repairInterval } from "@/lib/chartView";
+import { CANDLE_COLORS } from "@/lib/chartPalette";
 export { canMinuteBars, intervalAllowed, repairInterval } from "@/lib/chartView";
 
 /**
@@ -209,15 +210,15 @@ function chartStyles(dark: boolean, timeShare = false) {
     candle: {
       type,
       bar: {
-        upColor: "#ef5350",
-        downColor: "#26a69a",
-        noChangeColor: "#888888",
-        upBorderColor: "#ef5350",
-        downBorderColor: "#26a69a",
-        noChangeBorderColor: "#888888",
-        upWickColor: "#ef5350",
-        downWickColor: "#26a69a",
-        noChangeWickColor: "#888888",
+        upColor: CANDLE_COLORS.up,
+        downColor: CANDLE_COLORS.down,
+        noChangeColor: CANDLE_COLORS.noChange,
+        upBorderColor: CANDLE_COLORS.up,
+        downBorderColor: CANDLE_COLORS.down,
+        noChangeBorderColor: CANDLE_COLORS.noChange,
+        upWickColor: CANDLE_COLORS.up,
+        downWickColor: CANDLE_COLORS.down,
+        noChangeWickColor: CANDLE_COLORS.noChange,
       },
       area: {
         lineSize: 1.5,
