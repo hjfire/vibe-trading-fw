@@ -1,0 +1,481 @@
+{
+  "captured_at": "2026-10-03",
+  "branch": "sync/upstream-2026-10",
+  "base_sha": "7fb214aa",
+  "merge_sha": "d9a2fdc5",
+  "upstream_main_sha": "f21aa13d",
+  "merge_base_ours_theirs": "18027a0c",
+  "merge_base_upstream_main_head": "f21aa13d",
+  "coordinates_note": "base_sha is the branch tip the capture ran on (Task 4 BASE); merge_sha is the upstream merge commit; merge_base_ours_theirs is git merge-base upstream/main 518d793f (the pre-merge fork tip), while merge_base_upstream_main_head is upstream/main itself because the merge commit made it an ancestor of HEAD",
+  "window": [
+    "2025-01-01",
+    "2026-10-03"
+  ],
+  "window_note": "the three convertible symbols use this window; the refusal symbol uses its own window, recorded per symbol - its last bar is an ex-date, which is what makes production refuse it",
+  "additive_source": "derived",
+  "additive_source_ruling": "Task 3 probe @7fb214aa: eastmoney push2his stock_zh_a_hist unreachable in the ambient environment (fqt=1 0/12, fqt=0 1/11, ProxyError <- RemoteDisconnected in 0.2-0.4s) while Sina stock_zh_a_daily(adjust='') and stock_zh_a_hfq_factor were stable, so the additive frame is synthesized from the Sina factor steps instead of served by a vendor",
+  "interval": "1D",
+  "volume_units": "lots (Sina shares / 100, as akshare's a_share loader serves them)",
+  "columns": {
+    "raw": "trade_date,open,high,low,close,volume (index column, as-traded prices)",
+    "hfq": "trade_date,adj_factor, one row per bar in the window (Sina hfq-factor forward-filled)",
+    "qfq": "trade_date,open,high,low,close,volume (additive levels synthesized from the factor steps)"
+  },
+  "how_to_load": "pd.read_csv(path, parse_dates=[\"trade_date\"]).set_index(\"trade_date\") for raw/qfq; the hfq frame keeps trade_date as a column, which is the (trade_date, adj_factor) shape cn_adjust.apply_qfq expects",
+  "dtype_notes": [
+    "trade_date is datetime64 on both sides here; Sina's raw daily frame carries a date object and its factor table a datetime64, so both were normalized through the loader before writing",
+    "Sina's published hfq-factor table is reversed, string-typed, always 33 rows (window params ignored) and carries a 1900-01-01 sentinel row; loader._sina_factor sorts, casts and forward-fills it onto the window, which is what adj_factor holds here",
+    "Sina's adj_factor is a rising cumulative multiplier; brief Step 3's helper detects downward steps, so it is fed the exact divisor 1/adj_factor (g_next/g_prev == f_prev/f_next)"
+  ],
+  "reading_notes": [
+    "offset_distinct is the exact-float count of qfq.close - raw.close (brief Step 1's formula) and counts last-ulp cancellation noise, so it is above plateau_spans (the 1e-6 grouped plateau count); the on-disk pair is offset_distinct_on_disk / plateau_spans_on_disk. Assert plateaus, not exact float counts - the CSV text round trip moves the first number, not the second; on the refusal symbol both plateau keys are renamed pre_refusal_* on purpose - production _plateau_spans returns None there, so pre_refusal_plateau_spans=5 and pre_refusal_span_lengths=[85, 75, 97, 143, 1] is the 1e-6 grouping BEFORE that refusal (re-measured from the committed CSVs), not a span count production reached; on the three convertibles the two definitions coincide (4/5/5, production list equals the pre-grouping list), which is why this manifest never had to say which one it meant until a refusal appeared - iterating plateau keys across symbols must branch on bucket; the metric names plateau_spans / plateau_lengths / plateau_spans_on_disk stay present on the refusal symbol with a null value (production returned None there, so no span list exists), and every symbol now carries plateau_spans_production_returns_none saying which definition its plateau_spans points at (false on the three convertibles, true on the refusal)",
+    "pandas' default read_csv float parser is not bit-exact (csv_max_abs_gap_vs_capture is 1e-15 to 1e-13 on the levels); pass float_precision='round_trip' when the bits must match the capture",
+    "qfq.volume equals raw.volume by design: an additive vendor frame does not move volume, and it is the converter that divides it by the cumulative ratio; the mandated reverse check cannot see this column at all (it reads only qfq.close - raw.close and rebuilds volume from raw / ratio), so volume_identical_to_raw_on_disk is the face that falsifies a corrupt volume in _qfq.csv, and ohlc_offset_identity_max_abs is the matching face for open/high/low - see reverse_check_coverage",
+    "no symbol here is a 送转 window: on the derived path a bonus issue would be re-encoded as a cash plateau, so the converter's price-drift refusal signature cannot appear (see derived_path_limitation)",
+    "two residual faces, about five orders apart, and they are not interchangeable: reverse_check_max_rel / disk_reverse_check_max_rel are LEVEL face (600519.SH all-column max 2.1566e-16 relative), while return_reverse_check_max_rel is the RETURN face (pct_change of each lane's close) that the cross-implementation return assertion pins. Measured cause on 600519.SH 2025-07-16: the two lanes' close levels differ by 2.27373675443232059e-13 at their worst bar, differencing cancels nearly all of that and leaves 2.22044604925031308e-16 of absolute return gap, and the relative residual divides THAT by the same bar's own return magnitude 2.12615166548246748e-05 (a near-flat day, 2.1262e-05) instead of by the price level: 2.22044604925031308e-16 / 2.12615166548246748e-05 = 1.04434979183220599e-11. Largest return face over the three convertibles: 1.04434979183220599e-11 (600519.SH, 2025-07-16). The level-face keys are 48425.7x (600519.SH) / 1081.8x (000001.SZ) / 767.7x (601398.SH) tighter, so pinning a level number for a return assertion goes red on the committed data as it stands. The LEVEL face has two sub-faces and the keys hold them asymmetrically. Close-column-only, read off the committed CSVs with pandas' DEFAULT parser, is 600519.SH 1.92729087439429948e-16 / 000001.SZ 1.84525119780481264e-16 / 601398.SH 2.26465081303560163e-16 and is recorded per symbol as disk_reverse_check_close_only_max_rel; the capture-side per-column values are reverse_check[<col>].max_rel. The all-column max is what the two summary keys hold, and on 000001.SZ they are NOT one number: reverse_check_max_rel (capture) reads 2.15660308520428738e-16 / 2.21630966570611475e-16 / 2.26465081303560163e-16 while disk_reverse_check_max_rel (on-disk) reads 2.15660308520428738e-16 / 2.43233061477657715e-16 / 2.26465081303560163e-16, because its worst bar is volume and parsing moves it. Both summary keys max over five columns, so neither is a close-only reading and neither is interchangeable with reverse_check[<col>].max_rel. Both faces still measure agreement between two encodings of one corporate-action history (see derived_path_limitation) - neither is a second vendor's measurement, and no reading here licenses that wording",
+    "return_reverse_check_max_rel is read with pandas' DEFAULT read_csv float parser, the face the on-disk loader uses; return_reverse_check_max_rel_round_trip repeats it with float_precision='round_trip' (the capture's own bits). They agree exactly on 600519.SH and 601398.SH; on 000001.SZ parse noise moves the worst bar (2.63122856836137614e-13 at 2025-03-13 default vs 1.23123733430946016e-13 at 2026-04-13 round_trip), so part of that reading is parsing rather than conversion. Assert the default-parser key - it is the larger or equal one on all three symbols, and its max over the three is what REL_TOL must sit above. The round_trip re-read is the capture-bits face and is corroborated by that: it reproduces the committed capture-side reverse_check_max_rel bit-for-bit (600519.SH 2.15660308520428738e-16 / 000001.SZ 2.21630966570611475e-16 / 601398.SH 2.26465081303560163e-16). Note the suffix convention is NOT uniform across faces: for the level face the unsuffixed key is capture-side and the disk_ prefix marks the on-disk read, while for the return face the unsuffixed key is the on-disk DEFAULT-parser read and _round_trip marks the capture bits. return_reverse_check_abs_gap_at_worst_rel_bar is the absolute return gap AT the worst-relative bar, not the max absolute gap.",
+    "ohlc_offset_identity_max_abs is the NON-close invariant: an additive encoding shifts the four price columns by one and the same offset, so (qfq[c] - raw[c]) - (qfq.close - raw.close) is 0 by construction. Off disk it is not bit-exact under the default parser - on 600519.SH only open 379 / high 355 / low 373 of 424 bars land on exactly 0.0 and the rest are one ulp of the price level apart (2.27373675443232059e-13); under float_precision='round_trip' it is 600519.SH 0.00000000000000000e+00 / 000001.SZ 0.00000000000000000e+00 / 601398.SH 8.88178419700125232e-16. Assert it as <= the recorded value, never == 0.0, or the CSV round trip alone goes red"
+  ],
+  "provenance": {
+    "source": "Sina via akshare stock_zh_a_daily(adjust='') + stock_zh_a_daily(adjust='hfq-factor')",
+    "loader_entry": "backtest.loaders.akshare_loader.DataLoader.fetch_raw_with_factor",
+    "akshare_version": "1.18.81",
+    "pandas_version": "2.3.3",
+    "eastmoney_vendor_path": "not used - unreachable in this environment, see additive_source_ruling"
+  },
+  "derived_path_limitation": "the additive frames in this directory are re-encoded from the same Sina factor table the multiplicative path uses, so these fixtures check that two encodings of one corporate-action history agree (consistency reconciliation); they do NOT independently prove either encoding, and they hold no real refusal sample of the 送转 kind",
+  "symbols_convertible": [
+    "600519.SH",
+    "000001.SZ",
+    "601398.SH"
+  ],
+  "symbol_refusal": "000651.SZ",
+  "refusal_drift_floor": 20,
+  "refusal_candidate_scan": {
+    "window": [
+      "2025-01-01",
+      "2026-10-03"
+    ],
+    "candidates": [
+      "600519.SH",
+      "000001.SZ",
+      "601398.SH",
+      "600036.SH",
+      "000651.SZ"
+    ],
+    "convertible": 5,
+    "refused": 0,
+    "note": "all five brief-window candidates convert; the refusal sample below was found by moving the window END onto a real ex-date (a second real fetch of the same source, the START stays 2025-01-01), not by inventing bars"
+  },
+  "symbols": {
+    "600519.SH": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 3,
+      "offset_distinct": 4,
+      "plateau_spans": 4,
+      "plateau_lengths": [
+        114,
+        120,
+        122,
+        68
+      ],
+      "ex_dates": [
+        "2025-06-26",
+        "2025-12-19",
+        "2026-06-26"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-06-26",
+          "implied_cash": 27.6,
+          "implied_yield": 0.019222
+        },
+        {
+          "ex": "2025-12-19",
+          "implied_cash": 23.957,
+          "implied_yield": 0.016741
+        },
+        {
+          "ex": "2026-06-26",
+          "implied_cash": 28.02423,
+          "implied_yield": 0.02312
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 1.9283766720700147e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "high": {
+          "max_rel": 1.8969442894771867e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "low": {
+          "max_rel": 1.9396255359904233e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "close": {
+          "max_rel": 1.9272908743942995e-16,
+          "max_abs": 2.2737367544323206e-13
+        },
+        "volume": {
+          "max_rel": 2.1566030852042874e-16,
+          "max_abs": 2.9103830456733704e-11
+        }
+      },
+      "reverse_check_max_rel": 2.1566030852042874e-16,
+      "files": {
+        "raw": "600519.SH_raw.csv",
+        "hfq": "600519.SH_hfq.csv",
+        "qfq": "600519.SH_qfq.csv"
+      },
+      "offset_distinct_on_disk": 7,
+      "plateau_spans_on_disk": 4,
+      "csv_max_abs_gap_vs_capture": 2.2737367544323206e-13,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.1566030852042874e-16,
+      "disk_reverse_check_close_only_max_rel": 1.9272908743942995e-16,
+      "return_reverse_check_max_rel": 1.044349791832206e-11,
+      "return_reverse_check_worst_at": "2025-07-16",
+      "return_reverse_check_worst_return": 2.1261516654824675e-05,
+      "return_reverse_check_abs_gap_at_worst_rel_bar": 2.220446049250313e-16,
+      "return_reverse_check_max_rel_round_trip": 1.044349791832206e-11,
+      "return_reverse_check_worst_at_round_trip": "2025-07-16",
+      "ohlc_offset_identity_max_abs": 2.2737367544323206e-13,
+      "ohlc_offset_identity_max_abs_by_column": {
+        "open": 2.2737367544323206e-13,
+        "high": 2.2737367544323206e-13,
+        "low": 2.2737367544323206e-13
+      },
+      "ohlc_offset_identity_exact_bars_by_column": {
+        "open": 379,
+        "high": 355,
+        "low": 373
+      },
+      "ohlc_offset_identity_max_abs_round_trip": 0.0,
+      "plateau_spans_production_returns_none": false
+    },
+    "000001.SZ": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 4,
+      "offset_distinct": 5,
+      "plateau_spans": 5,
+      "plateau_lengths": [
+        104,
+        83,
+        160,
+        73,
+        4
+      ],
+      "ex_dates": [
+        "2025-06-12",
+        "2025-10-15",
+        "2026-06-12",
+        "2026-09-24"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-06-12",
+          "implied_cash": 0.362,
+          "implied_yield": 0.030549
+        },
+        {
+          "ex": "2025-10-15",
+          "implied_cash": 0.236,
+          "implied_yield": 0.020398
+        },
+        {
+          "ex": "2026-06-12",
+          "implied_cash": 0.36,
+          "implied_yield": 0.031858
+        },
+        {
+          "ex": "2026-09-24",
+          "implied_cash": 0.249,
+          "implied_yield": 0.021466
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 1.782376549956251e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "high": {
+          "max_rel": 1.7556742795449216e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "low": {
+          "max_rel": 1.817140842458432e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "close": {
+          "max_rel": 1.7943159144057188e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "volume": {
+          "max_rel": 2.2163096657061147e-16,
+          "max_abs": 4.656612873077393e-10
+        }
+      },
+      "reverse_check_max_rel": 2.2163096657061147e-16,
+      "files": {
+        "raw": "000001.SZ_raw.csv",
+        "hfq": "000001.SZ_hfq.csv",
+        "qfq": "000001.SZ_qfq.csv"
+      },
+      "offset_distinct_on_disk": 9,
+      "plateau_spans_on_disk": 5,
+      "csv_max_abs_gap_vs_capture": 1.7763568394002505e-15,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.432330614776577e-16,
+      "disk_reverse_check_close_only_max_rel": 1.8452511978048126e-16,
+      "return_reverse_check_max_rel": 2.631228568361376e-13,
+      "return_reverse_check_worst_at": "2025-03-13",
+      "return_reverse_check_worst_return": -0.0008438818565401629,
+      "return_reverse_check_abs_gap_at_worst_rel_bar": 2.220446049250313e-16,
+      "return_reverse_check_max_rel_round_trip": 1.2312373343094602e-13,
+      "return_reverse_check_worst_at_round_trip": "2026-04-13",
+      "ohlc_offset_identity_max_abs": 1.7763568394002505e-15,
+      "ohlc_offset_identity_max_abs_by_column": {
+        "open": 1.7763568394002505e-15,
+        "high": 1.7763568394002505e-15,
+        "low": 1.7763568394002505e-15
+      },
+      "ohlc_offset_identity_exact_bars_by_column": {
+        "open": 290,
+        "high": 289,
+        "low": 280
+      },
+      "ohlc_offset_identity_max_abs_round_trip": 0.0,
+      "plateau_spans_production_returns_none": false
+    },
+    "601398.SH": {
+      "bucket": "convertible",
+      "window": [
+        "2025-01-01",
+        "2026-10-03"
+      ],
+      "bars": 424,
+      "first": "2025-01-02",
+      "last": "2026-09-30",
+      "factor_steps": 4,
+      "offset_distinct": 6,
+      "plateau_spans": 5,
+      "plateau_lengths": [
+        3,
+        123,
+        104,
+        95,
+        99
+      ],
+      "ex_dates": [
+        "2025-01-07",
+        "2025-07-14",
+        "2025-12-15",
+        "2026-05-13"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-01-07",
+          "implied_cash": 0.1434,
+          "implied_yield": 0.021244
+        },
+        {
+          "ex": "2025-07-14",
+          "implied_cash": 0.1646,
+          "implied_yield": 0.020549
+        },
+        {
+          "ex": "2025-12-15",
+          "implied_cash": 0.1414,
+          "implied_yield": 0.017742
+        },
+        {
+          "ex": "2026-05-13",
+          "implied_cash": 0.1689,
+          "implied_yield": 0.02258
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": {
+        "open": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "high": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "low": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "close": {
+          "max_rel": 2.2646508130356016e-16,
+          "max_abs": 1.7763568394002505e-15
+        },
+        "volume": {
+          "max_rel": 2.1877724009100665e-16,
+          "max_abs": 1.862645149230957e-09
+        }
+      },
+      "reverse_check_max_rel": 2.2646508130356016e-16,
+      "files": {
+        "raw": "601398.SH_raw.csv",
+        "hfq": "601398.SH_hfq.csv",
+        "qfq": "601398.SH_qfq.csv"
+      },
+      "offset_distinct_on_disk": 8,
+      "plateau_spans_on_disk": 5,
+      "csv_max_abs_gap_vs_capture": 8.881784197001252e-16,
+      "volume_identical_to_raw_on_disk": true,
+      "disk_reverse_check_max_rel": 2.2646508130356016e-16,
+      "disk_reverse_check_close_only_max_rel": 2.2646508130356016e-16,
+      "return_reverse_check_max_rel": 1.7386092565630812e-13,
+      "return_reverse_check_worst_at": "2025-10-30",
+      "return_reverse_check_worst_return": 0.0012771392081736277,
+      "return_reverse_check_abs_gap_at_worst_rel_bar": 2.220446049250313e-16,
+      "return_reverse_check_max_rel_round_trip": 1.7386092565630812e-13,
+      "return_reverse_check_worst_at_round_trip": "2025-10-30",
+      "ohlc_offset_identity_max_abs": 8.881784197001252e-16,
+      "ohlc_offset_identity_max_abs_by_column": {
+        "open": 8.881784197001252e-16,
+        "high": 8.881784197001252e-16,
+        "low": 8.881784197001252e-16
+      },
+      "ohlc_offset_identity_exact_bars_by_column": {
+        "open": 394,
+        "high": 393,
+        "low": 397
+      },
+      "ohlc_offset_identity_max_abs_round_trip": 8.881784197001252e-16,
+      "plateau_spans_production_returns_none": false
+    },
+    "000651.SZ": {
+      "bucket": "refusal",
+      "window": [
+        "2025-01-01",
+        "2026-08-27"
+      ],
+      "bars": 401,
+      "first": "2025-01-02",
+      "last": "2026-08-27",
+      "factor_steps": 4,
+      "offset_distinct": 5,
+      "ex_dates": [
+        "2025-05-15",
+        "2025-08-29",
+        "2026-01-23",
+        "2026-08-27"
+      ],
+      "implied_cash_per_step": [
+        {
+          "ex": "2025-05-15",
+          "implied_cash": 0.997096,
+          "implied_yield": 0.02126
+        },
+        {
+          "ex": "2025-08-29",
+          "implied_cash": 1.994192,
+          "implied_yield": 0.042205
+        },
+        {
+          "ex": "2026-01-23",
+          "implied_cash": 0.997096,
+          "implied_yield": 0.024409
+        },
+        {
+          "ex": "2026-08-27",
+          "implied_cash": 1.999823,
+          "implied_yield": 0.048096
+        }
+      ],
+      "derived_note": "additive 序列由 Sina hfq-factor 步长反推，非厂商原样回包",
+      "reverse_check": null,
+      "reverse_check_max_rel": null,
+      "files": {
+        "raw": "000651.SZ_raw.csv",
+        "hfq": "000651.SZ_hfq.csv",
+        "qfq": "000651.SZ_qfq.csv"
+      },
+      "refusal_cause": "unclassified",
+      "refusal_observed": "_plateau_spans(offset) itself returns None for this window (additive_conversion.py:86-89 refuses an unclassifiable one-bar plateau, and the window's last bar IS ex-date 2026-08-27, so that plateau sits at the window edge where it cannot be told from a dividend landing on the final bar); convert_additive_to_multiplicative therefore returns None at :129-130 for it",
+      "plateau_spans_production_returns_none": true,
+      "offset_distinct_on_disk": 8,
+      "csv_max_abs_gap_vs_capture": 7.105427357601002e-15,
+      "volume_identical_to_raw_on_disk": true,
+      "pre_refusal_plateau_spans": 5,
+      "pre_refusal_span_lengths": [
+        85,
+        75,
+        97,
+        143,
+        1
+      ],
+      "pre_refusal_plateau_spans_on_disk": 5,
+      "plateau_spans": null,
+      "plateau_lengths": null,
+      "plateau_spans_on_disk": null,
+      "disk_reverse_check_max_rel": null,
+      "disk_reverse_check_close_only_max_rel": null,
+      "return_reverse_check_max_rel": null,
+      "return_reverse_check_worst_at": null,
+      "return_reverse_check_worst_return": null,
+      "return_reverse_check_abs_gap_at_worst_rel_bar": null,
+      "return_reverse_check_max_rel_round_trip": null,
+      "return_reverse_check_worst_at_round_trip": null,
+      "ohlc_offset_identity_max_abs": 7.105427357601002e-15,
+      "ohlc_offset_identity_max_abs_by_column": {
+        "open": 7.105427357601002e-15,
+        "high": 7.105427357601002e-15,
+        "low": 7.105427357601002e-15
+      },
+      "ohlc_offset_identity_exact_bars_by_column": {
+        "open": 327,
+        "high": 341,
+        "low": 341
+      },
+      "ohlc_offset_identity_max_abs_round_trip": 0.0
+    }
+  },
+  "reverse_check_coverage": {
+    "sees": "close only - additive_conversion.py:127 reads qfq.close - raw.close; the result frame rebuilds open/high/low from raw*ratio and volume from raw/ratio, so nothing in the residual depends on those four input columns",
+    "blind_to": [
+      "qfq.open",
+      "qfq.high",
+      "qfq.low",
+      "qfq.volume"
+    ],
+    "measured": "on mutated copies of the committed CSVs (repo tree untouched): a single qfq.open cell +0.01, open/high/low reset to raw with the offset left on close, and qfq.volume scaled by 1.5 all leave the reverse-check residual bit-identical to the committed disk_reverse_check_max_rel while the converter output stays equal to the baseline bar-for-bar - 600519.SH: baseline 2.15660308520428738e-16, after all three mutations 2.15660308520428738e-16 / 2.15660308520428738e-16 / 2.15660308520428738e-16; 000001.SZ: baseline 2.43233061477657715e-16, after all three mutations 2.43233061477657715e-16 / 2.43233061477657715e-16 / 2.43233061477657715e-16; 601398.SH: baseline 2.26465081303560163e-16, after all three mutations 2.26465081303560163e-16 / 2.26465081303560163e-16 / 2.26465081303560163e-16",
+    "same_mutations_do_move": "ohlc_offset_identity_max_abs goes to 600519.SH: 1.000000e-02 (one open cell +0.01) / 7.958123e+01 (ohlc reset to raw); 000001.SZ: 1.000000e-02 (one open cell +0.01) / 1.207000e+00 (ohlc reset to raw); 601398.SH: 1.000000e-02 (one open cell +0.01) / 6.183000e-01 (ohlc reset to raw), and volume_identical_to_raw_on_disk flips from true to 600519.SH false, 000001.SZ false, 601398.SH false on the volume mutation",
+    "assertion_faces": {
+      "close": "return_reverse_check_max_rel (returns) is the face Task 5 pins. Close-only levels: disk_reverse_check_close_only_max_rel (on-disk) / reverse_check[\"close\"].max_rel (capture)",
+      "open/high/low": "ohlc_offset_identity_max_abs",
+      "volume": "volume_identical_to_raw_on_disk",
+      "levels_all_columns": "reverse_check_max_rel (capture) / disk_reverse_check_max_rel (on-disk) - max over all five columns, taken on volume for 600519.SH and 000001.SZ, so NOT a close-only reading"
+    },
+    "data_status": "the committed data is correct in all five columns - brief Step 3's build_additive_from_factor (fed the 1/f divisor table, ruling R-15), re-derived from the committed raw + hfq CSVs in this process, reproduces _qfq.csv bit-for-bit under float_precision='round_trip' on all four symbols: max_abs 0.0 and DataFrame.equals True, volume column included. Under pandas' DEFAULT parser the same comparison lands exactly on the already-recorded csv_max_abs_gap_vs_capture (600519.SH 2.27373675443232059e-13 / 000001.SZ 1.77635683940025046e-15 / 601398.SH 8.88178419700125232e-16 / 000651.SZ 7.10542735760100186e-15), i.e. the text round trip's parse noise and nothing else - so this is a guard-coverage gap, not a data defect (ruling R-19)"
+  },
+  "manifest_revision": {
+    "round": "1",
+    "reviewed_commit": "07b4eb2d",
+    "changed": "metadata layer only - return-face reverse-check keys (Important-1), the non-close ohlc_offset_identity keys and reverse_check_coverage (Important-2), the pre_refusal_* renames plus plateau_spans_production_returns_none and the disk_reverse_check_max_rel null on the refusal symbol (Important-3, Minor 5). No CSV byte, no window, no step, no bucket verdict and no already-ratified decision (R-15 1/f feeding, R-16 window end on a real ex-date) was touched.",
+    "controller_alignment": "post-review touch-ups by the controller, not the implementer: notes[4] attributed 000001.SZ disk_reverse_check_max_rel (2.43233061477657715e-16) to reverse_check_max_rel, whose committed value is 2.21630966570611475e-16; assertion_faces.close named the five-column key as the close face; and return_reverse_check_worst_abs_gap was the gap at the worst-relative bar, not a max. Fixed by naming each key its own value, splitting the faces table into close-only vs levels_all_columns, renaming the gap key, and adding disk_reverse_check_close_only_max_rel (measured twice: by the reviewer and by the controller, agreeing bit-for-bit). CSVs, buckets, windows and the ratified decisions are untouched."
+  }
+}

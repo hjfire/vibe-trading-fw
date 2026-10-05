@@ -18,7 +18,7 @@
 - `docs/` 被 `.gitignore:124` 忽略 ⇒ spec 与本计划都要 `git add -f`（既有 4 个 docs 文件就是这么进来的）。
 - 探针纪律（本仓既有）：needle 唯一 + `finally` 字节还原 + sha256 前后校验；**禁用 `git checkout --` / `git restore` / `git stash` 还原**（脏树上会冲掉别人的工作）。
 - Windows 本机：一律 `python -X utf8`；bash 脚本用 `bash tools/xxx.sh`（`core.filemode=false`，`./` 写法在 runner 上 Permission denied）；`core.autocrlf=true`。
-- 全量套件基线（`f90473e2` 实测）：**17043 passed / 169 skipped / 11 failed / 11 errors**，529.96s；22 条红里 20 处 `OSError [WinError 1314]`（无符号链接特权），余 2 条是文件锁与时钟时限。失败必须**逐条按成因归类**，对不上基线的单列「本轮新增红」并停下修。
+- 全量套件基线（`f90473e2` 实测）：**17043 passed / 169 skipped / 11 failed / 11 errors**，529.96s；22 条红里 20 处 `OSError [WinError 1314]`（无符号链接特权），余 2 条是文件锁与时钟时限。失败必须**逐条按成因归类**，对不上基线的单列「本轮新增红」并停下修。**注意**：这条基线是合并**前**的；Task 1 报告实测从仓库根跑的 deselected 计数在合并前后是 **17227 → 17386**（差 159，上游那 7 个新测试文件带来的），所以 `17043 passed` 这个总数在 Task 8 不可逐字引用 —— 能对上的只有「22 条红的成因清单」，归类按成因、不按总数。
 - `tools/` 那台机器只用 stdlib + pytest（fork 工作流只 `pip install pytest`）；`agent/tests/` 那台**刻意破这条纪律**，因为收益率对账离不开 pandas/numpy，它由上游 `test.yml` 经 `testpaths` 收集。
 - 数值断言只读入库 fixture，**CI 里不取网络**。真取数只出现在 Task 3 的一次性只读探针与 Task 4 的一次性采集脚本里，两者都不提交脚本本体。
 - 商标/敏感词针脚不许字面写进被扫描面（`.superpowers/**`、`tools/`、`repowiki/`、`.github/`、`项目档案.md`）；`docs/` 被 `ci_grep_gates.sh:66` 的 `--exclude-dir=docs` 豁免。
@@ -57,7 +57,7 @@
 
 ```bash
 git fetch upstream
-git rev-parse --short HEAD upstream/main
+git rev-parse --short HEAD; git rev-parse --short upstream/main
 git rev-list --left-right --count upstream/main...HEAD
 git merge-base upstream/main HEAD
 git merge-tree --write-tree HEAD upstream/main | head -1; echo "merge-tree rc=$?"
@@ -71,13 +71,13 @@ Expected：`35 / <N>`（`N` 记录实际值，本计划写作时是 236）；mer
 - [ ] **Step 2: 采合并前门禁面读数**（Task 8 要比对，必须先留底）
 
 ```bash
-python -X utf8 -m pytest -q -k upstream_owned 2>&1 | tail -3
+python -X utf8 -m pytest tools/test_wiki_drift.py -q -k upstream_owned 2>&1 | tail -3
 bash tools/ci_grep_gates.sh > /tmp/gates_before.txt 2>&1; echo "rc=$?"
 python -X utf8 tools/wiki_drift.py stale --format count
 python -X utf8 tools/wiki_drift.py index --check >/dev/null 2>&1; echo "index rc=$?"
 ```
 
-Expected：`-k upstream_owned` 收到 **1** 条并通过；`ci_grep_gates.sh` rc=1（既有形状：19 行输出、`docs/` 0 行、`./.qoder/` 恰 1 条）；stale 读数 **445**；`index --check` rc=0。把四行读数写进 ledger 的 `Task 1: pre-merge readings` 段。
+Expected：`-k upstream_owned` 收到 **1** 条并通过（**必须指名文件**：`pyproject.toml:276` 的 `testpaths = ["agent/tests"]` 让从仓库根跑的 `-k` 永远收不到 `tools/` 下的用例 —— 在合并后的 `d9a2fdc5` 实测：从根跑 `7 skipped, 17386 deselected`，指名文件 `1 passed, 229 deselected`）；`ci_grep_gates.sh` rc=1（既有形状：19 行输出、`docs/` 0 行、`./.qoder/` 恰 1 条）；stale 读数 **445**；`index --check` rc=0。把四行读数写进 ledger 的 `Task 1: pre-merge readings` 段。
 
 - [ ] **Step 3: 建分支并合并**
 
@@ -96,12 +96,12 @@ Expected：`git status --porcelain` 空；`git log --oneline -1` 是 `Merge remo
 ```bash
 git grep -c "frame_caliber(" -- agent/src/market_data.py agent/backtest/runner.py
 git grep -n "def frame_caliber" -- agent/backtest/loaders/registry.py
-git grep -n 'attrs\["adjustment"\]' -- agent/backtest/loaders/akshare_loader.py
+git grep -n '"adjustment": "split_dividend"' -- agent/backtest/loaders/akshare_loader.py
 git grep -n '("akshare", "a_share")' -- agent/backtest/loaders/registry.py
 python -X utf8 -c "import sys; sys.path[:0]=['agent']; from backtest.loaders import registry; print(registry.frame_caliber.__doc__.splitlines()[0])"
 ```
 
-Expected：`market_data.py` 命中 **1**、`runner.py` 命中 **5**；`def frame_caliber` 在 `registry.py` 存在；akshare loader 有 `attrs["adjustment"]` 写入点；表里有 `("akshare", "a_share")` 那一格；末行打印出函数 docstring 首句。
+Expected：`market_data.py` 命中 **1**、`runner.py` 命中 **5**；`def frame_caliber` 在 `registry.py` 存在；akshare loader 有 `"adjustment": "split_dividend"` 写入点（合并树实测在 `akshare_loader.py:371`，形状是 `converted.attrs = {**getattr(df, "attrs", {}), "adjustment": "split_dividend",}` 的字典字面量，**不是** `attrs["adjustment"] = …` 的下标赋值 —— 原判据按字面写法 grep 会 0 命中，那是判据写错不是合并丢了东西）；表里有 `("akshare", "a_share")` 那一格；末行打印出函数 docstring 首句。
 **任何一条不成立 ⇒ 本计划的 Task 5/6 前提失效，停下重读 spec §3.1，不要改代码去凑。**
 
 - [ ] **Step 5: 复测门禁面（合并后）**
@@ -139,17 +139,24 @@ diff /tmp/gates_before_norm.txt /tmp/gates_after_norm.txt && echo "gates identic
 ```bash
 python -X utf8 - <<'PY'
 import subprocess, re
+# 坐标必须写死成字面 sha：合并之后 merge-base(upstream/main, HEAD) == upstream/main，
+# 于是 `git diff HEAD...upstream/main` 变成**空集**，`upstream/main...HEAD` 变成「我们对
+# 上游的全部差」。照字面跑会得到一张空锚点表，而守卫对空表是**真空通过**的 —— 本项目
+# 已知的第二种假绿形状。M/OURS/THEIRS 三方都来自 Task 1 的 ledger。
+M, OURS, THEIRS = "18027a0c", "518d793f", "f21aa13d"
 FILES = subprocess.run(
-    ["git", "diff", "--name-only", "upstream/main...HEAD"], capture_output=True, text=True, encoding="utf-8"
+    ["git", "diff", "--name-only", f"{M}..{OURS}"], capture_output=True, text=True, encoding="utf-8"
 ).stdout.split()
-THEIRS = set(subprocess.run(
-    ["git", "diff", "--name-only", "HEAD...upstream/main"], capture_output=True, text=True, encoding="utf-8"
+THEIRS_FILES = set(subprocess.run(
+    ["git", "diff", "--name-only", f"{M}..{THEIRS}"], capture_output=True, text=True, encoding="utf-8"
 ).stdout.split())
-OVERLAP = [f for f in FILES if f in THEIRS]
+OVERLAP = [f for f in FILES if f in THEIRS_FILES]
+assert THEIRS_FILES and OVERLAP, "empty theirs/overlap set -> the table would be vacuously green"
+assert len(OVERLAP) == 14, (len(OVERLAP), OVERLAP)   # Task 1 实测；不等于 14 就停下报读数
 RULE = {".py": re.compile(r"^\s*(async def |def |class )"), ".md": re.compile(r"^#{1,6} ")}
 
 def added(side, path):
-    rng = "upstream/main...HEAD" if side == "ours" else "HEAD...upstream/main"
+    rng = f"{M}..{OURS}" if side == "ours" else f"{M}..{THEIRS}"
     out = subprocess.run(["git", "diff", rng, "--", path], capture_output=True, text=True, encoding="utf-8").stdout
     lines = [l[1:] for l in out.splitlines() if l.startswith("+") and not l.startswith("+++")]
     rx = RULE["." + path.rsplit(".", 1)[-1]]
@@ -176,7 +183,7 @@ print("\ntotal anchors =", tot)
 PY
 ```
 
-Expected：打印出 `n = 14` 与两份表。
+Expected：打印出 `n = 14` 与两份表，`total anchors` 是一个**非零**整数。
 **`MISSING` 的处理**（不许留空装作有）：先跑放宽规则 —— 同一函数里再取「新增的模块级常量赋值行」`^\s*[A-Z][A-Z0-9_]{3,}(: .*)? = `；仍为空则手工挑**一条在合并后文件里逐字唯一、长度 ≥25、不含 `"` 的新增行**；挑不出来才把该文件登记进 `NO_ANCHORS[side]`，并在集合旁写一行**理由注释**（例如「该侧只删不增」或「改动是 badge 行，标题层无新增」）。把每一步的实得计数记进 ledger。
 
 - [ ] **Step 2: 写守卫文件**
@@ -225,6 +232,10 @@ def test_the_anchor_table_is_a_declared_partition_of_the_overlap_set(side: str) 
     covered = set(ANCHORS[side]) | set(NO_ANCHORS[side])
     assert covered == set(OVERLAP_FILES), sorted(set(OVERLAP_FILES) - covered)
     assert not set(ANCHORS[side]) & set(NO_ANCHORS[side]), "a file cannot be both pinned and excused"
+    for rel, needles in ANCHORS[side].items():
+        # An empty tuple in ANCHORS is the OTHER vacuous pass: the file looks covered,
+        # the per-file loop below asserts nothing, and the partition test stays green.
+        assert needles, f"{side}/{rel} is declared as pinned with zero needles"
 
 
 def test_the_anchor_table_has_not_been_thinned() -> None:
@@ -575,6 +586,9 @@ PY
 
 Expected：每只打印 `max` / `p99` / `median` 相对残差。
 **钉阈值的规则（写死，不许事后放宽）**：`REL_TOL` = 三个 `max` 里最大的那个**向上取一个数量级**，且必须 `≤ 1e-6`；若 `> 1e-6` ⇒ **不是放阈值，是停下查明细**（大概率是窗口末端锚点日不同，或 derived 编码把 送转 当成现金红利塞进了 additive —— 这两种都是真缺陷，spec §5.3 说得很清楚：阈值要既能放过 2 位小数的舍入、又能抓住一个分红量级的偏差 `≈1e-3`）。把打印出的三个 `max` 与最终 `REL_TOL` 写进 ledger 和用例注释。
+**与 Step 2 的对账**：Step 2 骨架里的 `REL_TOL = 1e-10` 已由控制器在 `07b4eb2d` 的实测上预钉。
+若 Step 1 打印的最大 `max` 仍是 `1.044e-11` 量级 ⇒ 直接沿用，把三个数写进用例注释即可；若明显不同
+（差一个数量级以上）⇒ **不要改阈值去就它**，停下报 BLOCKED：要么盘上 fixture 变了，要么量的面不对。
 
 - [ ] **Step 2: 写失败用例（此时文件里没有实现读取路径，跑起来必红在 import/fixture 缺失或断言）**
 
@@ -604,13 +618,17 @@ from backtest.loaders.cn_adjust import apply_qfq
 FIXTURES = Path(__file__).parent / "fixtures" / "upstream_sync"
 COLS = ["open", "high", "low", "close", "volume"]
 
-# Max relative residual measured on the committed fixtures: <print the three maxes>.
-# Pinned one order of magnitude above it, capped at 1e-6 by spec §5.3: it must let
-# through 2-decimal vendor rounding over a 500-bar window and still catch a
-# dividend-sized error (~1e-3). Do NOT relax this number to make a run pass — a
-# residual above the cap is a defect in one of the two conversions, not a tolerance
-# that was set too tightly.
-REL_TOL = 1e-<N>
+# Face discipline: this tolerance is pinned from the RETURN-face residual measured by
+# Step 1 above, NOT from `manifest.json`'s `reverse_check_max_rel` — those are LEVEL-face
+# numbers (~2e-16 here) and they are 5 orders too tight for returns: a 2.3e-13 level gap
+# divided by a near-flat day's return (+2.1e-05 on 600519.SH, 2025-07-16) prints 1e-11.
+# Step 1's own three maxes, on fixtures as committed at 07b4eb2d: 600519.SH 1.044e-11,
+# 000001.SZ 2.631e-13, 601398.SH 1.739e-13. One order above the largest, capped at 1e-6
+# by spec §5.3: it must let through 2-decimal vendor rounding over a 500-bar window and
+# still catch a dividend-sized error (~1e-3, 7 orders away). Do NOT relax this number to
+# make a run pass — a residual above the cap is a defect in one of the two conversions,
+# not a tolerance that was set too tightly.
+REL_TOL = 1e-10  # 9.6x headroom over 1.044e-11 — one order of magnitude, rounded down
 
 _MANIFEST = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))
 SYMBOLS_CONVERTIBLE = tuple(c for c, v in _MANIFEST["symbols"].items() if v["bucket"] == "convertible")
@@ -794,14 +812,35 @@ def test_unstamped_additive_leaves_with_the_additive_label(monkeypatch) -> None:
 
 @pytest.mark.parametrize("code", SYMBOL_REFUSAL)
 def test_a_refused_window_is_not_relabeled(code: str, monkeypatch) -> None:
-    """`convert_additive_to_multiplicative` returns None for a 送转-crossing window (its
-    own docstring: offsets drift with the price level there, so it refuses rather than
-    convert on a wrong basis). Refusing is only correct if the label then says additive —
-    the refusal and the stamp must be checked together or a loosened refusal rule turns
-    into a mislabel with clean numbers."""
+    """`convert_additive_to_multiplicative` refuses the committed window at ONE named branch.
+    Which branch matters: bare `assert refused is None` is satisfied by eight
+    `return None` paths (`additive_conversion.py:117,119,125,130,149,153,159,168` — `:138`
+    would be a ninth but it cannot fire, see the paragraph below), so
+    loosening the guard under test would still leave this green. The committed `000651.SZ`
+    window refuses at the plateau-shape guard (`:128-130`, `_plateau_spans(offset) is None`)
+    because its last plateau is ONE bar — NOT because a 送转 crosses it. So the docstring
+    must not claim 送转, and must not claim the drift branch is covered elsewhere either:
+    `:136-138` is an unreachable guard. `_plateau_spans` returns a span list only after its
+    edge/unc fold loop at `:86-89` has refused every window that still holds a one-bar
+    plateau, so any list reaching `:136` has `single_bar_spans == 0` and `:137` is
+    perpetually false (controller re-measure at 95e65087: 4000 randomized offset shapes plus
+    an exhaustive 55,980-case sweep over all integer offsets of length 2..6 on a 6-symbol
+    alphabet, zero surviving one-bar plateaus; the four hand-built drift shapes all came
+    back `_plateau_spans(...) is None`). Upstream's own
+    `test_additive_conversion.py:137 test_non_plateau_offsets_fail_closed` (`[95.0, 95.5,
+    96.0, 96.5]`) does refuse, but through that same `:86-89 -> :128-130` route, so the
+    `:138` line is covered by NEITHER file. Register that as an upstream reachability gap in
+    `项目档案.md` (Task 8); do not fix upstream code here. Refusing is only correct
+    if the label then says additive — refusal and stamp are checked together or a loosened
+    refusal rule turns into a mislabel with clean numbers."""
     import akshare as _ak  # noqa: F401  (fixture path needs no vendor import; kept explicit)
+    from backtest.loaders.additive_conversion import _plateau_spans
     raw = _read_csv(FIXTURES / f"{code}_raw.csv", indexed=True)[COLS]
     additive = _read_csv(FIXTURES / f"{code}_qfq.csv", indexed=True)[COLS]
+    offset = (additive["close"] - raw["close"]).astype(float)
+    assert _plateau_spans(offset) is None, (
+        f"{code}: the offset series no longer trips the plateau-shape guard — the refusal "
+        f"sample drifted, and this test is now asserting a different branch than it names")
     refused = convert_additive_to_multiplicative(raw, additive)
     assert refused is None, f"{code}: the committed refusal window converted — bucket drifted"
     prov = _serving_frames(monkeypatch, additive)
@@ -910,7 +949,7 @@ git status --porcelain
 **Files:**
 - Modify: `tools/wiki_freshness_gate.sh:16`（`LIMIT="${WIKI_STALE_MAX:-<N>}"`）与 `:5` 的 prose 读数
 - Modify: `.github/workflows/repowiki-freshness.yml:75`（`WIKI_STALE_MAX: '<N>'`）
-- Modify: `tools/test_wiki_drift.py:4811`（正则 `:-445}`）、`:4813`（`${WIKI_STALE_MAX:-445}` 字面量）、`:5044` 附近的工作流断言、`:5034` 的 prose「The other 445 pins」
+- Modify: `tools/test_wiki_drift.py:4811`（正则 `:-445}`）、`:4813`（`${WIKI_STALE_MAX:-445}` 字面量）、`:5044` 附近的工作流断言、`:5036` 的 prose「The other 445 pins」（**坐标更正，Task 7 实读**：原写 `:5034` 偏两行，`:5034` 实为同一条 docstring 上一句 `env:` value 的结尾；spec §7.2 的 `:4811-4813` ＋ `:5031`/`:5044` 本来就是对的）
 - Modify: `repowiki/README.md:234`（运维口径里的那个数）
 
 **Interfaces:**
@@ -924,7 +963,7 @@ python -X utf8 tools/wiki_drift.py stale --format count
 ```
 
 Expected：一个整数 `N`。spec §7.1：`N` 只会往 450 方向走（HEAD 前移 ⇒ `tree_baseline()` 众数回落点变新）。
-- `N ≤ 445` ⇒ 门本来就绿，**不改任何数**，跳过 Step 2~5，直接 Step 6 记录「本轮无需重钉，读数 `<N>` @ `<SHA>`」。
+- `N ≤ 445` ⇒ 门本来就绿，**不改任何数**，跳过 Step 2~5，直接 Step 6 记录「本轮无需重钉，读数 `<N>` @ `<SHA>`」。**记录必须带上天花板说明**：Task 1 实测合并前后都是 445，而 445 距全树 450 只差 5 页 ⇒ 这个数「没变」是**接近天花板**、不是「上游改动与 Wiki 无关」的证据；判据形状是 `tools/wiki_freshness_gate.sh:33` 的 `[ "$STALE" -gt "$LIMIT" ]`（严格大于 ⇒ 445 恰好不红，450 必红）。下一次任何 HEAD 前移都可能把它推到 450，那时本分支的结论作废、按 `N == 450` 分支走。
 - `N > 445` ⇒ 继续。
 - `N == 450`（全树皆 stale）⇒ **接受门红着等 M5**，把读数与决定写进档案，不改判据形状、不放宽阈值消音（spec §7.3）。
 
@@ -1041,7 +1080,7 @@ Expected：与基线 **11 failed / 11 errors** 对比，逐条按成因归类：
 - [ ] **Step 2: 门禁面收口**
 
 ```bash
-python -X utf8 -m pytest -q -k upstream_owned 2>&1 | tail -3
+python -X utf8 -m pytest tools/test_wiki_drift.py -q -k upstream_owned 2>&1 | tail -3
 bash tools/ci_grep_gates.sh > /tmp/gates_final.txt 2>&1; echo "rc=$?"
 sed -E 's/\b[0-9a-f]{6,40}\b/SHA/g' /tmp/gates_final.txt > /tmp/gates_final_norm.txt
 diff /tmp/gates_before_norm.txt /tmp/gates_final_norm.txt && echo "gates identical to pre-merge"
@@ -1054,7 +1093,8 @@ Expected：`upstream_owned` 仍 1 条绿（**它证明本轮没动四前缀**，
 
 ```bash
 git log --oneline --first-parent -8
-git log --merges --oneline upstream/main..HEAD | wc -l      # 期望 1（只有那一个 merge 提交）
+git log --merges --oneline main..HEAD --first-parent | wc -l   # 期望 1（本轮只做一个 merge；Task 8 实测形状）
+git log --merges --oneline upstream/main..HEAD | wc -l         # 实得 37 ＝ 36 条继承来的 + 1 条本轮，见下方更正
 git diff --name-only HEAD...upstream/main -- .gitignore tools/ci_grep_gates.sh .github/workflows/test.yml wiki/ | wc -l
 python -X utf8 -m pytest agent/tests/test_upstream_sync_calibers.py tools/test_upstream_sync.py -q
 bash tools/wiki_freshness_gate.sh; echo "gate rc=$?"
@@ -1062,6 +1102,8 @@ git status --porcelain
 ```
 
 Expected：merge 提交恰 1；四前缀 0；两个新测试文件全绿；`gate rc=0`；工作树空。DoD 第 5 条（§6 裁定落档）核对 Task 3 的档案段是否存在；DoD 第 6 条核对 Task 7 的数与档案/README 里的数一致。
+
+> **Step 3 的 merge 计数选择器更正（Task 8 在 `@5f40e61e` 实测）**：本条原只有一行 `git log --merges --oneline upstream/main..HEAD | wc -l  # 期望 1`，实跑 **37**，与「期望 1」直接冲突 —— 但它不是回归。分解：`upstream/main..main` 里本来就有 **36** 条 merge 提交（历次同步带进来的上游 PR merge，`git rev-list --count --merges upstream/main..main` 实测），本轮只加了自己的 `d9a2fdc5`（parents `518d793f` × `f21aa13d`），36 + 1 = 37。DoD 第 1 条要证的是「**我们这一支只做了一个 merge**」，只有沿 first-parent 才成立，所以按上面那两行分开取数，档案里两个数都要带坐标写，不许只留一个。
 
 - [ ] **Step 4: 档案落档（追加，不重排既有行）**
 
@@ -1085,7 +1127,10 @@ Expected：merge 提交恰 1；四前缀 0；两个新测试文件全绿；`gate
   `grounding/identity_checks`）无对应 topic 页 ⇒ 转 M5 名单（任务 #16），并附 `refs_broken` 的新读数。
 
   ```bash
-  python -X utf8 tools/wiki_drift.py report --json 2>/dev/null | python -X utf8 -c "import json,sys; d=json.load(sys.stdin); print({k: d[k] for k in ('uncovered','refs_broken','partial','ledger_void','count') if k in d})"
+  # 更正（Task 8 @5f40e61e 实测）：载荷的七个顶层键是 generated_at/head/baseline/baseline_source/
+  # summary/pages/uncovered，计数全在 summary 里，顶层 uncovered 才是那份**清单**；载荷里没有 count 键，
+  # 所以旧写法那句 `if k in d` 会把七个计数一个都不打印（静默空读数），并把顶层 uncovered 当计数读。
+  python -X utf8 tools/wiki_drift.py report --json 2>/dev/null | python -X utf8 -c "import json,sys; d=json.load(sys.stdin); s=d['summary']; print({k: s[k] for k in ('pages','needs_update','clean','partial','reconciled','ledger_void','distinct_refs','refs_changed','refs_broken','uncovered')}); print('head',d['head'],'baseline',d['baseline'],'baseline_source',d['baseline_source']); print('len(uncovered list)=',len(d['uncovered']),'len(pages list)=',len(d['pages']))"
   ```
 
 - **交付的永久闸门**：以后每次同步跑 `pytest tools/test_upstream_sync.py agent/tests/test_upstream_sync_calibers.py -q`
