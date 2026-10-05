@@ -1,5 +1,8 @@
 # agent/tests/pine_oracle/test_pine_audit.py
-"""Gate 3: audit a ``.pine`` script for the two things this harness can actually prove.
+"""The script-side audit gate: audit a ``.pine`` text for the two things the harness can prove.
+
+(``audit.py`` explains why this is not called 判据三 — that name belongs to 权威点值,
+``项目档案.md`` §6.4.)
 
 The harness has two witnesses and they answer different questions. 判据二 (the numeric
 oracle) proves *arithmetic* — engine vs an independently written Python reference on the

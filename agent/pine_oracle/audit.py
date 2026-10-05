@@ -1,4 +1,10 @@
-"""Gate 3 — read a ``.pine`` script and say what the harness can prove about it.
+"""The script-side audit gate — read a ``.pine`` text and say what the harness can prove about it.
+
+Named for what it is, not numbered: 「判据三」 in this repo's archive
+(``项目档案.md`` §6.4) is already the third of the 三重正证 — 权威点值／外部锚点. This module
+is not a fourth arithmetic witness either: it is the layer that READS 判据一 and 判据二's
+rosters and reports per script. Its one genuinely new witness is the script-level
+``lookahead_on`` scan, which neither of the two existing gates performs.
 
 Two questions, deliberately kept apart, because the harness answers them with two
 different witnesses:
