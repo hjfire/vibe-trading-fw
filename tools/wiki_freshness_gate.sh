@@ -2,8 +2,8 @@
 # tools/wiki_freshness_gate.sh —— 只读：不改文件、不建仓、不安装
 # Threshold-based, not zero: a fork cannot chase 450 pages instantly, and a gate that
 # is always red gets switched off. WIKI_STALE_MAX is the tuning knob; its shipped
-# default is the measured water level at M3 time (423 partial + 22 stale = 445), and
-# M5 lowers it shard by shard. The brand/code/secret gates stay in ci_grep_gates.sh —
+# default is re-pinned per shard from the then-measured water level (M3: 423 partial +
+# 22 stale = 445; M5 shard 1 at 2ac28b0a = 439). The brand/code/secret gates stay in ci_grep_gates.sh —
 # one policy, one implementation.
 set -u
 set -o pipefail
@@ -13,7 +13,7 @@ RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 NC=$'\033[0m'
 FAILED=0
-LIMIT="${WIKI_STALE_MAX:-445}"
+LIMIT="${WIKI_STALE_MAX:-439}"
 
 STALE=$(python -X utf8 tools/wiki_drift.py stale --format count 2>/dev/null)
 if ! [[ "$STALE" =~ ^[0-9]+$ ]]; then

@@ -72,7 +72,7 @@ jobs:
       - name: Wiki freshness gate
         continue-on-error: true
         env:
-          WIKI_STALE_MAX: '445'
+          WIKI_STALE_MAX: '439'
         run: bash tools/wiki_freshness_gate.sh
       # 套件（硬）。带 local_archive 标记的是**三条**用例（这个数是形状，不是水位；选择器的
       # 读数按「在某 commit 实测」写）：前两条断言未入库的

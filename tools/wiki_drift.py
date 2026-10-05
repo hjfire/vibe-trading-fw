@@ -1934,7 +1934,7 @@ def stamp_links(
     if not (prior_reconciled and not moved):
         entry["partial"] = True
     UPDATE_DIR.mkdir(parents=True, exist_ok=True)
-    with LEDGER.open("a", encoding="utf-8") as fh:
+    with LEDGER.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
 
@@ -2509,7 +2509,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
     # anchor is then read off the same slice of history anyway.
     entry["applied"] = sorted(set(prior.applied)) if (args.partial and prior) else []
     UPDATE_DIR.mkdir(parents=True, exist_ok=True)
-    with LEDGER.open("a", encoding="utf-8") as fh:
+    with LEDGER.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     # A hand stamp vouches for the whole page, so it moves the baseline that travels
     # with the page. A partial one records unfinished work: it must leave

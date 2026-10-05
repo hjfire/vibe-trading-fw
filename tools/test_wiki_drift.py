@@ -2484,7 +2484,7 @@ def test_a_page_with_no_drift_but_unverified_prose_is_still_queued(repo_wired, c
 
     A page the ledger marks `partial` (anchors moved, prose never re-read) has score 0,
     so `report`'s `needs_update` does not count it. If `stale` filtered on the same
-    score, the queue would read 22 while the water level is 445 and M5 would be handed
+    score, the queue would read 22 while the water level was 445 and M5 would be handed
     a list that quietly omits 423 pages — which is the exact failure this project has
     already been burned by once, where a stamp hid work the tool could not do itself.
 
@@ -4531,37 +4531,37 @@ def test_the_archived_export_still_holds_the_450_seeded_pages():
 
 @pytest.mark.local_archive
 def test_every_seeded_topic_body_matches_the_archive_byte_for_byte():
-    """Gate 6, made permanent: 450 pages, both directions named, no empty iteration.
+    """Gate 6, narrowed at M5: rewritten prose must be STAMPED, not archive-equal.
 
-    For every archived export page the same relative key must exist under
-    `repowiki/topics/`, and the seeded page's *body* bytes (its frontmatter stripped —
-    the frontmatter is what M2 added, and `body_sha()` hashes the body for exactly this
-    reason) must equal the export file's bytes. The count is asserted from the archive
-    side, so a walk that found nothing could never pass, and the two failure lists are
-    reported separately: "absent" is a lost page, "mismatch" is an edited one.
+    M2 seeded every body as the archive's bytes; M5 rewrites shard by shard, so the
+    honest predicate over those 450 keys is a two-way equality -- a body differing
+    from the archive == a page whose `verified_at` left SEEDING_SNAPSHOT. A differing
+    body without a stamp is unvouched prose; a stamp without one is self-certification.
+    Re-pin `len(stamped)` per shard; page *names* stay pinned by the local_archive triple.
     """
     export_pages = sorted(ARCHIVE_CONTENT.rglob("*.md"))
     assert len(export_pages) == 450, (
         f"refusing to compare against {len(export_pages)} archived pages — the 450-page "
-        f"archive is the premise of this check (see the case above; recovery is "
-        f"{EXTERNAL_BACKUP})"
+        f"archive is the premise (see the case above; recovery: {EXTERNAL_BACKUP})"
     )
     absent: list[str] = []
-    mismatched: list[str] = []
+    mismatched, stamped = set(), set()
     for export in export_pages:
         rel = export.relative_to(ARCHIVE_CONTENT).as_posix()
-        seeded = REAL_REPO / "repowiki" / "topics" / export.relative_to(ARCHIVE_CONTENT)
+        seeded = REAL_REPO / "repowiki" / "topics" / rel
         if not seeded.is_file():
             absent.append(rel)
             continue
+        fm, _ = wiki_drift.split_frontmatter(seeded.read_text(encoding="utf-8"))
+        if str((fm or {}).get("verified_at") or "").strip().lower() != SEEDING_SNAPSHOT:
+            stamped.add(rel)
         if wiki_drift.body_text(seeded).encode("utf-8") != export.read_bytes():
-            mismatched.append(rel)
-    assert absent == [], f"pages the seed did not publish: {absent[:5]} ({len(absent)} total)"
-    assert mismatched == [], (
-        f"seeded bodies that are not the archive's bytes: {mismatched[:5]} "
-        f"({len(mismatched)} total)"
+            mismatched.add(rel)
+    assert absent == [] and mismatched == stamped, (
+        f"absent={absent[:5]} unstamped={sorted(mismatched - stamped)[:5]} "
+        f"self-certified={sorted(stamped - mismatched)[:5]}"
     )
-    assert len(export_pages) - len(absent) - len(mismatched) == 450
+    assert len(stamped) == 6, f"shard size moved: {len(stamped)} {sorted(stamped)[:8]}"
 
 
 @pytest.mark.local_archive
@@ -4808,9 +4808,9 @@ def test_the_freshness_gate_is_readable_and_carries_no_brand_patterns():
     # M-1: `"445" in src` was satisfied by the prose comment at the top of the file, so the
     # shipped default could become 500 and this test would still pass. Pin the shape of the
     # expansion, then its value separately, then that there is exactly one default to read.
-    assert re.search(r"\$\{WIKI_STALE_MAX:-445\}", src), "the default must be the measured water level"
+    assert re.search(r"\$\{WIKI_STALE_MAX:-439\}", src), "the default must be the measured water level"
     defaults = re.findall(r"\$\{WIKI_STALE_MAX:-\d+\}", src)
-    assert len(defaults) == 1 and defaults[0] == "${WIKI_STALE_MAX:-445}", defaults
+    assert len(defaults) == 1 and defaults[0] == "${WIKI_STALE_MAX:-439}", defaults
     assert "stale --format count" in src
     assert "index --check" in src
     # TM_NEEDLE (:1538) is the suite's already-lowercased brand needle; the point of
@@ -5033,7 +5033,7 @@ def test_the_fork_workflow_overrides_the_water_level_with_the_measured_number():
     thing that can make it mean something, and nothing in the suite read the workflow's
     `env:` value.
 
-    The other 445 pins live in `tools/wiki_freshness_gate.sh` (`${WIKI_STALE_MAX:-445}`)
+    The other 439 pins live in `tools/wiki_freshness_gate.sh` (`${WIKI_STALE_MAX:-439}`)
     and cover the script's FALLBACK; this is the workflow's OVERRIDE, and a runner always
     takes the override. `WIKI_STALE_MAX: '999999'` there is a gate that is green for every
     tree imaginable — and the suite stayed green with it, which is the always-green light
@@ -5041,7 +5041,7 @@ def test_the_fork_workflow_overrides_the_water_level_with_the_measured_number():
     this literal has to move in the same commit, and the red here is the reminder.
     """
     text = (REAL_REPO / ".github" / "workflows" / "repowiki-freshness.yml").read_text(encoding="utf-8")
-    assert "WIKI_STALE_MAX: '445'" in _gate_step(text), _gate_step(text)
+    assert "WIKI_STALE_MAX: '439'" in _gate_step(text), _gate_step(text)
     # one override only: a job- or workflow-level `WIKI_STALE_MAX` would win over, or
     # silently coexist with, the step value this case just read.
     assert text.count("WIKI_STALE_MAX:") == 1, text
