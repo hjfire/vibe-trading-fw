@@ -1799,7 +1799,7 @@ def test_every_empty_tree_hint_call_site_passes_archive():
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "EMPTY_TREE_HINT"
     ]
-    assert len(sites) >= 3, [node.lineno for node in sites]
+    assert len(sites) == 4, [node.lineno for node in sites]
     for node in sites:
         passed = {kw.arg for kw in node.keywords}
         assert passed == slots, (node.lineno, sorted(passed))
@@ -1820,12 +1820,12 @@ def test_every_empty_tree_hint_call_site_passes_archive():
 
 GUARD_CALLS = ("write_refusal", "root_is_read_only")
 # The write shapes the sweep recognises. An attribute name alone is enough for the
-# `Path`/`shutil` verbs that no read-only object carries (`touch`, `copyfile`, …);
-# `os.replace` and `shutil.copy` need the receiver, because `value.replace("\\", "/")`
-# appears all over this module and is string work, not a write.
+# `Path`/`shutil` verbs that no read-only object carries (`touch`, `copyfile`,
+# `unlink`); `os.replace`, `os.remove` and `shutil.copy` need the receiver, because
+# `value.replace(...)` and `items.remove(...)` are string/list work in this module.
 WRITE_ATTRS = ("write_text", "write_bytes", "mkdir", "makedirs", "touch",
-               "copyfile", "copy2", "copytree", "rename")
-QUALIFIED_WRITES = {"os": ("replace",), "shutil": ("copy",)}
+               "copyfile", "copy2", "copytree", "rename", "unlink")
+QUALIFIED_WRITES = {"os": ("replace", "remove"), "shutil": ("copy",)}
 WRITE_MODE_CHARS = "wax+"
 
 
@@ -1855,10 +1855,10 @@ def _is_filesystem_write(node: ast.Call) -> bool:
 
 
 def _is_layout_comparison(node: ast.AST) -> bool:
-    """`<expr>.layout <op> "repo"` — the inline half of the root-shape gate, as
-    `cmd_seed` writes it. Matching the AST node instead of the source text is what
-    stops a comment or docstring that merely *says* `layout != "repo"` from passing an
-    ungated writer, which is how the first version of this case was satisfied."""
+    """`<expr>.layout <op> "repo"` — the inline half of the root-shape gate. Two sites
+    spell it: `stamp_frontmatter` (reached from `mark` and `reanchor --apply`) and
+    `cmd_seed`, whose own body holds no write — seed writes in `apply_page_plan`.
+    AST matching is what stops prose saying `layout != "repo"` gating a writer."""
     return (isinstance(node, ast.Compare)
             and isinstance(node.left, ast.Attribute) and node.left.attr == "layout"
             and any(isinstance(c, ast.Constant) and c.value == "repo" for c in node.comparators))
@@ -1875,14 +1875,14 @@ def test_every_command_that_writes_is_gated_on_the_root_shape():
     `write_refusal` / `root_is_read_only` call, or a comparison of some `.layout` against
     the `"repo"` literal — whose line number precedes the first write's line number.
 
-    Three limits worth naming instead of letting the docstring overclaim:
+    Four limits worth naming instead of letting the docstring overclaim:
       * it sweeps `cmd_*` bodies only, so a write that lives in a helper
         (`apply_page_plan`, `copy_ledger`) is invisible here;
-      * writes are matched by NAME, so the sweep sees the shapes listed above and nothing
-        else — a verb it does not name is a hole, which is why the floor below counts
-        writers rather than trusting the match;
-      * a write through a handle that was opened outside the swept body carries no mode
-        for the sweep to read.
+      * writes are matched by NAME, so a verb it does not name is a hole — which is why
+        the count below is exact instead of a floor an unrecognised writer hides under;
+      * a write through a handle opened outside the swept body carries no mode to read;
+      * the `.layout` half matches a comparison, not its direction, so an
+        `if .layout == "repo": write()` would also count as its own gate.
     """
     src = (REAL_REPO / "tools" / "wiki_drift.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
@@ -1906,7 +1906,7 @@ def test_every_command_that_writes_is_gated_on_the_root_shape():
             offenders.append((node.name, guard_line, min(write_lines)))
     # `cmd_reanchor`, `cmd_report`, `cmd_mark` and `cmd_index` write today; a sweep that
     # found nothing would certify any future refactor of the module's shapes.
-    assert len(writers) >= 3, writers
+    assert len(writers) == 4, writers
     assert not offenders, offenders
 
 
@@ -4714,10 +4714,10 @@ def test_index_check_refuses_a_tree_where_no_page_is_stamped(repo_wired, capsys)
 
 
 def test_index_writes_nothing_on_a_read_only_root(repo_wired, monkeypatch, capsys):
-    """`index` is the fifth writing verb M3 adds, so it goes through the same entry gate
-    `mark` and `reanchor --apply` use — the contract in README §一 is four entries
-    before this task and five after, and a verb that skips it re-opens the clobber
-    hazard M2 paid for with a lost DRIFT.md.
+    """`index` is one of the five writing verbs README §一 enumerates — `report`, `mark`,
+    `reanchor --apply` and `index` on the `wiki_root` test, `seed` on the disk shape — so
+    it goes through the same entry gate `mark` and `reanchor --apply` use; a verb that
+    skips it re-opens the clobber hazard M2 paid for with a lost DRIFT.md.
 
     The root must really have the IDE shape: `WikiRoot.resolve()` decides layout from
     `zh/content/` on disk, so a nonexistent path resolves to `repo` and the gate would
@@ -4913,7 +4913,7 @@ def test_both_legs_feed_the_same_failure_accumulator():
 # `agent/tests`，而本仓的硬规则是上游文件逐字不动 —— 所以 fork 加一份自己的
 # 工作流文件，而不是去改 `.github/workflows/test.yml`。控制器裁定：套件步骤是
 # 硬步骤（不带 `continue-on-error`，第一天就该绿），只有水位门禁那一步是软的
-# （spec §9.1：首周只观察）。全文件里只允许出现一行 `continue-on-error`，
+# （spec §9.1：首轮软、观察两周再改阻断）。全文件里只允许出现一行 `continue-on-error`，
 # 第一条用例钉的就是这条，因为「两步都软」等价于一个从不报警的绿灯。
 #
 # 两条归档用例读的是 `.qoder/repowiki/_ide-export-retired-2026-10-01`：未入库、
@@ -4946,10 +4946,10 @@ def test_the_two_archive_cases_are_marked_local_archive():
     Marking them is what lets the workflow collect the rest."""
     src = (REAL_REPO / "tools" / "test_wiki_drift.py").read_text(encoding="utf-8")
     marked = re.findall(r'@pytest\.mark\.local_archive\ndef (test_\w+)', src)
-    assert len(marked) >= 2, marked
-    for name in ("test_the_archived_export_still_holds_the_450_seeded_pages",
-                 "test_every_seeded_topic_body_matches_the_archive_byte_for_byte"):
-        assert name in marked, marked
+    marked_cases = ("test_the_archived_export_still_holds_the_450_seeded_pages",
+                    "test_every_seeded_topic_body_matches_the_archive_byte_for_byte",
+                    "test_the_ide_export_body_tree_is_still_absent")
+    assert set(marked) == set(marked_cases), sorted(set(marked) ^ set(marked_cases))
     # The marker must be REGISTERED, or `-m "not local_archive"` warns-and-passes and a
     # future typo in the marker name silently deselects nothing. Registration lives in
     # tools/conftest.py, not in this module: a test module is imported too late for
@@ -4981,7 +4981,7 @@ def test_the_workflow_materialises_upstream_main_so_the_guards_are_not_silently_
     assert "git rev-parse --verify refs/remotes/upstream/main" in step
     # the fetch is a hard step: only the water level may soften, and the flag has to sit
     # *inside that one step* — moving it onto the install step keeps the count at 1 while
-    # hardening the gate, which is §9.1's 「首周只观察」 written backwards (mutation R3).
+    # hardening the gate, which is §9.1's 「观察两周再改阻断」 written backwards (mutation R3).
     assert text.count("continue-on-error") == 1
     gate_idx = text.index("Wiki freshness gate")
     assert gate_idx < text.index("continue-on-error") < text.index("wiki_freshness_gate.sh")
