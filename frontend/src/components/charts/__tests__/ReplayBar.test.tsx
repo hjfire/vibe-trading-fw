@@ -51,6 +51,9 @@ describe("ReplayBar", () => {
     expect(screen.getByText(/2025-09-30/)).toBeTruthy();
     expect(screen.getByText(/第 251\/501 根/)).toBeTruthy();
     expect(screen.getByText(/剩 250 根/)).toBeTruthy();
+    // `ProChartReplay.test.tsx` reads the cursor day back out of this node, so the readout has
+    // to be reachable by test id and carry the date in its own text.
+    expect(screen.getByTestId("replay-readout").textContent).toContain("2025-09-30");
     expect(screen.getByRole("button", { name: "退出回放" })).toBeTruthy();
   });
 

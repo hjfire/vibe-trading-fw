@@ -125,3 +125,30 @@ export function replayReadout(bars: readonly Stamped[], cursorTs: number): Repla
   const shown = index + 1;
   return { shown, total: bars.length, remaining: Math.max(bars.length - shown, 0), index };
 }
+
+/**
+ * The toolbar's cursor date. Deliberately the browser's own calendar day: the readout and the
+ * date box only have to agree with *each other*, and a bar stamped at the exchange's 15:00
+ * falls on that same day for a CN-hosted browser either way. This is a coordinate, not i18n
+ * copy, so it is built by hand instead of `toLocaleDateString` (which would vary by locale).
+ */
+export function formatReplayDate(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * The date box's `YYYY-MM-DD` as a cursor: the last bar whose day is at or before it.
+ *
+ * End of the UTC day, not midnight — A-share daily bars are stamped at the session close
+ * (15:00 CST = 07:00 UTC), so that day's own midnight would resolve to the *previous* trading
+ * day. See the `ops-market-data-timezone-fallback` note on why stamps are exchange-local.
+ */
+export function cursorFromDatePick(bars: readonly Stamped[], iso: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const dayEnd = Date.parse(`${iso}T23:59:59.999Z`);
+  if (Number.isNaN(dayEnd)) return null;
+  const i = indexAtOrBefore(bars, dayEnd);
+  return i < 0 ? null : bars[i].timestamp;
+}

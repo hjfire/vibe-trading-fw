@@ -22,6 +22,20 @@ import {
 } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
+  DEFAULT_REPLAY_BACK,
+  REPLAY_MORE,
+  cursorFromDatePick,
+  cursorFromView,
+  formatReplayDate,
+  isReplayExhausted,
+  replayReadout,
+  replayWindow,
+  stepCursor,
+  type ReplayReadout,
+  type ReplaySpeed,
+} from "@/lib/barReplay";
+import { ReplayBar } from "@/components/charts/ReplayBar";
+import {
   AVG_PRICE_NAME,
   DEFAULT_CANDLE_BAR_SPACE,
   DEFAULT_CANDLE_OFFSET_RIGHT,
@@ -119,6 +133,17 @@ const DEFAULT_SYMBOL = "600519.SH";
 const PAGE = 500;
 const WATCH_KEY = "pro-chart.watchlist.v1";
 const SESSION_KEY = "pro-chart.session.v1";
+/** Replay session state. `cursorTs === null` means the chart is live; a non-empty `bars` with
+ *  a null cursor is the one-shot post-exit handback waiting to be answered. */
+interface ReplaySession {
+  bars: KLineData[];
+  cursorTs: number | null;
+  /** Task 4 owns this flag; everything else only ever clears it. */
+  playing: boolean;
+}
+
+const IDLE_REPLAY: ReplaySession = { bars: [], cursorTs: null, playing: false };
+
 // The 分时 price line. Deliberately neither of the up/down colors: those are
 // already spent on the candles and the change badge, and a line that happens to
 // be red reads as "it went up" even while it is falling.
@@ -450,6 +475,20 @@ export function ProChart() {
   // storage, and that runs after. So the pass files it here and `onSettled` puts
   // it up once the bank is done.
   const anchorNoteRef = useRef<{ bad?: boolean; text: string } | null>(null);
+  // --- Bar Replay（本地定制 ㊺）-----------------------------------------------------------
+  // The DataLoader closure is built once per chart (`:864`), so it can only read the ref;
+  // `replay` is the mirror the toolbar renders. `syncReplayUi` is the only writer of the
+  // mirror, and it derives everything from the ref — the two cannot drift, and a stale
+  // closure can never pass an old cursor or `playing` flag forward (Task 4's loop depends
+  // on this). See spec §5 for why the cursor is a timestamp.
+  const replayRef = useRef<ReplaySession>(IDLE_REPLAY);
+  const [replay, setReplay] = useState<{
+    active: boolean;
+    cursorTs: number | null;
+    playing: boolean;
+    readout: ReplayReadout | null;
+  }>({ active: false, cursorTs: null, playing: false, readout: null });
+  const [replaySpeed, setReplaySpeed] = useState<ReplaySpeed>("1");
   const [parked, setParked] = useState<StoredDrawing[]>([]);
   const replaceParked = (list: readonly StoredDrawing[]) => {
     parkedRef.current = list.slice();
@@ -863,6 +902,26 @@ export function ProChart() {
 
     const dataLoader: DataLoader = {
       getBars: async ({ type, timestamp, period, callback }) => {
+        // Bar Replay owns the chart while it is on: every answer comes out of the snapshot
+        // taken at entry, both `more` flags are dead, and no request leaves the page. The gate
+        // is structural, not cosmetic — the library reaches for newer bars only at
+        // `to === totalBarCount && more.backward` (dist 13601), so `backward: false` makes the
+        // future unreachable rather than merely hidden. `forward: false` kills the automatic
+        // left-edge request whose in-flight `_loading` (dist 13607) would silently drop the
+        // user's next step. See spec §6.
+        const session = replayRef.current;
+        if (session.cursorTs !== null) {
+          callback(type === "init" ? replayWindow(session.bars, session.cursorTs) : [], REPLAY_MORE);
+          return;
+        }
+        if (type === "init" && session.bars.length > 0) {
+          // One-shot handback after 退出回放: the pre-replay range goes back on screen with no
+          // fetch. `more` matches what a normal `init` answer carries (`shapeResponse` gives
+          // forward-only), so paging semantics resume unchanged from there.
+          replayRef.current = IDLE_REPLAY;
+          callback(session.bars, { forward: true, backward: false });
+          return;
+        }
         const iv = periodToInterval(period);
         const line = viewRef.current.timeShare;
         // `type` is not a scroll direction, and reading it as one broke panning:
@@ -1087,6 +1146,91 @@ export function ProChart() {
     };
   }, []);
 
+  const syncReplayUi = () => {
+    const r = replayRef.current;
+    setReplay({
+      active: r.cursorTs !== null,
+      cursorTs: r.cursorTs,
+      playing: r.playing,
+      readout: r.cursorTs === null ? null : replayReadout(r.bars, r.cursorTs),
+    });
+  };
+
+  const enterReplay = (mode: "default" | "viewEdge") => {
+    const chart = chartRef.current;
+    if (!chart || viewRef.current.timeShare) return;
+    // The snapshot *is* the replay universe. Paging in more history is what exiting is for
+    // (spec §6 reason 3); a replay that quietly fetched more would move the left edge under
+    // the cursor, and the loaded-range readout would be lying.
+    const bars = chart.getDataList().slice();
+    if (bars.length === 0) return;
+    const last = bars[bars.length - 1].timestamp;
+    // `getVisibleRange().to` is an *exclusive* bound (`_adjustVisibleRange` loops
+    // `for (i = realFrom; i < realTo)`, dist 13569), so the bar sitting at the right edge of
+    // the view is index `to - 1`; `cursorFromView` takes an index, not a count.
+    const cursorTs =
+      mode === "viewEdge"
+        ? (cursorFromView(bars, chart.getVisibleRange().to - 1) ?? last)
+        : stepCursor(bars, last, -DEFAULT_REPLAY_BACK);
+    replayRef.current = { bars, cursorTs, playing: false };
+    syncReplayUi();
+    chart.resetData();
+  };
+
+  /** Hand the pre-replay range back without a request: one `init` answered from the cache. */
+  const exitReplay = () => {
+    const chart = chartRef.current;
+    const r = replayRef.current;
+    if (r.cursorTs === null || !chart) return;
+    replayRef.current = { bars: r.bars, cursorTs: null, playing: false };
+    syncReplayUi();
+    chart.resetData();
+  };
+
+  /**
+   * Identity changed (period / symbol / 分时): drop the cache rather than hand it back — those
+   * bars belong to the outgoing view. No `resetData()` either: every caller is one line from
+   * `setPeriod`/`setSymbol`, which reload by themselves, and a second load per switch is what
+   * `ProChartPaging.test.tsx` counts.
+   */
+  const dropReplay = () => {
+    const r = replayRef.current;
+    if (r.cursorTs === null && r.bars.length === 0) return;
+    replayRef.current = IDLE_REPLAY;
+    syncReplayUi();
+  };
+
+  /** Move the cursor and let the chart re-ask; a `resetData()` per step is the only way to
+   *  swap the visible window in v10 (there is no `applyNewData`). */
+  const replayStep = (n: number) => {
+    const chart = chartRef.current;
+    const r = replayRef.current;
+    if (!chart || r.cursorTs === null || r.bars.length === 0) return;
+    const next = stepCursor(r.bars, r.cursorTs, n);
+    if (next === r.cursorTs) return; // already at an end: do not re-init the chart for nothing
+    // Playing stops by itself at the newest bar (spec §7), so the flag is recomputed here
+    // rather than trusted from whatever render the caller closed over.
+    const playing = r.playing && !isReplayExhausted(r.bars, next);
+    replayRef.current = { bars: r.bars, cursorTs: next, playing };
+    syncReplayUi();
+    chart.resetData();
+  };
+
+  const pickReplayDate = (iso: string) => {
+    const chart = chartRef.current;
+    const r = replayRef.current;
+    if (!chart || r.cursorTs === null) return;
+    const next = cursorFromDatePick(r.bars, iso);
+    if (next === null || next === r.cursorTs) return;
+    const playing = r.playing && !isReplayExhausted(r.bars, next);
+    replayRef.current = { bars: r.bars, cursorTs: next, playing };
+    syncReplayUi();
+    chart.resetData();
+  };
+
+  // Task 4 replaces this with the setTimeout playback loop.
+  const toggleReplayPlay = () => undefined;
+
   /**
    * Move the chart to a view (local custom ㉖). One writer for the mode flag,
    * the period and the price overlay, because the three have to agree — entry 46
@@ -1099,6 +1243,9 @@ export function ProChart() {
    */
   const setView = (view: ChartView, reload: boolean) => {
     const chart = chartRef.current;
+    // A period / 分时 switch changes what the bars *are*, so the replay window cannot follow
+    // it (spec §7). `applySymbol` reaches this same line before its `setSymbol`.
+    dropReplay();
     const target = viewPeriod(view);
     const periodChanged = target !== viewPeriod(viewRef.current);
     // The zoom swap that goes with the view swap, before the reload below: the
@@ -1141,7 +1288,9 @@ export function ProChart() {
     // `resetData()` without comparing the incoming period to the live one, so
     // re-applying 1-minute still re-requests. That is what a 分时 <-> K线 toggle
     // needs — the *window* changed even though the period did not — and it is
-    // why this file never calls `resetData()`.
+    // why `setView` never adds a `resetData()` of its own. (Bar Replay's cursor steps are the
+    // only other `resetData()` in this file, and `dropReplay()` above took them out of this
+    // path before the period ever moved.)
     if (reload || periodChanged) chart.setPeriod(intervalToPeriod(target));
   };
 
@@ -1693,6 +1842,21 @@ export function ProChart() {
           })}
         </div>
         <div className="mx-2 h-5 w-px bg-border" />
+        <ReplayBar
+          active={replay.active}
+          disabled={timeShare}
+          reason={timeShare ? "分时只有一节 session，没有可回放的历史" : null}
+          playing={replay.playing}
+          speed={replaySpeed}
+          readout={replay.readout}
+          cursorLabel={replay.cursorTs === null ? null : formatReplayDate(replay.cursorTs)}
+          onStart={enterReplay}
+          onStop={exitReplay}
+          onStep={replayStep}
+          onTogglePlay={toggleReplayPlay}
+          onSpeed={setReplaySpeed}
+          onPickDate={pickReplayDate}
+        />
         <button
           className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
           title="编写/管理自定义指标公式（保存在本地）"

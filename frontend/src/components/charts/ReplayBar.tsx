@@ -123,9 +123,21 @@ export function ReplayBar({
         onChange={(e) => setDate(e.target.value)}
         onKeyDown={sendDate}
       />
-      <span className="text-xs text-muted-foreground">
+      {/* The two count segments are separate elements on purpose: `getByText` matches an
+          element's *own* text nodes, so `第 950/1200 根` is only findable — by
+          `ProChartReplay.test.tsx`, which reads this row from outside the page — when it is one
+          node. Merging them back into the parent string makes that page test go red on
+          "unable to find", with the copy itself still correct. */}
+      <span data-testid="replay-readout" className="text-xs text-muted-foreground">
         回放中{cursorLabel ? ` ${cursorLabel}` : ""}
-        {readout ? ` · 第 ${readout.shown}/${readout.total} 根 · 剩 ${readout.remaining} 根` : ""}
+        {readout ? (
+          <>
+            {" · "}
+            <span>第 {readout.shown}/{readout.total} 根</span>
+            {" · "}
+            <span>剩 {readout.remaining} 根</span>
+          </>
+        ) : null}
       </span>
       <button type="button" className={BTN} onClick={onStop} title="交回完整已加载区间，恢复正常分页">
         退出回放

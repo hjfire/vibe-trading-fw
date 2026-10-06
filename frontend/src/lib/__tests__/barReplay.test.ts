@@ -4,7 +4,9 @@ import {
   DEFAULT_REPLAY_BACK,
   REPLAY_MORE,
   cursorBar,
+  cursorFromDatePick,
   cursorFromView,
+  formatReplayDate,
   indexAtOrBefore,
   isFutureDrawing,
   isReplayExhausted,
@@ -123,5 +125,32 @@ describe("replayReadout", () => {
   });
   it("DEFAULT_REPLAY_BACK 是 250（日线约一年）", () => {
     expect(DEFAULT_REPLAY_BACK).toBe(250);
+  });
+});
+
+describe("formatReplayDate / cursorFromDatePick", () => {
+  // Daily bars stamped at the exchange's 15:00 CST, i.e. 07:00 UTC.
+  const daily = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ timestamp: Date.UTC(2020, 0, 1 + i) + 7 * 3_600_000 }));
+
+  it("15:00 CST 的日线 bar 挑同日不落到前一天", () => {
+    const bars = daily(5);
+    expect(cursorFromDatePick(bars, "1970-01-01")).toBeNull();
+    expect(cursorFromDatePick(bars, "2020-01-01")).toBe(bars[0].timestamp);
+    expect(cursorFromDatePick(bars, "2020-01-03")).toBe(bars[2].timestamp);
+    expect(cursorFromDatePick(bars, "2030-01-01")).toBe(bars[4].timestamp);
+  });
+
+  it("非法串返回 null，不抛", () => {
+    const bars = daily(3);
+    expect(cursorFromDatePick(bars, "2020-1-1")).toBeNull();
+    expect(cursorFromDatePick(bars, "not-a-date")).toBeNull();
+  });
+
+  it("读数与日期框互为反函数：显示的那天输回去必须落回同一根", () => {
+    const bars = daily(6);
+    for (const b of bars) {
+      expect(cursorFromDatePick(bars, formatReplayDate(b.timestamp))).toBe(b.timestamp);
+    }
   });
 });
