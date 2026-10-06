@@ -85,16 +85,16 @@ export function ReplayBar({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <button type="button" className={BTN} onClick={() => onStep(-10)} title="向左 10 根（Backspace）">
+      <button type="button" className={BTN} onClick={() => onStep(-10)} title="向左 10 根">
         快退 10 根
       </button>
-      <button type="button" className={BTN} onClick={() => onStep(-1)} title="向左一根（←）">
+      <button type="button" className={BTN} onClick={() => onStep(-1)} title="向左一根">
         前一根
       </button>
       <button type="button" className={BTN} onClick={onTogglePlay} disabled={!!readout && readout.remaining === 0}>
         {playing ? "暂停" : "播放"}
       </button>
-      <button type="button" className={BTN} onClick={() => onStep(1)} title="向右一根（→）">
+      <button type="button" className={BTN} onClick={() => onStep(1)} title="向右一根">
         后一根
       </button>
       <button type="button" className={BTN} onClick={() => onStep(10)} title="向右 10 根">
