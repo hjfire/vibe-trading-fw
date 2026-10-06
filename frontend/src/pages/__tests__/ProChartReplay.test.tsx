@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProChart } from "../ProChart";
 
@@ -73,6 +73,10 @@ const h = vi.hoisted(() => ({
   newer: 0,
   // A symbol the backend answers with zero bars: the blank chart spec §7 also covers.
   blank: false,
+  // A backend that *rejects*. The `catch` arm of `getBars` owes the same §6 three-type rule the
+  // two success gates do — a pre-entry `init` that fails after 回放 must not answer `[]`, because
+  // `_addData` case `init` + `[]` is `_clearData()` (dist 13455-13456, 14574-14578).
+  fail: false,
   loader: null as null | {
     getBars: (p: {
       type: string;
@@ -206,6 +210,9 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
         type: h.askedType,
         before: before === null ? null : new Date(before).toISOString().slice(0, 10),
       });
+      // Recorded *before* the throw: the request still left the page, and the zero-network
+      // assertions count attempts, not successes.
+      if (h.fail) throw new Error("fake backend down");
       return { bars, source: "fake", symbol: "600519.SH", interval: "1D", ok: true };
     },
   };
@@ -265,8 +272,8 @@ async function flush(): Promise<void> {
   });
 }
 
-async function mountLoaded(): Promise<void> {
-  render(<ProChart />);
+async function mountLoaded() {
+  const view = render(<ProChart />);
   await settle();
   expect(h.list.length).toBe(TOTAL); // the whole fake history is on the chart
   // Recording starts here. Reaching `TOTAL` from one 500-bar `init` *requires* the page to
@@ -275,6 +282,8 @@ async function mountLoaded(): Promise<void> {
   // itself issued). Nothing is hidden: the `fetchKline` recorder below is never reset, so the
   // zero-network assertion still sees every request the page ever made.
   h.answers = [];
+  // The playback tests unmount mid-play, which is only reachable through the render result.
+  return view;
 }
 
 beforeEach(() => {
@@ -290,6 +299,7 @@ beforeEach(() => {
   h.gate = null;
   h.newer = 0;
   h.blank = false;
+  h.fail = false;
   h.loader = null;
   localStorage.clear();
 });
@@ -592,5 +602,284 @@ describe("/pro-chart 回放的数据通路", () => {
     });
     expect(visible()).toEqual(allowedByDay(readoutDayEnd()));
     expect(h.list[h.list.length - 1].timestamp).toBe(target.timestamp);
+  });
+
+  // The same parked race as the two above, one arm further down: the request *fails*. The `catch`
+  // used to answer `callback([], false)` no matter what replay was doing, and for `init` `[]` is
+  // not "nothing new" but `_clearData()` (dist 13455-13456, 14574-14578) — so a 换周期 that errored
+  // after the user clicked 回放 would blank the canvas while the toolbar went on reading 第 N/M 根,
+  // breaking spec §5 exactly the way the success path did before its own fix. The answer rule is
+  // §6's, and it is the same three arms whether the fetch came back or threw.
+  it("换周期那一问的 init 失败落地：错误照常上报，数据仍答回放窗口", async () => {
+    render(<ProChart />);
+    await flush();
+    expect(h.list.length).toBe(500);
+    expect(h.inFlight).toBe(0);
+    h.answers = [];
+
+    let release!: () => void;
+    h.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    h.fail = true; // 这一问会 reject；日线没有重试，直接走到 catch
+    const reqs = h.requests.length;
+    await click("60分");
+    expect(h.inFlight).toBe(1);
+    expect(h.answers.length).toBe(0); // still on the wire
+
+    const cache = visible();
+    await click("回放");
+    const dayEnd = readoutDayEnd();
+    const win = cache.filter((ts) => ts <= dayEnd);
+    expect(win.length).toBeGreaterThan(0);
+    expect(visible()).toEqual(win);
+
+    await act(async () => {
+      release();
+      h.gate = null;
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Non-vacuity: the parked question really did leave the page and really did fail.
+    expect(h.requests.length).toBe(reqs + 1);
+    expect(h.requests[h.requests.length - 1].type).toBe("init");
+    // §5 at the instant the failure lands: still exactly the cursor's prefix — not `[]`.
+    expect(visible()).toEqual(win);
+    expect(h.list.length).toBeGreaterThan(0);
+    expect(h.list.some((b) => b.timestamp > dayEnd)).toBe(false);
+    // Delivered (the library clears `_loading` inside the callback, dist 13616-13617) with the
+    // window and both flags dead, exactly like the success arm.
+    const inits = h.answers.filter((a) => a.type === "init");
+    expect(inits.length).toBe(2); // entry's own `resetData()`, plus this parked, failed one
+    for (const a of inits) {
+      expect(a.bars).toBe(win.length);
+      expect({ forward: a.forward, backward: a.backward }).toEqual({ forward: false, backward: false });
+    }
+    expect(h.inFlight).toBe(0);
+    // Only the *data* answer is replaced: the error still reaches the user.
+    expect(screen.getByText("fake backend down")).toBeTruthy();
+    // And replay keeps working from there, still with zero requests of its own.
+    await click("后一根");
+    expect(visible()).toEqual(cache.filter((ts) => ts <= readoutDayEnd()));
+    expect(h.requests.length).toBe(reqs + 1);
+  });
+});
+
+/**
+ * 自动播放（spec §7）。
+ *
+ * 每台都是"先挂载、再 `vi.useFakeTimers()`"：`mountLoaded()` 里的 `settle()` 靠真实
+ * `setTimeout(r, 0)` 泵微任务，fake 掉它就永远等不到；页面装好之后才开假钟，因为本任务要断言的
+ * 正是"推进 N ms 走几根"。收尾一律 `vi.useRealTimers()`（describe 里再兜一道，免得某条断言
+ * 半路红了把假钟留给后面的用例）。
+ */
+describe("/pro-chart 自动播放", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("1× 就是一秒一根：推进 3500 ms 恰好走 3 根", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    const start = h.list.length;
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3500);
+    });
+    expect(h.list.length).toBe(start + 3);
+    expect(visible()).toEqual(allowedByDay(readoutDayEnd()));
+    vi.useRealTimers();
+  });
+
+  it("倍速查表：4× 时同样的 3500 ms 走 14 根", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    const start = h.list.length;
+    await click("4×");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3500);
+    });
+    expect(h.list.length).toBe(start + 14);
+    vi.useRealTimers();
+  });
+
+  it("到达末根自己停：playing 回 false，再推进也不动", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("从视图右端开始"); // 游标已在末根
+    const btn = buttonOf("播放");
+    expect(btn.hasAttribute("disabled")).toBe(true);
+    await click("前一根");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DAY * 1000); // 远超走完剩余根数所需
+    });
+    // 简报把 `reached` 取在点下播放的那一刻，可那时尚未走完最后这一根（1199 → 1200），所以取样
+    // 挪到走完之后：停在的地方就是末根，不多不少；再推一整个交易日也不动。
+    expect(h.list.length).toBe(TOTAL);
+    const reached = h.list.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DAY * 1000);
+    });
+    expect(h.list.length).toBe(reached); // 停在末根，不再动
+    expect(screen.getByRole("button", { name: "播放" })).toBeTruthy();
+    vi.useRealTimers();
+  });
+
+  it("播放中手动走到末根：同一帧就停成「播放」，残留的 tick 也被收掉", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("从视图右端开始");
+    await click("前一根");
+    await click("播放");
+    expect(screen.getByRole("button", { name: "暂停" })).toBeTruthy();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    await click("后一根"); // 人工一步踩到末根
+    expect(h.list.length).toBe(TOTAL);
+    // `playing` 是在 `applyReplayCursor` 里现算的，不是从上一次渲染继承的：走到头这一刻按钮就该
+    // 回到「播放」，effect 的 cleanup 顺手收掉那个还挂着的 tick。
+    expect(screen.getByRole("button", { name: "播放" })).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DAY * 1000);
+    });
+    expect(h.list.length).toBe(TOTAL);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("切到后台就暂停，切回来保持暂停（不补跑一堆帧）", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    const at = h.list.length;
+    const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(h.list.length).toBe(at); // 暂停生效
+    spy.mockRestore();
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(h.list.length).toBe(at); // 回来了也不自动续播
+    expect(screen.getByRole("button", { name: "播放" })).toBeTruthy();
+    vi.useRealTimers();
+  });
+
+  it("播放中每个步进仍是一次 init、零请求", async () => {
+    await mountLoaded();
+    const before = h.requests.length;
+    vi.useFakeTimers();
+    await click("回放");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(h.requests.length).toBe(before);
+    vi.useRealTimers();
+  });
+
+  it("按暂停就停下，按播放就从那一根接着走", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    const start = h.list.length;
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(h.list.length).toBe(start + 1);
+    await click("暂停");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    // 暂停不是"按钮写着暂停然后继续跑"：cleanup 必须清掉那个还没触发的 timer。
+    expect(h.list.length).toBe(start + 1);
+    expect(screen.getByRole("button", { name: "播放" })).toBeTruthy();
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    // 只有一条链：恢复后再走一根，不会因为重启而多走一根、也不会跳根。
+    expect(h.list.length).toBe(start + 2);
+    expect(visible()).toEqual(allowedByDay(readoutDayEnd()));
+    vi.useRealTimers();
+  });
+
+  it("播放中退出回放：链停了，整段 cache 交回，且仍然零请求", async () => {
+    await mountLoaded();
+    const before = h.requests.length;
+    const cache = visible();
+    vi.useFakeTimers();
+    await click("回放");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(h.list.length).toBeLessThan(TOTAL); // 真的在播，且还没到末根
+    await click("退出回放");
+    expect(visible()).toEqual(cache);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    // 退出把 `cursorTs` 与 `playing` 一起归零：残留的 tick 既无处步进，也不该再排下去。
+    expect(visible()).toEqual(cache);
+    expect(screen.queryByTestId("replay-readout")).toBeNull();
+    expect(h.requests.length).toBe(before);
+    vi.useRealTimers();
+  });
+
+  it("播放中换周期：回放被丢弃，链不再改图", async () => {
+    await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    await click("60分");
+    expect(screen.queryByTestId("replay-readout")).toBeNull();
+    const afterSwitch = visible();
+    expect(afterSwitch.length).toBe(500); // 新视图自己的 init 答了它那一页
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(visible()).toEqual(afterSwitch);
+    vi.useRealTimers();
+  });
+
+  it("卸载后不留计时器：unmount 之后没有会自我续排的链", async () => {
+    const view = await mountLoaded();
+    vi.useFakeTimers();
+    await click("回放");
+    await click("播放");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    const at = h.list.length;
+    expect(vi.getTimerCount()).toBeGreaterThan(0); // 播放链确实挂着一个待触发的 timer
+    await act(async () => {
+      view.unmount();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    // 链活着的话每个 tick 都会再排一个，pending 永远 ≥ 1；一次性的一次残留（例如 jsdom 为
+    // storage 事件排的 0 ms）推一下就没了。配合下一条：图也没再被动过。
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.list.length).toBe(at);
+    vi.useRealTimers();
   });
 });

@@ -4,6 +4,7 @@ import {
   dispose,
   type CandleType,
   type Chart,
+  type DataLoaderGetBarsParams,
   type KLineData,
   type DataLoader,
   type Nullable,
@@ -28,6 +29,7 @@ import {
   cursorFromView,
   formatReplayDate,
   isReplayExhausted,
+  paceMs,
   replayReadout,
   replayWindow,
   stepCursor,
@@ -143,6 +145,28 @@ interface ReplaySession {
 }
 
 const IDLE_REPLAY: ReplaySession = { bars: [], cursorTs: null, playing: false };
+
+/**
+ * spec §6's replay answer, in the one place it can be read: `init` gets the cursor's prefix, the
+ * two paging directions get `[]`, and both `more` flags are dead either way.
+ *
+ * Three call sites owe it, which is why it is a function and not a third copy:
+ * 1. the structural gate at the top of `getBars` — replay owns the chart, nothing leaves;
+ * 2. the delivery gate — a request that left *before* entry can land *after* it;
+ * 3. the `catch` — the same request can also *fail* after entry, and `case 'init'` with `[]` is
+ *    `_clearData()` (dist 13455-13456, 14574-14578), so the error arm blanks the canvas exactly
+ *    the way the success arm did before its own fix unless it answers the same three ways.
+ *
+ * The `callback` itself is never skipped in any arm: the library clears `_loading` inside it
+ * (dist 13616-13617), and swallowing it leaves the chart unable to page ever again.
+ */
+function answerReplay(
+  type: DataLoaderGetBarsParams["type"],
+  r: ReplaySession,
+  callback: DataLoaderGetBarsParams["callback"],
+): void {
+  callback(type === "init" ? replayWindow(r.bars, r.cursorTs) : [], REPLAY_MORE);
+}
 
 // The 分时 price line. Deliberately neither of the up/down colors: those are
 // already spent on the candles and the change badge, and a line that happens to
@@ -917,7 +941,7 @@ export function ProChart() {
         // user's next step. See spec §6.
         const session = replayRef.current;
         if (session.cursorTs !== null) {
-          callback(type === "init" ? replayWindow(session.bars, session.cursorTs) : [], REPLAY_MORE);
+          answerReplay(type, session, callback);
           return;
         }
         if (type === "init" && session.bars.length > 0) {
@@ -984,29 +1008,17 @@ export function ProChart() {
           // next data event — which 分时 never gets (no paging, no push).
           if (line) setChangeBase(typeof res.prev_close === "number" ? res.prev_close : null);
           // Re-read the ref *at delivery*, not at request time: this page left before the user
-          // clicked 回放, and its answer can still land after entry. The answer this branch gives
-          // is the one spec §6's table prescribes for the `type` that was asked — the same three
-          // arms the gate at the top of this function answers with (keep the two in sync):
-          // `forward` / `backward` ⇒ `[]`, because for a paging direction "nothing new" is exactly
-          // what it means, and the library appends a `backward` answer onto the list (`_addData`
-          // case `backward`, dist 13464), so bars newer than the snapshot would be written onto
-          // the window `enterReplay` just truncated — look-ahead on a chart labelled 回放中
-          // (spec §5), until the next step's `resetData()` hid it. `init` ⇒ `replayWindow(cache,
-          // cursorTs)`, because for `init` an empty array is *not* "nothing new": `_addData` case
-          // `init` does `_clearData(); this._dataList = data` (dist 13455-13456) and `_clearData`
-          // empties `_dataList` (dist 14574-14578). A 换周期／换标的 `init` can still be on the
-          // wire when 回放 is clicked — `resetData` clears `_loading` and re-asks (dist
-          // 13652-13656), and the entry button is live because `barCount` still holds the
-          // outgoing view's count — so answering that one with `[]` would blank the canvas while
-          // the toolbar went on reading 第 N/M 根. The callback itself may NOT be skipped in any
-          // arm: the library clears `_loading` inside it (dist 13616-13617), and swallowing it
-          // leaves the chart unable to page ever again. All three answer with `REPLAY_MORE`, and
-          // put the page's own 加载中… hint down by hand, since the delivery this branch replaces
-          // is the one that normally clears it two lines below.
+          // clicked 回放, and its answer can still land after entry — that is the race spec §6's
+          // third reason is about, and the reason the gate cannot be answered from a `session`
+          // captured at the top of this function. What it hands back is §6's three-type rule,
+          // spelled out once in `answerReplay` (a `backward` answer of `[]` means "nothing newer";
+          // an `init` answer of `[]` means *empty the store*, so it has to be the window).
+          // The page's own 加载中… hint also goes down by hand, since the delivery this branch
+          // replaces is the one that normally clears it two lines below.
           const r = replayRef.current;
           if (r.cursorTs !== null) {
             setStatus((s) => ({ ...s, loading: false }));
-            callback(type === "init" ? replayWindow(r.bars, r.cursorTs) : [], REPLAY_MORE);
+            answerReplay(type, r, callback);
             return;
           }
           callback(bars, page.more);
@@ -1107,7 +1119,19 @@ export function ProChart() {
             refreshDrawCount(chart);
           }
         } catch (e) {
-          callback([], false);
+          // The failure arm owes the same §6 answer as the two gates above — this is the third of
+          // the three places the rule lives, hence `answerReplay`. A 换周期／换标的 `init` that left
+          // before 回放 and *errors* after entry would otherwise deliver `[]`, and `case 'init'`
+          // with `[]` is `_clearData()` (dist 13455-13456, 14574-14578): the canvas goes blank
+          // under a toolbar still reading 第 N/M 根, which is spec §5's invariant broken by the
+          // error path exactly as the success path had been doing. Only the data answer is
+          // replaced; the error itself still goes up, since a failed refresh is a fact.
+          const r = replayRef.current;
+          if (r.cursorTs !== null) {
+            answerReplay(type, r, callback);
+          } else {
+            callback([], false);
+          }
           setStatus({ loading: false, error: e instanceof Error ? e.message : String(e), source: "" });
         }
       },
@@ -1238,36 +1262,107 @@ export function ProChart() {
     syncReplayUi();
   };
 
-  /** Move the cursor and let the chart re-ask; a `resetData()` per step is the only way to
-   *  swap the visible window in v10 (there is no `applyNewData`). */
-  const replayStep = (n: number) => {
+  /**
+   * The one cursor-apply path: take the next timestamp → write the ref → re-mirror → repaint.
+   * 单步、日期框 and the play loop all route through here, so the tail exists once. Two things in
+   * it are easy to forget and have to be forgotten in exactly one place: `playing` is
+   * *recomputed* from `isReplayExhausted` rather than carried over (spec §7 — playing stops by
+   * itself at the newest bar, whatever render the caller closed over believed), and a cursor that
+   * did not move costs no `resetData()` (the clamped-at-the-end case, which otherwise re-inits
+   * the chart on every dead click — and every dead tick).
+   */
+  const applyReplayCursor = (nextTs: number) => {
     const chart = chartRef.current;
     const r = replayRef.current;
     if (!chart || r.cursorTs === null || r.bars.length === 0) return;
-    const next = stepCursor(r.bars, r.cursorTs, n);
-    if (next === r.cursorTs) return; // already at an end: do not re-init the chart for nothing
+    if (nextTs === r.cursorTs) return; // already at an end: do not re-init the chart for nothing
     // Playing stops by itself at the newest bar (spec §7), so the flag is recomputed here
     // rather than trusted from whatever render the caller closed over.
-    const playing = r.playing && !isReplayExhausted(r.bars, next);
-    replayRef.current = { bars: r.bars, cursorTs: next, playing };
+    const playing = r.playing && !isReplayExhausted(r.bars, nextTs);
+    replayRef.current = { bars: r.bars, cursorTs: nextTs, playing };
     syncReplayUi();
     chart.resetData();
+  };
+
+  /** Move the cursor and let the chart re-ask; a `resetData()` per step is the only way to
+   *  swap the visible window in v10 (there is no `applyNewData`). */
+  const replayStep = (n: number) => {
+    const r = replayRef.current;
+    if (r.cursorTs === null) return;
+    // `stepCursor` does the clamping (and hands back `cursorTs` unchanged on an empty cache), so
+    // the "already at an end" test belongs to `applyReplayCursor`, not to each caller.
+    applyReplayCursor(stepCursor(r.bars, r.cursorTs, n));
   };
 
   const pickReplayDate = (iso: string) => {
-    const chart = chartRef.current;
     const r = replayRef.current;
-    if (!chart || r.cursorTs === null) return;
+    if (r.cursorTs === null) return;
     const next = cursorFromDatePick(r.bars, iso);
-    if (next === null || next === r.cursorTs) return;
-    const playing = r.playing && !isReplayExhausted(r.bars, next);
-    replayRef.current = { bars: r.bars, cursorTs: next, playing };
-    syncReplayUi();
-    chart.resetData();
+    if (next === null) return; // the box holds a date outside the loaded range
+    applyReplayCursor(next);
   };
 
-  // Task 4 replaces this with the setTimeout playback loop.
-  const toggleReplayPlay = () => undefined;
+  // Playback is a `setTimeout` chain, not `setInterval`: one step's `resetData()` costs a
+  // variable amount of time, and a fixed interval would stack in-flight steps on top of each
+  // other. Not `requestAnimationFrame` either — a background tab does not run rAF at all, and
+  // leaving this playing unattended is the point of the feature (spec §7).
+  useEffect(() => {
+    if (!replay.playing) return;
+    let timer: number | null = null;
+    const tick = () => {
+      timer = null;
+      const r = replayRef.current;
+      if (r.cursorTs === null) return;
+      if (isReplayExhausted(r.bars, r.cursorTs)) {
+        replayRef.current = { ...r, playing: false };
+        syncReplayUi();
+        return;
+      }
+      replayStep(1);
+      timer = window.setTimeout(tick, paceMs(replaySpeed));
+    };
+    timer = window.setTimeout(tick, paceMs(replaySpeed));
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
+    // `replaySpeed` in the deps means a mid-play speed change takes effect on the next tick
+    // by restarting the countdown, which is what the toolbar's click looks like.
+    //
+    // The loop body reads ONLY `replayRef.current` (via `replayStep`/`syncReplayUi`) and never
+    // `replay` state: this closure stops at the render that turned playing on, so from then on
+    // `replay.cursorTs` would be a frozen value. That is what Task 3's mirror rule bought —
+    // one writer, derived from the ref — and why `replayStep`/`syncReplayUi` stay out of the
+    // deps: they are new function objects every render, and re-running the effect on each render
+    // would restart the countdown and never play.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replay.playing, replaySpeed]);
+
+  const toggleReplayPlay = () => {
+    const r = replayRef.current;
+    if (r.playing) {
+      replayRef.current = { ...r, playing: false };
+      syncReplayUi();
+      return;
+    }
+    // Nothing to play if the cursor is already on the newest loaded bar.
+    if (r.cursorTs === null || isReplayExhausted(r.bars, r.cursorTs)) return;
+    replayRef.current = { ...r, playing: true };
+    syncReplayUi();
+  };
+
+  // A hidden tab is a tab nobody is watching: pause, and *stay* paused when they come back, so
+  // the chart shows where it stopped instead of bursting through the catch-up frames.
+  useEffect(() => {
+    const onHide = () => {
+      const r = replayRef.current;
+      if (document.visibilityState !== "hidden" || !r.playing) return;
+      replayRef.current = { ...r, playing: false };
+      syncReplayUi();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Move the chart to a view (local custom ㉖). One writer for the mode flag,
