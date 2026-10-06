@@ -120,6 +120,25 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   critical: "紧急",
 };
 
+/**
+ * Which settings-row values the stored rule does not carry yet. Without this the
+ * row would read 「已建，条件一致」 after the 连续满足根数 spinner moved, while the
+ * backend still debounced with the old number — the panel would be claiming a
+ * state only `send()` can change.
+ */
+function settingsDiff(rule: AlertRuleRow, s: AlertsSettings): string[] {
+  const out: string[] = [];
+  if (rule.for_bars !== s.forBars)
+    out.push(`连续满足根数：后端 ${rule.for_bars} → 这里 ${s.forBars}`);
+  if (rule.severity !== s.severity)
+    out.push(`级别：后端 ${SEVERITY_LABEL[rule.severity]} → 这里 ${SEVERITY_LABEL[s.severity]}`);
+  if (rule.send_resolved !== s.sendResolved)
+    out.push(`恢复通知：后端 ${rule.send_resolved ? "开" : "关"} → 这里 ${s.sendResolved ? "开" : "关"}`);
+  if (rule.targets.join("\u0000") !== s.targets.join("\u0000"))
+    out.push(`推送目标：后端 ${rule.targets.length} 个 → 这里 ${s.targets.length} 个`);
+  return out;
+}
+
 export default function AlertsTab({ draft, getChart, symbol, interval, adjust }: AlertsTabProps) {
   const [settings, setSettings] = useState<AlertsSettings>(readSettings);
   const [plans, setPlans] = useState<PineAlertPlan[]>([]);
@@ -224,7 +243,14 @@ export default function AlertsTab({ draft, getChart, symbol, interval, adjust }:
     setBusy(body.id);
     try {
       const row = await alertsApi.createRule(body);
-      setNotice({ text: `已写入后端规则「${body.title}」(${row?.id ?? body.id})，轮询按后端节奏继续。`, bad: false });
+      // The panel cannot see VIBE_TRADING_ENABLE_SCHEDULER, and with it off the
+      // poller loop never starts — so this must not promise a cadence it cannot
+      // verify. Measured live: a created rule sat with last_checked_at=null until
+      // something ticked the engine by hand.
+      setNotice({
+        text: `已写入后端规则「${body.title}」(${row?.id ?? body.id})；是否自动轮询由后端调度开关决定，未开启时可在告警页手动评估。`,
+        bad: false,
+      });
       setPending(null);
       await refresh();
     } catch (e) {
@@ -365,7 +391,9 @@ export default function AlertsTab({ draft, getChart, symbol, interval, adjust }:
         const plan = row.plan;
         const native = plan?.status === "native" ? plan : null;
         const existing = native ? rules.find((r) => r.id === native.draft?.id) : undefined;
-        const inSync = existing && sameCondition(existing.condition, native?.condition);
+        const condSame = !!existing && sameCondition(existing.condition, native?.condition);
+        const diffs = existing ? settingsDiff(existing, settings) : [];
+        const inSync = condSame && !diffs.length;
         const title = plan?.title || row.series?.title || `${plan?.fn ?? "alertcondition"}@L${row.line}`;
         return (
           <div key={`${row.line}:${title}`} className="space-y-1 rounded border px-2 py-1.5">
@@ -433,7 +461,9 @@ export default function AlertsTab({ draft, getChart, symbol, interval, adjust }:
 
             {pending && native && pending === native.draft?.id && (
               <div className="rounded border border-red-500/40 bg-red-500/5 px-2 py-1.5 text-[11px] leading-4 text-red-500">
-                {`后端这条规则的条件已被改成 ${describeCondition(existing?.condition)}，与本脚本译出的不同。覆盖会丢掉那个改动。`}
+                {condSame
+                  ? `后端规则的条件一致，只有这一行的参数与它不同：${diffs.join("；")}。覆盖会按这里的值改写。`
+                  : `后端这条规则的条件已被改成 ${describeCondition(existing?.condition)}，与本脚本译出的不同。覆盖会丢掉那个改动。`}
                 <div className="mt-1 flex gap-1.5">
                   <button
                     type="button"

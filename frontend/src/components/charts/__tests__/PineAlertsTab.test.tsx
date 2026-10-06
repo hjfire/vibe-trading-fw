@@ -54,8 +54,26 @@ function emptyTargets() {
   vi.spyOn(alertsApi, "listTargets").mockResolvedValue({ targets: [], channels: [] });
 }
 
-function ruleRow(id: string, condition: Partial<AlertCondition>): AlertRuleRow {
-  return { id, title: "手改过的", symbol: "600519.SH", interval: "1D", condition } as unknown as AlertRuleRow;
+function ruleRow(
+  id: string,
+  condition: Partial<AlertCondition> | null | undefined,
+  over: Partial<AlertRuleRow> = {},
+): AlertRuleRow {
+  // The settings fields default to the panel's own defaults, so a row with the
+  // same condition really is "已建，条件一致" — a test that wants a divergence
+  // passes `over`.
+  return {
+    id,
+    title: "手改过的",
+    symbol: "600519.SH",
+    interval: "1D",
+    condition,
+    for_bars: 1,
+    severity: "info",
+    send_resolved: true,
+    targets: [],
+    ...over,
+  } as unknown as AlertRuleRow;
 }
 
 it("可译条目显示后端条件文案与引擎命中根号，并有创建按钮", async () => {
@@ -183,4 +201,30 @@ it("有推送目标时勾选进 draft.targets，并显示已注册的名称", as
   fireEvent.click(screen.getByRole("button", { name: /创建/ }));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   expect(create.mock.calls[0][0].targets).toEqual(["-100123"]);
+});
+
+it("条件一致但这里的参数不同 ⇒ 露出更新与差在哪，而不是「已建，条件一致」", async () => {
+  emptyTargets();
+  const create = vi.spyOn(alertsApi, "createRule").mockResolvedValue({ id: "pine_x" } as never);
+  const list = vi.spyOn(alertsApi, "listRules").mockResolvedValue([]);
+
+  const first = renderTab(NATIVE);
+  fireEvent.click(await screen.findByRole("button", { name: /创建/ }, { timeout: 3000 }));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  const id = create.mock.calls[0][0].id;
+  const cond = create.mock.calls[0][0].condition;
+
+  create.mockClear();
+  // Same id and the same condition; only the stored debounce is the old number.
+  list.mockResolvedValue([ruleRow(id, cond, { for_bars: 1 })]);
+  first.unmount();
+  renderTab(NATIVE);
+  fireEvent.change(screen.getByLabelText("连续满足根数"), { target: { value: "4" } });
+
+  expect(screen.queryByRole("button", { name: /已建/ })).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: /更新/ }, { timeout: 3000 }));
+  expect(screen.getByText(/连续满足根数：后端 1 → 这里 4/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /确认覆盖/ }));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  expect(create.mock.calls[0][0]).toMatchObject({ id, for_bars: 4 });
 });
