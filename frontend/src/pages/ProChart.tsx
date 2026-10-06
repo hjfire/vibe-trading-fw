@@ -1266,13 +1266,18 @@ export function ProChart() {
     for (const o of overlays) {
       if (typeof o.id !== "string") continue;
       const future = cursorTs !== null && isFutureDrawing(o.points ?? [], cursorTs);
-      // A line the user hid by hand (`visible: false` on the instance, d.ts 1077) must not
-      // enter the bookkeeping: hiding it again is a no-op, but the matching restore on exit
-      // would light it up and overwrite a deliberate choice.
-      if (future && !hiddenByReplayRef.current.has(o.id) && o.visible !== false) {
-        // The library's boolean answer is ignored on purpose — a flag-only override is the
-        // case where it does not report the change it made (`chartDrawings.ts` ⑤: "Trust the
-        // instance, not the return value"), so the ref is the only bookkeeping there is.
+      // `o.visible !== false` keeps a line the user hid by hand (d.ts 1077) out of the
+      // bookkeeping: hiding it again is a no-op, and the matching restore on exit would light up
+      // a deliberate choice. What is *not* a condition here is the bookkeeping itself — the 清单
+      // panel stays operable during replay, so one 「显示」 click repaints a hidden future line,
+      // and an id already in the ref must not buy that line an exemption for the rest of the
+      // session (spec §8). The branch is therefore idempotent on instance state: hide what is
+      // future and visible, restore what is past and in the ref.
+      if (future && o.visible !== false) {
+        // The library's boolean answer is not a verdict: `shouldUpdate()` (dist 8314-8318)
+        // reports whether a *repaint* was queued, and a `lock`-only override answers `false` even
+        // though the write landed (`chartDrawings.ts` ⑤: "Trust the instance, not the return
+        // value"), so the ref is the only bookkeeping there is.
         chart.overrideOverlay({ id: o.id, visible: false });
         hiddenByReplayRef.current.add(o.id);
       } else if (!future && hiddenByReplayRef.current.has(o.id)) {

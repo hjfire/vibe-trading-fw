@@ -18,8 +18,10 @@ import { ProChart } from "../ProChart";
  *
  * The chart double is `ProChartReplay.test.tsx`'s (the data path is not this file's subject, but
  * entering replay *is* a data-path action, so the double has to answer like the library). Three
- * differences only: `getOverlays()` hands back real overlay shapes, `overrideOverlay` applies to
- * those instances *and* records the call, and `chartDrawings.saveDrawings` is counted.
+ * differences only: `getOverlays()` hands back real overlay shapes — and honours the `{ id }`
+ * filter the way `getOverlaysByFilter` does, since `applyDrawingFlags` reads a line back through
+ * it — `overrideOverlay` applies to those instances *and* records the call, answering the way
+ * `shouldUpdate()` answers, and `chartDrawings.saveDrawings` is counted.
  *
  * Why a separate file rather than more cases in `ProChartReplay.test.tsx`: that file's double
  * would now have to carry the overlay shape too, and the fifteen data-path cases would start
@@ -67,13 +69,19 @@ const OVERLAYS = [
   },
 ];
 
-type OverlayState = { id: string; name: string; visible?: boolean; points: Array<{ timestamp?: number }> };
+type OverlayState = {
+  id: string;
+  name: string;
+  visible?: boolean;
+  lock?: boolean;
+  points: Array<{ timestamp?: number }>;
+};
 
 const h = vi.hoisted(() => ({
   list: [] as Array<{ timestamp: number }>,
   more: { forward: false, backward: false },
   requests: [] as string[],
-  overlays: [] as Array<{ id: string; name: string; visible?: boolean; points: Array<{ timestamp?: number }> }>,
+  overlays: [] as OverlayState[],
   overrides: [] as Array<{ id?: string; visible?: boolean }>,
   saved: 0,
   // The buckets `saveDrawings` was handed, so a test can read what *would* have been stored
@@ -165,7 +173,13 @@ vi.mock("klinecharts", () => ({
     // The overlays the page is allowed to see, in the shape `getOverlays()` really answers
     // (`{ id, name, paneId, points, visible, … }`) — `applyFutureDrawings` reads `points` and
     // `visible` off them, and `serializeDrawings` reads the same two.
-    getOverlays: () => h.overlays,
+    //
+    // `StoreImp.getOverlays(filter)` is `getOverlaysByFilter` (dist 14285-14298), so an `{ id }`
+    // filter narrows to that one overlay. `applyDrawingFlags` reads the instance back through
+    // exactly that call (chartDrawings.ts:623), so the filter has to be honoured here or the
+    // 清单 path below would verify the line it aimed at against the *first* overlay in the list.
+    getOverlays: (filter?: { id?: string }) =>
+      typeof filter?.id === "string" ? h.overlays.filter((o) => o.id === filter.id) : h.overlays,
     getPaneOptions: () => [],
     setPaneOptions: vi.fn(),
     getOffsetRightDistance: () => 0,
@@ -176,17 +190,26 @@ vi.mock("klinecharts", () => ({
     // `StoreImp.overrideOverlay` -> `getOverlaysByFilter` (dist 14285-14298): no id means the
     // filter matches *every* overlay, so that is modelled too rather than assumed away.
     //
-    // The answer is deliberately `false` even though the change is applied: this repo's recorded
-    // experience of a flag-only override is exactly that asymmetry, and the note at the top of
-    // `chartDrawings.ts` (⑤, "Trust the instance, not the return value") is the standing rule.
-    // A page that gated its bookkeeping on that boolean therefore cannot pass here.
-    overrideOverlay: (o: { id?: string; visible?: boolean }) => {
+    // The boolean answer mirrors `OverlayImp.shouldUpdate()` (dist 8314-8318), which watches
+    // zLevel/points/**visible**/extendData/styles and **not `lock`** (`chartDrawings.ts` ⑤): the
+    // write always lands on the instance, and the answer only reports whether a repaint was
+    // queued — so a `visible` change answers `true` (verified in dist: `draw` is set, and
+    // `StoreImp.prototype.overrideOverlay` returns `true`, index.esm.js:14450-14454) while a
+    // `lock`-only change answers `false` even though it worked. Same modelling as
+    // `lib/__tests__/chartDrawings.test.ts:144-177`, and the reason the cases below read the
+    // instance instead of this return value ("trust the instance", ⑤).
+    overrideOverlay: (o: { id?: string; visible?: boolean; lock?: boolean }) => {
       h.overrides.push({ id: o.id, visible: o.visible });
       const targets = o.id === undefined || o.id === null ? h.overlays : h.overlays.filter((x) => x.id === o.id);
+      let draw = false;
       for (const target of targets) {
+        const prevVisible = target.visible;
+        if ("lock" in o) target.lock = o.lock;
         if ("visible" in o) target.visible = o.visible;
+        // `shouldUpdate()` queues a repaint for what actually changed; `lock` is not among them.
+        draw = draw || prevVisible !== target.visible;
       }
-      return false;
+      return draw;
     },
   }),
 }));
@@ -353,6 +376,35 @@ describe("/pro-chart 回放中的画线", () => {
     // `mine` 被隐过一次（进入时它就是未来线），但退出时不该被点亮
     expect(h.overrides.some((o) => o.id === "mine" && o.visible === true)).toBe(false);
     expect(inst("mine")?.visible).toBe(false);
+  });
+
+  // spec §8's promise, tested through the gesture that used to break it: the 清单 panel stays
+  // operable while replaying, so one click on 「显示」 paints a replay-hidden future line back
+  // on screen — and with that id already booked as hidden, the guard refused to hide it again
+  // for the rest of the session. Storage is safe either way (`hideFree` folds the transient hide
+  // out of the banked copy); what broke is that a future line stayed visible.
+  it("回放途中从清单点亮被隐的未来线：下一步就重新隐掉", async () => {
+    await mountLoaded();
+    await click("画线清单");
+    await click("回放");
+    expect(inst("future")?.visible).toBe(false);
+    // The list is a snapshot taken before 回放, so the row still offers 「隐藏」: clicking it
+    // re-asserts a hide the replay already made (a no-op on the instance), banks, and refreshes
+    // the rows — which is what makes the row read 「显示」, one click from lighting the line up.
+    await click("隐藏画线 future");
+    expect(buttonOf("隐藏画线 future").textContent).toBe("显示");
+    await click("隐藏画线 future");
+    // The click itself works — this is the state the guard has to recover from, not a defect.
+    expect(inst("future")?.visible).toBe(true);
+    h.overrides = [];
+    // 后一根：游标 949 → 950，这条线的第二个锚点（第 1000 根）还在游标之后，仍是未来。
+    await click("后一根");
+    expect(h.overrides.map((o) => [o.id, o.visible])).toEqual([["future", false]]);
+    expect(inst("future")?.visible).toBe(false);
+    // 过去的两条线全程不是这套记账的生意。
+    expect(h.overrides.some((o) => o.id === "past-1" || o.id === "past-2")).toBe(false);
+    expect(inst("past-1")?.visible).not.toBe(false);
+    expect(inst("past-2")?.visible).not.toBe(false);
   });
 
   // The storage half of contract 2, which the count above cannot see: a bank that fires *while*
