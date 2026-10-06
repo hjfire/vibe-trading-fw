@@ -36,13 +36,18 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * are never skipped silently: each one is counted and named on the wall — the
  * drawing/hline/table families under `exempted:`, the legal all-`na` warm-up drop
  * under `compared:` as `na-dropped=` — and every counter on those two lines carries
- * a gate at the bottom of this file, of one of two kinds. CEILINGS (a measured
+ * a gate at the bottom of this file, of one of three kinds. CEILINGS (a measured
  * number somebody has to raise before it may grow): `live` total, three of the four
  * buckets it decomposes into (`mutating`, `run-end-built`, `existence`), the
  * sub-count `existence-anchor-below-k` that says how much of `existence` sits below
  * its own cut, `na-dropped`, `after-cut-objects` and `after-cut-end-created`.
  * EXACT ZERO (that skip may not appear at all): the fourth bucket `unexplained`,
- * `after-cut-unexplained`, `hlines-tail-skipped`, `tables-skipped`. The identity that
+ * `after-cut-unexplained`, `hlines-tail-skipped`, `tables-skipped`. EXACT LIST:
+ * `runEndCells` — the (script, kind) cells arm 2b may excuse records on, pinned to
+ * one named cell and its count. A ceiling bounds HOW MANY records a bucket may grow
+ * to; this one bounds WHICH cell, which is the half a ceiling cannot see. FLOORS (work
+ * that may not vanish): `series`, `values`, `hlines`, `drawings` — each `≥ ran ×` a measured
+ * per-script rate, plus the strict-share floor on the object channel just below. The identity that
  * makes the four buckets ADD UP to `live` is asserted as well, so an exemption cannot
  * migrate from one bucket to another without moving a capped number, and `aborted` is
  * pinned by its exact sorted LIST rather than by a count. Measured 2026-10-07 on the
@@ -423,9 +428,12 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * was run against) — six of them red, the seventh (⑥, the `delete` arm)
  * a measurement whose finding is that it does NOT redden. Baseline green FIRST so
  * any red below is attributable to the edit and not to the machine (`scripts=210 passed=206
- * mismatched=4 crashed=0`, rc=0 — five green runs are logged for this build and they
- * measured 25.17–25.63 s of comparing (`tests`) and 27.25–28.34 s for the file; the
- * timing is reported, not gated, and no assertion below depends on it). Each edit then went
+ * mismatched=4 crashed=0`, rc=0 — five green runs OF THIS FILE ALONE are logged for
+ * this build and they measured 25.17–25.63 s of comparing (`tests`) and 27.25–28.34 s
+ * for the file; the runs that additionally collected a scratch copy of this file are
+ * NOT in that range — their `tests` is 55–96 s because two corpus suites ran in one
+ * process, so that number is not this file's. The timing is reported, not gated, and
+ * no assertion below depends on it). Each edit then went
  * red, was reverted, and printed those same numbers again:
  *   · ① the window itself — `cmpNumbers`' per-bar loop walked `i <= k` instead of
  *     `i < k`, comparing the first `k+1` entries instead of the first `k` (the
@@ -506,9 +514,14 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  *     load-bearing?": no, and by construction it cannot be — `PROPS_OF_OP.delete`
  *     is the empty list, so the field-scoped rule hands a `delete` no excusable
  *     FIELD at all, which is exactly what the round-1 kind-keyed rule had been
- *     spending. The arm stays in the scan because the wall's inventory should read
- *     like the corpus, and because the EXISTENCE branch is where a `delete` does
- *     earn its exemption (`pineRuntime.ts:2220-2221`).
+ *     spending. The arm stays in the scan for one reason only: the wall's inventory
+ *     should read like the corpus. It is NOT load-bearing for the gate, and ⑥ is the
+ *     measurement that says so — the two EXISTENCE arms never consult this scan (they
+ *     decide from `measureObjectLiveness`'s six-run tag, so with `delete` out of the
+ *     regex `existence=718` and `existence-anchor-below-k=288` came out unchanged).
+ *     What a `delete` really explains is an ABSENCE, and it explains it at the engine
+ *     level (`emitDrawings` skips objects with the flag set, `pineRuntime.ts:2220-2221`)
+ *     — which is what branch (3) below keys on, not on the source scan.
  *     ⑦ the `run-end-built` ceiling lowered from `892` to `891`, the new bucket's
  *     cap proven the same way ④'s was. RED, rc=1, at exactly that `expect`:
  *     「内容差异被「run 末端重建」豁免掉的记录数（实测 892）…」 expected 892 to be
@@ -750,6 +763,10 @@ interface Counts {
   /** …of `live`: content differs in fields no call writes, and the measured evidence is that the
    *  whole object set of this kind is REBUILT as the run grows (see `cmpObjectDrawings` arm 2b). */
   liveRunEndBuilt: number;
+  /** …of `liveRunEndBuilt`, keyed `${script}|${kind}`: the ceiling bounds HOW MANY records arm 2b
+   *  may excuse; this bounds WHICH cells may be excused at all. A count-preserving move to another
+   *  script or kind would otherwise stay green at 892. */
+  runEndCells: Map<string, number>;
   /** …of `live`: one side is missing and the identity itself moves with the end of the run. */
   liveExistence: number;
   /** …of `live`: content differs at this k and some differing field is not attributable to any
@@ -1076,6 +1093,11 @@ function drawKey(d: Draw): string {
 }
 
 const OBJECT_KINDS: readonly ("label" | "line" | "box")[] = ["label", "line", "box"];
+
+/** Which arm of the object-drawing pass excused a record: 2a mutation, 2b run-end
+ *  construction, or the identity-level existence flag. Printed per arm on the wall. */
+type LiveArm = "mutating" | "run-end-built" | "existence";
+const LIVE_REASON_ARMS: readonly LiveArm[] = ["mutating", "run-end-built", "existence"];
 
 /**
  * The compared fields of an object record, BY NAME: exactly what `drawKey` joins
@@ -1480,7 +1502,11 @@ interface Extras {
   readonly kindCounts: Map<string, number[]>;
   /** Source contains `barstate.islast` (`RUN_END_RE`). */
   readonly runEnd: boolean;
-  readonly liveReasons: Set<string>;
+  /** Exemption reason rows, keyed by the row text, valued by the ARM that produced
+   *  it (`mutating` / `run-end-built` / `existence`). The value exists so the wall
+   *  can print a few rows PER ARM: a flat head-N over the sorted union lands on one
+   *  alphabetically-early family and shows none of the 892 `run-end-built` records. */
+  readonly liveReasons: Map<string, LiveArm>;
   readonly afterCutRows: Set<string>;
   readonly tailRows: Set<string>;
   readonly belowCutRows: Set<string>;
@@ -1562,15 +1588,18 @@ function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, 
         if (diff.length > 0 && diff.every((field) => excusable.has(field))) {
           c.live += 1;
           c.liveMutating += 1;
-          x.liveReasons.add(`${s.rel} ${tag} — 源码对 ${kind} 有 ${calls.join("/")} 调用，同一对象在更长的喂法里还会变`);
+          x.liveReasons.set(`${s.rel} ${tag} — 源码对 ${kind} 有 ${calls.join("/")} 调用，同一对象在更长的喂法里还会变`, "mutating");
           continue;
         }
         if (x.runEnd && x.creators.has(kind) && rebuiltAsItGrows(x.kindCounts.get(kind))) {
           c.live += 1;
           c.liveRunEndBuilt += 1;
-          x.liveReasons.add(
+          const cell = `${s.rel}|${kind}`;
+          c.runEndCells.set(cell, (c.runEndCells.get(cell) ?? 0) + 1);
+          x.liveReasons.set(
             `${s.rel} ${tag} — ${kind} 在 barstate.islast 的建造里重建（条数 ${(x.kindCounts.get(kind) ?? []).join("/")}），` +
               `差异字段「${diff.join(",") || "无具名字段"}」无人写入`,
+            "run-end-built",
           );
           continue;
         }
@@ -1602,7 +1631,7 @@ function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, 
         if (an !== undefined && an < k && x.belowCutRows.size < 8) {
           x.belowCutRows.add(`${s.rel} ${tag} k=${k} — 前缀这条记录锚在第 ${an} 根（< k），全量里它已经不存在`);
         }
-        x.liveReasons.add(`${s.rel} ${tag} — ${why ?? "较短的喂法里有、全量里没有（对象在更晚的 bar 被删掉或重建）"}`);
+        x.liveReasons.set(`${s.rel} ${tag} — ${why}`, "existence");
         continue;
       }
       // (4) only the FULL run has it, and the identity itself did NOT move between
@@ -1636,7 +1665,7 @@ function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, 
             x.belowCutRows.add(`${s.rel} ${tag} k=${k} — 全量这条记录锚在第 ${an} 根（< k），索引配对本身随喂法移动`);
           }
         }
-        x.liveReasons.add(`${s.rel} ${tag} — ${why}`);
+        x.liveReasons.set(`${s.rel} ${tag} — ${why}`, "existence");
         continue;
       }
       if (an === undefined) {
@@ -1804,6 +1833,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
       live: 0,
       liveMutating: 0,
       liveRunEndBuilt: 0,
+      runEndCells: new Map(),
       liveExistence: 0,
       liveExistenceBelowCut: 0,
       liveUnexplained: 0,
@@ -1836,7 +1866,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     const mismatchKeys: string[] = [];
     const failedFiles: string[] = [];
     const perFile: { rel: string; isMtf: boolean; diffs: string[]; hits: MechHit[] }[] = [];
-    const liveReasons = new Set<string>();
+    const liveReasons = new Map<string, LiveArm>();
     const afterCutRows = new Set<string>();
     const endCreatedRows = new Set<string>();
     const tailRows = new Set<string>();
@@ -1967,11 +1997,24 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     );
     // Identities, not records: `live-objects=1848` is 1848 RECORD comparisons
     // spread over the (script, identity) pairs named here.
-    const liveIdentities = new Set([...liveReasons].map((r) => r.slice(0, r.indexOf(" — ")))).size;
+    const liveIdentities = new Set([...liveReasons.keys()].map((r) => r.slice(0, r.indexOf(" — ")))).size;
     process.stdout.write(
       `  live drawing objects (run-end dependent: ${liveIdentities} (script, identity) pairs exempted, ${liveReasons.size} reason rows):\n`,
     );
-    for (const r of [...liveReasons].sort().slice(0, 24)) process.stdout.write(`    live: ${r}\n`);
+    // Stratified by arm, not head-N over the sorted union: the union is dominated by
+    // `mutating` rows from alphabetically-early families, so a flat `slice(0, 24)`
+    // printed NONE of the `run-end-built` rows — and 2b is the 892-record hole the
+    // archive has to disclose in its own words, so it has to be readable off the
+    // wall. Each arm prints its own row total first, so a truncated print can never
+    // read as a complete inventory.
+    for (const arm of LIVE_REASON_ARMS) {
+      const rows = [...liveReasons.entries()]
+        .filter(([, a]) => a === arm)
+        .map(([r]) => r)
+        .sort();
+      process.stdout.write(`    ${arm}: ${rows.length} reason rows, first ${Math.min(6, rows.length)} shown:\n`);
+      for (const r of rows.slice(0, 6)) process.stdout.write(`      live: ${r}\n`);
+    }
     if (afterCutRows.size) {
       process.stdout.write(`  after-cut object records (${afterCutRows.size}, anchor >= k checked, not assumed):\n`);
       for (const r of [...afterCutRows].sort()) process.stdout.write(`    ${r}\n`);
@@ -2081,7 +2124,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // remaining slack is stated as arithmetic, not prose — every multiple below sits
     // at 86–91% of its measured per-script average (values 2 000 vs 2 194, series 10
     // vs 11.0, hlines 4 vs 4.4, drawings 1.5 vs 1.75), which is ~18 scripts' worth of
-    // work for the first three and ~29 for `drawings`, all of it below one whole file
+    // work for the first three and ~30 files' worth for `drawings`, all of it below one whole file
     // per script.
     expect(pairs, "(script, k) 对必须是 已比较脚本 × 探针长度").toBe(ran * KS.length);
     expect(ran, "跑通并可比较的脚本数掉了：语料遍历或解释器坏了（实测 210）").toBeGreaterThanOrEqual(200);
@@ -2196,9 +2239,16 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     ).toBeLessThanOrEqual(238);
     expect(
       c.liveRunEndBuilt,
-      `内容差异被「run 末端重建」豁免掉的记录数（实测 ${c.liveRunEndBuilt}）：barstate.islast + 本 kind 有 .new + ` +
+      `内容差异被「run 末端重建」豁免掉的记录数（实测 892）：barstate.islast + 本 kind 有 .new + ` +
         `条数随喂法单调长，这是设计 §10 认下的对象通道洞本身，只许按登记的口径长`,
     ).toBeLessThanOrEqual(892);
+    // 上限只管「豁免掉多少条」，管不了「豁免的是哪一格」。892 这个数字今天全部来自
+    // (gaps_percent_size_distribution.pine, line) 一格；语料一改，同样的 892 条可能挪到
+    // 别的脚本或别的 kind 上而总数不变、这条上限不动。所以按格判等。
+    expect(
+      [...c.runEndCells.entries()].sort(),
+      `「run 末端重建」只许发生在登记的 (脚本, kind) 格上（实测 ${[...c.runEndCells.keys()].sort().join(",")}）`,
+    ).toEqual([["statistics/gaps_percent_size_distribution.pine|line", 892]]);
     expect(
       c.liveExistence,
       `存在性豁免的记录数（实测 ${c.liveExistence}）：对象身份本身随「喂到第几根」增减（六根走查量出来的存活度旗标），` +
