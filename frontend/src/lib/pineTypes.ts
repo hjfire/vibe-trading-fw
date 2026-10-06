@@ -143,6 +143,24 @@ export interface PineMarker {
   color?: string;
 }
 
+/**
+ * One `alertcondition()` / `alert()` call site, with the interpreter's own
+ * per-bar decision. `hits[i]` is what the script evaluated on bar `i` — the
+ * bridge (pineAlertRules) sends the condition's *source* to the backend and the
+ * only way to prove both sides mean the same thing is to compare this series
+ * against the backend's verdict bar by bar.
+ */
+export interface PineAlertSeries {
+  /** 1-based source line of the call, so rule ids stay stable per call site. */
+  line: number;
+  fn: "alertcondition" | "alert";
+  /** `alertcondition`'s `title` (empty for `alert`, which has none). */
+  title: string;
+  message: string;
+  /** Length == bars run; `na` conditions count as false. */
+  hits: boolean[];
+}
+
 export interface PineInput {
   /** Bound variable name, so the formula can keep referring to it. */
   varName: string;
@@ -302,6 +320,13 @@ export interface PineResult {
    * MTF.5 producer); absent when the script never calls it.
    */
   lowerTfMs?: number[];
+  /**
+   * `alertcondition()` / `alert()` call sites and their per-bar hits, in
+   * declaration order. Absent when the script declares no alert — never an
+   * empty array, so consumers can tell "no alerts" from "one alert that never
+   * fired".
+   */
+  alerts?: PineAlertSeries[];
 }
 
 /** Bar data the runtime needs beyond OHLCV. */

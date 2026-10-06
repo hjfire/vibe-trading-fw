@@ -40,6 +40,7 @@ import {
   sentinel,
   strArg,
   type BuiltinCtx,
+  type PineAlertSeries,
   type PineBars,
   type PineInput,
   type PineLine,
@@ -235,6 +236,13 @@ export class PineRuntime {
   private readonly fillSeen = new Set<string>();
   /** Resolutions requested by `request.security_lower_tf`, for the mount layer. */
   private readonly lowerTfSeen = new Set<number>();
+  /**
+   * `alertcondition()` / `alert()` call sites in declaration order, keyed by cid
+   * so a call site reached twice in one bar (inside a loop) still writes one
+   * series rather than duplicating.
+   */
+  private readonly alerts: PineAlertSeries[] = [];
+  private readonly alertByCid = new Map<number, PineAlertSeries>();
 
   private readonly params: number[];
   private readonly opLimit: number;
@@ -1470,6 +1478,61 @@ export class PineRuntime {
     return out;
   }
 
+  /* ----------------------------------------------------------------- alerts */
+
+  private ensureAlert(
+    cid: number,
+    fn: "alertcondition" | "alert",
+    line: number,
+    title: string,
+    message: string,
+  ): PineAlertSeries {
+    let s = this.alertByCid.get(cid);
+    if (!s) {
+      s = {
+        line,
+        fn,
+        title,
+        message,
+        hits: new Array<boolean>(this.bars.list.length).fill(false),
+      };
+      this.alertByCid.set(cid, s);
+      this.alerts.push(s);
+    } else if (!s.message && message) {
+      // A ternary message reads as '' on the bars where it is off; keep the
+      // first real text so the panel shows what the alert would actually say.
+      s.message = message;
+    }
+    return s;
+  }
+
+  /**
+   * `alertcondition(condition, title, message)` / `alert(message, freq)` — the
+   * interpreter's own verdict for every bar, recorded so the alert bridge can be
+   * reconciled against the backend's evaluation of the same condition. `na` and
+   * missing conditions count as false, never as an error.
+   */
+  private doAlert(node: Extract<Expr, { k: "call" }>): V {
+    const isCondition = node.name === "alertcondition";
+    const fn: "alertcondition" | "alert" = isCondition ? "alertcondition" : "alert";
+    const args = node.args;
+    const message = strArg(args, this.ctx, isCondition ? 2 : 0, "", "message");
+    const s = this.ensureAlert(
+      node.cid,
+      fn,
+      node.line,
+      isCondition ? strArg(args, this.ctx, 1, "", "title") : "",
+      message,
+    );
+    let hit = message !== "";
+    if (isCondition) {
+      const cond = argAt(args, 0, "condition", "series");
+      hit = cond !== undefined && isTrue(this.val(cond));
+    }
+    s.hits[this.bi] = hit;
+    return sentinel("void");
+  }
+
   /* --------------------------------------------------------------- dispatch */
 
   private dispatch(node: Extract<Expr, { k: "call" }>): V {
@@ -1520,8 +1583,7 @@ export class PineRuntime {
         return this.doBarColor(args);
       case "alertcondition":
       case "alert":
-        this.warn(`${name}() 提醒在前端不起作用，已忽略`);
-        return nothing;
+        return this.doAlert(node);
       case "source":
         return args.length ? this.val(args[0].value) : NA;
     }
@@ -2367,6 +2429,7 @@ export class PineRuntime {
     };
     if (this.precision !== undefined) result.precision = this.precision;
     if (this.lowerTfSeen.size) result.lowerTfMs = [...this.lowerTfSeen];
+    if (this.alerts.length) result.alerts = this.alerts.slice();
     if (this.kind === "strategy") result.report = this.sim.report();
     return result;
   }

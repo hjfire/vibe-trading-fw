@@ -152,14 +152,14 @@ describe("dialect dispatch", () => {
       {
         id: "w4",
         label: "x",
-        code: '//@version=5\nindicator("deco")\nplot(close, "c")\nalertcondition(close > open, "t", "warm")\n',
+        code: '//@version=5\nindicator("deco")\nplot(close, "c")\nindicator.overrides.reset_all()\n',
         params: [],
         kind: "pane",
       },
       (m) => notes.push(m),
     );
     expect(err).toBeNull();
-    expect(notes.join(" ")).toContain("alertcondition");
+    expect(notes.join(" ")).toContain("indicator.overrides.reset_all");
     // ⑲: pane mounts carry the stable `sub:<name>` pane id, not a fresh random one.
     expect(chart.createIndicator).toHaveBeenCalledWith({
       name: indicatorName("w4"),

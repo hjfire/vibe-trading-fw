@@ -547,7 +547,7 @@ export function resolveBareConstant(name: string): V | undefined {
 export function isDecorativeName(name: string): boolean {
   return (
     /^(label|line|box|table|marker|sprite|chart|request|strategy\.risk|strategy\.allow_entry|indicator\.overrides)\./.test(name) ||
-    /^(alert|alertcondition|syntax\.functions)$/.test(name)
+    /^(syntax\.functions)$/.test(name)
   );
 }
 
