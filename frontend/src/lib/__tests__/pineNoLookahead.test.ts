@@ -26,18 +26,37 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * series, marker value/text/side, hline prefix, `bg`/`bar`/`fill` colour
  * projections, alert hits, strategy equity/positions — is either (a) named in
  * `LOOKAHEAD_REGISTER`, with the channel and the mechanism, or (b) red. On those
- * channels nothing is averaged and nothing is tolerated.
+ * channels nothing is averaged and nothing is tolerated. (The CHANNEL a row claims is
+ * machine-checked for the line family only — see the `channel` limit in the register
+ * section below, which is stated as a limit rather than smoothed over.)
  *
  * What IS skipped, and where the number for it lives: three record families are
  * not bar-indexed and are therefore not compared — mutable `label`/`line`/`box`
  * objects, the `hline` tail past the prefix's own count, and `table` cells. They
- * are never skipped silently: each one is counted, named on the wall under
- * `exempted:` (measured 2026-10-07: `live-objects=1848`, `after-cut-objects=4`,
- * `after-cut-end-created=1`, `hlines-tail-skipped=0`, `tables-skipped=0`) and
- * pinned by the assertions at the bottom of this file, so a skip can only grow
- * by somebody reading a number and raising a ceiling. "Nothing is averaged,
- * tolerated or skipped" would be false as an unconditional sentence; it is true
- * of the compared channels and the inventory beside it is the proof.
+ * are never skipped silently: each one is counted and named on the wall — the
+ * drawing/hline/table families under `exempted:`, the legal all-`na` warm-up drop
+ * under `compared:` as `na-dropped=` — and every counter on those two lines carries
+ * a gate at the bottom of this file, of one of two kinds. CEILINGS (a measured
+ * number somebody has to raise before it may grow): `live` total, three of the four
+ * buckets it decomposes into (`mutating`, `run-end-built`, `existence`), the
+ * sub-count `existence-anchor-below-k` that says how much of `existence` sits below
+ * its own cut, `na-dropped`, `after-cut-objects` and `after-cut-end-created`.
+ * EXACT ZERO (that skip may not appear at all): the fourth bucket `unexplained`,
+ * `after-cut-unexplained`, `hlines-tail-skipped`, `tables-skipped`. The identity that
+ * makes the four buckets ADD UP to `live` is asserted as well, so an exemption cannot
+ * migrate from one bucket to another without moving a capped number, and `aborted` is
+ * pinned by its exact sorted LIST rather than by a count. Measured 2026-10-07 on the
+ * delivered bytes: `live-objects=1848 (mutating=238 run-end-built=892
+ * existence=718 existence-anchor-below-k=288 unexplained=0)`, `na-dropped=71`,
+ * `after-cut-objects=4`, `after-cut-end-created=1`, `after-cut-unexplained=0`,
+ * `hlines-tail-skipped=0`, `tables-skipped=0`. The strict side of the object channel
+ * is fenced from the other end too, by a measured floor on
+ * `drawings / (drawings + live)` (≥15%, today 368/2216 = 16.6%). So a skip on this
+ * inventory can only grow by somebody reading a number and raising the cap over it —
+ * which is what THIS sentence is scoped to, and nothing more: the compared channels
+ * are the ones with zero tolerance, not these record families. "Nothing is averaged,
+ * tolerated or skipped" would be false as an unconditional sentence; it is true of the
+ * compared channels and the inventory beside it is the proof.
  *
  * ── Comparison surface (what 逐项相等 means here, and what is left out) ──
  * Compared, index-aligned over bars [0, k), with `na` matching only `na` and
@@ -105,36 +124,98 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * the run ENDS, not on which bars it read. `label[59]` in the k=60 run and
  * `label[299]` in the full run are the same object at two different ends of
  * the same mutation sequence, and neither one is "the value at bar 59". The
- * harness decides this per (script, k) from two measured signals and never from
- * a filename list:
- *   · the MUTATION MECHANISM, read off the script's own source
- *     (`OBJECT_MUTATION_RE`, inventoried on the wall by
- *     `mutation calls in corpus source:`) — this alone excuses a record whose
- *     CONTENT differs at this very k (`mutating=1130`). Variance across runs is
- *     NOT what excuses it any more; an object that changes with no such call
- *     behind it is reported (`unexplained=`, measured 0, pinned at 0).
+ * harness decides this per (script, k) from measured signals and never from a
+ * filename list. Three arms, tried in this order, each with its own counter, its
+ * own ceiling and its own mechanism claim:
+ *   · MUTATION, FIELD BY FIELD (`mutating=238`): a record whose CONTENT differs
+ *     at this k is excused only when every field that actually differs is one a
+ *     call this script's source contains can WRITE — `PROPS_OF_OP` is the engine's
+ *     own `applyDrawOp` switch (`pineRuntime.ts:2127-2196`) and
+ *     `RECORD_FIELD_OF_PROP` is `emitDrawings`' record shape
+ *     (`pineRuntime.ts:2222-2247`), so the mapping is read off the engine, not
+ *     guessed. `label.set_text` therefore excuses `text`, `set_xy` excuses
+ *     `bar`/`price`, and `delete` excuses NOTHING here: it writes only the
+ *     `deleted` flag, which can explain a record being ABSENT, never a record whose
+ *     fields differ. Round 1 of this file keyed the excuse on the KIND alone, so
+ *     one `label.set_text` excused every label in the script and the corpus's
+ *     rolling-buffer `line.delete(l[1])` idiom
+ *     (`statistics/gaps_percent_size_distribution.pine:82,100`) was carrying
+ *     content differences it cannot explain. The previous build printed that as
+ *     `mutating=1130`; this one prints `mutating=238 run-end-built=892` — the same
+ *     1 130 records, split by the mechanism that actually reaches each one, and
+ *     `live-objects=` is 1 848 either way. Read that as what this round did and
+ *     what it did not do: it stopped a `delete` from excusing a FIELD it cannot
+ *     write and named the construction mechanism that was hiding inside the
+ *     mutation excuse; it did not shrink the exemption, because the records are
+ *     still run-end dependent and still not comparable. Variance across runs is NOT
+ *     what excuses a CONTENT difference, and neither is a call that cannot write the
+ *     field; an object that changes with no explaining call is reported
+ *     (`unexplained=`, measured 0, pinned at 0). That last clause is MEASURED, not
+ *     just constructed: canary ⑥ below takes `delete` out of the source scan on a
+ *     copy of these delivered bytes, and `unexplained` does not rise above that 0 —
+ *     the whole `exempted:` line stays `live-objects=1848 (mutating=238
+ *     run-end-built=892 existence=718 existence-anchor-below-k=288 unexplained=0)`
+ *     unchanged to the digit, and the only thing that moves is the printed inventory
+ *     of calls. A `delete`-free scan cannot convict a record, because a `delete`
+ *     never excused one.
+ *   · RUN-END CONSTRUCTION (`run-end-built=892`), for the content differences no
+ *     call writes: the script has a `barstate.islast` block, constructs this kind
+ *     (`label.new(`/`line.new(`/`box.new(`), and the MEASURED per-kind record count
+ *     grows with the run (`59/119/179/239/298` for that file's `line`), so index
+ *     `i` of the k=60 run and index `i` of the full run are the i-th object of two
+ *     different construction passes — their args were evaluated at two different
+ *     ends, e.g. `time[149]` is `na` in the shorter run and a real timestamp in the
+ *     full one, which is how that file's column lands at `line|0|0|0|0|…` versus
+ *     `line|149|0|149|0|…`. This is the object-channel hole the design §10 ruling
+ *     accepted, and it is named, counted and capped HERE rather than folded into
+ *     the mutation excuse; a source scan cannot localise it to the block, because
+ *     the construction sits in the `_line()`/`_label()` helpers that the
+ *     `barstate.islast` block calls. A look-ahead in a script that does NOT rebuild
+ *     its objects at the run end still lands in `unexplained` and reddens.
  *   · an identity-level EXISTENCE flag, walked over ALL SIX runs
  *     (k=60/120/180/240/299 and the full 300) — this excuses only records whose
  *     very PRESENCE moves with the end of the run (`existence=718`), where index
- *     pairing carries no information for an anchor check to convict. Their
- *     anchors are still MEASURED: `existence-anchor-below-k=288` is that hole
- *     printed and pinned, not argued away.
- * Exempted records are counted, printed per identity
- * (`370 (script, identity) pairs exempted, 658 reason rows`) and left out of the
- * content comparison — the same honest treatment `table` gets, for the same
- * reason. What stays strict for those scripts is everything else, at zero
- * tolerance: every series, marker, hline, alert and strategy curve. A
- * look-ahead that only ever shows up in a mutable label would be invisible to
- * this harness and to Bar Replay alike — the chart's price data, and what replay
- * steps through, are the series.
- * HOW MUCH THAT EXEMPTION COULD ABSORB, measured rather than asserted (2026-10-07,
- * scratch copy of this file outside the repo tree, both signals above forced
- * empty so object records are compared like any other channel): the same corpus
- * and the same bars give `passed=194 mismatched=16` and `diffs collected=2404`,
- * i.e. 12 more scripts go red beyond the 4 registered ones and 1 418 more diff
- * records appear (`unexplained=1130`, `after-cut-unexplained=288`). That is the
- * size of the hole this exemption holds open, on the record; the first assertion
- * to fire in that build was `expect(c.liveUnexplained).toBe(0)` at 1130.
+ *     pairing carries no information for an anchor check to convict. THIS arm is
+ *     still the cross-run variance signal: what the two content arms above lost is
+ *     the power to excuse a CONTENT difference by variance, not the existence one.
+ *     Their anchors are still MEASURED: `existence-anchor-below-k=288` is that hole
+ *     printed and pinned, not argued away. Which side of the pairing the records sit
+ *     on is measured too: in the forced build below the prefix-only arm is NOT part
+ *     of the forcing (it excuses unconditionally) and that build still prints
+ *     `existence=0`, so today every one of the 718 comes from the full-run-only side
+ *     — a record the shorter runs never reached — while `a && !b`, the shape a
+ *     `delete` between `k` and the end of the run leaves behind, fires on 0 records
+ *     on this corpus. It is kept because the shape is real in the engine
+ *     (`emitDrawings` drops a deleted object from the walk,
+ *     `pineRuntime.ts:2220-2221`) and no rule here can promise the corpus will keep
+ *     not producing it; what the measurement promises is only that if it starts, the
+ *     count moves under a cap somebody has to raise.
+ * Exempted records are counted, printed per identity (the wall's
+ * `live drawing objects (run-end dependent: …)` block names the (script, identity)
+ * pairs and the reason each one carries) and left out of the content comparison —
+ * the same honest treatment `table` gets, for the same reason. What stays strict
+ * for those scripts is everything else, at zero tolerance: every series, marker,
+ * hline, alert and strategy curve. A look-ahead that only ever shows up in a
+ * mutable label would be invisible to this harness and to Bar Replay alike — the
+ * chart's price data, and what replay steps through, are the series.
+ * HOW MUCH THAT EXEMPTION COULD ABSORB, measured rather than asserted: re-run
+ * 2026-10-07 on a scratch copy of THIS build with all three content signals
+ * forced empty (`mutators`, `creators`, `live`) so no arm has anything to excuse
+ * with and object records are compared like any other channel. Same corpus, same
+ * bars: `scripts=210 passed=194 mismatched=16`, `diffs collected=2404 across 16
+ * files`, and the wall reads `live-objects=1130 (mutating=0 run-end-built=0
+ * existence=0 existence-anchor-below-k=0 unexplained=1130)
+ * after-cut-objects=434 after-cut-end-created=1 after-cut-unexplained=288`.
+ * Twelve more scripts go red beyond the 4 registered ones and 1 418 more diff
+ * records appear — and `1130 = 238 + 892` is exactly the two content arms this
+ * file splits today, which is the point of splitting them: the hole did not
+ * shrink, it got a mechanism on every part of it. The first `expect` to fire was
+ * again `expect(c.liveUnexplained).toBe(0)`, at 1130. `informative-scripts`
+ * printed 191 rather than 192 for one reason worth naming: the forced build makes
+ * `statistics/gaps_percent_size_distribution.pine` a mismatched file, and
+ * mismatches are not counted as covered. The mechanism guard printed
+ * `registered=16 line-hits=986 违例=12` — 12 of those 16 files have no register
+ * row, so the extra red cannot be waved through as "already known".
  * Records that are frozen across all six runs are compared by content like
  * anything else, and records created after the cut are counted, not compared.
  *
@@ -269,6 +350,18 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * mismatching goes red, and a script that gets fixed also goes red until
  * somebody shrinks the register, so the list cannot silently rot in either
  * direction. Everything outside it keeps zero tolerance in both buckets.
+ * The limit on the CHANNEL check, stated because the table behind it is
+ * degenerate today: each row's `channel` is compared against the channel the
+ * difference was MEASURED on, and that measurement only exists for line records —
+ * both `MechHit` shapes come out of `cmpLines` and both map to `"line"`, so the
+ * derived set can literally only ever answer `line`. The assertion is therefore
+ * one-way: it convicts a row whose differences STOPPED being line-channel (a row
+ * claiming `line` while the measured set is empty, or a file that no longer
+ * mismatches at all), but it cannot CONFIRM a marker or alert channel, because no
+ * marker/alert difference is recorded as a `MechHit` at all. A marker-channel row
+ * would be checked by hand until someone adds the matching shapes; what still
+ * convicts any non-negative-offset difference on a registered file is the two-way
+ * list check plus the mechanism predicate below, not the channel word.
  * `statistics/dividends_per_share_dps_yearly.pine` and
  * `statistics/earnings_per_share_eps_yearly.pine` use the same negative-offset
  * idiom (`space = 8`, columns at `offset = (-i * space)`, i = 1 … 20) but are NOT
@@ -280,13 +373,44 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * whole run and `build()` drops them on BOTH sides; the engine's own warning for
  * each of the two files says it: 「20 条 plot 全区间无数据，已隐藏」.
  * They are NOT `na`-only scripts, though — the measured run puts both in the
- * informative 192, not in the printed 14 (that list is built in sorted file
- * order, and both names sort ahead of position 10,
- * `statistics/gaps_percent_size_distribution.pine`, which IS printed, so their
- * absence from it is what proves they were informative). Nothing is being waved
+ * informative 192, not in the printed 14. That list is collected in sorted file
+ * order, and both names sort AHEAD of `statistics/kendall_rank_correlation_coefficient.pine`,
+ * the tenth entry of the list, which IS printed — so their absence from it is what
+ * proves they were informative. The delivered file does not rest on that sorting
+ * argument: both names are pinned out of the `non-informative` list by an assertion
+ * beside the floors, so the sentence below fails loudly rather than quietly if one of
+ * them ever goes `na`-only. Nothing is being waved
  * through a vacuous pass: their offset-0 series really was compared bar for bar,
  * and it is only the shifted columns that carry no value on these 300 bars. They
  * enter the register the moment one of them does.
+ * What counts as INFORMATIVE is itself a rule, and it is worth stating site by site
+ * because the number is read as "the comparison was not vacuous here". A script is
+ * informative when at least one comparison inside the window MATCHED on something
+ * with a value in it, at any of the places that set the flag: a finite bar value on a
+ * number series (`cmpNumbers`), a non-empty marker `texts` entry or a `true` alert hit
+ * (`cmpSeries`, whose own predicate decides — the marker `up` channel is deliberately
+ * given a predicate that never earns coverage, because the engine's default `true` is
+ * not a value), an equal `hline` pair (`cmpHlines`), a non-null per-bar colour in the
+ * `bg`/`bar` projection, a `fill` band with at least one point in the window, or an
+ * object record that matched at this k AND carries a finite value
+ * (`recordCarriesValue`, arm 1 of `cmpObjectDrawings`: a finite `price` for a `label`,
+ * a finite `y1`/`y2` for a `line`/`box`). The object arm is the one this round
+ * tightened, because a drawing record is emitted as soon as its coordinates are merely
+ * DEFINED (`o.y !== undefined`, `pineRuntime.ts:2223-2238`): agreement on a bare
+ * `label|0|na|…` placeholder used to be able to mark a script covered on its own, and
+ * now cannot — so `informative-scripts=192` does NOT include that weaker form any
+ * more. What it still does include, and nobody should mistake for a per-bar value, is
+ * the `hline`-pair and colour-projection arms above: those are matched channels whose
+ * records carry no bar-indexed number of their own. Measured on this corpus the
+ * tightening costs nothing and, so far, buys nothing: the build this round replaced
+ * and this one both print `informative-scripts=192` with a byte-identical 14-name
+ * `non-informative` list, because every script that reaches the equal-state arm also
+ * has at least one value-carrying comparison here. One further limit worth naming:
+ * only PASSED scripts are sorted into the two buckets — `informative` +
+ * `non-informative` = `passed` is asserted — so a mismatched file never counts as
+ * covered, which is exactly why the forced build below prints 191 rather than 192.
+ * The flag says a comparison was not vacuous, not that it was large; the size floors
+ * are per-script averages rather than a story about this list.
  *
  * ── Missing input is an incident, never a skip ──
  * The corpus is local-only (`frontend/.gitignore:9`), like
@@ -294,54 +418,67 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * harness: a walk that finds fewer than 100 scripts THROWS. There is no
  * `describe.skipIf` and no early return, because a guard that compares nothing
  * passes, and a guard that cannot fail is worse than no guard. Its red capability
- * was proven before its floors were trusted, five ways, on 2026-10-07 against
- * this file and this corpus — baseline green FIRST so any red below is
- * attributable to the edit and not to the machine (`scripts=210 passed=206
- * mismatched=4 crashed=0`, rc=0 — the green runs of this build measured 25.2–25.8 s
- * of comparing, 27.2–28.2 s for the file). Each edit then went
+ * was proven before its floors were trusted, seven ways on 2026-10-07 against
+ * this harness and this corpus (each entry below names WHICH build of this file it
+ * was run against) — six of them red, the seventh (⑥, the `delete` arm)
+ * a measurement whose finding is that it does NOT redden. Baseline green FIRST so
+ * any red below is attributable to the edit and not to the machine (`scripts=210 passed=206
+ * mismatched=4 crashed=0`, rc=0 — five green runs are logged for this build and they
+ * measured 25.17–25.63 s of comparing (`tests`) and 27.25–28.34 s for the file; the
+ * timing is reported, not gated, and no assertion below depends on it). Each edit then went
  * red, was reverted, and printed those same numbers again:
  *   · ① the window itself — `cmpNumbers`' per-bar loop walked `i <= k` instead of
  *     `i < k`, comparing the first `k+1` entries instead of the first `k` (the
- *     shift, not the tolerance, is what this gate exists to catch). RED, rc=1:
- *     `passed` 206 → 18, `mismatched` 4 → 192, `diffs collected=2624`, and every
- *     fresh diff spells the off-by-one out — `line 系列2#0：第 60 根 前缀=缺项
- *     全量=0`, a bar the prefix was never fed. The first `expect` to fire was the
- *     informativeness floor: 「真有值在比的脚本数（实测 191）」 expected 3 to be
- *     greater than or equal to 180. Said plainly: ① was run against the build
- *     THIS one replaced, and both halves of that message have since been rewritten
- *     — the floor is `informativeScripts >= ran * 0.85` (an absolute 180 could
- *     swallow a corpus that shrank) and the message is computed, so it now reads
- *     「真有值在比的脚本数不得低于跑通脚本的 85%（实测 192/210 = 91%）」. The edit
- *     would still fire that floor first; it was not re-run against this build, and
- *     the 180 quoted above is the old absolute one. What did not change is the
- *     rest of the evidence: the ledger had 188 unregistered files to name as well
- *     and said so on the wall before any assertion ran
- *     (`mismatched: plain=188 mtf=4 register=192`), and the mechanism guard
- *     printed 违例=192 — a diff that is not the registered negative-offset branch
- *     cannot hide behind a row either.
+ *     shift, not the tolerance, is what this gate exists to catch). Re-run
+ *     2026-10-07 against THIS build, on a scratch copy. RED, rc=1:
+ *     `scripts=210 passed=18 mismatched=192 crashed=0`
+ *     (`mismatched: plain=188 mtf=4 register=192`), `diffs collected=2624 across
+ *     192 files`, and every fresh diff spells the off-by-one out — the collapsed
+ *     shape on the wall is literally `x5 line Upper#N：第 N 根 前缀=缺项 全量=N`,
+ *     i.e. index `k`, the bar the prefix run was never fed, where `p[k]` is
+ *     `undefined` and `fmt` prints 缺项. `values` went 460 826 → 462 464 (+1 638:
+ *     one bar walked on every series that got that far), which is exactly the work
+ *     this pin forbids. The object channel did not move (`exempted:` still
+ *     1848 / 238 / 892 / 718 / 288 / 0) — a series-loop edit has no business
+ *     changing it, and the wall agrees. The first `expect` to fire is the
+ *     informativeness floor, with the message computed as designed: 「真有值在比的
+ *     脚本数不得低于跑通脚本的 85%（实测 4/210 = 2%）」 expected 4 to be greater than
+ *     or equal to 179 — 192 files went mismatched, and of the 18 that stayed clean
+ *     only 4 still had a finite value inside the window. The mechanism guard named
+ *     the rest on the wall before any assertion ran
+ *     (`registered=192 line-hits=0 违例=192`): 188 of those files have no register
+ *     row, so a build that somehow survived the floor would still die on the
+ *     two-way register check — a diff that is not the registered negative-offset
+ *     branch cannot hide behind a row either.
  *   · ② the stale-row direction — a 5th `LOOKAHEAD_REGISTER` row pointing at
  *     `statistics/z_score.pine`, a file that does NOT mismatch. RED, rc=1, at
  *     `expect(stale, …).toEqual([])`, and the message names the offending row:
  *     「登记在册却没有再出现前缀≠全量」: expected [] / received
  *     ['statistics/z_score.pine']. The readout stayed `mismatched=4 passed=206`
  *     throughout — the row hid nothing, it only lied, and the gate reds a lie.
- *     Re-run 2026-10-07 against this build: red at the same `expect`, same readout.
+ *     BUILD: round 1 (1748 lines, `exempted:` read `mutating=1130`, no
+ *     `run-end-built`), NOT re-run against these bytes — the two-way register check it
+ *     exercises is byte-identical here, so the reading carries over, but it is that
+ *     build's reading and is named as one.
  *   · ③ the unregistered direction — deleting the `us_treasury_yields.pine` row.
  *     RED, rc=1, at `expect(unregistered, …).toEqual([])`: 「未登记的前缀≠全量」
  *     receiving ['statistics/us_treasury_yields.pine'] with three of that file's
  *     real `[mtf]` diff lines printed under it (offset=-8，第 52 根起分叉：
  *     前缀=na 全量=150.2017…). This is the one that proves the MTF bucket above is
  *     zero tolerance and not an exemption: strip its row and an MTF script goes
- *     red exactly like a plain one. Re-run 2026-10-07 against this build: red at
- *     the same `expect`, same three lines named.
- *   · ④ and ⑤ are the two new pins' own canaries — numbered after the three
- *     above, they are not the review findings of the same names. Both ran on a
- *     scratch COPY of this file outside the repo tree, so the shipped bytes never
- *     held a mutation:
+ *     red exactly like a plain one. BUILD: round 1 as well (same
+ *     `mutating=1130` wall, same three named diff lines), not re-run here — the
+ *     assertion it reddens is unchanged between the two builds.
+ *   · ④–⑦ are the pins' own canaries — numbered after the three above, they are
+ *     not the review findings of the same names. All four ran on a scratch COPY of
+ *     this file (a sibling directory of `src/`, imports rewritten, deleted after the
+ *     run), so the shipped bytes never held a mutation:
  *     ④ the `live` ceiling lowered from `1_848` to `1_847`. RED, rc=1, at exactly
  *     that `expect`: 「被豁免的对象画线记录总数（实测 1848）只许按登记的口径长」
  *     expected 1848 to be less than or equal to 1847. So `live-objects=1848` is a
- *     gate, not a caption.
+ *     gate, not a caption. BUILD: round 1 (`mutating=1130` on its wall); the ceiling
+ *     itself is the same 1 848 here, and ⑦ below is this build's bite-test for the
+ *     bucket ④'s total is now decomposed into.
  *     ⑤ finding ②'s old bug put back — branch 4's `an >= k` relaxed to
  *     `an !== undefined`, i.e. every full-run-only object record counted as
  *     "created after the cut" without its anchor being checked. RED, rc=1 at
@@ -351,13 +488,43 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  *     the anchor check decides WHICH pinned bucket a record lands in, and
  *     `after-cut-unexplained` itself stayed 0 under this mutation — the ceiling on
  *     `after-cut-objects` is what has the bite, so finding ② is closed by the pair
- *     (anchor is checked, bucket is capped), not by the 0 alone.
+ *     (anchor is checked, bucket is capped), not by the 0 alone. BUILD: round 1
+ *     again, not re-run against these bytes; branch 4's anchor check and the `4`
+ *     ceiling are both unchanged here, and the delivered wall still prints
+ *     `after-cut-objects=4 after-cut-end-created=1 after-cut-unexplained=0`.
+ *     ⑥ the `delete` arm taken out of the source scan — `OBJECT_MUTATION_RE`
+ *     relaxed from `(?:set|delete)[a-z0-9_]*` to `set[a-z0-9_]*`, so
+ *     `label.delete(…)`/`line.delete(…)` are no longer found as calls this script
+ *     makes. GREEN — all three of that copy's tests passed — and not one count
+ *     moved: `live-objects=1848
+ *     (mutating=238 run-end-built=892 existence=718 existence-anchor-below-k=288
+ *     unexplained=0)`, `passed=206 mismatched=4`, `diffs collected=986`. The only
+ *     line that changed was the inventory itself — `mutation calls in corpus
+ *     source:` lost `line.delete=13, label.delete=13` — and the reason rows that
+ *     quote the call list read `set_x/set_text/set_tooltip` instead of
+ *     `delete/set_x/set_text/set_tooltip`. That is the answer to "was `delete`
+ *     load-bearing?": no, and by construction it cannot be — `PROPS_OF_OP.delete`
+ *     is the empty list, so the field-scoped rule hands a `delete` no excusable
+ *     FIELD at all, which is exactly what the round-1 kind-keyed rule had been
+ *     spending. The arm stays in the scan because the wall's inventory should read
+ *     like the corpus, and because the EXISTENCE branch is where a `delete` does
+ *     earn its exemption (`pineRuntime.ts:2220-2221`).
+ *     ⑦ the `run-end-built` ceiling lowered from `892` to `891`, the new bucket's
+ *     cap proven the same way ④'s was. RED, rc=1, at exactly that `expect`:
+ *     「内容差异被「run 末端重建」豁免掉的记录数（实测 892）…」 expected 892 to be
+ *     less than or equal to 891, readout otherwise unchanged to the digit. So the
+ *     arm this round added is capped by a gate, not by a caption.
  * After every revert the harness file was byte-identical to the pre-canary
  * snapshot again (`diff` empty, md5 unchanged) before the next edit, so the
- * proofs are independent of each other; ④⑤ needed no revert, being copies. The
- * printed `[no-lookahead]` block is the evidence each edit leaves behind, and
- * ②③④⑤ were run against this build while ① was run against the build it replaced.
- * They are a record of runs, not a claim about one.
+ * proofs are independent of each other; ④–⑦ needed no revert, being copies. The
+ * printed `[no-lookahead]` block is the evidence each edit leaves behind, and the
+ * BUILD each canary was run against is now stated on the canary itself instead of
+ * being claimed for all seven at once: ①, ⑥, ⑦ and the hole-size measurement above
+ * ran against THIS build (① and ⑥ were run once more, 2026-10-07, on the final
+ * doc-only bytes — their entries carry that second reading), while ②, ③, ④ and ⑤
+ * belong to the round-1 build whose wall read `mutating=1130` with every other
+ * number identical, and are named as that. They are a record of runs, not a claim
+ * about one.
  */
 
 const CORPUS_DIR = resolve(
@@ -526,6 +693,16 @@ interface MechHit {
  * than from the register row's own self-report — that is what makes the
  * `channel` field of a row checkable (`LOOKAHEAD_REGISTER` says which surface the
  * difference shows up on; this says which surface it was actually seen on).
+ *
+ * Scope, stated because the table is degenerate today: both `MechHit` shapes come
+ * out of `cmpLines`, so this map can only ever answer `line`. The assertion is
+ * therefore one-way — it can catch a registered row whose differences stopped
+ * being line-channel (a row claiming `line` while the measured set is empty, or a
+ * row whose file no longer mismatches at all), but it CANNOT confirm a marker or
+ * alert channel, because nothing records a MechHit for those; a marker-channel
+ * difference on a registered file shows up as the `hits.length !== diffs.length`
+ * count mismatch above instead. Adding a marker/alert row means adding the
+ * matching `MechHit` shapes first — until then this is a line-channel check only.
  */
 const CHANNEL_OF_SHAPE: Record<MechHit["shape"], string> = {
   "line-diverges": "line",
@@ -567,11 +744,16 @@ interface Counts {
   drawings: number;
   /** Object drawings excluded as run-end dependent at this k (see drawing rule 2). */
   live: number;
-  /** …of `live`: content differs at this k AND the source mutates that kind (`set_*` / `delete`). */
+  /** …of `live`: content differs at this k AND every differing field is one a `set_*` call this
+   *  script's source contains can change (`excusableFields`; `delete` changes no field at all). */
   liveMutating: number;
+  /** …of `live`: content differs in fields no call writes, and the measured evidence is that the
+   *  whole object set of this kind is REBUILT as the run grows (see `cmpObjectDrawings` arm 2b). */
+  liveRunEndBuilt: number;
   /** …of `live`: one side is missing and the identity itself moves with the end of the run. */
   liveExistence: number;
-  /** …of `live`: content differs at this k with NO mutation call for that kind in the source → red. */
+  /** …of `live`: content differs at this k and some differing field is not attributable to any
+   *  call in the source (nor to a record created at the run's own end) → red. */
   liveUnexplained: number;
   /** …of `liveExistence`: that record's own anchor is below `k` — a hole measured on the wall, not argued. */
   liveExistenceBelowCut: number;
@@ -828,11 +1010,12 @@ function cmpMarkers(s: Sink, p: PineMarker[], f: PineMarker[], k: number, c: Cou
  * unchecked tail at k=60 could hide 240 bars of creations. Deepest cut, tightest
  * bound; the pin below is what turns "measured 0" into "stays 0".
  * Was the drop LIVE or LATENT on this corpus? Measured LATENT: `hlines-tail-skipped`
- * is 0 in every run of this build — the shipped green readout and both scratch
- * copies named in the canary list below (the one that switched the drawing
- * exemption off, `liveUnexplained` 0 → 1130, and the one that blinded this very
- * anchor check, `after-cut-objects` 4 → 5). No hline record has ever been dropped
- * invisibly here, and `tailRows` has never printed.
+ * is 0 in every run of this build that was logged — the shipped green readout, the
+ * hole-size build, and each of canary ①/⑥/⑦'s copies — and it was 0 in the round-1
+ * build's exemption-off and anchor-blinding runs too (those took `liveUnexplained`
+ * 0 → 1130 and `after-cut-objects` 4 → 5 respectively, and neither dropped an hline).
+ * No hline record has ever been dropped invisibly here, and `tailRows` has never
+ * printed.
  * The pin is still the only thing between a future tail and silence, so it is an
  * exact `toBe(0)`, not a ceiling with slack: a record that can be neither compared
  * nor attributed should cost somebody a red run and a paragraph.
@@ -892,7 +1075,139 @@ function drawKey(d: Draw): string {
   }
 }
 
-const OBJECT_KINDS: Draw["kind"][] = ["label", "line", "box"];
+const OBJECT_KINDS: readonly ("label" | "line" | "box")[] = ["label", "line", "box"];
+
+/**
+ * The compared fields of an object record, BY NAME: exactly what `drawKey` joins
+ * into a string, split back out so a difference can be attributed to a field
+ * instead of to the whole record. Same normalisation as `drawKey` (`num`/`fmt`),
+ * so `drawFields(a)` equals `drawFields(b)` field-for-field whenever their
+ * `drawKey`s are equal.
+ */
+function drawFields(d: Draw): Map<string, string> {
+  const num = (v: number | undefined) => (v === undefined ? "-" : fmt(v));
+  switch (d.kind) {
+    case "label":
+      return new Map([
+        ["bar", String(d.bar)],
+        ["price", num(d.price)],
+        ["text", d.text],
+        ["bg", d.bg ?? ""],
+        ["fg", d.fg ?? ""],
+      ]);
+    case "line":
+      return new Map([
+        ["x1", num(d.x1)],
+        ["y1", num(d.y1)],
+        ["x2", num(d.x2)],
+        ["y2", num(d.y2)],
+        ["color", d.color ?? ""],
+        ["width", num(d.width)],
+        ["dashed", d.dashed ? "1" : "0"],
+      ]);
+    case "box":
+      return new Map([
+        ["x1", num(d.x1)],
+        ["y1", num(d.y1)],
+        ["x2", num(d.x2)],
+        ["y2", num(d.y2)],
+        ["border", d.border ?? ""],
+        ["bg", d.bg ?? ""],
+      ]);
+    default:
+      // Not decomposable: this pass only ever sees `label`/`line`/`box`
+      // (`OBJECT_KINDS`), so any other record is compared as one anonymous field.
+      return new Map([["record", drawKey(d)]]);
+  }
+}
+
+/** The named fields in which two records of one identity differ (`[]` = no named
+ *  field differs, i.e. only the joined `drawKey` string differs — not excusable,
+ *  because nothing here can say WHAT changed). */
+function objectFieldDiff(a: Draw, b: Draw): string[] {
+  const fa = drawFields(a);
+  const fb = drawFields(b);
+  const out: string[] = [];
+  for (const [name, v] of fa) if (fb.get(name) !== v) out.push(name);
+  for (const name of fb.keys()) if (!fa.has(name)) out.push(name);
+  return out.sort();
+}
+
+/**
+ * Which engine properties each drawing operation writes — copied from
+ * `applyDrawOp`'s own switch (`pineRuntime.ts:2127-2196`), which is the ONLY way a
+ * `set_*`/`delete` call reaches a drawing object. `delete` writes nothing but the
+ * `deleted` flag: it can explain a record being ABSENT (`emitDrawings` skips
+ * deleted objects, `pineRuntime.ts:2220-2221`), never a record whose FIELDS
+ * differ — hence the empty list, and hence a `delete`-only script excuses no
+ * content difference at all. An operation missing from this table is the engine's
+ * `default:` arm (`pineRuntime.ts:2197-2199`, "harmless read, ignore"): the
+ * corpus's 2 `label.set_tooltip` calls are exactly that — the engine has no
+ * tooltip property and the compared record has no tooltip field, so they change
+ * nothing here and excuse nothing.
+ */
+const PROPS_OF_OP: Record<string, readonly string[]> = {
+  delete: [],
+  set_text: ["text"],
+  set_x: ["x"],
+  set_x1: ["x"],
+  set_left: ["x"],
+  set_y: ["y"],
+  set_y1: ["y"],
+  set_top: ["y"],
+  set_x2: ["x2"],
+  set_right: ["x2"],
+  set_y2: ["y2"],
+  set_bottom: ["y2"],
+  set_xy: ["x", "y"],
+  set_xy1: ["x", "y"],
+  set_xy2: ["x2", "y2"],
+  // `set_color` is kind-dependent in the engine (`pineRuntime.ts:2163-2166`): a
+  // label gets `bg`, anything else gets `color`. `RECORD_FIELD_OF_PROP` resolves
+  // the difference per kind, so listing both props over-excuses nothing.
+  set_color: ["bg", "color"],
+  set_border_color: ["color"],
+  set_bg_color: ["bg"],
+  set_text_color: ["fg"],
+  set_textcolor: ["fg"],
+  set_width: ["width"],
+  set_style: ["dashed"],
+};
+
+/** Which compared record field each engine property lands in, per kind — read off
+ *  `emitDrawings` (`pineRuntime.ts:2222-2247`): `o.x` → `label.bar` / `line.x1` /
+ *  `box.x1`, `o.y` → `label.price` / `line.y1` / `box.y1`, `o.color` → `line.color`
+ *  / `box.border`, and a property the kind's record does not carry (`fg` on a box,
+ *  `width` on a label) simply has no field to excuse. */
+const RECORD_FIELD_OF_PROP: Record<"label" | "line" | "box", Record<string, string>> = {
+  label: { x: "bar", y: "price", text: "text", bg: "bg", fg: "fg" },
+  line: { x: "x1", y: "y1", x2: "x2", y2: "y2", color: "color", width: "width", dashed: "dashed" },
+  box: { x: "x1", y: "y1", x2: "x2", y2: "y2", color: "border", bg: "bg" },
+};
+
+/** The fields the calls this script's source contains can actually change. */
+function excusableFields(kind: "label" | "line" | "box", calls: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  const props = RECORD_FIELD_OF_PROP[kind];
+  for (const op of calls) {
+    for (const p of PROPS_OF_OP[op] ?? []) {
+      const f = props[p];
+      if (f) out.add(f);
+    }
+  }
+  return out;
+}
+
+/** Does this record carry a FINITE value, as opposed to a bare `na` placeholder?
+ *  `label`/`line`/`box` records are emitted with their coordinates merely
+ *  DEFINED (`o.y !== undefined`, `pineRuntime.ts:2223-2238`), so `label|0|na|…`
+ *  is an empty placeholder: agreeing on one says nothing about the window, and it
+ *  must not mark a script covered. */
+function recordCarriesValue(d: Draw): boolean {
+  if (d.kind === "label") return Number.isFinite(d.price);
+  if (d.kind === "line" || d.kind === "box") return Number.isFinite(d.y1) || Number.isFinite(d.y2);
+  return true;
+}
 
 /**
  * The bar a drawing record is anchored to: `label` carries `.bar`, `line`/`box`
@@ -919,15 +1234,30 @@ function anchorOf(d: Draw): number | undefined {
  * `statistics/linear_regression_all_data.pine:39-40` is the case that sets the
  * DIGIT-suffixed `line.set_xy1` / `line.set_xy2`, which is why the method name is
  * `(set|delete)[a-z0-9_]*` and not `set_[a-z_]*` — a stricter class left those two
- * calls unseen and reddened 5 records whose mechanism was on the next line.
- * Keyed by the object kind the call names, value the distinct calls found.
+ * calls unseen and reddened 5 records whose mechanism was on the next line (that
+ * run belongs to the build this round replaced; what carries over is the reason the
+ * class is wide — the engine's own case labels are `set_xy1`/`set_xy2`,
+ * `pineRuntime.ts:2155,2159`, and this round's rule reads the SAME list to decide
+ * which fields may be excused, so a call the scan misses is a field nothing here can
+ * excuse).
+ * Keyed by the object kind the call names, value the distinct calls found;
+ * `excusableFields` turns that list into the FIELDS those calls can change, which
+ * is what the content exemption is granted on — the kind is only the scope of the
+ * search, never the exemption itself.
+ * `delete` is in this scan for two reasons and not a third: the wall's inventory
+ * should read like the corpus, and the EXISTENCE branch is where a `delete` does
+ * explain something (`emitDrawings` skips deleted objects,
+ * `pineRuntime.ts:2220-2221`). It is not in it because it excuses content:
+ * `PROPS_OF_OP.delete` is the empty list, and taking `delete` out of this regex
+ * changed not one count on this corpus — canary ⑥ in the header.
  *
  * Honest limits, stated because they are real: this is a SOURCE scan, so a
  * commented-out `label.set_text(` would satisfy it, and it says "this SCRIPT has
- * mutation calls for this KIND", not "this object identity was mutated after
- * bar k". What it does buy is that the exemption can no longer be granted by
- * variance alone — an object that changes with no such call in the source is
- * reported (`live-unexplained=`), not excused.
+ * mutation calls that reach this FIELD", not "this object identity was mutated
+ * after bar k". What it does buy is that the exemption can no longer be granted by
+ * variance alone, nor by a call that cannot write the field that differs — an
+ * object that changes in a way nothing in the source explains is reported
+ * (`live-unexplained=`), not excused.
  */
 const OBJECT_MUTATION_RE = /(?:^|[^.\w])(label|line|box)\.((?:set|delete)[a-z0-9_]*)\s*\(/g;
 
@@ -936,8 +1266,10 @@ const OBJECT_MUTATION_RE = /(?:^|[^.\w])(label|line|box)\.((?:set|delete)[a-z0-9
  * `barstate.islast` present (`statistics/gaps_percent_size_distribution.pine:119`
  * opens the histogram block that calls `_line()`/`_label()`, and
  * `utils/unit_testing_framework.pine` / `statistics/linear_regression_all_data.pine`
- * are the other two). It is used ONLY as a conjunct with `createdAfterEveryPrefix`
- * below, never as a blanket exemption.
+ * are the other two). It is never a blanket exemption: both places that read it
+ * pair it with measured conjuncts — `createdAfterEveryPrefix` in branch 4's
+ * end-created verdict, and `creators` + `rebuiltAsItGrows` in arm 2b's
+ * run-end-construction verdict.
  */
 const RUN_END_RE = /barstate\.islast/;
 
@@ -948,6 +1280,23 @@ function measureObjectMutators(src: string): Map<string, string[]> {
     if (!calls.includes(m[2])) calls.push(m[2]);
     out.set(m[1], calls);
   }
+  return out;
+}
+
+/** Which object kinds this script constructs at all (`label.new(` / `line.new(` /
+ *  `box.new(`). Paired with `RUN_END_RE` and the measured per-kind record counts
+ *  (`rebuiltAsItGrows`) this is the evidence for the second content mechanism in
+ *  `cmpObjectDrawings` arm 2b — construction, not mutation. A source scan cannot
+ *  tell WHERE the construction runs: `statistics/gaps_percent_size_distribution.pine`
+ *  builds its columns in the `_line()`/`_label()` helpers (lines 70-96) which the
+ *  `if barstate.islast` block calls at line 131-133, so the `.new(` text sits in a
+ *  function body, not inside the block. The count conjunct below is what pins it
+ *  down to behaviour rather than leaving it at "the file mentions islast". */
+const OBJECT_CREATE_RE = /(?:^|[^.\w])(label|line|box)\.new\s*\(/g;
+
+function measureObjectCreators(src: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of src.matchAll(OBJECT_CREATE_RE)) out.add(m[1]);
   return out;
 }
 
@@ -1006,7 +1355,7 @@ function measureKindCounts(prefixes: (PineResult | null)[]): Map<string, number[
  *       was running;
  *   (b) the per-kind count is non-decreasing with run length — `emitDrawings`
  *       walks `drawObjs.values()` in INSERTION order and skips deleted objects
- *       (`pineRuntime.ts:2223`), so a count that only grows means index `i` is a
+ *       (`pineRuntime.ts:2220-2221`), so a count that only grows means index `i` is a
  *       SUFFIX append, not a renumbered survivor.
  * Used with `RUN_END_RE` (source) this is what makes
  * `statistics/gaps_percent_size_distribution.pine`'s 299th histogram column
@@ -1017,6 +1366,24 @@ function measureKindCounts(prefixes: (PineResult | null)[]): Map<string, number[
 function createdAfterEveryPrefix(counts: number[] | undefined, i: number): boolean {
   if (!counts || !counts.length) return false;
   if (!counts.every((n) => n <= i)) return false;
+  for (let j = 1; j < counts.length; j++) if (counts[j]! < counts[j - 1]!) return false;
+  return true;
+}
+
+/**
+ * Is this kind's object set REBUILT as the run grows? Measured over the five
+ * prefixes: non-decreasing counts AND strictly more records at the longest prefix
+ * than at the shortest (`statistics/gaps_percent_size_distribution.pine`'s `line`:
+ * 59/119/179/239/298). That shape is what a run-end construction pass leaves
+ * behind — the object set is a function of where the run ENDED — and it is what
+ * makes index `i` of the k=60 run and index `i` of the full run the i-th object of
+ * TWO CONSTRUCTIONS rather than one object one of the runs moved. A prefix that
+ * did not compile reports `Number.MAX_SAFE_INTEGER`, so the test fails and the
+ * exemption is not granted.
+ */
+function rebuiltAsItGrows(counts: number[] | undefined): boolean {
+  if (!counts || counts.length < 2) return false;
+  if (counts[counts.length - 1]! <= counts[0]!) return false;
   for (let j = 1; j < counts.length; j++) if (counts[j]! < counts[j - 1]!) return false;
   return true;
 }
@@ -1096,13 +1463,19 @@ function cmpBarIndexedDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Coun
   }
 }
 
-/** Everything the drawing pass needs beyond the counters: the two measured
- * signals and the row collectors that make each skip visible on the wall. */
+/** Everything the drawing pass needs beyond the counters: the five measured
+ * signals below (identity liveness, the per-kind mutation calls, the kinds the
+ * script constructs, the per-kind record counts of the five prefixes, and the
+ * `barstate.islast` flag) and the row collectors that make each skip visible on
+ * the wall. No arm reads a filename list. */
 interface Extras {
   /** Identity-level run-end dependence over all six runs (`measureObjectLiveness`). */
   readonly live: Map<string, string>;
-  /** Per-kind mutation calls found in this script's source (`measureObjectMutators`). */
+  /** Per-kind mutation calls found in this script's source (`measureObjectMutators`);
+   *  `excusableFields` turns them into the record fields they can write. */
   readonly mutators: Map<string, string[]>;
+  /** Object kinds this script constructs at all (`measureObjectCreators`). */
+  readonly creators: Set<string>;
   /** Per-kind record counts of the five prefixes, in `KS` order. */
   readonly kindCounts: Map<string, number[]>;
   /** Source contains `barstate.islast` (`RUN_END_RE`). */
@@ -1122,21 +1495,39 @@ interface Extras {
  * object at two ends of one mutation sequence. Four branches, narrowest first:
  *   1. equal at this k → compared like any other record (per-`k` exemption: a
  *      longer prefix mutating the object later no longer excuses this one);
- *   2. different content → excused only on the MECHANISM (the source mutates
- *      that kind); without it the difference is reported, not excused;
- *   3. prefix-only → the identity-level flag (deleted/rebuilt later) excuses it,
- *      and its absence is a contradiction between the two views → reported;
+ *   2. both sides have this index and the content differs → two arms, tried in
+ *      order and each with its own counter and ceiling: 2a FIELD BY FIELD, where
+ *      every field that actually differs must be one a call found in this script's
+ *      source can change (`excusableFields`, built from the engine's own
+ *      `applyDrawOp` switch) — a `delete` writes no field, so it never excuses this
+ *      arm; 2b RUN-END CONSTRUCTION, for the fields no call writes, gated on three
+ *      measured conjuncts (`barstate.islast` in the source, this kind constructed,
+ *      this kind's record count non-decreasing and growing with the run). Nothing
+ *      explaining it → reported, not excused (`live-unexplained`, pinned at 0);
+ *   3. prefix-only → the identity-level flag excuses the record's ABSENCE. The
+ *      flag is set by construction here (`a && !b` is precisely the shape
+ *      `measureObjectLiveness` records), so there is no second path in this branch
+ *      and this file deletes provably-dead code instead of commenting it;
  *   4. full-only → the identity flag excuses the re-counted creation order (its
  *      anchor measured, printed and pinned); otherwise the anchor is CHECKED:
  *      `>= k` after-cut, `< k` either end-created (`barstate.islast` + an index no
  *      shorter run reaches — `anchorOf` is a coordinate, not a creation bar) or RED.
- * Branch 4's measured outcome today: 4 records `>= k`, 1 record end-created, 0 red.
+ * Measured outcome per branch on this corpus, 2026-10-07: 2a excuses 238 records,
+ * 2b excuses 892, branch 3 fires on NONE (all 718 existence records are full-only
+ * ones from branch 4 — the header's forced-build measurement shows it, because that
+ * build empties the liveness map but not this unconditional arm, and still prints
+ * `existence=0`), branch 4 gives 4 records `>= k`, 1 end-created and 0 red, and
+ * `unexplained` is 0 in both content paths. So `live` = 238 + 892 + 718 = 1848, and
+ * the identity assertion at the bottom of the file makes those buckets add up to it
+ * on every run. Branch 1's compared records are inside the wall's `drawings=368`,
+ * which also counts rule 1's `fill` comparisons.
  */
 function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, x: Extras): void {
   for (const kind of OBJECT_KINDS) {
     const ps = p.filter((d) => d.kind === kind);
     const fs = f.filter((d) => d.kind === kind);
-    const calls = x.mutators.get(kind);
+    const calls = x.mutators.get(kind) ?? [];
+    const excusable = excusableFields(kind, calls);
     for (let i = 0; i < Math.max(ps.length, fs.length); i++) {
       const a = ps[i];
       const b = fs[i];
@@ -1144,48 +1535,74 @@ function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, 
       const why = x.live.get(tag);
       // (1) same state at this k as at the end of the full run → COMPARED, hard,
       // even when a longer prefix mutates this object afterwards. This is what
-      // "exempt per (script, k)" buys.
+      // "exempt per (script, k)" buys. Coverage is earned by a record that carries
+      // a value: agreement on a bare `label|0|na|…` placeholder says nothing about
+      // the window and must not mark the script covered.
       if (a && b && drawKey(a) === drawKey(b)) {
         c.drawings += 1;
-        s.informative = true;
+        if (recordCarriesValue(b)) s.informative = true;
         continue;
       }
-      // (2) same identity, different end of the same mutation sequence.
+      // (2) same identity, different end of the sequence — two mechanisms, tried
+      // in order, each named on the wall:
+      //   2a MUTATION, field by field: every differing field must be one a call
+      //      found in this script's source can write. `delete` is in the source
+      //      inventory but writes no field, so it stops being an excuse once the
+      //      difference is in a FIELD rather than in the record's existence.
+      //   2b CONSTRUCTION at the run's end, for the fields no call writes: this
+      //      script has a `barstate.islast` block, constructs this kind, and the
+      //      measured per-kind record count grows with the run
+      //      (`rebuiltAsItGrows`) — so the two records are the i-th object of two
+      //      different construction passes, and their args were evaluated at two
+      //      different ends. This arm is the object-channel hole the design §10
+      //      ruling accepted; it is counted, capped and named here rather than
+      //      folded into the mutation excuse.
       if (a && b) {
-        if (calls) {
+        const diff = objectFieldDiff(a, b);
+        if (diff.length > 0 && diff.every((field) => excusable.has(field))) {
           c.live += 1;
           c.liveMutating += 1;
           x.liveReasons.add(`${s.rel} ${tag} — 源码对 ${kind} 有 ${calls.join("/")} 调用，同一对象在更长的喂法里还会变`);
           continue;
         }
-        c.live += 1;
-        c.liveUnexplained += 1;
-        note(
-          s,
-          `${kind} 第 ${i} 项在 k=${k} 的内容与全量末端不同，而源码里没有 ${kind} 的 set_*/delete 调用能解释它：` +
-            `前缀=${drawKey(a)} 全量=${drawKey(b)}（不是「对象在 k 之后被改过」，按字面差异处理）`,
-        );
-        continue;
-      }
-      // (3) the prefix has it, the full run does not. `measureObjectLiveness`
-      // flags exactly this shape (present in a shorter run, gone at the end of a
-      // longer one — deleted or rebuilt later), so reaching the branch without
-      // the flag means the two views of the same data disagree: loud.
-      if (a && !b) {
-        const an = anchorOf(a);
-        if (why) {
+        if (x.runEnd && x.creators.has(kind) && rebuiltAsItGrows(x.kindCounts.get(kind))) {
           c.live += 1;
-          c.liveExistence += 1;
-          if (an !== undefined && an < k) c.liveExistenceBelowCut += 1;
-          x.liveReasons.add(`${s.rel} ${tag} — ${why}`);
+          c.liveRunEndBuilt += 1;
+          x.liveReasons.add(
+            `${s.rel} ${tag} — ${kind} 在 barstate.islast 的建造里重建（条数 ${(x.kindCounts.get(kind) ?? []).join("/")}），` +
+              `差异字段「${diff.join(",") || "无具名字段"}」无人写入`,
+          );
           continue;
         }
         c.live += 1;
         c.liveUnexplained += 1;
         note(
           s,
-          `${kind} 第 ${i} 项在前缀里有、全量里没有，而存活度判定没抓到：前缀=${drawKey(a)}（锚点 ${an ?? "无"}`,
+          `${kind} 第 ${i} 项在 k=${k} 的内容与全量末端不同，而差异字段「${diff.join(",") || "无具名字段"}」既不属于源码 ` +
+            `${kind} 调用（${calls.join("/") || "无"}）能改到的字段（${[...excusable].sort().join(",") || "无"}），` +
+            `也不是「run 末端重建」那条（runEnd=${x.runEnd} 建造 ${kind}=${x.creators.has(kind)} 条数随喂法长=${rebuiltAsItGrows(
+              x.kindCounts.get(kind),
+            )}）：` +
+            `前缀=${drawKey(a)} 全量=${drawKey(b)}（不是「对象在 k 之后被改过」，按字面差异处理）`,
         );
+        continue;
+      }
+      // (3) the prefix has it, the full run does not: the object was deleted (or
+      // rebuilt) at a bar the shorter run never reached — `emitDrawings` skips
+      // deleted objects (`pineRuntime.ts:2220-2221`), which is the ONLY thing a
+      // `delete` can explain. `measureObjectLiveness` flags exactly this shape, so
+      // `why` is set here by construction and there is no second arm to keep. Its
+      // anchor is still MEASURED: `existence-anchor-below-k=` is that hole, printed
+      // and pinned.
+      if (a && !b) {
+        const an = anchorOf(a);
+        c.live += 1;
+        c.liveExistence += 1;
+        if (an !== undefined && an < k) c.liveExistenceBelowCut += 1;
+        if (an !== undefined && an < k && x.belowCutRows.size < 8) {
+          x.belowCutRows.add(`${s.rel} ${tag} k=${k} — 前缀这条记录锚在第 ${an} 根（< k），全量里它已经不存在`);
+        }
+        x.liveReasons.add(`${s.rel} ${tag} — ${why ?? "较短的喂法里有、全量里没有（对象在更晚的 bar 被删掉或重建）"}`);
         continue;
       }
       // (4) only the FULL run has it, and the identity itself did NOT move between
@@ -1386,6 +1803,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
       drawings: 0,
       live: 0,
       liveMutating: 0,
+      liveRunEndBuilt: 0,
       liveExistence: 0,
       liveExistenceBelowCut: 0,
       liveUnexplained: 0,
@@ -1465,6 +1883,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
         const x: Extras = {
           live,
           mutators,
+          creators: measureObjectCreators(src),
           kindCounts,
           runEnd,
           liveReasons,
@@ -1521,7 +1940,8 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // Every record this gate does NOT compare is on this line, with the reason
     // counter it is excused on. Nothing here is a prose claim.
     process.stdout.write(
-      `  exempted: live-objects=${c.live} (mutating=${c.liveMutating} existence=${c.liveExistence} ` +
+      `  exempted: live-objects=${c.live} (mutating=${c.liveMutating} run-end-built=${c.liveRunEndBuilt} ` +
+        `existence=${c.liveExistence} ` +
         `existence-anchor-below-k=${c.liveExistenceBelowCut} unexplained=${c.liveUnexplained}) ` +
         `after-cut-objects=${c.afterCut} after-cut-end-created=${c.afterCutEndCreated} ` +
         `after-cut-unexplained=${c.afterCutBelowCut} ` +
@@ -1650,11 +2070,19 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     /* -------------------------------------------------------------- floors */
     // No vacuous pass: the walk found these files and every compared script was
     // evaluated at every k in the probe set. The WORK floors are per-script
-    // averages against `ran`, not absolutes: an absolute `> 400_000` under a
-    // measured 460 826 leaves ~18 scripts' worth of slack while its comment
-    // claimed room for one removed file, and a floor that can swallow 18 scripts
-    // stopping being compared is not a floor. Against `ran` each one says what it
-    // means: every script that ran still contributes this much compared work.
+    // averages against `ran`, not absolutes. The arithmetic, on this build's wall: an
+    // absolute `> 400_000` under a measured 460 826 sits 60 826 values below it, and
+    // at the measured 2 194 values per script (460 826/210) that is ~28 scripts'
+    // worth of comparison free to vanish while the gate stayed green — the comment
+    // above the old literal claimed room for ONE removed file. Kept relative, the
+    // floor binds on the average instead: 2 000 of a measured 2 194 per script, so a
+    // script that stops contributing VALUES reddens even if `ran` itself holds, and a
+    // smaller corpus lowers the bar honestly rather than silently gaining slack. The
+    // remaining slack is stated as arithmetic, not prose — every multiple below sits
+    // at 86–91% of its measured per-script average (values 2 000 vs 2 194, series 10
+    // vs 11.0, hlines 4 vs 4.4, drawings 1.5 vs 1.75), which is ~18 scripts' worth of
+    // work for the first three and ~29 for `drawings`, all of it below one whole file
+    // per script.
     expect(pairs, "(script, k) 对必须是 已比较脚本 × 探针长度").toBe(ran * KS.length);
     expect(ran, "跑通并可比较的脚本数掉了：语料遍历或解释器坏了（实测 210）").toBeGreaterThanOrEqual(200);
     expect(plainScripts + mtfScripts, "分档必须覆盖每个跑通的脚本").toBe(ran);
@@ -1662,9 +2090,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // Measured averages, COMPUTED in the message rather than retyped into it: a
     // caption that has to be edited every run is a caption that goes stale (this
     // one said 2 186 while the measured value was 460 826/210 = 2 194). The
-    // multiples below sit under the measured averages — values 2 194, series 11,
-    // hlines 4.4, drawings 1.8 — and the slack they leave is stated in files, not
-    // in prose.
+    // multiples below are the ones the paragraph above prices out.
     const avg = (n: number): string => (n / ran).toFixed(2);
     expect(
       c.values,
@@ -1696,16 +2122,19 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // add work to it. `failed` produces no comparison at all, so it is 0 or the
     // corpus broke; `aborted` matters because a run that stops at bar 1 compares
     // `na` against `na` at every later bar and passes for free — the floor above
-    // is what keeps that from becoming the whole gate, and this ceiling is what
-    // keeps it from quietly becoming 20 scripts.
+    // is what keeps that from becoming the whole gate, and the pin below is the
+    // exact sorted LIST of which files they are, because 2 files with different
+    // names in them are a different hole and a count of 2 would not have noticed.
     expect(failed, `全量 run 直接返回 error 的脚本数（实测 ${failed}）：没东西可比不等于通过`).toBe(0);
     expect(
-      aborted,
-      `中途 abort 的脚本数（实测 ${aborted}：${abortedFiles.map((x) => x.split(" — ")[0]).join(", ")}）——` +
-        `中断之后的 bar 两侧都是 na，比的是空，只许这几本`,
-    ).toBeLessThanOrEqual(2);
+      abortedFiles.map((x) => x.split(" — ")[0]).sort(),
+      `中途 abort 的脚本名单（实测 ${aborted} 本）：中断之后的 bar 两侧都是 na、比的是空，` +
+        `所以钉的是「哪两本」而不是「几本」——换了名字就换了机制，计数相同也不算同一条洞`,
+    ).toEqual(["statistics/kendall_rank_correlation_coefficient.pine", "volatility/mayer_multiple.pine"]);
     // The header argues that the two `offset = (-i * space)` dashboards are not
-    // vacuous passes. That is asserted, not read off a truncated print.
+    // vacuous passes. That is asserted, not read off a truncated print — and it is
+    // asserted the strong way: the two names must stay OUT of the `non-informative`
+    // list, which is the same fact the paragraph above argues by sorting order.
     for (const rel of [
       "statistics/dividends_per_share_dps_yearly.pine",
       "statistics/earnings_per_share_eps_yearly.pine",
@@ -1723,12 +2152,14 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // a hole can only grow by somebody reading the number and saying so.
     expect(
       c.liveUnexplained,
-      `内容随喂法而变、源码里却没有 ${OBJECT_KINDS.join("/")} 的 set_*/delete 调用能解释的画线记录（实测 ${c.liveUnexplained}，必须 0）` +
-        `——非 0 就是「对象通道里出现了无法解释的差异」，见文件头 drawing rule 2`,
+      `内容随喂法而变、既没有「源码里的 ${OBJECT_KINDS.join("/")} 调用写得到该字段」也没有「run 末端重建」` +
+        `可解释的画线记录（实测 ${c.liveUnexplained}，必须 0）——非 0 就是「对象通道里出现了无法解释的差异」，` +
+        `见文件头 drawing rule 2`,
     ).toBe(0);
     expect(
       c.afterCutBelowCut,
-      `只有全量有、锚点 < k、而「末端造物」的两条证据（索引没有任何更短喂法够到 + 该 kind 条数单调）都不成立的对象记录` +
+      `只有全量有、锚点 < k、而「末端造物」的三条证据（源码有 barstate.islast + 没有任何更短喂法够到这个索引 + ` +
+        `该 kind 条数随喂法单调）都不成立的对象记录` +
         `（实测 ${c.afterCutBelowCut}，必须 0）：那就是更晚的 bar 在窗口里造出来的记录`,
     ).toBe(0);
     // The two positive categories, ceilings pinned from the same measurement the
@@ -1749,13 +2180,43 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     // of the 718 existence records are anchored below their own cut, where index
     // pairing carries no information for any anchor check to convict. It was a
     // printed number with no gate under it; now it is a capped one, same shape as
-    // the `live` ceiling above (whose bite was proven by lowering it one notch in
-    // a scratch copy — canary ④).
+    // the `live` ceiling above. That ceiling's bite was proven by lowering it one
+    // notch in a scratch copy (canary ④ — a round-1-build run, see the header; the
+    // 1 848 it caps is identical in both builds), and THIS bucket's bite is proven by
+    // canary ⑦ lowering `run-end-built` from 892 to 891 on this build.
     expect(
       c.liveExistenceBelowCut,
       `被豁免的存在性记录里锚点在切点以下的条数（实测 ${c.liveExistenceBelowCut}）：` +
         `这条洞靠索引配对撑着，只许按登记的口径长`,
     ).toBeLessThanOrEqual(288);
+    expect(
+      c.liveMutating,
+      `内容差异被「源码里的调用写得到该字段」逐字段豁免掉的记录数（实测 ${c.liveMutating}）：` +
+        `豁免从严到只能按字段对上调用（「delete」写不到任何字段），这个数只许按登记的口径长`,
+    ).toBeLessThanOrEqual(238);
+    expect(
+      c.liveRunEndBuilt,
+      `内容差异被「run 末端重建」豁免掉的记录数（实测 ${c.liveRunEndBuilt}）：barstate.islast + 本 kind 有 .new + ` +
+        `条数随喂法单调长，这是设计 §10 认下的对象通道洞本身，只许按登记的口径长`,
+    ).toBeLessThanOrEqual(892);
+    expect(
+      c.liveExistence,
+      `存在性豁免的记录数（实测 ${c.liveExistence}）：对象身份本身随「喂到第几根」增减（六根走查量出来的存活度旗标），` +
+        `本语料上这 ${c.liveExistence} 条全部来自「只有全量有」那一侧、前缀-only 那条命中 0 条；` +
+        `豁免建立在跨 run 方差上而不是机制上，所以这条洞只许按登记的口径长`,
+    ).toBeLessThanOrEqual(718);
+    expect(
+      c.liveMutating + c.liveRunEndBuilt + c.liveExistence + c.liveUnexplained,
+      `四个桶必须正好铺满 live（实测 ${c.liveMutating}+${c.liveRunEndBuilt}+${c.liveExistence}+` +
+        `${c.liveUnexplained} 对 ${c.live}）：豁免不许在桶之间悄悄迁移——换了机制口径就得有人同时动这条 identity ` +
+        `与上面四条上限`,
+    ).toBe(c.live);
+    expect(
+      c.naDropped,
+      `全量独有、窗口里什么都没有（全 na / 告警没命中）的合法摘除条数（实测 ${c.naDropped}）：` +
+        `它印在 compared: 那行而不是 exempted:，签名组取并集之后 droppedFull 会收到只有全量才有的组，` +
+        `所以它同样只许按登记的口径长`,
+    ).toBeLessThanOrEqual(71);
     expect(
       c.drawings / (c.drawings + c.live),
       `画线里被严格比到的份额（实测 ${c.drawings}/${c.drawings + c.live} = ${(
