@@ -984,18 +984,29 @@ export function ProChart() {
           // next data event — which 分时 never gets (no paging, no push).
           if (line) setChangeBase(typeof res.prev_close === "number" ? res.prev_close : null);
           // Re-read the ref *at delivery*, not at request time: this page left before the user
-          // clicked 回放, and its answer can still land after entry. The library appends a
-          // `backward` answer onto the list (`_addData` case `backward`, dist 13464), so bars
-          // newer than the snapshot would be written onto the window `enterReplay` just
-          // truncated — look-ahead on a chart labelled 回放中 (spec §5), until the next step's
-          // `resetData()` hid it. The callback itself may NOT be skipped: the library clears
-          // `_loading` inside it (dist 13616-13617), and swallowing it leaves the chart unable
-          // to page ever again. So: deliver nothing, with both flags dead — and put the page's
-          // own 加载中… hint down by hand, since the delivery this branch replaces is the one
-          // that normally clears it two lines below.
-          if (replayRef.current.cursorTs !== null) {
+          // clicked 回放, and its answer can still land after entry. The answer this branch gives
+          // is the one spec §6's table prescribes for the `type` that was asked — the same three
+          // arms the gate at the top of this function answers with (keep the two in sync):
+          // `forward` / `backward` ⇒ `[]`, because for a paging direction "nothing new" is exactly
+          // what it means, and the library appends a `backward` answer onto the list (`_addData`
+          // case `backward`, dist 13464), so bars newer than the snapshot would be written onto
+          // the window `enterReplay` just truncated — look-ahead on a chart labelled 回放中
+          // (spec §5), until the next step's `resetData()` hid it. `init` ⇒ `replayWindow(cache,
+          // cursorTs)`, because for `init` an empty array is *not* "nothing new": `_addData` case
+          // `init` does `_clearData(); this._dataList = data` (dist 13455-13456) and `_clearData`
+          // empties `_dataList` (dist 14574-14578). A 换周期／换标的 `init` can still be on the
+          // wire when 回放 is clicked — `resetData` clears `_loading` and re-asks (dist
+          // 13652-13656), and the entry button is live because `barCount` still holds the
+          // outgoing view's count — so answering that one with `[]` would blank the canvas while
+          // the toolbar went on reading 第 N/M 根. The callback itself may NOT be skipped in any
+          // arm: the library clears `_loading` inside it (dist 13616-13617), and swallowing it
+          // leaves the chart unable to page ever again. All three answer with `REPLAY_MORE`, and
+          // put the page's own 加载中… hint down by hand, since the delivery this branch replaces
+          // is the one that normally clears it two lines below.
+          const r = replayRef.current;
+          if (r.cursorTs !== null) {
             setStatus((s) => ({ ...s, loading: false }));
-            callback([], REPLAY_MORE);
+            callback(type === "init" ? replayWindow(r.bars, r.cursorTs) : [], REPLAY_MORE);
             return;
           }
           callback(bars, page.more);

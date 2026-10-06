@@ -379,6 +379,67 @@ describe("/pro-chart 回放的数据通路", () => {
     expect(visible()).toEqual(cache.filter((ts) => ts <= readoutDayEnd()));
   });
 
+  // The same race one type over: the case the test above left unproved is `init`, because for
+  // `init` an empty answer is not "nothing new" — `_addData` case `init` does
+  // `_clearData(); this._dataList = data` (dist 13455-13456) and `_clearData` empties the list
+  // (dist 14574-14578), so an `[]` here *clears the store*. It is on the wire for real: 换周期
+  // asks an `init` of its own (`setView` → `setPeriod` → `resetData`, which clears `_loading` and
+  // re-asks, dist 13652-13656), and 回放 stays clickable throughout because `barCount` still
+  // holds the outgoing view's count. spec §6's table says what the answer has to be.
+  it("换周期那一问的 init 在回放中落地：它答窗口，不许答清空", async () => {
+    render(<ProChart />);
+    await flush();
+    expect(h.list.length).toBe(500); // the mount's `init` landed; paging deliberately not settled
+    expect(h.inFlight).toBe(0);
+    h.answers = []; // recorders start at the switch, same convention as `mountLoaded`
+
+    let release!: () => void;
+    h.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    h.newer = 20; // the incoming view answers with bars newer than anything on screen
+    const reqs = h.requests.length;
+    await click("60分"); // setView → dropReplay (idle no-op) + setPeriod → one `init` on the wire
+    expect(h.inFlight).toBe(1);
+    expect(h.answers.length).toBe(0); // it really is still on the wire, not answered early
+
+    const cache = visible(); // what `enterReplay` snapshots: the outgoing view, unchanged
+    await click("回放");
+    const dayEnd = readoutDayEnd();
+    const win = cache.filter((ts) => ts <= dayEnd);
+    expect(win.length).toBeGreaterThan(0);
+    expect(visible()).toEqual(win); // entry drew the window out of the snapshot, cost no request
+
+    await act(async () => {
+      release();
+      h.gate = null;
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // The parked request really did leave the page, so the branch below is the delivery-time one
+    // and not the gate at the top of `getBars`.
+    expect(h.requests.length).toBe(reqs + 1);
+    expect(h.requests[h.requests.length - 1].type).toBe("init");
+    // §5's invariant at the instant that answer lands: the store still holds exactly the prefix
+    // the cursor allows — not `[]`, and not the incoming view's 500 bars either.
+    expect(visible()).toEqual(win);
+    expect(h.list.some((b) => b.timestamp > dayEnd)).toBe(false);
+    // Both `init`s were ANSWERED with the window and both flags dead. The callback may not be
+    // skipped (dist 13616-13617 clears `_loading` inside it), so this counts deliveries.
+    const inits = h.answers.filter((a) => a.type === "init");
+    expect(inits.length).toBe(2); // entry's own `resetData()`, plus this parked one
+    for (const a of inits) {
+      expect(a.bars).toBe(win.length);
+      expect({ forward: a.forward, backward: a.backward }).toEqual({ forward: false, backward: false });
+    }
+    expect(h.inFlight).toBe(0);
+    // And replay still works from there.
+    await click("后一根");
+    expect(visible()).toEqual(cache.filter((ts) => ts <= readoutDayEnd()));
+    expect(h.requests.length).toBe(reqs + 1); // still: replay itself issued nothing
+  });
+
   // ~2160 clicks (955 back to the first bar, 1205 forward to the last, plus the clamped
   // no-ops), and one click costs about what a page render costs: 73s run alone, 113s when the
   // full suite runs it beside 118 other files. The vitest default 5s cannot hold it, so the
