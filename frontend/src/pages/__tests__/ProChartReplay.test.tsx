@@ -63,6 +63,16 @@ const h = vi.hoisted(() => ({
   askedType: "",
   // getVisibleRange().to, set per test to drive "start from the view edge".
   visibleTo: 0,
+  // A parked response: `getBars` has been called, `callback` has not. That is the shape of
+  // "the user clicked 回放 while a page was still on the wire" — no other test parks one, so
+  // the mount paging in this file has always settled before entry.
+  gate: null as null | Promise<void>,
+  // Bars the fake backend knows about *beyond* ALL_BARS. A `backward` request asks with
+  // `before = null` (klinePaging's `pagingBefore`), so this is what it gets back: a block
+  // newer than everything on screen, which `_addData` case `backward` appends (dist 13464).
+  newer: 0,
+  // A symbol the backend answers with zero bars: the blank chart spec §7 also covers.
+  blank: false,
   loader: null as null | {
     getBars: (p: {
       type: string;
@@ -172,9 +182,26 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
   return {
     ...actual,
     fetchKline: async (params: { before?: number | null; count?: number }) => {
+      // Two knobs for the races and the blank chart (see `h`); both are off by default, so
+      // every other test in this file walks exactly the path it walked before.
+      if (h.gate) await h.gate;
       const before = params.before ?? null;
-      const pool = before === null ? ALL_BARS : ALL_BARS.filter((b) => b.timestamp < before);
-      const bars = pool.slice(-(params.count ?? PAGE));
+      const universe =
+        h.newer > 0
+          ? [
+              ...ALL_BARS,
+              ...Array.from({ length: h.newer }, (_, i) => ({
+                timestamp: START + (TOTAL + i) * DAY,
+                open: 1,
+                high: 1,
+                low: 1,
+                close: 1,
+                volume: 1,
+              })),
+            ]
+          : ALL_BARS;
+      const pool = before === null ? universe : universe.filter((b) => b.timestamp < before);
+      const bars = h.blank ? [] : pool.slice(-(params.count ?? PAGE));
       h.requests.push({
         type: h.askedType,
         before: before === null ? null : new Date(before).toISOString().slice(0, 10),
@@ -227,6 +254,17 @@ const allowedByDay = (dayEnd: number): number[] =>
 
 const visible = (): number[] => h.list.map((b) => b.timestamp);
 
+/** The page's own `callback` deliveries for the two paging directions. */
+const directional = (): Answer[] => h.answers.filter((a) => a.type === "forward" || a.type === "backward");
+
+/** Lets every parked microtask (and the `callback` at the end of it) run to completion. */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
 async function mountLoaded(): Promise<void> {
   render(<ProChart />);
   await settle();
@@ -249,6 +287,9 @@ beforeEach(() => {
   h.inFlight = 0;
   h.askedType = "";
   h.visibleTo = TOTAL;
+  h.gate = null;
+  h.newer = 0;
+  h.blank = false;
   h.loader = null;
   localStorage.clear();
 });
@@ -281,6 +322,63 @@ describe("/pro-chart 回放的数据通路", () => {
     }
   });
 
+  // spec §5's invariant has a second way to break that no test here covered: the *answer* to a
+  // paging request the page issued before 回放 can land after entry, because the closure that
+  // asked was built with the pre-replay list in mind. `_addData` appends a `backward` answer
+  // (dist 13464) — bars newer than the snapshot, onto the list entry just truncated.
+  it("进入回放时还有一页在飞：它落不进回放窗口，且必须被答掉", async () => {
+    render(<ProChart />);
+    // Only the mount's `init` pages land; the chart is deliberately NOT settled to the end of
+    // the fake universe, so a `forward` ask still has a real 500-bar page to bring back.
+    await flush();
+    expect(h.list.length).toBe(500);
+    expect(h.inFlight).toBe(0);
+
+    let release!: () => void;
+    h.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    h.newer = 20; // the backward page comes back with 20 bars nobody has ever seen
+    await act(async () => {
+      ask("forward");
+      ask("backward");
+    });
+    expect(h.inFlight).toBe(2);
+    expect(directional().length).toBe(0); // both still on the wire
+
+    const cache = visible();
+    await click("回放");
+    const entered = visible();
+    expect(entered.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      release();
+      h.gate = null;
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const dayEnd = readoutDayEnd();
+    // §5's invariant: after both parked pages were delivered, the list is still exactly the
+    // prefix of the cache the cursor allows — not one bar more.
+    expect(visible()).toEqual(cache.filter((ts) => ts <= dayEnd));
+    // Said plainer: none of the 20 bars newer than the snapshot reached a chart reading 回放中.
+    expect(h.list.some((b) => b.timestamp > dayEnd)).toBe(false);
+    // Both pages were ANSWERED, with 0 bars and both flags dead. The callback may not be
+    // skipped — the library clears `_loading` inside it (dist 13616), so swallowing it wedges
+    // the chart. That is why this counts deliveries, not blocks.
+    const late = directional();
+    expect(late.map((a) => a.type).sort()).toEqual(["backward", "forward"]);
+    for (const a of late) {
+      expect(a.bars).toBe(0);
+      expect({ forward: a.forward, backward: a.backward }).toEqual({ forward: false, backward: false });
+    }
+    expect(h.inFlight).toBe(0);
+    // And replay itself still works: one more step, the invariant still holds.
+    await click("后一根");
+    expect(visible()).toEqual(cache.filter((ts) => ts <= readoutDayEnd()));
+  });
+
   // ~2160 clicks (955 back to the first bar, 1205 forward to the last, plus the clamped
   // no-ops), and one click costs about what a page render costs: 73s run alone, 113s when the
   // full suite runs it beside 118 other files. The vitest default 5s cannot hold it, so the
@@ -308,6 +406,7 @@ describe("/pro-chart 回放的数据通路", () => {
     // Reaching `TOTAL` from one 500-bar page takes three real `fetchKline` calls, so
     // `toBe(before)` below means "replay added none", not "nobody ever counted one".
     expect(before).toBeGreaterThan(0);
+    const cache = visible();
     await click("回放");
     for (let i = 0; i < 30; i++) await click("后一根");
     // The library does ask on its own, from the left-edge trigger `from === 0 && more.forward`;
@@ -318,8 +417,12 @@ describe("/pro-chart 回放的数据通路", () => {
     });
     await click("退出回放");
     expect(h.requests.length).toBe(before);
-    // And the handback put the whole loaded range back without one.
-    expect(h.list.length).toBe(TOTAL);
+    // The exit moment, in the form the invariant is written in everywhere else: at exit
+    // `cursorTs` is null, so `replayWindow(cache, cursorTs)` is the whole cache and the
+    // assertion is equality *by content*, not by length — a handback that is the right number of
+    // bars in the wrong order, or with the wrong bars in it, satisfies a length and breaks §5.
+    expect(cache.length).toBe(TOTAL);
+    expect(visible()).toEqual(cache);
   });
 
   it("forward / backward 各收到一次空答、两旗全 false（反真空通过：先数被问过几次）", async () => {
@@ -381,6 +484,39 @@ describe("/pro-chart 回放的数据通路", () => {
     expect(btn.hasAttribute("disabled")).toBe(true);
     expect(btn.getAttribute("title")).toContain("分时");
     expect(screen.queryByTestId("replay-readout")).toBeNull();
+  });
+
+  // spec §7's other entry condition. A lit button whose handler only `return`s is a silent
+  // no-op on a blank chart (backend down, or a symbol with no bars), and jsdom — like the
+  // browser — fires nothing on a `disabled` button, so this affordance IS the only way the
+  // guard can be observed: `click()` on it would have passed either way.
+  it("空表进不去：两颗入口按钮 disabled、原因写在 title", async () => {
+    h.blank = true;
+    render(<ProChart />);
+    await settle();
+    expect(h.list.length).toBe(0); // the backend answered, it just had nothing
+    for (const name of ["回放", "从视图右端开始"]) {
+      const btn = buttonOf(name);
+      expect(btn).toBeDisabled();
+      expect(btn.getAttribute("title")).toContain("图上还没有数据");
+    }
+    expect(screen.queryByTestId("replay-readout")).toBeNull();
+  });
+
+  // The other half of the same gate: `barCount` is written by the answer that *replaces* the
+  // list, never by a paging answer. A universe of exactly 4 pages makes `settle` end on an
+  // EMPTY closing page (klinePaging: `fresh.length >= pageSize` is what stops it), so a page
+  // length written there would put 0 on screen and snuff the button out on a full chart.
+  it("翻页只加 bar：收尾那一页交回 0 根，也不该把入口按钮按灭", async () => {
+    h.newer = 800; // 2000 根 = 4 × PAGE
+    render(<ProChart />);
+    await settle();
+    expect(h.list.length).toBe(TOTAL + 800);
+    // Non-vacuity: the closing paging answer really was the empty one.
+    expect(h.answers.filter((a) => a.type === "forward" && a.bars === 0).length).toBe(1);
+    for (const name of ["回放", "从视图右端开始"]) {
+      expect(buttonOf(name)).not.toBeDisabled();
+    }
   });
 
   it("日期框输入的日期落回同一根（往返）", async () => {

@@ -489,6 +489,12 @@ export function ProChart() {
     readout: ReplayReadout | null;
   }>({ active: false, cursorTs: null, playing: false, readout: null });
   const [replaySpeed, setReplaySpeed] = useState<ReplaySpeed>("1");
+  // How many bars an `init` last put on the chart — the second entry condition of spec §7.
+  // `chart.getDataList()` cannot be read during render, so the delivery that replaces the list
+  // reports its length here; it gates the entry buttons on a blank chart instead of lighting a
+  // button whose handler only `return`s. Emptiness is the only thing read off it (see the JSX):
+  // it is not the number of bars on screen, because paging only ever adds to that.
+  const [barCount, setBarCount] = useState(0);
   const [parked, setParked] = useState<StoredDrawing[]>([]);
   const replaceParked = (list: readonly StoredDrawing[]) => {
     parkedRef.current = list.slice();
@@ -977,7 +983,28 @@ export function ProChart() {
           // `callback`, so a base written here would only be picked up by the
           // next data event — which 分时 never gets (no paging, no push).
           if (line) setChangeBase(typeof res.prev_close === "number" ? res.prev_close : null);
+          // Re-read the ref *at delivery*, not at request time: this page left before the user
+          // clicked 回放, and its answer can still land after entry. The library appends a
+          // `backward` answer onto the list (`_addData` case `backward`, dist 13464), so bars
+          // newer than the snapshot would be written onto the window `enterReplay` just
+          // truncated — look-ahead on a chart labelled 回放中 (spec §5), until the next step's
+          // `resetData()` hid it. The callback itself may NOT be skipped: the library clears
+          // `_loading` inside it (dist 13616-13617), and swallowing it leaves the chart unable
+          // to page ever again. So: deliver nothing, with both flags dead — and put the page's
+          // own 加载中… hint down by hand, since the delivery this branch replaces is the one
+          // that normally clears it two lines below.
+          if (replayRef.current.cursorTs !== null) {
+            setStatus((s) => ({ ...s, loading: false }));
+            callback([], REPLAY_MORE);
+            return;
+          }
           callback(bars, page.more);
+          // spec §7's empty-chart entry condition, counted from the one answer that replaces the
+          // list: a `forward`/`backward` page only ever *adds* bars, so its length is not how
+          // many are on screen and writing it here would lower the count on every scroll. The
+          // error path below leaves it alone — a failed refresh keeps the previous answer on
+          // screen, so the button has to stay usable.
+          if (type === "init") setBarCount(bars.length);
           if (line) fitSessionToWidth(chart, bars.length);
           setStatus({ loading: false, error: null, source: res.source });
           // A failed refresh leaves the previous answer on screen, so the badge
@@ -1844,8 +1871,18 @@ export function ProChart() {
         <div className="mx-2 h-5 w-px bg-border" />
         <ReplayBar
           active={replay.active}
-          disabled={timeShare}
-          reason={timeShare ? "分时只有一节 session，没有可回放的历史" : null}
+          // spec §7's two entry conditions, both as affordances rather than as silent returns:
+          // 分时 (one session, nothing to step through) and an empty chart (backend down, or a
+          // symbol with no bars). `enterReplay` re-checks both from the chart itself — a
+          // disabled button is a browser affordance, not a guarantee.
+          disabled={timeShare || barCount === 0}
+          reason={
+            timeShare
+              ? "分时只有一节 session，没有可回放的历史"
+              : barCount === 0
+                ? "图上还没有数据，先等 K 线加载出来"
+                : null
+          }
           playing={replay.playing}
           speed={replaySpeed}
           readout={replay.readout}
