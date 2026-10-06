@@ -21,9 +21,23 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  *
  * What this gate does NOT claim: that the engine is look-ahead-free. It is not
  * (see the register below), and the corpus is not either. The gate's claim is
- * narrower and literally true: every difference between the two ways of feeding
- * bars is either (a) named in `LOOKAHEAD_REGISTER`, with the channel and the
- * mechanism, or (b) red. Nothing is averaged, tolerated or skipped.
+ * narrower and literally true, and it is scoped on purpose: every difference
+ * between the two ways of feeding bars that lands on a BAR-INDEXED channel —
+ * series, marker value/text/side, hline prefix, `bg`/`bar`/`fill` colour
+ * projections, alert hits, strategy equity/positions — is either (a) named in
+ * `LOOKAHEAD_REGISTER`, with the channel and the mechanism, or (b) red. On those
+ * channels nothing is averaged and nothing is tolerated.
+ *
+ * What IS skipped, and where the number for it lives: three record families are
+ * not bar-indexed and are therefore not compared — mutable `label`/`line`/`box`
+ * objects, the `hline` tail past the prefix's own count, and `table` cells. They
+ * are never skipped silently: each one is counted, named on the wall under
+ * `exempted:` (measured 2026-10-07: `live-objects=1848`, `after-cut-objects=4`,
+ * `after-cut-end-created=1`, `hlines-tail-skipped=0`, `tables-skipped=0`) and
+ * pinned by the assertions at the bottom of this file, so a skip can only grow
+ * by somebody reading a number and raising a ceiling. "Nothing is averaged,
+ * tolerated or skipped" would be false as an unconditional sentence; it is true
+ * of the compared channels and the inventory beside it is the proof.
  *
  * ── Comparison surface (what 逐项相等 means here, and what is left out) ──
  * Compared, index-aligned over bars [0, k), with `na` matching only `na` and
@@ -91,18 +105,36 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * the run ENDS, not on which bars it read. `label[59]` in the k=60 run and
  * `label[299]` in the full run are the same object at two different ends of
  * the same mutation sequence, and neither one is "the value at bar 59". The
- * harness detects this from behaviour, never from a filename list: for every
- * object identity (kind + creation-order index) it walks ALL SIX runs
- * (k=60/120/180/240/299 and the full 300) and calls the record *run-end
- * dependent* when its content varies across runs, or when it exists in a
- * shorter run but not in the full one (deleted later). Those records are
- * counted (`live-objects=`), printed per script, and excluded from the content
- * comparison — the same honest treatment `table` gets, for the same reason.
- * What stays strict for those scripts is everything else, at zero tolerance:
- * every series, marker, hline, alert and strategy curve. A look-ahead that
- * only ever shows up in a mutable label would be invisible to this harness and
- * to Bar Replay alike — the chart's price data, and what replay steps through,
- * are the series.
+ * harness decides this per (script, k) from two measured signals and never from
+ * a filename list:
+ *   · the MUTATION MECHANISM, read off the script's own source
+ *     (`OBJECT_MUTATION_RE`, inventoried on the wall by
+ *     `mutation calls in corpus source:`) — this alone excuses a record whose
+ *     CONTENT differs at this very k (`mutating=1130`). Variance across runs is
+ *     NOT what excuses it any more; an object that changes with no such call
+ *     behind it is reported (`unexplained=`, measured 0, pinned at 0).
+ *   · an identity-level EXISTENCE flag, walked over ALL SIX runs
+ *     (k=60/120/180/240/299 and the full 300) — this excuses only records whose
+ *     very PRESENCE moves with the end of the run (`existence=718`), where index
+ *     pairing carries no information for an anchor check to convict. Their
+ *     anchors are still MEASURED: `existence-anchor-below-k=288` is that hole
+ *     printed and pinned, not argued away.
+ * Exempted records are counted, printed per identity
+ * (`370 (script, identity) pairs exempted, 658 reason rows`) and left out of the
+ * content comparison — the same honest treatment `table` gets, for the same
+ * reason. What stays strict for those scripts is everything else, at zero
+ * tolerance: every series, marker, hline, alert and strategy curve. A
+ * look-ahead that only ever shows up in a mutable label would be invisible to
+ * this harness and to Bar Replay alike — the chart's price data, and what replay
+ * steps through, are the series.
+ * HOW MUCH THAT EXEMPTION COULD ABSORB, measured rather than asserted (2026-10-07,
+ * scratch copy of this file outside the repo tree, both signals above forced
+ * empty so object records are compared like any other channel): the same corpus
+ * and the same bars give `passed=194 mismatched=16` and `diffs collected=2404`,
+ * i.e. 12 more scripts go red beyond the 4 registered ones and 1 418 more diff
+ * records appear (`unexplained=1130`, `after-cut-unexplained=288`). That is the
+ * size of the hole this exemption holds open, on the record; the first assertion
+ * to fire in that build was `expect(c.liveUnexplained).toBe(0)` at 1130.
  * Records that are frozen across all six runs are compared by content like
  * anything else, and records created after the cut are counted, not compared.
  *
@@ -248,7 +280,7 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * whole run and `build()` drops them on BOTH sides; the engine's own warning for
  * each of the two files says it: 「20 条 plot 全区间无数据，已隐藏」.
  * They are NOT `na`-only scripts, though — the measured run puts both in the
- * informative 191, not in the printed 15 (that list is built in sorted file
+ * informative 192, not in the printed 14 (that list is built in sorted file
  * order, and both names sort ahead of position 10,
  * `statistics/gaps_percent_size_distribution.pine`, which IS printed, so their
  * absence from it is what proves they were informative). Nothing is being waved
@@ -262,21 +294,28 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  * harness: a walk that finds fewer than 100 scripts THROWS. There is no
  * `describe.skipIf` and no early return, because a guard that compares nothing
  * passes, and a guard that cannot fail is worse than no guard. Its red capability
- * was proven before its floors were trusted, three ways, on 2026-10-07 against
+ * was proven before its floors were trusted, five ways, on 2026-10-07 against
  * this file and this corpus — baseline green FIRST so any red below is
  * attributable to the edit and not to the machine (`scripts=210 passed=206
- * mismatched=4 crashed=0`, rc=0, 23.5s of comparing). Each edit then went red,
- * was reverted, and printed those same numbers again:
+ * mismatched=4 crashed=0`, rc=0 — the green runs of this build measured 25.2–25.8 s
+ * of comparing, 27.2–28.2 s for the file). Each edit then went
+ * red, was reverted, and printed those same numbers again:
  *   · ① the window itself — `cmpNumbers`' per-bar loop walked `i <= k` instead of
  *     `i < k`, comparing the first `k+1` entries instead of the first `k` (the
  *     shift, not the tolerance, is what this gate exists to catch). RED, rc=1:
  *     `passed` 206 → 18, `mismatched` 4 → 192, `diffs collected=2624`, and every
  *     fresh diff spells the off-by-one out — `line 系列2#0：第 60 根 前缀=缺项
  *     全量=0`, a bar the prefix was never fed. The first `expect` to fire was the
- *     informativeness floor (「真有值在比的脚本数（实测 191）」: expected 3 to be
- *     greater than or equal to 180), because a note returns before any value of
- *     that series counts as compared; the ledger had 188 unregistered files to
- *     name as well and said so on the wall before any assertion ran
+ *     informativeness floor: 「真有值在比的脚本数（实测 191）」 expected 3 to be
+ *     greater than or equal to 180. Said plainly: ① was run against the build
+ *     THIS one replaced, and both halves of that message have since been rewritten
+ *     — the floor is `informativeScripts >= ran * 0.85` (an absolute 180 could
+ *     swallow a corpus that shrank) and the message is computed, so it now reads
+ *     「真有值在比的脚本数不得低于跑通脚本的 85%（实测 192/210 = 91%）」. The edit
+ *     would still fire that floor first; it was not re-run against this build, and
+ *     the 180 quoted above is the old absolute one. What did not change is the
+ *     rest of the evidence: the ledger had 188 unregistered files to name as well
+ *     and said so on the wall before any assertion ran
  *     (`mismatched: plain=188 mtf=4 register=192`), and the mechanism guard
  *     printed 违例=192 — a diff that is not the registered negative-offset branch
  *     cannot hide behind a row either.
@@ -286,18 +325,39 @@ import { toBars, type PineDrawing, type PineLine, type PineMarker, type PineResu
  *     「登记在册却没有再出现前缀≠全量」: expected [] / received
  *     ['statistics/z_score.pine']. The readout stayed `mismatched=4 passed=206`
  *     throughout — the row hid nothing, it only lied, and the gate reds a lie.
+ *     Re-run 2026-10-07 against this build: red at the same `expect`, same readout.
  *   · ③ the unregistered direction — deleting the `us_treasury_yields.pine` row.
  *     RED, rc=1, at `expect(unregistered, …).toEqual([])`: 「未登记的前缀≠全量」
  *     receiving ['statistics/us_treasury_yields.pine'] with three of that file's
  *     real `[mtf]` diff lines printed under it (offset=-8，第 52 根起分叉：
  *     前缀=na 全量=150.2017…). This is the one that proves the MTF bucket above is
  *     zero tolerance and not an exemption: strip its row and an MTF script goes
- *     red exactly like a plain one.
+ *     red exactly like a plain one. Re-run 2026-10-07 against this build: red at
+ *     the same `expect`, same three lines named.
+ *   · ④ and ⑤ are the two new pins' own canaries — numbered after the three
+ *     above, they are not the review findings of the same names. Both ran on a
+ *     scratch COPY of this file outside the repo tree, so the shipped bytes never
+ *     held a mutation:
+ *     ④ the `live` ceiling lowered from `1_848` to `1_847`. RED, rc=1, at exactly
+ *     that `expect`: 「被豁免的对象画线记录总数（实测 1848）只许按登记的口径长」
+ *     expected 1848 to be less than or equal to 1847. So `live-objects=1848` is a
+ *     gate, not a caption.
+ *     ⑤ finding ②'s old bug put back — branch 4's `an >= k` relaxed to
+ *     `an !== undefined`, i.e. every full-run-only object record counted as
+ *     "created after the cut" without its anchor being checked. RED, rc=1 at
+ *     `expect(c.afterCut, …).toBeLessThanOrEqual(4)`: expected 5 to be less than
+ *     or equal to 4, with `after-cut-end-created=0` and `passed`/`mismatched`/
+ *     `diffs collected` unchanged to the digit (206/4/986). Two honest readings:
+ *     the anchor check decides WHICH pinned bucket a record lands in, and
+ *     `after-cut-unexplained` itself stayed 0 under this mutation — the ceiling on
+ *     `after-cut-objects` is what has the bite, so finding ② is closed by the pair
+ *     (anchor is checked, bucket is capped), not by the 0 alone.
  * After every revert the harness file was byte-identical to the pre-canary
- * snapshot again (`diff` empty, md5 unchanged) before the next edit, so the three
- * proofs are independent of each other. The printed `[no-lookahead]` block is the
- * evidence each edit leaves behind, and all three are re-runnable against this
- * file as shipped — they are a record of runs, not a claim about one.
+ * snapshot again (`diff` empty, md5 unchanged) before the next edit, so the
+ * proofs are independent of each other; ④⑤ needed no revert, being copies. The
+ * printed `[no-lookahead]` block is the evidence each edit leaves behind, and
+ * ②③④⑤ were run against this build while ① was run against the build it replaced.
+ * They are a record of runs, not a claim about one.
  */
 
 const CORPUS_DIR = resolve(
@@ -461,6 +521,17 @@ interface MechHit {
   readonly srcBar: number;
 }
 
+/**
+ * The channel a recorded difference came in, derived from the measurement rather
+ * than from the register row's own self-report — that is what makes the
+ * `channel` field of a row checkable (`LOOKAHEAD_REGISTER` says which surface the
+ * difference shows up on; this says which surface it was actually seen on).
+ */
+const CHANNEL_OF_SHAPE: Record<MechHit["shape"], string> = {
+  "line-diverges": "line",
+  "line-not-in-prefix": "line",
+};
+
 function note(s: Sink, msg: string): void {
   // No cap here on purpose: a capped collector would feed a capped
   // classification, and the floors below assert on the FULL list.
@@ -484,22 +555,36 @@ function shapeOf(msg: string): string {
 }
 
 interface Counts {
-  /** Number series (line / marker channel / alert hits) actually walked. */
+  /** Number series (line / marker channel / alert hits) with at least one bar walked. */
   series: number;
-  /** Individual bar-indexed values walked inside those series. */
+  /** Individual bar-indexed values actually walked inside those series. */
   values: number;
   /** Full-run-only records whose window slice carried nothing (all-`na` series, never-fired alert): the legal warm-up drop. */
   naDropped: number;
   /** `table` drawings skipped (no bar anchor to window). */
   tables: number;
-  /** Drawing records compared on the strict rule (bar-indexed + frozen objects). */
+  /** Drawing records compared on the strict rule (bar-indexed + object records frozen AT THIS k). */
   drawings: number;
-  /** Object drawings excluded as run-end dependent (see drawing rule 2). */
+  /** Object drawings excluded as run-end dependent at this k (see drawing rule 2). */
   live: number;
-  /** Object drawings created at or after the cut (nothing in the window to check). */
+  /** …of `live`: content differs at this k AND the source mutates that kind (`set_*` / `delete`). */
+  liveMutating: number;
+  /** …of `live`: one side is missing and the identity itself moves with the end of the run. */
+  liveExistence: number;
+  /** …of `live`: content differs at this k with NO mutation call for that kind in the source → red. */
+  liveUnexplained: number;
+  /** …of `liveExistence`: that record's own anchor is below `k` — a hole measured on the wall, not argued. */
+  liveExistenceBelowCut: number;
+  /** Object drawings the full run alone has, anchored at or after the cut (nothing in the window to check). */
   afterCut: number;
+  /** …full-run-only records whose index no shorter run reaches at all: appended at the run's last bar. */
+  afterCutEndCreated: number;
+  /** …records anchored BELOW the cut with neither explanation: a future bar conjured them at bar < k → red. */
+  afterCutBelowCut: number;
   /** hline records compared. */
   hlines: number;
+  /** hline records the full run has past the prefix's own count: no bar anchor, so not comparable. */
+  hlineTail: number;
 }
 
 function groupBy<T>(items: readonly T[], key: (t: T) => string): Map<string, T[]> {
@@ -523,17 +608,24 @@ function cmpNumbers(s: Sink, path: string, p: number[], f: number[], k: number, 
     note(s, `${path}：全量序列长度 ${f.length}，应为 ${TOTAL}`);
     return;
   }
-  c.series += 1;
-  c.values += k;
+  // Counted AFTER the walk, and only for the bars actually reached: a series that
+  // diverges at bar 3 was compared over 4 bars, not over `k`, and `values=` is
+  // read as "bar-indexed values compared" on the wall.
+  let walked = 0;
   for (let i = 0; i < k; i++) {
     const a = p[i];
     const b = f[i];
+    walked += 1;
     if (Number.isNaN(a) && Number.isNaN(b)) continue;
     if (Number.isNaN(a) !== Number.isNaN(b) || a !== b) {
       note(s, `${path}：第 ${i} 根 前缀=${fmt(a)} 全量=${fmt(b)}`);
-      return;
+      break;
     }
     if (Number.isFinite(a)) s.informative = true;
+  }
+  if (walked > 0) {
+    c.series += 1;
+    c.values += walked;
   }
 }
 
@@ -552,14 +644,18 @@ function cmpSeries<T>(
     note(s, `${path} 长度 ${p.length}/${f.length} 不为 ${k}/${TOTAL}`);
     return;
   }
-  c.series += 1;
-  c.values += k;
+  let walked = 0;
   for (let i = 0; i < k; i++) {
+    walked += 1;
     if (!same(p[i], f[i])) {
       note(s, `${path} 第 ${i} 根 前缀=${String(p[i])} 全量=${String(f[i])}`);
-      return;
+      break;
     }
     if (informative(p[i])) s.informative = true;
+  }
+  if (walked > 0) {
+    c.series += 1;
+    c.values += walked;
   }
 }
 
@@ -629,8 +725,13 @@ function cmpLines(s: Sink, p: PineLine[], f: PineLine[], k: number, c: Counts): 
     }
     return -1;
   };
-  for (const [sig, ps] of pg) {
+  for (const sig of new Set([...pg.keys(), ...fg.keys()])) {
+    const ps = pg.get(sig) ?? [];
     const fs = fg.get(sig) ?? [];
+    // ONE match per signature group: `pairGroup` is deterministic in its
+    // arguments, so matching the group once and reading both sides off the same
+    // result is the same report — running it twice (once per side) used to
+    // produce two notes for one value-divergent line and double the pass.
     const m = pairGroup(ps, fs, equalSlices, windowEmpty);
     for (const [i, [a, b]] of m.pairs.entries()) cmpNumbers(s, `line ${sigName(sig)}#${i}`, a.values, b.values, k, c);
     c.naDropped += m.droppedFull;
@@ -653,10 +754,6 @@ function cmpLines(s: Sink, p: PineLine[], f: PineLine[], k: number, c: Counts): 
           `全量那一根的值是第 ${bar - a.offset} 根算出来的）`,
       );
     }
-  }
-  for (const [sig, fs] of fg) {
-    const ps = pg.get(sig) ?? [];
-    const m = pairGroup(ps, fs, equalSlices, windowEmpty);
     for (const b of m.onlyFullNonEmpty) {
       const bar = conjuredBar(b, ps);
       const at = b.values.slice(0, k).findIndex((v) => !Number.isNaN(v));
@@ -688,7 +785,8 @@ function cmpMarkers(s: Sink, p: PineMarker[], f: PineMarker[], k: number, c: Cou
   const fg = groupBy(f, (m) => m.name);
   const equalSlice = (a: PineMarker, b: PineMarker) => firstDiff(a.values, b.values, k) < 0;
   const windowEmpty = (m: PineMarker) => !m.values.slice(0, k).some((v) => !Number.isNaN(v));
-  for (const [name, ps] of pg) {
+  for (const name of new Set([...pg.keys(), ...fg.keys()])) {
+    const ps = pg.get(name) ?? [];
     const fs = fg.get(name) ?? [];
     const m = pairGroup(ps, fs, equalSlice, windowEmpty);
     for (const [i, [a, b]] of m.pairs.entries()) {
@@ -705,10 +803,6 @@ function cmpMarkers(s: Sink, p: PineMarker[], f: PineMarker[], k: number, c: Cou
           `前缀第 ${at} 根 = ${fmt(a.values[at])}）`,
       );
     }
-  }
-  for (const [name, fs] of fg) {
-    const ps = pg.get(name) ?? [];
-    const m = pairGroup(ps, fs, equalSlice, windowEmpty);
     for (const b of m.onlyFullNonEmpty) {
       const at = b.values.slice(0, k).findIndex((v) => !Number.isNaN(v));
       note(s, `marker「${name}」前缀里没有，但全量在第 ${at} 根标了 ${fmt(b.values[at])}`);
@@ -721,8 +815,36 @@ function cmpMarkers(s: Sink, p: PineMarker[], f: PineMarker[], k: number, c: Cou
  * prefix list must be an ORDER-PREFIX of the full list. A price that differs at
  * an index below the prefix's own count means the level was computed from data
  * the prefix did not have.
+ *
+ * The TAIL (the full run has more records than the prefix) is NOT silently
+ * dropped any more: a `hline` record carries no bar anchor (`pineTypes.ts:304`
+ * is `{ price, title, color?, style? }`), so the harness cannot tell "created
+ * after the cut" from "created before it with a future price" — it counts the
+ * tail (`hlines-tail-skipped=`), prints it and pins the count, exactly like the
+ * other skips. What the probe set gives for free: a record is appended only when
+ * the `hline()` key has not been seen yet (`pineRuntime.ts:1920-1925`), so one
+ * call site contributes at most one record per bar and a tail can only be what a
+ * LATER bar created — at `k = TOTAL - 1` that is bar 299 alone, while an
+ * unchecked tail at k=60 could hide 240 bars of creations. Deepest cut, tightest
+ * bound; the pin below is what turns "measured 0" into "stays 0".
+ * Was the drop LIVE or LATENT on this corpus? Measured LATENT: `hlines-tail-skipped`
+ * is 0 in every run of this build — the shipped green readout and both scratch
+ * copies named in the canary list below (the one that switched the drawing
+ * exemption off, `liveUnexplained` 0 → 1130, and the one that blinded this very
+ * anchor check, `after-cut-objects` 4 → 5). No hline record has ever been dropped
+ * invisibly here, and `tailRows` has never printed.
+ * The pin is still the only thing between a future tail and silence, so it is an
+ * exact `toBe(0)`, not a ceiling with slack: a record that can be neither compared
+ * nor attributed should cost somebody a red run and a paragraph.
  */
-function cmpHlines(s: Sink, p: PineResult["hlines"], f: PineResult["hlines"], c: Counts): void {
+function cmpHlines(
+  s: Sink,
+  p: PineResult["hlines"],
+  f: PineResult["hlines"],
+  k: number,
+  c: Counts,
+  tailRows: Set<string>,
+): void {
   if (p.length > f.length) {
     note(s, `hline 条数 前缀=${p.length} > 全量=${f.length}（多喂 bar 反而少一条参考线）`);
   }
@@ -735,6 +857,13 @@ function cmpHlines(s: Sink, p: PineResult["hlines"], f: PineResult["hlines"], c:
     } else {
       s.informative = true;
     }
+  }
+  if (f.length > p.length) {
+    const extra = f.length - p.length;
+    c.hlineTail += extra;
+    tailRows.add(
+      `${s.rel} k=${k}：全量 ${f.length} 条 > 前缀 ${p.length} 条，多出的 ${extra} 条无 bar 锚点、不比`,
+    );
   }
 }
 
@@ -766,9 +895,71 @@ function drawKey(d: Draw): string {
 const OBJECT_KINDS: Draw["kind"][] = ["label", "line", "box"];
 
 /**
- * Which object drawings are run-end dependent, measured over ALL runs of one
- * script (the five prefixes plus the full one). Key is `kind|identity`, the
- * value the measured reason. See drawing rule 2 in the header.
+ * The bar a drawing record is anchored to: `label` carries `.bar`, `line`/`box`
+ * carry `.x1` (both are `Math.round(xToBar(…))` of the object's own first
+ * coordinate, `pineRuntime.ts:2220-2255`). `undefined` only for the kinds with
+ * no anchor at all (`hline`, `table`), which never reach here.
+ */
+function anchorOf(d: Draw): number | undefined {
+  if (d.kind === "label") return d.bar;
+  if (d.kind === "line" || d.kind === "box") return d.x1;
+  return undefined;
+}
+
+/**
+ * The MUTATION MECHANISM, measured from the corpus source rather than from run
+ * behaviour: `label.set_text` / `label.set_xy` / `label.set_x` /
+ * `label.set_tooltip` / `line.set_xy1` / `line.set_xy2` / `label.delete` /
+ * `line.delete` — the forms the corpus actually uses, counted on the wall by
+ * `mutation calls in corpus source:` (measured 2026-10-07: 13 `label.set_text`,
+ * 13 `line.delete`, 13 `label.delete`, 11 `label.set_xy`, 2 `label.set_x`,
+ * 2 `label.set_tooltip`, 1 `line.set_xy1`, 1 `line.set_xy2`).
+ * `statistics/gaps_percent_size_distribution.pine:100,145-155` is the corpus
+ * example — a label created once and rewritten from inside `if barstate.islast`;
+ * `statistics/linear_regression_all_data.pine:39-40` is the case that sets the
+ * DIGIT-suffixed `line.set_xy1` / `line.set_xy2`, which is why the method name is
+ * `(set|delete)[a-z0-9_]*` and not `set_[a-z_]*` — a stricter class left those two
+ * calls unseen and reddened 5 records whose mechanism was on the next line.
+ * Keyed by the object kind the call names, value the distinct calls found.
+ *
+ * Honest limits, stated because they are real: this is a SOURCE scan, so a
+ * commented-out `label.set_text(` would satisfy it, and it says "this SCRIPT has
+ * mutation calls for this KIND", not "this object identity was mutated after
+ * bar k". What it does buy is that the exemption can no longer be granted by
+ * variance alone — an object that changes with no such call in the source is
+ * reported (`live-unexplained=`), not excused.
+ */
+const OBJECT_MUTATION_RE = /(?:^|[^.\w])(label|line|box)\.((?:set|delete)[a-z0-9_]*)\s*\(/g;
+
+/**
+ * Does this script build objects at the END of the run? Also source-measured:
+ * `barstate.islast` present (`statistics/gaps_percent_size_distribution.pine:119`
+ * opens the histogram block that calls `_line()`/`_label()`, and
+ * `utils/unit_testing_framework.pine` / `statistics/linear_regression_all_data.pine`
+ * are the other two). It is used ONLY as a conjunct with `createdAfterEveryPrefix`
+ * below, never as a blanket exemption.
+ */
+const RUN_END_RE = /barstate\.islast/;
+
+function measureObjectMutators(src: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const m of src.matchAll(OBJECT_MUTATION_RE)) {
+    const calls = out.get(m[1]) ?? [];
+    if (!calls.includes(m[2])) calls.push(m[2]);
+    out.set(m[1], calls);
+  }
+  return out;
+}
+
+/**
+ * Which object IDENTITIES are run-end dependent, measured over ALL SIX runs of
+ * one script (the five prefixes plus the full one). Key is `kind|identity`, the
+ * value the measured reason.
+ *
+ * After the per-`k` rewrite this answers ONE question — does this identity's
+ * very EXISTENCE move with the end of the run — and it is no longer what
+ * exempts a content difference (see `cmpObjectDrawings`: content is decided at
+ * the `k` it happened, against the mutation mechanism). See drawing rule 2.
  */
 function measureObjectLiveness(results: PineResult[]): Map<string, string> {
   const live = new Map<string, string>();
@@ -779,11 +970,12 @@ function measureObjectLiveness(results: PineResult[]): Map<string, string> {
       const states = lists.map((l) => (i < l.length ? drawKey(l[i]) : undefined));
       const seen = states.filter((x): x is string => x !== undefined);
       const distinct = new Set(seen).size;
+      const present = seen.length;
       const inFull = states[states.length - 1] !== undefined;
       if (distinct > 1) {
         live.set(
           `${kind}|${i}`,
-          `${distinct} 种喂法给出 ${distinct} 种状态（对象随喂到第几根而变，前 k 项投影不存在）`,
+          `${present} 种喂法给出 ${distinct} 种状态（对象随喂到第几根而变，前 k 项投影不存在）`,
         );
       } else if (!inFull) {
         live.set(`${kind}|${i}`, `较短的喂法里有、全量里没有（对象在更晚的 bar 被删掉或重建）`);
@@ -791,6 +983,42 @@ function measureObjectLiveness(results: PineResult[]): Map<string, string> {
     }
   }
   return live;
+}
+
+/** How many records of each object kind each of the five prefixes emitted, in
+ * `KS` order — the shape `createdAfterEveryPrefix` reads. A prefix that did not
+ * compile reports `Number.MAX_SAFE_INTEGER`, i.e. the exemption is not granted. */
+function measureKindCounts(prefixes: (PineResult | null)[]): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const kind of OBJECT_KINDS) {
+    out.set(
+      kind,
+      prefixes.map((r) => (r ? r.drawings.filter((d) => d.kind === kind).length : Number.MAX_SAFE_INTEGER)),
+    );
+  }
+  return out;
+}
+
+/**
+ * Was index `i` of this kind created at the END of the full run rather than at a
+ * bar inside the window? Two measured conjuncts, no engine fact invented:
+ *   (a) NO prefix reaches index `i` — the object did not exist while any of them
+ *       was running;
+ *   (b) the per-kind count is non-decreasing with run length — `emitDrawings`
+ *       walks `drawObjs.values()` in INSERTION order and skips deleted objects
+ *       (`pineRuntime.ts:2223`), so a count that only grows means index `i` is a
+ *       SUFFIX append, not a renumbered survivor.
+ * Used with `RUN_END_RE` (source) this is what makes
+ * `statistics/gaps_percent_size_distribution.pine`'s 299th histogram column
+ * legible: it is created at bar 299 and ANCHORED at `x=298`, so its coordinate
+ * sits inside the window while its creation does not — a bare "anchor < k ⇒ red"
+ * would call that a leak and be wrong about the engine.
+ */
+function createdAfterEveryPrefix(counts: number[] | undefined, i: number): boolean {
+  if (!counts || !counts.length) return false;
+  if (!counts.every((n) => n <= i)) return false;
+  for (let j = 1; j < counts.length; j++) if (counts[j]! < counts[j - 1]!) return false;
+  return true;
 }
 
 /** Per-bar colour projection of the `bg` / `bar` records a run emitted. */
@@ -814,10 +1042,10 @@ function cmpBarIndexedDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Coun
     if (!ps.length && !fs.length) continue;
     const a = colourPerBar(ps, k);
     const b = colourPerBar(fs, k);
-    c.series += 1;
-    c.values += k;
     c.drawings += 1;
+    let walked = 0;
     for (let i = 0; i < k; i++) {
+      walked += 1;
       if (a[i] !== b[i]) {
         note(
           s,
@@ -826,6 +1054,10 @@ function cmpBarIndexedDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Coun
         break;
       }
       if (a[i] !== null) s.informative = true;
+    }
+    if (walked > 0) {
+      c.series += 1;
+      c.values += walked;
     }
   }
   // `fill`: group by the call-site colour/alpha, then compare the band's
@@ -864,67 +1096,166 @@ function cmpBarIndexedDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Coun
   }
 }
 
-function cmpObjectDrawings(
-  s: Sink,
-  p: Draw[],
-  f: Draw[],
-  c: Counts,
-  live: Map<string, string>,
-  liveReasons: Set<string>,
-): void {
+/** Everything the drawing pass needs beyond the counters: the two measured
+ * signals and the row collectors that make each skip visible on the wall. */
+interface Extras {
+  /** Identity-level run-end dependence over all six runs (`measureObjectLiveness`). */
+  readonly live: Map<string, string>;
+  /** Per-kind mutation calls found in this script's source (`measureObjectMutators`). */
+  readonly mutators: Map<string, string[]>;
+  /** Per-kind record counts of the five prefixes, in `KS` order. */
+  readonly kindCounts: Map<string, number[]>;
+  /** Source contains `barstate.islast` (`RUN_END_RE`). */
+  readonly runEnd: boolean;
+  readonly liveReasons: Set<string>;
+  readonly afterCutRows: Set<string>;
+  readonly tailRows: Set<string>;
+  readonly belowCutRows: Set<string>;
+  readonly endCreatedRows: Set<string>;
+}
+
+/**
+ * Object drawings (`label` / `line` / `box`), decided PER (script, k).
+ *
+ * `emitDrawings` emits ONE record per surviving object holding its FINAL state
+ * (`pineRuntime.ts:2220-2255`), so the two records of one identity are the same
+ * object at two ends of one mutation sequence. Four branches, narrowest first:
+ *   1. equal at this k → compared like any other record (per-`k` exemption: a
+ *      longer prefix mutating the object later no longer excuses this one);
+ *   2. different content → excused only on the MECHANISM (the source mutates
+ *      that kind); without it the difference is reported, not excused;
+ *   3. prefix-only → the identity-level flag (deleted/rebuilt later) excuses it,
+ *      and its absence is a contradiction between the two views → reported;
+ *   4. full-only → the identity flag excuses the re-counted creation order (its
+ *      anchor measured, printed and pinned); otherwise the anchor is CHECKED:
+ *      `>= k` after-cut, `< k` either end-created (`barstate.islast` + an index no
+ *      shorter run reaches — `anchorOf` is a coordinate, not a creation bar) or RED.
+ * Branch 4's measured outcome today: 4 records `>= k`, 1 record end-created, 0 red.
+ */
+function cmpObjectDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, x: Extras): void {
   for (const kind of OBJECT_KINDS) {
     const ps = p.filter((d) => d.kind === kind);
     const fs = f.filter((d) => d.kind === kind);
+    const calls = x.mutators.get(kind);
     for (let i = 0; i < Math.max(ps.length, fs.length); i++) {
       const a = ps[i];
       const b = fs[i];
       const tag = `${kind}|${i}`;
-      const why = live.get(tag);
+      const why = x.live.get(tag);
+      // (1) same state at this k as at the end of the full run → COMPARED, hard,
+      // even when a longer prefix mutates this object afterwards. This is what
+      // "exempt per (script, k)" buys.
+      if (a && b && drawKey(a) === drawKey(b)) {
+        c.drawings += 1;
+        s.informative = true;
+        continue;
+      }
+      // (2) same identity, different end of the same mutation sequence.
+      if (a && b) {
+        if (calls) {
+          c.live += 1;
+          c.liveMutating += 1;
+          x.liveReasons.add(`${s.rel} ${tag} — 源码对 ${kind} 有 ${calls.join("/")} 调用，同一对象在更长的喂法里还会变`);
+          continue;
+        }
+        c.live += 1;
+        c.liveUnexplained += 1;
+        note(
+          s,
+          `${kind} 第 ${i} 项在 k=${k} 的内容与全量末端不同，而源码里没有 ${kind} 的 set_*/delete 调用能解释它：` +
+            `前缀=${drawKey(a)} 全量=${drawKey(b)}（不是「对象在 k 之后被改过」，按字面差异处理）`,
+        );
+        continue;
+      }
+      // (3) the prefix has it, the full run does not. `measureObjectLiveness`
+      // flags exactly this shape (present in a shorter run, gone at the end of a
+      // longer one — deleted or rebuilt later), so reaching the branch without
+      // the flag means the two views of the same data disagree: loud.
+      if (a && !b) {
+        const an = anchorOf(a);
+        if (why) {
+          c.live += 1;
+          c.liveExistence += 1;
+          if (an !== undefined && an < k) c.liveExistenceBelowCut += 1;
+          x.liveReasons.add(`${s.rel} ${tag} — ${why}`);
+          continue;
+        }
+        c.live += 1;
+        c.liveUnexplained += 1;
+        note(
+          s,
+          `${kind} 第 ${i} 项在前缀里有、全量里没有，而存活度判定没抓到：前缀=${drawKey(a)}（锚点 ${an ?? "无"}`,
+        );
+        continue;
+      }
+      // (4) only the FULL run has it, and the identity itself did NOT move between
+      // runs. The anchor is CHECKED here instead of assumed — with one correction
+      // the measurement forced on me: `anchorOf` returns a drawing COORDINATE
+      // (`Math.round(xToBar(o.x))`, `pineRuntime.ts:2229-2247`), not the bar the
+      // object was created on, so "anchor < k" is not by itself evidence of a leak;
+      // it says the coordinate lies inside the window. Three verdicts, each pinned:
+      //   • anchor >= k → after-cut (created past the cut, nothing in the window);
+      //   • anchor < k but the object was BUILT AT THE RUN'S END (`x.runEnd` from
+      //     the source, `createdAfterEveryPrefix` from the six runs) → end-created:
+      //     creation bar is the full run's last bar (299), which is past every cut
+      //     in `KS`, while its column sits on bar 298;
+      //   • neither → RED (`after-cut-unexplained=`), pinned at 0. That is the gate
+      //     the reviewer asked for; it fires on nothing today, which is why the two
+      //     positive categories carry their own measured ceilings.
+      // When the identity DOES move (`why`), index pairing carries no information
+      // for any anchor check to convict — `statistics/
+      // gaps_percent_size_distribution.pine:145-155` draws one column per bucket
+      // inside `if barstate.islast`, so index 239 of the k=240 run and index 239 of
+      // the full run are different objects. Exempted, counted, and its anchor
+      // MEASURED: `existence-anchor-below-k=` is that hole, on the wall.
+      const full = b!;
+      const an = anchorOf(full);
       if (why) {
         c.live += 1;
-        liveReasons.add(`${s.rel} ${tag} — ${why}`);
+        c.liveExistence += 1;
+        if (an !== undefined && an < k) {
+          c.liveExistenceBelowCut += 1;
+          if (x.belowCutRows.size < 8) {
+            x.belowCutRows.add(`${s.rel} ${tag} k=${k} — 全量这条记录锚在第 ${an} 根（< k），索引配对本身随喂法移动`);
+          }
+        }
+        x.liveReasons.add(`${s.rel} ${tag} — ${why}`);
         continue;
       }
-      if (!a) {
-        c.afterCut += 1; // created at or after the cut: no window entry to compare
+      if (an === undefined) {
+        c.afterCutBelowCut += 1;
+        note(s, `${kind} 第 ${i} 项只有全量有，而这条记录没有 bar 锚点可查：全量=${drawKey(full)}`);
         continue;
       }
-      c.drawings += 1;
-      // Contradiction guards: the liveness pass above already covers "content
-      // varies" and "gone in the full run", so reaching either line means the
-      // two views of the same data disagree — a harness bug, which must be loud.
-      if (!b) {
-        note(s, `${kind} 第 ${i} 项在前缀里有、全量里没有，而存活度判定没抓到：前缀=${drawKey(a)}`);
+      if (an >= k) {
+        c.afterCut += 1;
+        x.afterCutRows.add(`${s.rel} ${tag} k=${k} — 锚在第 ${an} 根（>= k）：${drawKey(full)}`);
         continue;
       }
-      if (a.kind !== b.kind) {
-        note(s, `${kind} 第 ${i} 项两侧类型不一致（前缀=${a.kind} 全量=${b.kind}）`);
+      if (x.runEnd && createdAfterEveryPrefix(x.kindCounts.get(kind), i)) {
+        c.afterCutEndCreated += 1;
+        x.endCreatedRows.add(
+          `${s.rel} ${tag} k=${k} — 锚点 ${an} 在窗口内，但没有任何更短的喂法够到这个索引，且 ${kind} 的条数随喂法单调不减（${(x.kindCounts.get(kind) ?? []).join("/")}/${fs.length}）：${drawKey(full)}`,
+        );
         continue;
       }
-      if (drawKey(a) !== drawKey(b)) {
-        note(s, `${kind} 第 ${i} 项冻结于窗口内却变了：前缀=${drawKey(a)} 全量=${drawKey(b)}`);
-        continue;
-      }
-      s.informative = true;
+      c.afterCutBelowCut += 1;
+      note(
+        s,
+        `${kind} 第 ${i} 项只有全量有，锚在第 ${an} 根（< k=${k}），而「末端造物」的三条证据都不成立` +
+          `（更短的喂法也到过这个索引 / 该 kind 的条数不单调 / 源码无 barstate.islast）：全量=${drawKey(full)}`,
+      );
     }
   }
 }
 
-function cmpDrawings(
-  s: Sink,
-  p: Draw[],
-  f: Draw[],
-  k: number,
-  c: Counts,
-  live: Map<string, string>,
-  liveReasons: Set<string>,
-): void {
+function cmpDrawings(s: Sink, p: Draw[], f: Draw[], k: number, c: Counts, x: Extras): void {
   c.tables += Math.max(
     p.filter((d) => d.kind === "table").length,
     f.filter((d) => d.kind === "table").length,
   );
   cmpBarIndexedDrawings(s, p, f, k, c);
-  cmpObjectDrawings(s, p, f, c, live, liveReasons);
+  cmpObjectDrawings(s, p, f, k, c, x);
 }
 
 function cmpAlerts(s: Sink, p: Alert[], f: Alert[], k: number, c: Counts): void {
@@ -936,7 +1267,8 @@ function cmpAlerts(s: Sink, p: Alert[], f: Alert[], k: number, c: Counts): void 
     return true;
   };
   const windowEmpty = (a: Alert) => !a.hits.slice(0, k).some(Boolean);
-  for (const [kk, ps] of pg) {
+  for (const kk of new Set([...pg.keys(), ...fg.keys()])) {
+    const ps = pg.get(kk) ?? [];
     const fs = fg.get(kk) ?? [];
     const m = pairGroup(ps, fs, equalHits, windowEmpty);
     for (const [a, b] of m.pairs) cmpSeries(s, `alert ${kk}`, a.hits, b.hits, k, c, (x, y) => x === y, (x) => x);
@@ -949,10 +1281,6 @@ function cmpAlerts(s: Sink, p: Alert[], f: Alert[], k: number, c: Counts): void 
           `条数 前缀=${ps.length} 全量=${fs.length}）`,
       );
     }
-  }
-  for (const [kk, fs] of fg) {
-    const ps = pg.get(kk) ?? [];
-    const m = pairGroup(ps, fs, equalHits, windowEmpty);
     for (const b of m.onlyFullNonEmpty) {
       const at = b.hits.slice(0, k).findIndex(Boolean);
       note(s, `alert ${kk} 前缀里没这条，但全量在第 ${at} 根就命中`);
@@ -975,13 +1303,12 @@ function cmpArtifact(
   full: PineArtifact,
   k: number,
   c: Counts,
-  live: Map<string, string>,
-  liveReasons: Set<string>,
+  x: Extras,
 ): void {
   cmpLines(s, pre.result.lines, full.result.lines, k, c);
   cmpMarkers(s, pre.result.markers, full.result.markers, k, c);
-  cmpHlines(s, pre.result.hlines, full.result.hlines, c);
-  cmpDrawings(s, pre.result.drawings, full.result.drawings, k, c, live, liveReasons);
+  cmpHlines(s, pre.result.hlines, full.result.hlines, k, c, x.tailRows);
+  cmpDrawings(s, pre.result.drawings, full.result.drawings, k, c, x);
   if (pre.result.alerts || full.result.alerts) {
     cmpAlerts(s, pre.result.alerts ?? [], full.result.alerts ?? [], k, c);
   }
@@ -1018,10 +1345,36 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     expect(Math.max(...gaps), "没有跳空：gap 类脚本会在 na 对 na 上空转").toBeGreaterThan(0.02);
     const bodies = BARS.map((b) => Math.abs(b.close - b.open) / b.open);
     expect(Math.max(...bodies)).toBeGreaterThan(0.01);
-    // Step 4 的实测前提：宿主周期必须被推断成恰好 1 天，且每个探针长度都是——
-    // 否则 request.security 的 HTF 分桶在两种喂法下不是同一个函数，比较无意义。
-    expect(inferTimeframeMs(toBars(BARS))).toBe(DAY_MS);
-    for (const k of KS) expect(inferTimeframeMs(toBars(BARS.slice(0, k))), `k=${k}`).toBe(DAY_MS);
+    // 「独立影线 ⇒ 严格局部极值存在」是文件头列为承重的那条性质，这里断言它，
+    // 不再只写在注释里：把 high/low 绑到相邻收盘上，pivot/fractal/zigzag 一类
+    // 脚本就永远不出值，比较会退化成 na 对 na（本仓踩过的空转通过）。
+    // 实测：300 根里 86 根严格高点、86 根严格低点；最短探针 k=60 里 18/17。
+    const pivotHigh = (list: KLineData[]) => {
+      let n = 0;
+      for (let i = 1; i < list.length - 1; i++) {
+        if (list[i].high > list[i - 1].high && list[i].high > list[i + 1].high) n += 1;
+      }
+      return n;
+    };
+    const pivotLow = (list: KLineData[]) => {
+      let n = 0;
+      for (let i = 1; i < list.length - 1; i++) {
+        if (list[i].low < list[i - 1].low && list[i].low < list[i + 1].low) n += 1;
+      }
+      return n;
+    };
+    expect(pivotHigh(BARS), "严格局部高点数（实测 86/300）").toBeGreaterThanOrEqual(60);
+    expect(pivotLow(BARS), "严格局部低点数（实测 86/300）").toBeGreaterThanOrEqual(60);
+    // 每个探针长度自己也要有极值，否则最短那一档是在空比
+    for (const k of KS) {
+      const pre = BARS.slice(0, k);
+      expect(pivotHigh(pre), `k=${k} 前缀的严格高点数（k=60 实测 18）`).toBeGreaterThan(5);
+      expect(pivotLow(pre), `k=${k} 前缀的严格低点数（k=60 实测 17）`).toBeGreaterThan(5);
+    }
+    // Step 4 的实测前提：宿主周期必须被推断成恰好 1 天。逐个 k 的同一条针搬进
+    // 下面那条比较 test 的前置里了——两条 test 相互独立，留在这里只会让周期漂移
+    // 在比较跑完之后的下一条 test 才红。
+    expect(inferTimeframeMs(toBars(BARS)), "宿主周期必须是恰好 1 天").toBe(DAY_MS);
   });
 
   it("每个脚本、每个 k：前 k 根喂进去的结果必须等于全量的前 k 项", () => {
@@ -1032,11 +1385,25 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
       tables: 0,
       drawings: 0,
       live: 0,
+      liveMutating: 0,
+      liveExistence: 0,
+      liveExistenceBelowCut: 0,
+      liveUnexplained: 0,
       afterCut: 0,
+      afterCutEndCreated: 0,
+      afterCutBelowCut: 0,
       hlines: 0,
+      hlineTail: 0,
     };
+    // Step 4 的前提在比较之前现场核一遍（原来只有那条输入 test 里有）：两条 test
+    // 相互独立，周期漂移若留到下一条才红，比较已经白跑了一轮。
+    expect(inferTimeframeMs(toBars(BARS)), "宿主周期必须是恰好 1 天，否则 HTF 分桶在两种喂法下不是同一个函数").toBe(DAY_MS);
+    for (const k of KS) {
+      expect(inferTimeframeMs(toBars(BARS.slice(0, k))), `k=${k} 的周期推断也必须是 1 天`).toBe(DAY_MS);
+    }
     let failed = 0;
     let aborted = 0;
+    const abortedFiles: string[] = [];
     let ran = 0;
     let plainScripts = 0;
     let mtfScripts = 0;
@@ -1049,8 +1416,14 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     let informativeScripts = 0;
     const diffs: string[] = [];
     const mismatchKeys: string[] = [];
+    const failedFiles: string[] = [];
     const perFile: { rel: string; isMtf: boolean; diffs: string[]; hits: MechHit[] }[] = [];
     const liveReasons = new Set<string>();
+    const afterCutRows = new Set<string>();
+    const endCreatedRows = new Set<string>();
+    const tailRows = new Set<string>();
+    const belowCutRows = new Set<string>();
+    const mutationCalls = new Map<string, number>();
     const nonInformative: string[] = [];
 
     for (const abs of files) {
@@ -1062,21 +1435,44 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
         const full = compilePine(src, BARS, {});
         if ("error" in full) {
           failed += 1; // not runnable → nothing to compare; counted, never a pass
+          failedFiles.push(`${rel} — ${full.error}`);
           continue;
         }
         ran += 1;
-        if (full.abort) aborted += 1;
+        if (full.abort) {
+          aborted += 1;
+          abortedFiles.push(`${rel} — ${full.abort}`);
+        }
         const isMtf = MTF_RE.test(src) || (full.result.lowerTfMs?.length ?? 0) > 0;
         if (isMtf) mtfScripts += 1;
         else plainScripts += 1;
 
         // All five prefix runs first: the object-drawing liveness verdict is a
-        // measurement over the whole sweep, not a per-k guess.
+        // measurement over the whole sweep, not a per-k guess. The mutation
+        // mechanism is read off the SOURCE, so it is known before any run.
         const prefixes = KS.map((k) => compilePine(src, BARS.slice(0, k), {}));
         const results: PineResult[] = [];
         for (const p of prefixes) if (!("error" in p)) results.push(p.result);
         results.push(full.result);
+        const mutators = measureObjectMutators(src);
+        const kindCounts = measureKindCounts(prefixes.map((p) => ("error" in p ? null : p.result)));
+        const runEnd = RUN_END_RE.test(src);
+        for (const m of src.matchAll(OBJECT_MUTATION_RE)) {
+          const name = `${m[1]}.${m[2]}`;
+          mutationCalls.set(name, (mutationCalls.get(name) ?? 0) + 1);
+        }
         const live = measureObjectLiveness(results);
+        const x: Extras = {
+          live,
+          mutators,
+          kindCounts,
+          runEnd,
+          liveReasons,
+          afterCutRows,
+          tailRows,
+          belowCutRows,
+          endCreatedRows,
+        };
 
         const scriptDiffs: string[] = [];
         const hits: MechHit[] = [];
@@ -1088,7 +1484,7 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
           if ("error" in pre) {
             note(s, `全量能跑、前 ${k} 根跑不起来：${pre.error}`);
           } else {
-            cmpArtifact(s, pre, full, k, c, live, liveReasons);
+            cmpArtifact(s, pre, full, k, c, x);
           }
           if (s.informative) informative = true;
         });
@@ -1120,20 +1516,62 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     );
     process.stdout.write(
       `  compared: series=${c.series} values=${c.values} drawings=${c.drawings} hlines=${c.hlines} ` +
-        `na-dropped=${c.naDropped} live-objects=${c.live} after-cut-objects=${c.afterCut} tables-skipped=${c.tables}\n`,
+        `na-dropped=${c.naDropped}\n`,
+    );
+    // Every record this gate does NOT compare is on this line, with the reason
+    // counter it is excused on. Nothing here is a prose claim.
+    process.stdout.write(
+      `  exempted: live-objects=${c.live} (mutating=${c.liveMutating} existence=${c.liveExistence} ` +
+        `existence-anchor-below-k=${c.liveExistenceBelowCut} unexplained=${c.liveUnexplained}) ` +
+        `after-cut-objects=${c.afterCut} after-cut-end-created=${c.afterCutEndCreated} ` +
+        `after-cut-unexplained=${c.afterCutBelowCut} ` +
+        `hlines-tail-skipped=${c.hlineTail} tables-skipped=${c.tables}\n`,
+    );
+    if (failedFiles.length) process.stdout.write(`  failed runs: ${failedFiles.join(" | ")}\n`);
+    if (abortedFiles.length) process.stdout.write(`  aborted runs: ${abortedFiles.join(" | ")}\n`);
+    process.stdout.write(
+      `  mutation calls in corpus source: ${[...mutationCalls.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([x, n]) => `${x}=${n}`)
+        .join(", ") || "none"}\n`,
     );
     process.stdout.write(
       `  mismatched: plain=${plainMismatched} mtf=${mtfMismatched} register=${mismatchKeys.length} (files: ${mismatchKeys
         .slice(0, 6)
         .join(", ")})\n`,
     );
+    // Uncapped on purpose: the header argues from this list, so the argument has
+    // to be readable off the wall, not off a truncated print.
     process.stdout.write(
-      `  non-informative (nothing but \`na\` produced on these bars): ${nonInformative.length}: ${nonInformative
-        .slice(0, 12)
-        .join(", ")}${nonInformative.length > 12 ? ", …" : ""}\n`,
+      `  non-informative (nothing but \`na\` produced on these bars): ${nonInformative.length}: ${nonInformative.join(", ")}\n`,
     );
-    process.stdout.write(`  live drawing objects (run-end dependent, ${liveReasons.size} verdicts):\n`);
+    // Identities, not records: `live-objects=1848` is 1848 RECORD comparisons
+    // spread over the (script, identity) pairs named here.
+    const liveIdentities = new Set([...liveReasons].map((r) => r.slice(0, r.indexOf(" — ")))).size;
+    process.stdout.write(
+      `  live drawing objects (run-end dependent: ${liveIdentities} (script, identity) pairs exempted, ${liveReasons.size} reason rows):\n`,
+    );
     for (const r of [...liveReasons].sort().slice(0, 24)) process.stdout.write(`    live: ${r}\n`);
+    if (afterCutRows.size) {
+      process.stdout.write(`  after-cut object records (${afterCutRows.size}, anchor >= k checked, not assumed):\n`);
+      for (const r of [...afterCutRows].sort()) process.stdout.write(`    ${r}\n`);
+    }
+    if (endCreatedRows.size) {
+      process.stdout.write(
+        `  end-created object records (${c.afterCutEndCreated}, anchor < k but built on the run's last bar):\n`,
+      );
+      for (const r of [...endCreatedRows].sort()) process.stdout.write(`    ${r}\n`);
+    }
+    if (tailRows.size) {
+      process.stdout.write(`  hline tail records (${tailRows.size}):\n`);
+      for (const r of [...tailRows].sort()) process.stdout.write(`    ${r}\n`);
+    }
+    if (belowCutRows.size) {
+      process.stdout.write(
+        `  existence records anchored BELOW the cut (${c.liveExistenceBelowCut} counted, first ${belowCutRows.size} shown):\n`,
+      );
+      for (const r of [...belowCutRows].sort()) process.stdout.write(`    ${r}\n`);
+    }
     // Shape histogram: a flat head-N dump of the raw list is dominated by the
     // noisiest file, and classification needs the SHAPE of every file's diffs.
     // Nothing is dropped here — `diffs` keeps all of them and the assertions
@@ -1211,26 +1649,126 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
 
     /* -------------------------------------------------------------- floors */
     // No vacuous pass: the walk found these files and every compared script was
-    // evaluated at every k in the probe set. Floors are the measured counts
-    // (2026-10-07), with room for a corpus file to be removed, not room for the
-    // comparison to stop happening.
+    // evaluated at every k in the probe set. The WORK floors are per-script
+    // averages against `ran`, not absolutes: an absolute `> 400_000` under a
+    // measured 460 826 leaves ~18 scripts' worth of slack while its comment
+    // claimed room for one removed file, and a floor that can swallow 18 scripts
+    // stopping being compared is not a floor. Against `ran` each one says what it
+    // means: every script that ran still contributes this much compared work.
     expect(pairs, "(script, k) 对必须是 已比较脚本 × 探针长度").toBe(ran * KS.length);
-    expect(pairs, "对数下限（实测 1050）").toBeGreaterThanOrEqual(1000);
     expect(ran, "跑通并可比较的脚本数掉了：语料遍历或解释器坏了（实测 210）").toBeGreaterThanOrEqual(200);
     expect(plainScripts + mtfScripts, "分档必须覆盖每个跑通的脚本").toBe(ran);
     expect(mtfScripts, "多周期档的脚本数（实测 7）").toBeGreaterThanOrEqual(6);
-    expect(c.values, "一个值都没比到，等于没守卫（实测 460826 个逐 bar 的值）").toBeGreaterThan(400_000);
-    expect(c.series, "一条序列都没比到（实测 2302 条）").toBeGreaterThan(2_000);
-    expect(c.drawings, "一条画线记录都没比到（实测 366 条，另有 live-objects 走单独口径）").toBeGreaterThan(300);
-    expect(c.hlines, "一条 hline 都没比到（实测 920）").toBeGreaterThan(800);
+    // Measured averages, COMPUTED in the message rather than retyped into it: a
+    // caption that has to be edited every run is a caption that goes stale (this
+    // one said 2 186 while the measured value was 460 826/210 = 2 194). The
+    // multiples below sit under the measured averages — values 2 194, series 11,
+    // hlines 4.4, drawings 1.8 — and the slack they leave is stated in files, not
+    // in prose.
+    const avg = (n: number): string => (n / ran).toFixed(2);
+    expect(
+      c.values,
+      `平均每个脚本至少比到 2 000 个逐 bar 的值（实测 ${c.values} / ${ran} = ${avg(c.values)}）`,
+    ).toBeGreaterThanOrEqual(ran * 2_000);
+    expect(
+      c.series,
+      `平均每个脚本至少比到 10 条序列（实测 ${c.series} / ${ran} = ${avg(c.series)}）`,
+    ).toBeGreaterThanOrEqual(ran * 10);
+    expect(
+      c.hlines,
+      `平均每个脚本至少比到 4 条 hline（实测 ${c.hlines} / ${ran} = ${avg(c.hlines)}）`,
+    ).toBeGreaterThanOrEqual(ran * 4);
+    expect(
+      c.drawings,
+      `平均每个脚本至少严格比到 1.5 条画线记录（实测 ${c.drawings} / ${ran} = ${avg(c.drawings)}；其余走 exempted 那行）`,
+    ).toBeGreaterThanOrEqual(Math.round(ran * 1.5));
     // The comparison must not be `na` against `na` all the way down: a script
-    // only counts as covered once a FINITE value (or a fired alert, or a frozen
-    // drawing) actually sat in the window and was compared.
+    // only counts as covered once a FINITE value (or a fired alert, or a compared
+    // drawing record) actually sat in the window and was compared.
     expect(informativeScripts + nonInformative.length, "信息/非信息两档必须盖过每个跑通的脚本").toBe(passed);
-    expect(informativeScripts, "真有值在比的脚本数（实测 191）").toBeGreaterThanOrEqual(180);
+    expect(
+      informativeScripts,
+      `真有值在比的脚本数不得低于跑通脚本的 85%（实测 ${informativeScripts}/${ran} = ${Math.round(
+        (informativeScripts / ran) * 100,
+      )}%）`,
+    ).toBeGreaterThanOrEqual(Math.round(ran * 0.85));
+    // The two buckets that SHRINK the comparison are pinned like the ones that
+    // add work to it. `failed` produces no comparison at all, so it is 0 or the
+    // corpus broke; `aborted` matters because a run that stops at bar 1 compares
+    // `na` against `na` at every later bar and passes for free — the floor above
+    // is what keeps that from becoming the whole gate, and this ceiling is what
+    // keeps it from quietly becoming 20 scripts.
+    expect(failed, `全量 run 直接返回 error 的脚本数（实测 ${failed}）：没东西可比不等于通过`).toBe(0);
+    expect(
+      aborted,
+      `中途 abort 的脚本数（实测 ${aborted}：${abortedFiles.map((x) => x.split(" — ")[0]).join(", ")}）——` +
+        `中断之后的 bar 两侧都是 na，比的是空，只许这几本`,
+    ).toBeLessThanOrEqual(2);
+    // The header argues that the two `offset = (-i * space)` dashboards are not
+    // vacuous passes. That is asserted, not read off a truncated print.
+    for (const rel of [
+      "statistics/dividends_per_share_dps_yearly.pine",
+      "statistics/earnings_per_share_eps_yearly.pine",
+    ]) {
+      expect(nonInformative, `${rel} 掉进了 non-informative 档：文件头「它的 offset=0 序列真在被逐根比对」一句失效`).not.toContain(
+        rel,
+      );
+    }
     // The gate itself must not be the thing that breaks.
     expect(crashed, "harness 自己抛异常").toBe(0);
     expect(passed + mismatched, "passed + mismatched 必须等于跑通的脚本数").toBe(ran);
+
+    /* ------------------------------------------------ the skip inventory */
+    // Every one of these numbers is a hole with a size on it. They are pinned so
+    // a hole can only grow by somebody reading the number and saying so.
+    expect(
+      c.liveUnexplained,
+      `内容随喂法而变、源码里却没有 ${OBJECT_KINDS.join("/")} 的 set_*/delete 调用能解释的画线记录（实测 ${c.liveUnexplained}，必须 0）` +
+        `——非 0 就是「对象通道里出现了无法解释的差异」，见文件头 drawing rule 2`,
+    ).toBe(0);
+    expect(
+      c.afterCutBelowCut,
+      `只有全量有、锚点 < k、而「末端造物」的两条证据（索引没有任何更短喂法够到 + 该 kind 条数单调）都不成立的对象记录` +
+        `（实测 ${c.afterCutBelowCut}，必须 0）：那就是更晚的 bar 在窗口里造出来的记录`,
+    ).toBe(0);
+    // The two positive categories, ceilings pinned from the same measurement the
+    // header quotes (2026-10-07: all 5 records are one identity, `line|298` of
+    // `statistics/gaps_percent_size_distribution.pine` — 4 of them anchored at 298
+    // ≥ k, the k=299 one anchored at 298 < k and end-created).
+    expect(
+      c.afterCut,
+      `锚点 >= k 的「只有全量有」对象记录（实测 ${c.afterCut}）：切点之后创建的画线，只许登记这么多`,
+    ).toBeLessThanOrEqual(4);
+    expect(
+      c.afterCutEndCreated,
+      `锚点 < k 但由 barstate.islast 在 run 末端创建的对象记录（实测 ${c.afterCutEndCreated}）：` +
+        `画线的 x 是坐标不是创建 bar（pineRuntime.ts:2229），这条只能命名不能算违规，但也不许悄悄长`,
+    ).toBeLessThanOrEqual(1);
+    expect(c.live, `被豁免的对象画线记录总数（实测 ${c.live}）只许按登记的口径长`).toBeLessThanOrEqual(1_848);
+    // `existence-anchor-below-k` is the biggest single hole inside `live` — 288
+    // of the 718 existence records are anchored below their own cut, where index
+    // pairing carries no information for any anchor check to convict. It was a
+    // printed number with no gate under it; now it is a capped one, same shape as
+    // the `live` ceiling above (whose bite was proven by lowering it one notch in
+    // a scratch copy — canary ④).
+    expect(
+      c.liveExistenceBelowCut,
+      `被豁免的存在性记录里锚点在切点以下的条数（实测 ${c.liveExistenceBelowCut}）：` +
+        `这条洞靠索引配对撑着，只许按登记的口径长`,
+    ).toBeLessThanOrEqual(288);
+    expect(
+      c.drawings / (c.drawings + c.live),
+      `画线里被严格比到的份额（实测 ${c.drawings}/${c.drawings + c.live} = ${(
+        (c.drawings / (c.drawings + c.live)) *
+        100
+      ).toFixed(1)}%）不得低于 15%`,
+    ).toBeGreaterThanOrEqual(0.15);
+    expect(
+      c.hlineTail,
+      `全量比前缀多出的 hline 条数（实测 ${c.hlineTail}）：hline 记录没有 bar 锚点（pineTypes.ts:304），` +
+        `这条尾巴比不了，但也不许悄悄长出来`,
+    ).toBe(0);
+    expect(c.tables, `table 画线跳过条数（实测 ${c.tables}）：没有 bar 锚点，见文件头`).toBeLessThanOrEqual(0);
 
     /* --------------------------------------------------------- the register */
     // Two-way exact equality between the observed mismatch set and the
@@ -1251,10 +1789,28 @@ describe("pineNoLookahead — 前缀必须等于全量的前缀（spec §10 / §
     ).toEqual([]);
     expect(mismatchKeys.length, "一个脚本只许计一次，且必须与 observed 集合一致").toBe(observed.length);
     expect(plainMismatched + mtfMismatched, "两个档加起来就是 mismatched").toBe(mismatched);
+    // A row must name the channel the differences were MEASURED on. Deriving it
+    // from `MechHit.shape` (recorded at the matcher branch that fired) is what
+    // makes this checkable: an `e.channel !== ""` test against four hard-coded
+    // "line" rows can never fail, so it was not a gate.
+    const channelOf = new Map<string, string[]>();
+    for (const e of perFile) channelOf.set(e.rel, [...new Set(e.hits.map((h) => CHANNEL_OF_SHAPE[h.shape]))].sort());
+    const channelBad = observed
+      .map((key) => {
+        const row = LOOKAHEAD_REGISTER.find((e) => registerKey(e) === key);
+        const got = channelOf.get(key) ?? [];
+        return { key, want: row?.channel ?? "（无登记行）", got: got.join("/") || "（无实测命中）" };
+      })
+      .filter((x) => x.got !== x.want);
     expect(
-      observed.filter((x) => LOOKAHEAD_REGISTER.find((e) => registerKey(e) === x && e.channel !== "")).length,
-      "登记项必须写清是哪条通道出的问题",
-    ).toBe(observed.length);
+      channelBad,
+      `登记行写的通道与实测出差异的通道不一致（通道由 MechHit.shape 推出，不是自述）：\n${channelBad
+        .map((x) => `  · ${x.key} 登记=${x.want} 实测=${x.got}`)
+        .join("\n")}`,
+    ).toEqual([]);
+    process.stdout.write(
+      `  register channels: ${observed.map((k) => `${k}=${(channelOf.get(k) ?? []).join("/")}`).join(", ")}\n`,
+    );
     // The register is a ledger of defects, not a coverage number: it may never
     // grow into a tolerance mechanism.
     expect(REGISTER_KEYS.length, "register 尺寸（实测 4）").toBeLessThanOrEqual(6);
