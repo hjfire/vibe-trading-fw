@@ -78,7 +78,8 @@ frontend/src/lib/barReplay.ts        纯函数，无 React、无 chart 实例
   ├─ isReplayExhausted(bars, cursorTs) 游标已在最后一根 ⇒ 播放自动停
   ├─ paceMs(speed)                    倍速表，纯查表
   ├─ isFutureDrawing(points, cursorTs) 任一锚点 ts > cursor 即为未来画线
-  └─ 类型 ReplayState { active, cursorTs, total, shown }
+  └─ replayReadout(bars, cursorTs)     ⇒ ReplayReadout { shown, total, remaining, index }
+                                       游标读数（工具条那一行）与窗口切片同源
 
 frontend/src/pages/ProChart.tsx      只做三件事：持 cache、答 DataLoader、驱动 resetData
 frontend/src/components/charts/ReplayBar.tsx  工具条那一排（新文件，避免继续喂大 ProChart）
@@ -87,6 +88,12 @@ frontend/src/components/charts/ReplayBar.tsx  工具条那一排（新文件，�
 理由：本仓图表侧的既有分层就是"纯数学在 `lib/`、接线在页面"（`klinePaging.ts`、`mtfSync.ts`、
 `paneLayout.ts`、`chartView.ts` 全是这个形状），且 `ProChart.tsx` 已经 1700+ 行——工具条拆出去，
 ProChart 只多一个 `<ReplayBar />` 挂载点和 ref 接线。
+
+**不抽 `lib/useReplay.ts`**（规划时先写了这一层，实现前撤掉）：本仓页面级测试的既有路子是
+`render(<ProChart />)` ＋ `vi.mock("klinecharts")` 造一个照 `_addData` 建模的 chart 替身
+（`ProChartPaging.test.tsx` 就是这么抓住"拖一下跳回原位"那个真缺陷的）。回放的结构不变量要走的
+是同一条路——被测的是页面里那段分支本身，替 hook 写 hook 测试只会新增一面要维护的接线，
+并把"工具条按钮到 `resetData()` 这条线是否接通"留在覆盖之外。
 
 ## 五、游标身份：timestamp，不是 index
 
@@ -113,9 +120,9 @@ re-init、退出回放后 `forward` 分页在头部 prepend（事实 5 的另一
 
 | 分支 | 非回放（现状，不改） | 回放态 |
 | --- | --- | --- |
-| `init` | 网络拉最新 `PAGE` 根 | **同步**答 `replayWindow(cache, cursorTs)`，`more = { forward: false, backward: false }` |
-| `forward` | 网络拉更早，`shapeResponse` 去重 | **一律 `callback([], {forward:false, backward:false})`**，并 `blockedForward += 1` |
-| `backward` | 网络拉更新并过滤 | **一律 `callback([], {forward:false, backward:false})`**，并 `blockedBackward += 1` |
+| `init` | 网络拉最新 `PAGE` 根 | **同步**答 `replayWindow(cache, cursorTs)`，`more = REPLAY_MORE`（两旗都 false） |
+| `forward` | 网络拉更早，`shapeResponse` 去重 | **一律 `callback([], REPLAY_MORE)`** |
+| `backward` | 网络拉更新并过滤 | **一律 `callback([], REPLAY_MORE)`** |
 
 **回放态整条 DataLoader 零网络请求**，这是本设计对第六节的收紧，理由有三条，第三条才是决定性的：
 
@@ -128,9 +135,11 @@ re-init、退出回放后 `forward` 分页在头部 prepend（事实 5 的另一
    图上有什么"，它有边界是诚实的，工具条如实显示"回放区间＝已加载的 N 根"。
 
 两道闸门而非一道：`more.backward=false` 使 backward 本不该被调用（事实 5），页面仍然接住它。
-守卫测试要断 `blockedBackward > 0`／`blockedForward > 0` 才算兜底真被踩过——本仓有
-"扫全仓的守卫在空集合上真空通过"的前科。再加一条最硬的结构断言：**回放期间
-`fetchKline` 的调用次数为 0**（spy 计数），它一旦成立，上面整类竞态就不存在。
+兜底真被踩过要有**外部观测**才算——守卫测试在 chart 替身一侧记录每次 `callback` 的
+`(type, bars.length, more)`，断"测试自己发起的 `forward`/`backward` 询问各被答了一次空答"。
+页面内部不留 `blocked*` 计数器：只有页面自己读得到的计数不构成本仓要求的判据（"扫全仓的守卫在
+空集合上真空通过"那条前科的反面教训是，判据必须落在被测对象之外）。再加一条最硬的结构断言：
+**回放期间 `fetchKline` 的调用次数为 0**（spy 计数），它一旦成立，上面整类竞态就不存在。
 
 
 ## 七、进入 / 退出 / 播放
@@ -193,13 +202,15 @@ HTF bar，那是引擎缺陷，要在本表里如实标红并单独立项，**�
 
 - `frontend/src/lib/__tests__/barReplay.test.ts`——纯函数：二分（含"游标早于首根"“落在两根之间”）、
   `stepCursor` 两端夹紧、`replayWindow` 与不变量、`paceMs` 查表、`isFutureDrawing` 多空锚点。
-- `frontend/src/pages/__tests__/ProChartReplay.test.tsx`——**结构不变量**测试：用带 spy 的 chart 替身，
-  断 (a) 回放态每次 `getBars` 答出去的 bar 的 `timestamp` 全部 `≤ cursorTs`；(b) 三个分支答出去的
-  `more` 两个旗都是 `false`；(c) 有人问 `backward` 或 `forward` 时对应 `blocked*` 计数 > 0；
+- `frontend/src/pages/__tests__/ProChartReplay.test.tsx`——**结构不变量**测试：`render(<ProChart />)`
+  ＋ 按 `_addData` 建模的 chart 替身（`ProChartPaging.test.tsx` 那一套，补上 `resetData`／
+  `overrideOverlay`／`getVisibleRange`），断 (a) 回放态每次 `getBars` 答出去的 bar 的 `timestamp` 全部
+  `≤ cursorTs`；(b) 三个分支答出去的 `more` 两个旗都是 `false`；(c) 测试自己发起的 `forward` 与
+  `backward` 询问各收到一次空答（替身记录的应答条数 > 0，空集合真空通过不算门）；
   (d) 回放全程 `fetchKline` 调用数为 **0**（spy 计数，这条最硬）；(e) 步进到首根/末根再步进一次，
   游标不动且不越界。**替身必须按库真实行为建模**：`resetData()` 要真的再回调一次
   `getBars({type:'init'})`，否则会重演"替身全绿而功能不动"那一类。
-- `pineReplayNoLookahead.test.ts`——第十节那条 harness。
+- `pineNoLookahead.test.ts`——第十节那条 harness。
 - 既有回归面（改动会碰到）：`ProChartPaging`(3)、`klinePaging`(9)、`ProChartDrawings`(59)、
   `chartDrawings`(56)、`indicatorLang`(31)、`pineIndicatorWire`(15)、`subIndicators`(20)。
 - 活体验收：真实浏览器（vite dev + 后端 8000，600519.SH 日线）走"进入 → 单步 20 根 → 播放 →
