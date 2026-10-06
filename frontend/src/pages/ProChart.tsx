@@ -28,6 +28,7 @@ import {
   cursorFromDatePick,
   cursorFromView,
   formatReplayDate,
+  isFutureDrawing,
   isReplayExhausted,
   paceMs,
   replayReadout,
@@ -506,6 +507,10 @@ export function ProChart() {
   // closure can never pass an old cursor or `playing` flag forward (Task 4's loop depends
   // on this). See spec §5 for why the cursor is a timestamp.
   const replayRef = useRef<ReplaySession>(IDLE_REPLAY);
+  // Overlays this page hid *itself*, so leaving replay can put them back without touching a
+  // line the user hid by hand (`chartDrawings` stores `visible`, and `overrideOverlay` does
+  // honour it — unlike `lock`; see the header note there).
+  const hiddenByReplayRef = useRef<Set<string>>(new Set());
   const [replay, setReplay] = useState<{
     active: boolean;
     cursorTs: number | null;
@@ -904,13 +909,35 @@ export function ProChart() {
   };
 
   /**
+   * The overlays as the *user* left them, for anything that reads them into a copy.
+   *
+   * Bar Replay hides the lines that reach past the cursor with
+   * `overrideOverlay({ id, visible: false })` (spec §8) — a view state, not a choice — and
+   * every copy path below reads `visible` off the instance (`serializeDrawings` turns a
+   * `visible: false` into a stored `hidden: true`). So a snapshot taken while a hide is in
+   * effect (the bank an edit fires, the bank the unmount fires, a `.json` / `?d=` export, a
+   * line whose sub pane just closed) would persist the transient hide as the user's own hidden
+   * line, and the next reload — or the next import — would hand it back invisible.
+   *
+   * Fixed on the copy, never on the chart: un-hiding there would paint a line the cursor says
+   * is still in the future, and would make this a second writer of `visible`. Idle cost is one
+   * `size` read; the map only runs while something is actually hidden.
+   */
+  const hideFree = (overlays: readonly { id?: string }[]): unknown[] =>
+    hiddenByReplayRef.current.size === 0
+      ? overlays.slice()
+      : overlays.map((o) =>
+          o.id && hiddenByReplayRef.current.has(o.id) ? { ...o, visible: true } : o,
+        );
+
+  /**
    * Write the bucket: the lines on the chart plus the ones parked off it (⑲).
    * Parked first, because `saveDrawings` keeps the tail when a bucket overflows
    * and a line nobody can see is the one worth sacrificing — and because every
    * other write path would otherwise delete them by omission.
    */
   const bankDrawings = (chart: Chart, s: string, i: string, excludeId: string | null = null) => {
-    saveDrawings(s, i, [...parkedRef.current, ...serializeDrawings(chart.getOverlays(), excludeId)]);
+    saveDrawings(s, i, [...parkedRef.current, ...serializeDrawings(hideFree(chart.getOverlays()), excludeId)]);
   };
 
   // Create/destroy the chart once per mount.
@@ -1218,6 +1245,43 @@ export function ProChart() {
     });
   };
 
+  /**
+   * Hide the drawings that reach past the cursor. `null` cursor means replay is off: restore
+   * everything this function hid and nothing else.
+   *
+   * Nothing here writes storage. The bank path (`serializeDrawings(chart.getOverlays())`)
+   * takes the whole overlay list with no name filter, so a bank fired mid-hide would persist
+   * `visible: false` as the user's own hidden line — surviving exit, reload and export.
+   *
+   * `overrideOverlay` repaints the overlay layer only (`updatePane(UpdateLevel.Overlay)`, dist
+   * 14430-14455): no `resetData()`, no `getBars`, so spec §5's window and §6's zero-network hold
+   * by construction — this function cannot move a bar.
+   */
+  const applyFutureDrawings = (chart: Chart, cursorTs: number | null) => {
+    const overlays = chart.getOverlays() as Array<{
+      id?: string;
+      visible?: boolean;
+      points?: Array<{ timestamp?: number }>;
+    }>;
+    for (const o of overlays) {
+      if (typeof o.id !== "string") continue;
+      const future = cursorTs !== null && isFutureDrawing(o.points ?? [], cursorTs);
+      // A line the user hid by hand (`visible: false` on the instance, d.ts 1077) must not
+      // enter the bookkeeping: hiding it again is a no-op, but the matching restore on exit
+      // would light it up and overwrite a deliberate choice.
+      if (future && !hiddenByReplayRef.current.has(o.id) && o.visible !== false) {
+        // The library's boolean answer is ignored on purpose — a flag-only override is the
+        // case where it does not report the change it made (`chartDrawings.ts` ⑤: "Trust the
+        // instance, not the return value"), so the ref is the only bookkeeping there is.
+        chart.overrideOverlay({ id: o.id, visible: false });
+        hiddenByReplayRef.current.add(o.id);
+      } else if (!future && hiddenByReplayRef.current.has(o.id)) {
+        chart.overrideOverlay({ id: o.id, visible: true });
+        hiddenByReplayRef.current.delete(o.id);
+      }
+    }
+  };
+
   const enterReplay = (mode: "default" | "viewEdge") => {
     const chart = chartRef.current;
     if (!chart || viewRef.current.timeShare) return;
@@ -1236,6 +1300,7 @@ export function ProChart() {
         : stepCursor(bars, last, -DEFAULT_REPLAY_BACK);
     replayRef.current = { bars, cursorTs, playing: false };
     syncReplayUi();
+    applyFutureDrawings(chart, cursorTs);
     chart.resetData();
   };
 
@@ -1246,6 +1311,9 @@ export function ProChart() {
     if (r.cursorTs === null || !chart) return;
     replayRef.current = { bars: r.bars, cursorTs: null, playing: false };
     syncReplayUi();
+    // Everything this page hid goes back before the range reopens, so the live chart shows
+    // the user's own set of lines — invisible ones stay only if the user hid them.
+    applyFutureDrawings(chart, null);
     chart.resetData();
   };
 
@@ -1260,14 +1328,27 @@ export function ProChart() {
     if (r.cursorTs === null && r.bars.length === 0) return;
     replayRef.current = IDLE_REPLAY;
     syncReplayUi();
+    // The lines this page hid belong to the *outgoing* view, and that view's bucket is banked
+    // by the delivery the switch below sets off (`bankDrawings` in the `init` handler), which
+    // reads `visible` off the instances — so a hide left on them would be stored as the user's
+    // own 隐藏 line, and the next visit to that symbol would restore it invisible. Put them
+    // back while the overlay list on the chart is still that view's; the function only ever
+    // touches ids this page hid, so a list that has already been swapped costs nothing.
+    const chart = chartRef.current;
+    if (chart) applyFutureDrawings(chart, null);
+    // Then drop the bookkeeping: whatever is left names overlays that go with the outgoing
+    // view, and the incoming one's lines get fresh ids from the library.
+    hiddenByReplayRef.current.clear();
   };
 
   /**
-   * The one cursor-apply path: take the next timestamp → write the ref → re-mirror → repaint.
-   * 单步、日期框 and the play loop all route through here, so the tail exists once. Two things in
-   * it are easy to forget and have to be forgotten in exactly one place: `playing` is
+   * The one cursor-apply path: take the next timestamp → write the ref → re-mirror → put the
+   * drawings right → repaint.
+   * 单步、日期框 and the play loop all route through here, so the tail exists once. Three things
+   * in it are easy to forget and have to be forgotten in exactly one place: `playing` is
    * *recomputed* from `isReplayExhausted` rather than carried over (spec §7 — playing stops by
-   * itself at the newest bar, whatever render the caller closed over believed), and a cursor that
+   * itself at the newest bar, whatever render the caller closed over believed), the drawings
+   * have to be re-asked against the cursor that just moved (spec §8), and a cursor that
    * did not move costs no `resetData()` (the clamped-at-the-end case, which otherwise re-inits
    * the chart on every dead click — and every dead tick).
    */
@@ -1281,6 +1362,11 @@ export function ProChart() {
     const playing = r.playing && !isReplayExhausted(r.bars, nextTs);
     replayRef.current = { bars: r.bars, cursorTs: nextTs, playing };
     syncReplayUi();
+    // 单步 and 日期框 land here, so the drawings follow the cursor from one place too: a line
+    // the cursor has caught up with becomes visible again on this step, and one it stepped
+    // back past goes hidden. Decided from `nextTs` alone — no memory of the last verdict
+    // (spec §8).
+    applyFutureDrawings(chart, nextTs);
     chart.resetData();
   };
 
@@ -1568,10 +1654,14 @@ export function ProChart() {
    * Everything this bucket holds, on the chart or not (⑲). Exporting the live
    * lines only would hand over half a drawing set and then watch the parked half
    * vanish on the next edit.
+   *
+   * `hideFree` for the same reason the bank uses it: a `.json` / `?d=` export made while
+   * replay is on must not carry the transient hide into the file, or the import puts the
+   * user's line back invisible.
    */
   const allDrawings = (chart: Chart): StoredDrawing[] => [
     ...parkedRef.current,
-    ...serializeDrawings(chart.getOverlays()),
+    ...serializeDrawings(hideFree(chart.getOverlays())),
   ];
 
   /**
@@ -1591,7 +1681,10 @@ export function ProChart() {
     // library's own `onRemoved` put out the armed-tool highlight.
     const salvage = dead.filter((o) => !isInProgress(o));
     const unfinished = dead.filter((o) => isInProgress(o));
-    const waiting = serializeDrawings(salvage);
+    // `hideFree` again, because a parked copy is a stored copy: a future line the replay hid
+    // and this pane just swallowed would otherwise come back invisible when the pane returns —
+    // under a fresh id, so exit-replay would have nothing to restore it by.
+    const waiting = serializeDrawings(hideFree(salvage));
     drawingsMutedRef.current = true;
     try {
       for (const o of salvage) if (o.id) chart.removeOverlay({ id: o.id });
