@@ -11,7 +11,15 @@ import {
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
 import { cn } from "@/lib/utils";
-import { fetchKline, intervalToPeriod, isCalendarInterval, periodToInterval, INTERVALS, type IntervalKey } from "@/lib/marketApi";
+import {
+  DEFAULT_ADJUST,
+  fetchKline,
+  intervalToPeriod,
+  isCalendarInterval,
+  periodToInterval,
+  INTERVALS,
+  type IntervalKey,
+} from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
   AVG_PRICE_NAME,
@@ -2035,6 +2043,9 @@ export function ProChart() {
         seed={scriptSeed}
         symbols={watch}
         onPickSymbol={applySymbol}
+        symbol={symbol}
+        interval={viewPeriod({ interval, timeShare })}
+        adjust={DEFAULT_ADJUST}
       />
     </div>
   );

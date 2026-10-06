@@ -22,7 +22,7 @@ export type Draft = {
   code: string;
 }
 
-export type TabKey = "editor" | "library" | "exchange" | "report" | "screener";
+export type TabKey = "editor" | "library" | "exchange" | "report" | "screener" | "alerts";
 
 /** What to show when the workbench is opened from outside (share links). */
 export interface WorkbenchSeed {

@@ -12,11 +12,13 @@ import {
 } from "@/lib/indicatorStore";
 import type { ScriptCard } from "@/lib/scriptExchange";
 import type { BarLoader } from "@/lib/screener";
+import type { IntervalKey } from "@/lib/marketApi";
 import EditorTab from "./workbench/EditorTab";
 import LibraryTab from "./workbench/LibraryTab";
 import ExchangeTab from "./workbench/ExchangeTab";
 import ReportTab from "./workbench/ReportTab";
 import ScreenerTab from "./workbench/ScreenerTab";
+import AlertsTab from "./workbench/AlertsTab";
 import {
   cardToDraft,
   draftToCard,
@@ -31,11 +33,13 @@ import {
  *
  * Five tabs share one piece of text: the editor (write), the library (built-in
  * TradingView-style scripts), the exchange tab (.pine / JSON / share link), the
- * strategy report and the condition screener. Everything runs client-side
- * against the mounted KLineChart instance; scripts persist in localStorage.
+ * strategy report and the condition screener. A sixth hands the same text to the
+ * backend alert kernel. Everything runs client-side against the mounted
+ * KLineChart instance; scripts persist in localStorage.
  *
  * The props contract is unchanged from ⑩ so ProChart keeps working verbatim;
- * `seed` / `symbols` / `onPickSymbol` are the additions, all optional.
+ * `seed` / `symbols` / `onPickSymbol` are the ⑪ additions and `symbol` /
+ * `interval` / `adjust` the alert bridge's, all optional.
  */
 
 interface IndicatorEditorProps {
@@ -52,6 +56,10 @@ interface IndicatorEditorProps {
   onPickSymbol?: (symbol: string) => void;
   /** Data seam for the screener (tests run without a network). */
   loadBars?: BarLoader;
+  /** What the chart is showing right now; an alert rule is written about it. */
+  symbol?: string;
+  interval?: IntervalKey;
+  adjust?: string;
 }
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -60,6 +68,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "exchange", label: "导入导出" },
   { key: "report", label: "策略报告" },
   { key: "screener", label: "条件筛选" },
+  { key: "alerts", label: "脚本告警" },
 ];
 
 export default function IndicatorEditor({
@@ -71,6 +80,9 @@ export default function IndicatorEditor({
   symbols = [],
   onPickSymbol,
   loadBars,
+  symbol = "",
+  interval = "1D",
+  adjust = "qfq",
 }: IndicatorEditorProps) {
   const [items, setItems] = useState<UserIndicator[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -318,6 +330,16 @@ export default function IndicatorEditor({
               getChart={getChart}
               loadBars={loadBars}
               onPickSymbol={onPickSymbol ?? (() => undefined)}
+            />
+          )}
+
+          {tab === "alerts" && (
+            <AlertsTab
+              draft={draft}
+              getChart={getChart}
+              symbol={symbol}
+              interval={interval}
+              adjust={adjust}
             />
           )}
         </div>

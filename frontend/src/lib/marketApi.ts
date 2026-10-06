@@ -89,6 +89,10 @@ export const RESOLUTION_BY_INTERVAL: Record<IntervalKey, string> = {
   "1M": "M",
 };
 
+/** Every chart in this app asks for 前复权, so a rule written about the screen
+ *  has to say the same word; `close` is only the same number on the same basis. */
+export const DEFAULT_ADJUST = "qfq" as const;
+
 /**
  * Millisecond span of each toolbar period. Monthly is a 30-day block, matching
  * `periodStringFromMs`/`tfToMs` in `pineResample` so the two ends of the
@@ -234,7 +238,7 @@ export async function fetchKline(params: {
   q.set("symbol", params.symbol);
   q.set("resolution", RESOLUTION_BY_INTERVAL[params.interval]);
   q.set("countback", String(params.count ?? 500));
-  q.set("adjust", params.adjust ?? "qfq");
+  q.set("adjust", params.adjust ?? DEFAULT_ADJUST);
   if (params.before) q.set("to", String(Math.floor(params.before / 1000)));
   if (params.session) q.set("session", params.session);
   const res = await fetch(`/api/udf/history?${q.toString()}`, {
