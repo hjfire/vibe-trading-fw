@@ -128,12 +128,17 @@ def test_short_window_reports_error_not_a_verdict() -> None:
 
 def test_each_series_carries_information() -> None:
     """Anti-false-green: an all-False series would satisfy the equality trivially."""
+    seen = 0
     for fx, case in _cases():
+        seen += 1
         hits = case["pineHits"]
         assert any(hits) and not all(hits), f"{fx['name']}: series carries no information"
         tail = hits[int(case["minPrefix"]):]
         assert any(tail), f"{fx['name']}: no hit inside the compared region"
         assert not all(tail), f"{fx['name']}: every compared bar hit, so False is untested"
+    # The loop above is the guard against a trivial series and is itself trivial
+    # on an empty roster, so the count has to be asserted outside it.
+    assert seen >= 4, f"only {seen} cases inspected; a vacuous pass is not a guard"
 
 
 def _case_period(case: Dict[str, Any]) -> int:
