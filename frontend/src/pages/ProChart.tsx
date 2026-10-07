@@ -8,6 +8,7 @@ import {
   type KLineData,
   type DataLoader,
   type Nullable,
+  type TooltipShowRule,
 } from "klinecharts";
 import i18n from "@/i18n";
 import { useThemeDark } from "@/lib/theme-store";
@@ -104,6 +105,14 @@ import {
   mergeDrawings,
   readDrawingsShareLink,
 } from "@/lib/drawingExchange";
+import {
+  DEFAULT_LEGEND_PREFS,
+  type LegendPrefs,
+  legendStyles,
+  loadLegendPrefs,
+  RULE_OPTIONS,
+  saveLegendPrefs,
+} from "@/lib/chartLegend";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
@@ -261,7 +270,7 @@ export function readSession(): ChartView & { symbol: string } {
   }
 }
 
-function chartStyles(dark: boolean, timeShare = false) {
+function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs = DEFAULT_LEGEND_PREFS) {
   // A-share convention: red = up, green = down. Candle colors live under
   // `candle.bar` in v10 (`.area` is for area/line charts).
   //
@@ -270,9 +279,20 @@ function chartStyles(dark: boolean, timeShare = false) {
   // the choice was made anywhere else, switching themes painted the candles back
   // over a 分时 line and the toggle looked like it had stopped working.
   const type: CandleType = timeShare ? "area" : "candle_solid";
+  // The legend fragment is composed *here*, the single style-composition point
+  // (spec §三.C): v10 has no `setTooltipOptions`, and the theme effect below
+  // re-pushes this whole object, so a preference living anywhere outside this
+  // function is painted back out by the next dark-mode flip.
+  const legendFragment = legendStyles(legend);
   return {
     grid: { horizontal: { color: dark ? "#1f2733" : "#f0f0f0" }, vertical: { color: dark ? "#1f2733" : "#f0f0f0" } },
     candle: {
+      // Fragment first, this function's own keys after: the fragment only ever
+      // writes `tooltip`/`priceMark`, `candle` here writes `type`/`bar`/`area`,
+      // so the two subtrees cannot collide whichever way they are spread — and
+      // keeping this order is what stops a future fragment key from stealing
+      // `type` away from the 分时 toggle.
+      ...legendFragment.candle,
       type,
       bar: {
         upColor: CANDLE_COLORS.up,
@@ -300,6 +320,8 @@ function chartStyles(dark: boolean, timeShare = false) {
         ],
       },
     },
+    // Sub-pane indicator legends ride the same object for the same reason.
+    indicator: legendFragment.indicator,
     xAxis: { axisLine: { color: dark ? "#4a4a4a" : "#ccc" }, tickText: { color: dark ? "#aaa" : "#666" } },
     yAxis: { axisLine: { color: dark ? "#4a4a4a" : "#ccc" }, tickText: { color: dark ? "#aaa" : "#666" } },
   };
@@ -496,6 +518,14 @@ export function ProChart() {
   // behaviour than the one the user is drawing with. Same reason as
   // `drawStyleRef` above.
   const magnetRef = useRef<MagnetMode>(magnet);
+  // Legend (第③片 C): every value defaults to the library's own, so a user who
+  // never opens the panel gets the pre-feature picture pixel for pixel.
+  const [legend, setLegend] = useState<LegendPrefs>(() => loadLegendPrefs());
+  const [legendPanelOpen, setLegendPanelOpen] = useState(false);
+  // Same closure problem as `drawStyleRef`/`magnetRef`: two clicks inside one
+  // task would otherwise both compose onto the same stale snapshot and the
+  // second would undo the first.
+  const legendRef = useRef<LegendPrefs>(legend);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -969,7 +999,11 @@ export function ProChart() {
       // on every redraw (see `chartLocale`).
       locale: chartLocale(i18n.language),
       timezone: "Asia/Shanghai",
-      styles: chartStyles(dark, session.timeShare),
+      // `legend` here is the mount value, which is the right value: this effect
+      // runs once per mount, and every later change goes through the theme
+      // effect below (which lists `legend` as a dependency) rather than through
+      // a re-`init`.
+      styles: chartStyles(dark, session.timeShare, legend),
     });
     if (!chart) return;
     chartRef.current = chart;
@@ -1227,10 +1261,13 @@ export function ProChart() {
 
   // Theme switch → restyle in place. Also the only writer of the candle/line
   // choice, so `timeShare` is a dependency: leaving it out let a theme change
-  // repaint a 分时 line as candles.
+  // repaint a 分时 line as candles. `legend` joins that list for the same reason
+  // and by the same mechanism — the legend has no other lever in v10 (there is
+  // no `setTooltipOptions`), so this effect is what puts a legend preference on
+  // the chart, and leaving `legend` out would strand every panel control.
   useEffect(() => {
-    chartRef.current?.setStyles(chartStyles(dark, timeShare));
-  }, [dark, timeShare]);
+    chartRef.current?.setStyles(chartStyles(dark, timeShare, legend));
+  }, [dark, timeShare, legend]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
@@ -1757,6 +1794,22 @@ export function ProChart() {
   };
 
   /**
+   * Change a legend pref. Nothing else has to happen: `legend` is in the theme
+   * effect's dependency list, so the new value goes onto the chart through the
+   * same single composition point that the theme flip uses.
+   *
+   * `saveLegendPrefs` replaces the stored deviation set rather than merging into
+   * it, so what goes to storage is the composed whole prefs — a patch-only object
+   * would drop the other deviating keys on the next write.
+   */
+  const patchLegend = (patch: Partial<LegendPrefs>) => {
+    const next: LegendPrefs = { ...legendRef.current, ...patch };
+    legendRef.current = next;
+    setLegend(next);
+    saveLegendPrefs(next);
+  };
+
+  /**
    * Arm a draw tool. The button doubles as the exit: clicking the armed tool
    * again (or Esc) drops the half-drawn overlay instead of leaving the chart
    * swallowing clicks waiting for a second point.
@@ -2279,6 +2332,19 @@ export function ProChart() {
             onChange={(e) => void onDrawingFilePicked(e)}
           />
         </div>
+        <button
+          type="button"
+          className={cn(
+            "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+            legendPanelOpen && "bg-muted font-medium ring-1 ring-primary",
+          )}
+          aria-label="图例"
+          aria-pressed={legendPanelOpen}
+          title="图例与标记：主图数值块、副图指标图例、涨幅行、高低标记、最新价线（默认全部等于 klinecharts 出厂值）"
+          onClick={() => setLegendPanelOpen((v) => !v)}
+        >
+          图例
+        </button>
         {/* Style of the next drawing; with a line selected it restyles that one too (⑯). */}
         <div className="flex items-center gap-1">
           {DRAWING_COLORS.map((c) => (
@@ -2380,6 +2446,71 @@ export function ProChart() {
           {status.loading ? "加载中…" : status.error ? <span className="text-red-500">{status.error}</span> : status.source || ""}
         </div>
       </div>
+
+      {legendPanelOpen && (
+        <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-lg border bg-background px-3 py-2 text-xs">
+          <span className="text-muted-foreground">图例:</span>
+          <label className="flex items-center gap-1">
+            主图数值
+            <select
+              aria-label="主图图例显示规则"
+              className="rounded-md border bg-transparent px-1 py-0.5"
+              value={legend.candleRule}
+              onChange={(e) => patchLegend({ candleRule: e.target.value as TooltipShowRule })}
+            >
+              {RULE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1">
+            副图指标
+            <select
+              aria-label="副图图例显示规则"
+              className="rounded-md border bg-transparent px-1 py-0.5"
+              value={legend.indicatorRule}
+              onChange={(e) => patchLegend({ indicatorRule: e.target.value as TooltipShowRule })}
+            >
+              {RULE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              aria-label="涨幅行"
+              checked={legend.showChange}
+              onChange={(e) => patchLegend({ showChange: e.target.checked })}
+            />
+            涨幅行
+          </label>
+          <button
+            type="button"
+            aria-label="高低标记"
+            aria-pressed={legend.highLowMark}
+            className="rounded-md border px-2 py-1 hover:bg-muted"
+            title="高/低价位标记（库默认开）"
+            onClick={() => patchLegend({ highLowMark: !legend.highLowMark })}
+          >
+            高低标记
+          </button>
+          <button
+            type="button"
+            aria-label="最新价线"
+            aria-pressed={legend.lastPriceLine}
+            className="rounded-md border px-2 py-1 hover:bg-muted"
+            title="最新价的虚线与价签一起开关（只关线会在轴上留一个孤立价签）"
+            onClick={() => patchLegend({ lastPriceLine: !legend.lastPriceLine })}
+          >
+            最新价线
+          </button>
+        </div>
+      )}
 
       {drawPanelOpen && (
         <div className="max-h-[132px] shrink-0 overflow-y-auto rounded-lg border bg-background">

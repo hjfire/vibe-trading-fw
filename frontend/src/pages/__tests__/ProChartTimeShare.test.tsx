@@ -36,7 +36,7 @@ const h = vi.hoisted(() => ({
   period: { type: "day", span: 1 },
   list: [] as KLineData[],
   periods: [] as Array<{ type: string; span: number }>,
-  styles: [] as Array<{ candle?: { type?: string } }>,
+  styles: [] as Array<{ candle?: { type?: string; tooltip?: { showRule?: string } } }>,
   indicators: [] as Array<{ op: "create" | "remove"; name: string; paneId?: string }>,
   /**
    * What is mounted on the fake chart right now. The legend the user sees is one
@@ -207,7 +207,7 @@ vi.mock("klinecharts", () => ({
         ? { getBoundingClientRect: () => ({ width: h.domWidth, height: 200 }) }
         : null,
     applyOptions: () => {},
-    setStyles: (s: { candle?: { type?: string } }) => {
+    setStyles: (s: { candle?: { type?: string; tooltip?: { showRule?: string } } }) => {
       h.styles.push(s);
     },
     setPaneOptions: (o: { id?: string; height?: number }) => {
@@ -369,6 +369,11 @@ function lastCandleType(): string | undefined {
   return h.styles.at(-1)?.candle?.type;
 }
 
+/** The last `candle.tooltip.showRule` the page pushed onto the chart. */
+function lastCandleShowRule(): string | undefined {
+  return h.styles.at(-1)?.candle?.tooltip?.showRule;
+}
+
 function askedFor(session: "latest" | undefined): Record<string, unknown>[] {
   return h.requests.filter((r) => (r.session === "latest") === (session === "latest"));
 }
@@ -487,6 +492,9 @@ describe("clicking 分时", () => {
     });
     await settle();
     expect(lastCandleType()).toBe("area");
+    // 第③片: legend prefs ride the same re-pushed object, so a theme flip in a
+    // 分时 view has to keep both halves — type *and* legend rule.
+    expect(lastCandleShowRule()).toBe("always");
   });
 
   it("is a toggle, and going round again re-fetches the session", async () => {
