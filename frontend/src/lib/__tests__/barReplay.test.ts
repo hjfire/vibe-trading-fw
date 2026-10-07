@@ -21,6 +21,13 @@ const DAY = 86_400_000;
 const bars = (n: number) => Array.from({ length: n }, (_, i) => ({ timestamp: i * DAY, close: i }));
 const TEN = bars(10);
 
+/** A cache whose neighbours share one instant — `shapeResponse` only trims *across* pages. */
+const stamped = (...days: number[]) => days.map((d) => ({ timestamp: d * DAY }));
+const DUP = stamped(0, 1, 2, 5, 5, 6, 7, 8); // indices 3 and 4 are both 5 * DAY
+const NEWEST_DUP = stamped(0, 1, 2, 3, 9, 9); // the duplicated pair is the newest bar
+const ALL_DUP = stamped(7, 7, 7, 7, 7); // every bar names the same instant
+const LONG_DUP = stamped(1, ...Array.from({ length: 11 }, () => 2), 3, 4); // a run wider than 10
+
 describe("indexAtOrBefore", () => {
   it("命中精确的 bar 戳", () => {
     expect(indexAtOrBefore(TEN, 4 * DAY)).toBe(4);
@@ -65,6 +72,29 @@ describe("stepCursor", () => {
   });
   it("空表原样返回，不抛", () => {
     expect(stepCursor([], 5 * DAY, 1)).toBe(5 * DAY);
+  });
+  it("游标早于首根：两个方向都钳在首根，与无重复表一致", () => {
+    expect(stepCursor(TEN, -1, -1)).toBe(0);
+    expect(stepCursor(TEN, -1, 1)).toBe(DAY);
+  });
+  it("同戳连档上向左一根：跨过重复真的动，不许把游标自己交回去", () => {
+    expect(stepCursor(DUP, 5 * DAY, -1)).toBe(2 * DAY);
+  });
+  it("同戳连档上向右一根：还是下一根，不被跨重复带偏", () => {
+    expect(stepCursor(DUP, 5 * DAY, 1)).toBe(6 * DAY);
+  });
+  it("末根重复：向右是死点击（原样返回），向左照样跨出去", () => {
+    expect(stepCursor(NEWEST_DUP, 9 * DAY, 1)).toBe(9 * DAY);
+    expect(stepCursor(NEWEST_DUP, 9 * DAY, -1)).toBe(3 * DAY);
+  });
+  it("全表同戳：前后都无处可去，原样返回游标", () => {
+    expect(stepCursor(ALL_DUP, 7 * DAY, -1)).toBe(7 * DAY);
+    expect(stepCursor(ALL_DUP, 7 * DAY, 1)).toBe(7 * DAY);
+    expect(stepCursor(ALL_DUP, 7 * DAY, -250)).toBe(7 * DAY);
+  });
+  it("快退 10 根落在同戳连档里：跨出连档才算真的退了", () => {
+    expect(stepCursor(LONG_DUP, 2 * DAY, -10)).toBe(DAY);
+    expect(stepCursor(LONG_DUP, 2 * DAY, 1)).toBe(3 * DAY);
   });
 });
 

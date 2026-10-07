@@ -75,10 +75,24 @@ export function replayWindow<T extends Stamped>(bars: readonly T[], cursorTs: nu
 /** Move the cursor by `n` bars (negative = back in time), clamped to the loaded range. */
 export function stepCursor(bars: readonly Stamped[], cursorTs: number, n: number): number {
   if (bars.length === 0) return cursorTs;
+  const last = bars.length - 1;
   // A cursor that names no bar any more re-lands on the nearest one instead of running off
   // the end — that is what a period switch or a re-entry after paging can leave behind.
-  const at = Math.min(Math.max(indexAtOrBefore(bars, cursorTs), 0), bars.length - 1);
-  return bars[Math.min(Math.max(at + n, 0), bars.length - 1)].timestamp;
+  const at = Math.min(Math.max(indexAtOrBefore(bars, cursorTs), 0), last);
+  if (n === 0) return bars[at].timestamp;
+  const dir = n > 0 ? 1 : -1;
+  let i = Math.min(Math.max(at + n, 0), last);
+  // `indexAtOrBefore` resolves a duplicated timestamp to its LAST occurrence, so a plain
+  // `at + n` can land back on the instant the cursor already holds — and a control that hands
+  // back the cursor's own value is a permanent no-op (`applyReplayCursor` skips the repaint).
+  // Keep walking the same way until the landing bar names a different instant, but never past
+  // an end: at a real end the unchanged answer is the contract, not a stall.
+  while (i !== at && bars[i].timestamp === cursorTs) {
+    const next = i + dir;
+    if (next < 0 || next > last) break;
+    i = next;
+  }
+  return bars[i].timestamp;
 }
 
 /** True once the cursor sits on the newest loaded bar: playing has nowhere to go. */
