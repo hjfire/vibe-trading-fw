@@ -221,7 +221,15 @@ describe("写偏好：未偏离默认的键一律不落盘", () => {
       highLowMark: false,
       lastPriceLine: false,
     });
-    expect(localStorage.getItem(LEGEND_PREFS_KEY)).not.toBeNull();
+    // 落盘形状逐键断言，不是「键在不在」：`lastPriceLine: false` 这五项里唯一
+    // 靠 falsy 值偏离默认的一项，写成 `not.toBeNull()` 时删掉它的过滤分支也不会有任何判据红。
+    expect(stored()).toEqual({
+      candleRule: "none",
+      indicatorRule: "follow_cross",
+      showChange: true,
+      highLowMark: false,
+      lastPriceLine: false,
+    });
     saveLegendPrefs(DEFAULT_LEGEND_PREFS);
     expect(localStorage.getItem(LEGEND_PREFS_KEY)).toBeNull();
     expect(loadLegendPrefs()).toEqual(DEFAULT_LEGEND_PREFS);
