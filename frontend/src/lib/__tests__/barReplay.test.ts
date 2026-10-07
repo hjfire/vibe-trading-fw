@@ -27,6 +27,8 @@ const DUP = stamped(0, 1, 2, 5, 5, 6, 7, 8); // indices 3 and 4 are both 5 * DAY
 const NEWEST_DUP = stamped(0, 1, 2, 3, 9, 9); // the duplicated pair is the newest bar
 const ALL_DUP = stamped(7, 7, 7, 7, 7); // every bar names the same instant
 const LONG_DUP = stamped(1, ...Array.from({ length: 11 }, () => 2), 3, 4); // a run wider than 10
+/** A five-wide run in the middle: anchoring on its first bar instead of its last moves the answer. */
+const MID_DUP = stamped(0, 1, 2, 2, 2, 2, 2, 3, 4); // indices 2..6 are all 2 * DAY
 
 describe("indexAtOrBefore", () => {
   it("命中精确的 bar 戳", () => {
@@ -95,6 +97,11 @@ describe("stepCursor", () => {
   it("快退 10 根落在同戳连档里：跨出连档才算真的退了", () => {
     expect(stepCursor(LONG_DUP, 2 * DAY, -10)).toBe(DAY);
     expect(stepCursor(LONG_DUP, 2 * DAY, 1)).toBe(3 * DAY);
+  });
+  it("步进与窗口同锚点：连档按最后一个同戳根算，两个方向都是", () => {
+    expect(replayWindow(MID_DUP, 2 * DAY).length).toBe(7); // through index 6, the run's last bar
+    expect(stepCursor(MID_DUP, 2 * DAY, -2)).toBe(1 * DAY);
+    expect(stepCursor(MID_DUP, 2 * DAY, 2)).toBe(4 * DAY);
   });
 });
 
