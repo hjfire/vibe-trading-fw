@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getSupportedOverlays } from "klinecharts";
 
 import {
   ALL_PANES_PRESENT,
@@ -32,6 +33,7 @@ import {
   saveDrawings,
   serializeDrawings,
   styleOfOverlay,
+  toolCreateExtras,
   toolOf,
   withAlpha,
   type DrawingStyle,
@@ -181,6 +183,81 @@ function fakeChart(overlays: FakeOverlay[] = []) {
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+/**
+ * 第③片 A：七件库内置模板挂上工具栏。名字这一条不抄表——直接问库要注册表，
+ * 于是「升级后某模板改名」是测试变红，而不是用户画不出线。
+ */
+describe("新增工具与建线附加键", () => {
+  it("每件工具的名字都是库里真实存在的内置模板", () => {
+    const supported = getSupportedOverlays();
+    for (const t of DRAW_TOOLS) {
+      expect(supported, `${t.name} 不在 klinecharts 内置模板里`).toContain(t.name);
+    }
+  });
+
+  it("13 件工具，落点数与库的 totalStep 逐行相等", () => {
+    expect(DRAW_TOOLS.map((t) => t.name)).toEqual([
+      "segment",
+      "rayLine",
+      "horizontalStraightLine",
+      "priceLine",
+      "fibonacciLine",
+      "brush",
+      "straightLine",
+      "verticalStraightLine",
+      "horizontalSegment",
+      "horizontalRayLine",
+      "parallelStraightLine",
+      "priceChannelLine",
+      "simpleAnnotation",
+    ]);
+    // `totalStep`（spec §二.1 表）减一就是落点数；`brush` 是拖动，-1。
+    const clicks: Record<string, number> = {
+      segment: 2,
+      rayLine: 2,
+      horizontalStraightLine: 1,
+      priceLine: 1,
+      fibonacciLine: 2,
+      brush: -1,
+      straightLine: 2,
+      verticalStraightLine: 1,
+      horizontalSegment: 2,
+      horizontalRayLine: 2,
+      parallelStraightLine: 3,
+      priceChannelLine: 3,
+      simpleAnnotation: 1,
+    };
+    for (const t of DRAW_TOOLS) expect(t.clicks, t.name).toBe(clicks[t.name]);
+  });
+
+  it("只有垂直线是纯时间的，只有标注带文字", () => {
+    expect(toolOf("verticalStraightLine")?.dim).toBe("time");
+    expect(toolOf("simpleAnnotation")?.hasText).toBe(true);
+    for (const t of DRAW_TOOLS) {
+      if (t.name === "verticalStraightLine" || t.name === "simpleAnnotation") continue;
+      expect(t.dim, t.name).toBeUndefined();
+      expect(t.hasText, t.name).toBeUndefined();
+    }
+  });
+
+  it("toolCreateExtras 只给带文字的线补默认锚点图元", () => {
+    expect(toolCreateExtras("simpleAnnotation")).toEqual({ needDefaultPointFigure: true });
+    expect(toolCreateExtras("priceLine")).toEqual({});
+    expect(toolCreateExtras("nope")).toEqual({});
+  });
+
+  it("垂直线的清单行不印价位，价格线照旧", () => {
+    const ts = 1_700_000_000_000;
+    const v = describeDrawing(
+      overlay({ id: "v", name: "verticalStraightLine", points: [{ timestamp: ts, value: 1300 }] }),
+    );
+    expect(v?.detail).toBe(formatBarTime(ts));
+    expect(v?.detail).not.toContain("价位");
+    const p = describeDrawing(overlay({ id: "p", name: "priceLine", points: [{ timestamp: ts, value: 1300 }] }));
+    expect(p?.detail).toContain("价位 1300");
+  });
 });
 
 describe("tool metadata", () => {

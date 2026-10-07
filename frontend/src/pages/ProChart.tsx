@@ -81,6 +81,7 @@ import {
   saveDrawingStyle,
   saveDrawings,
   serializeDrawings,
+  toolCreateExtras,
   toolOf,
   type DrawingFlags,
   type DrawingRow,
@@ -1748,6 +1749,7 @@ export function ProChart() {
       name,
       paneId: MAIN_PANE_ID,
       styles: overlayStylesOf(drawStyleRef.current),
+      ...toolCreateExtras(name),
       ...drawingEvents(),
     });
   };

@@ -1,4 +1,4 @@
-import type { Chart } from "klinecharts";
+import type { Chart, OverlayCreate } from "klinecharts";
 import { isSubPaneId, subPaneNameOf } from "./paneLayout";
 
 /**
@@ -35,8 +35,11 @@ import { isSubPaneId, subPaneNameOf } from "./paneLayout";
  *    `styles.overlay` (d.ts 1122). Figure styles are resolved as
  *    `{ ...defaultStyles[type], ...overlay.styles?.[type], ...figure.styles }`
  *    (dist 8955), so the overlay fragment only wins where the overlay template
- *    itself does not pin the same key — none of the six tools we expose does
- *    (`brush` adds `lineCap/lineJoin` only, dist 11944-11960). Defaults are
+ *    itself does not pin the same key — none of the tools we expose pins a
+ *    colour (`brush` adds `lineCap/lineJoin` only, dist 11944-11960), and the
+ *    only template that pins any `line` key at all is `simpleAnnotation`, with
+ *    `line.style: 'dashed'` (dist 12468-12469) — a solid/dashed asymmetry on
+ *    restore, not a colour one. Defaults are
  *    `line: { color: '#1677FF', size: 1, style: 'solid' }` (dist 11774-11780).
  *    Changing a drawing that already exists is `overrideOverlay({ id, styles })`
  *    (d.ts 978): it goes through `getOverlaysByFilter` (dist 14285-14298), whose
@@ -110,6 +113,14 @@ export interface DrawTool {
   name: string;
   /** Clicks the user has to make; drives the hint text. */
   clicks: number;
+  /**
+   * Does this line's `value` mean price at all? A vertical line only carries a
+   * bar, so `describeDrawing` calling its number a 价位 would be a lie. Absent
+   * means "both axes apply"; `"price"` is reserved for a future axis-only tool.
+   */
+  dim?: "time" | "price" | "both";
+  /** The line's words come from `extendData`, so the list owes it a text box. */
+  hasText?: boolean;
 }
 
 export const DRAW_TOOLS: DrawTool[] = [
@@ -119,10 +130,36 @@ export const DRAW_TOOLS: DrawTool[] = [
   { label: "价格线", name: "priceLine", clicks: 1 },
   { label: "斐波那契", name: "fibonacciLine", clicks: 2 },
   { label: "画笔", name: "brush", clicks: -1 }, // freehand: drag, double-click to finish
+  { label: "直线", name: "straightLine", clicks: 2 },
+  { label: "垂直线", name: "verticalStraightLine", clicks: 1, dim: "time" },
+  { label: "水平线段", name: "horizontalSegment", clicks: 2 },
+  { label: "水平射线", name: "horizontalRayLine", clicks: 2 },
+  { label: "平行线", name: "parallelStraightLine", clicks: 3 },
+  { label: "价格通道", name: "priceChannelLine", clicks: 3 },
+  { label: "标注", name: "simpleAnnotation", clicks: 1, hasText: true },
 ];
 
 export function toolOf(name: string): DrawTool | undefined {
   return DRAW_TOOLS.find((t) => t.name === name);
+}
+
+/**
+ * The `createOverlay` keys a tool needs beyond name/paneId/points/styles.
+ *
+ * `simpleAnnotation` draws three figures and marks every one of them
+ * `ignoreEvent: true` (dist 12466-12516), and `needDefaultPointFigure` is false
+ * in the constructor (dist 8245) — so an annotation straight from the template
+ * is inert: unclickable, undraggable, and undeletable by right-click. Asking the
+ * library for its default point figures (dist 8245 / `KD:1094`) is the only
+ * public way to give it a hit target.
+ *
+ * One implementation, both entry points — `armTool` asks here, and
+ * `restoreDrawings` has to ask the same question once the annotation's text
+ * round-trips: if only one entry asked, a drawn annotation would be editable and
+ * a restored one would not, which is the same asymmetry ⑮ had to fix for events.
+ */
+export function toolCreateExtras(name: string): Partial<OverlayCreate> {
+  return toolOf(name)?.hasText === true ? { needDefaultPointFigure: true } : {};
 }
 
 /** Hint text for an armed tool; `-1` means freehand. */
@@ -689,7 +726,9 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
     const last = formatBarTime(stamps[stamps.length - 1]);
     bits.push(first === last ? first : `${first} → ${last}`);
   }
-  if (values.length > 0) {
+  // A vertical line's `value` is whatever the click happened to land on; the
+  // tool is pure time (`DrawTool.dim`), so printing it as a price is a lie.
+  if (values.length > 0 && toolOf(name)?.dim !== "time") {
     // "价位" on a MACD pane is the same lie as the invisible line: the number is
     // real and the reader's unit is wrong (⑭, again, in the reporting half).
     const unit = paneId === MAIN_PANE_ID ? "价位" : "值";

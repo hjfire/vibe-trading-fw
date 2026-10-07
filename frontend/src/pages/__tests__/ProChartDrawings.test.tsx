@@ -601,6 +601,17 @@ describe("/pro-chart 画线交互", () => {
     expect(h.overlays[0]).toMatchObject({ name: "segment", drawing: false, points: [{ timestamp: START, value: 200 }, { timestamp: START + DAY, value: 210 }] });
     expect(screen.getByText(/已画 1 条/)).toBeTruthy();
   });
+
+  it("标注在建线那一刻就要到默认锚点图元，其余不送", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    const arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg.needDefaultPointFigure).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    const plain = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(plain).not.toHaveProperty("needDefaultPointFigure");
+  });
 });
 
 /**
