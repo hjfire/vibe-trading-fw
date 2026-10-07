@@ -14,7 +14,7 @@ TradingView 上用户每天在用、而本项目缺一整块的三个面：
 2. **画不准。** 落点的价格是鼠标 y 的连续投影，画一条"前高"要肉眼对齐：差一个像素就偏 0.01，两条线看着
    一样高其实不等。TV 的 Magnet 把落点吸到那一根 K 线的 OHLC 四个价上。
 3. **看不见 / 关不掉。** 图例（左上角 时间/开/高/低/收/量 六行）、高点与低点标记、最新价虚线、副图指标
-   图例，全部是库默认值：既不能改成"跟随光标"，也不能整体隐藏，更不能加一行涨幅或成交额。
+   图例，全部是库默认值：既不能改成"跟随光标"，也不能整体隐藏，更不能加一行涨幅。
 
 **成功判据（一句话）：** 这三件事都能在 klinecharts 10.0.3 的**公开 API 面**上完成——不改库、不 patch、
 不自绘 canvas；并且**默认态逐像素不变**：没有动过任何新偏好的用户，升级后看到的图与今天完全一致。
@@ -156,6 +156,42 @@ brush`。本仓的可见面是 `FE/lib/chartDrawings.ts:115-122` 的 `DRAW_TOOLS
 `toolOf(name)?.label ?? name` ⇒ 新工具的行标签免费，但**它的 `detail` 会把 `value` 印成"价位"**，
 对只有 x 意义的垂直线是句假话，得改。
 
+### 11. `simpleAnnotation` 的模板把 `line.style` 钉成了 dashed ⇒ 不设防的话，重载会让线变脸
+
+模板体第一件事就是 `styles: { line: { style: 'dashed' } }`（`KC:12465-12469`），而
+`OverlayImp.override` 对 `styles` 走 `merge(this.styles, styles)`（`KC:8288-8291`）：模板先合并进实例，
+调用方的片段后合并并覆盖同名键。后果是两条不对称：
+
+- `armTool` 总是显式送 `overlayStylesOf(...)`（`FE/pages/ProChart.tsx:1750`），默认样式里
+  `style: 'solid'` ⇒ **画出来是实线**；
+- `restoreDrawings` 只在 `d.style` 存在时才送片段（`FE/lib/chartDrawings.ts:539`），而默认样式不落盘
+  （`styleOfOverlay` 回 `undefined`）⇒ **重载后模板的 dashed 生效，同一条标注变成虚线**，
+  第一次编辑再落盘时又把 dashed 记成了用户偏好。
+
+七件新工具里只有标注的模板钉了这个键（`brush` 钉的是 `lineCap/lineJoin`，`KC:11944-11960`，与
+`style` 无关），所以修法是窄的：**恢复时给 `hasText` 且没有落盘样式的线补一份默认片段**，
+让"画的时候"和"恢复的时候"走同一套显式样式。这条要有测试钉（画→刷新→仍是实线）。
+
+### 12. 数据面根本没有 `turnover`，所以图例只能加涨幅一行，不能加成交额
+
+`{turnover}` 与 `{change}` 两个占位符库都支持（`KC:7666` 的 mapping 里都在，中文键也都在表里，
+`KC:6972-6973`），但占位符要能取到数才有意义：
+
+- 本仓喂给图表的 bar 由 `columnsToBars` 构造，只有 `timestamp/open/high/low/close/volume` 六个键
+  （`FE/lib/marketApi.ts:174-185`），UDF 协议的列数组里也没有成交额那一列；
+- 分时那条路同样没有：`_bars_from_frame` 只发这六个字段，均价线因此走 `Σ(close×volume)/Σ(volume)`
+  的**近似**并被明令禁止叫 VWAP（`FE/lib/timeShare.ts:158-167`）。
+
+⇒ 成交额行永远印 `n/a`（`legend.defaultValue`，`KC:11523`）。画一条恒为 `n/a` 的行不是"功能少"，
+是把一个本项目拿不到的数字挂上去充当有，**本片不做**（第八节留档）。
+`{change}` 不同：它由 `prevClose` 与当根 `close` 现算（`KC:7659-7662`），两个数都已在数据里，做得到。
+
+顺带钉一条判据归属：`{change}` 那格的取色是 `candle.priceMark.last.{up,down,noChange}Color`
+（`KC:7687-7689`）。本仓的主题只改了 `candle.bar`（`FE/pages/ProChart.tsx:270-280`），`priceMark.last`
+仍是库默认（涨绿跌红）——**这是今天就存在的事实**，最新价价签今天就是这个色。本片不改它：
+§一的判据是"默认态逐像素不变"，改色属于主题片，另案。图例偏好里因此**一个颜色键都不写**。
+
+
 ## 三、方案裁定
 
 ### A. 工具扩展：新增 7 件，全部是库内置模板
@@ -215,9 +251,8 @@ export interface LegendPrefs {
   candleRule: TooltipShowRule;      // 默认 "always"
   indicatorRule: TooltipShowRule;   // 默认 "always"
   showChange: boolean;              // 涨幅行，默认 false
-  showTurnover: boolean;            // 成交额行，默认 false
   highLowMark: boolean;             // 高/低价位标记，默认 true（= 库默认）
-  lastPriceLine: boolean;           // 最新价虚线，默认 true（= 库默认）
+  lastPriceLine: boolean;           // 最新价标记（线＋价签），默认 true（= 库默认）
 }
 export const DEFAULT_LEGEND_PREFS: LegendPrefs;         // 逐项等于 §二.8 表里的库默认
 /** 只含 show / showRule / template 四类键的样式片段，形状由本函数唯一决定。 */
@@ -228,22 +263,27 @@ export type LegendStyleFragment = {
   indicator: { tooltip: { showRule: TooltipShowRule } };
 };
 export function legendStyles(p: LegendPrefs): LegendStyleFragment;
-export function legendTemplate(p: LegendPrefs): TooltipLegend[];  // 6 行 + 可选 2 行，顺序固定
+export function legendTemplate(p: LegendPrefs): TooltipLegend[];  // 6 行 + 可选涨幅 1 行，顺序固定
 export function loadLegendPrefs(): LegendPrefs;         // 逐键校验 + 回默认，读不到不抛
 export function saveLegendPrefs(p: LegendPrefs): void;
 ```
 
 - `legendStyles` 只写 `show` / `showRule` / `template` 这三类键，**绝不写颜色**，避免与
-  `chartStyles` 的红涨绿跌主题面打架。
+  `chartStyles` 的红涨绿跌主题面打架（§二.12 末段：`{change}` 的取色本来就来自 `priceMark.last`，本片不碰）。
+- **没有成交额行**：§二.12 已核实数据面取不到 `turnover`，恒为 `n/a` 的一行不是"功能少"而是假话，
+  已列入第八节留档。
+- 涨幅行写成 `{ title: "change", value: "{change}" }`——标题给**键**而不是给中文字：库对标题再过一次
+  `i18n`（`KC:7685`），zh_CN 表里 `change: '涨幅：'`（`KC:6973`）是现成的，写死中文会让英文界面冒出中文行。
+- `lastPriceLine` 一个偏好同时驱动 `last.show` / `last.line.show` / `last.text.show`：TV 关掉
+  "Last price line" 时线与价签一起消失，只关线会把一个孤立价签留在轴上。
 - 合成点唯一：`chartStyles(dark, timeShare, legend = DEFAULT_LEGEND_PREFS)` 内部把 `legendStyles(legend)`
   并进它自己的 `candle` / 追加 `indicator`，返回一份完整对象；`init`（`:955`）与主题 effect（`:1214`）
   都传当前偏好，effect 的依赖数组加 `legend`。**这一条是本片最容易写错的地方**（§二.7 记录的那次
   "换主题把分时盖回蜡烛"就是同一个坑），所以要有针对性测试，见 §六.5。
-- UI：工具栏加一个「图例」按钮（`aria-pressed`），点开一个与画线清单同款的小面板，六项控件：
-  主图数值图例三态、副图指标图例三态、涨幅勾选、成交额勾选、高低标记开关、最新价线开关。
+- UI：工具栏加一个「图例」按钮（`aria-pressed`），点开一个与画线清单同款的小面板，五项控件：
+  主图数值图例三态、副图指标图例三态、涨幅勾选、高低标记开关、最新价线开关。
   文案沿用现有硬编码中文面（`i18n.test.ts` 不覆盖 ProChart 画线文案，本片不扩大该面）。
-- 默认值等于库默认 ⇒ 不改偏好的用户看到的东西不变；`showChange`/`showTurnover` 是唯一会**增行**的两项，
-  默认关。
+- 默认值等于库默认 ⇒ 不改偏好的用户看到的东西不变；`showChange` 是唯一会**增行**的一项，默认关。
 
 ### D. 标注的文字：一个字段 + 一个输入框
 
@@ -252,6 +292,9 @@ export function saveLegendPrefs(p: LegendPrefs): void;
   `restoreDrawings` 建线时传回 `extendData: d.text`，并因 §二.5 的补偿对这类工具传
   `needDefaultPointFigure: true`（判据同样来自 `DrawTool` 表，两个入口共用一个 `toolCreateExtras(name)`）。
   文字长度上限 40 个字符，超出截断并在清单行上以 `title` 说明。
+- **恢复时要给标注补一份默认样式片段**（§二.11）：`d.style` 缺失且 `toolOf(d.name)?.hasText` ⇒
+  送 `overlayStylesOf(DEFAULT_DRAWING_STYLE)`。不补就是"画时实线、刷新后虚线"，再被下一次编辑写成用户偏好。
+  只给 `hasText` 这一类补，其余六件的模板不钉 `line.style`，行为与今天逐字节相同。
 - 清单行：`hasText` 的行多渲染一个 `<input aria-label="画线文字 {id}">`；`onChange` 走
   `overrideOverlay({id, extendData})`（§二.4 ⇒ `extendData` 在 `shouldUpdate` 里，会重绘），随后照常
   `syncDrawings` 落盘。删除仍走清单的删除按钮（它的自定义图元 `ignoreEvent`，图上右键删不掉，这是库行为）。
@@ -304,12 +347,17 @@ pro-chart.drawings.v1 (形状 +text) ─ serializeDrawings(hideFree(...)) / rest
    - `describeDrawing`：垂直线行不出现"价位"、其余行照旧。
    - 标注：`serializeDrawings` 带 `text`；`extendData` 是函数时不崩、不写；`restoreDrawings` 对
      `hasText` 工具传 `needDefaultPointFigure: true` 与 `extendData`；`toolCreateExtras` 单一实现被两个入口共用。
+   - 标注样式（§二.11）：无落盘样式的标注恢复时带 `styles.line.style === "solid"`；
+     **同一条判据对 `priceLine` 不成立**（它没有落盘样式时也不该被送片段）——两半都要写，
+     否则实现会顺手给所有工具补片段，把今天"默认不落盘"的存储面改掉。
    - 磁吸：`restoreDrawings(..., "strong_magnet")` 建出的 overlay 带该 `mode`；默认参数不写 `mode`。
 2. `FE/lib/__tests__/chartLegend.test.ts`（新文件）
-   - `DEFAULT_LEGEND_PREFS` 逐项等于库默认（`always`/`always`/false/false/true/true）。
-   - `legendTemplate`：默认恰好 6 行、与库默认模板逐键相等；勾涨幅/成交额后为 7/8/9 行且顺序固定。
+   - `DEFAULT_LEGEND_PREFS` 逐项等于库默认（`always`/`always`/false/true/true）。
+   - `legendTemplate`：默认恰好 6 行、与库默认模板逐键相等（`KC:11524-11531`）；勾上涨幅为 7 行、
+     新增行是 `{ title: "change", value: "{change}" }` 且落在 volume 之后。
    - `legendStyles` 只产 `show`/`showRule`/`template` 三类键，**不含任何颜色键**（防与主题面打架）。
-   - `loadLegendPrefs`：脏 JSON、未知 `showRule`、`"true"` 字符串、缺键 ⇒ 全部回默认且不抛。
+   - `loadLegendPrefs`：脏 JSON、未知 `showRule`、`"true"` 字符串、缺键、**多余的 `showTurnover` 键**
+     ⇒ 全部回默认且不抛（老偏好文件里带着已被否掉那行也不能污染模板）。
 3. `FE/lib/__tests__/drawingExchange.test.ts`（基线 31 条）
    - `text` 往返一致；>40 截断；`text` 非字符串被丢；version 写成 1/2/99/缺省都能导入（读侧不校验）。
    - `drawingKey`：同点同名的两个标注，`text` 不同 ⇒ 键不同（导入不互吞）；无 `text` 的线键形与改动前逐字相同
@@ -334,7 +382,8 @@ pro-chart.drawings.v1 (形状 +text) ─ serializeDrawings(hideFree(...)) / rest
    `WorldQuant` 商标 grep 门。
 8. 活体验收（browser-use MCP，`/pro-chart`）：13 件工具逐件画一条并刷新验证复现；磁吸开/关各画一条
    水平线，读 `getOverlays()` 的 `value` 断言它等于游标根的四个 OHLC 之一（关时一般不等）；
-   副图上画线证明磁吸不生效；标注改文字→刷新→文字仍在；图例六项各切一遍并切主题复查。
+   副图上画线证明磁吸不生效；标注改文字→刷新→文字仍在**且线型未变虚线**（§二.11）；
+   图例五项各切一遍并切主题复查。
 9. **上面这些条数只是本轮读到的值，不是判据**。要当前值请在 `frontend/` 逐文件跑（ANSI 要先剥掉，
    否则锚点被色码吃掉）：
 
@@ -357,6 +406,8 @@ pro-chart.drawings.v1 (形状 +text) ─ serializeDrawings(hideFree(...)) / rest
 
 ## 八、明确不做（已裁定，留档）
 
+- **图例的成交额行**：库认 `{turnover}` 占位符，本仓的数据面根本不产出这个字段（§二.12）⇒ 加上去是一行
+  永远 `n/a` 的假象。要做它得先在后端把成交额取回来，那是数据片的活，不是图例片的活。
 - **`verticalRayLine` / `verticalSegment`**：与 `verticalStraightLine` 同一判断轴，两种变体没人分得清，低价值。
 - **`simpleTag`**：与 `simpleAnnotation` 只差箭头朝向，同屏出现只会让清单里两行看起来一样。
 - **自定义图形工具（矩形/椭圆的 `rect`/`path`）**：第 2 节已经证明通道是开的，但 `registerOverlay` 必须早于
