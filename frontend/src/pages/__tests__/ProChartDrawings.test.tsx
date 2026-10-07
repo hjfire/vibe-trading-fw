@@ -60,6 +60,10 @@ interface FakeOverlay {
   // default (dist 8240-8242) before merging what the caller passed.
   lock?: boolean;
   visible?: boolean;
+  // The annotation's words (第③片 D): `extendData` in the library, `text` here.
+  extendData?: unknown;
+  // Set only when the caller asked; `simpleAnnotation` needs it to be clickable.
+  needDefaultPointFigure?: boolean;
   // Event callbacks the component handed to `createOverlay`; the library keeps
   // them on the instance and calls them for the rest of the overlay's life.
   // `onDrawEnd`/`onPressedMoveEnd` take the same `{ chart, overlay }` payload the
@@ -286,6 +290,8 @@ vi.mock("klinecharts", () => ({
           styles?: Record<string, unknown>;
           lock?: boolean;
           visible?: boolean;
+          extendData?: unknown;
+          needDefaultPointFigure?: boolean;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
@@ -295,6 +301,8 @@ vi.mock("klinecharts", () => ({
           currentStep: placed ? -1 : 1,
           drawing: !placed,
           styles: v.styles,
+          ...("extendData" in v ? { extendData: v.extendData } : {}),
+          ...("needDefaultPointFigure" in v ? { needDefaultPointFigure: v.needDefaultPointFigure } : {}),
           ...(typeof v.lock === "boolean" ? { lock: v.lock } : {}),
           ...(typeof v.visible === "boolean" ? { visible: v.visible } : {}),
           onDrawEnd: v.onDrawEnd,
@@ -317,6 +325,7 @@ vi.mock("klinecharts", () => ({
           styles?: Record<string, unknown>;
           lock?: boolean;
           visible?: boolean;
+          extendData?: unknown;
         };
         const targets =
           v.id === undefined || v.id === null ? h.overlays.slice() : h.overlays.filter((o) => o.id === v.id);
@@ -325,11 +334,13 @@ vi.mock("klinecharts", () => ({
         for (const target of targets) {
           const prevStyles = target.styles;
           const prevVisible = target.visible;
+          const prevExtendData = target.extendData;
           const prevPoints = JSON.stringify(target.points);
           // `override()` merges every key except id/name/currentStep/points/
           // styles (dist 8280-8281), which is how `lock`/`visible` get set.
           if ("lock" in v) target.lock = v.lock;
           if ("visible" in v) target.visible = v.visible;
+          if ("extendData" in v) target.extendData = v.extendData;
           if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
           // `points` is the one key `override()` does NOT blind-merge: it has its
           // own branch that replaces them wholesale and marks the drawing
@@ -347,6 +358,7 @@ vi.mock("klinecharts", () => ({
             draw ||
             prevVisible !== target.visible ||
             prevStyles !== target.styles ||
+            prevExtendData !== target.extendData ||
             prevPoints !== JSON.stringify(target.points);
         }
         return draw;
@@ -1149,6 +1161,72 @@ describe("/pro-chart 画线清单", () => {
     expect(screen.queryByText(/已画/)).toBeNull();
     // The bucket of the symbol we left is untouched.
     expect(readBuckets()["600519.SH|1D"]).toHaveLength(1);
+  });
+
+  it("标注行有文字输入框，改字即 override 并落盘", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    // The row only earns a text box because the tool says it carries words.
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    expect(box.value).toBe("");
+
+    fireEvent.change(box, { target: { value: "前高" } });
+    await flush();
+
+    const call = h.chart?.overrideOverlay.mock.calls.at(-1)?.[0] as { id?: string; extendData?: unknown };
+    expect(call).toEqual({ id, extendData: "前高" });
+    const bucket = readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>;
+    expect(bucket[0]?.text).toBe("前高");
+  });
+
+  it("非标注的行没有文字输入框", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1290 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    expect(screen.queryByLabelText(/^画线文字/)).toBeNull();
+  });
+
+  // 义务 2（T3 评审席）：`applyDrawingText` 既不认 `isInProgress` 也不认 `hasText`，
+  // 所以闸门在行源这一侧——存回来的文字要正好落在框里（非受控的 defaultValue），
+  // 而画到一半的标注压根成不了一行。
+  it("存回来的文字就在框里，画到一半的标注进不了清单也拿不到第二个框", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          {
+            name: "simpleAnnotation",
+            paneId: "candle_pane",
+            points: [{ timestamp: START, value: 1300 }],
+            text: "前高",
+          },
+        ],
+      }),
+    );
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const id = h.overlays[0].id;
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    expect(box.value).toBe("前高");
+    expect(screen.getAllByLabelText(/^画线文字/)).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    await flush();
+    expect(h.overlays.some((o) => o.drawing)).toBe(true);
+
+    // Re-read the chart *with* the half-drawn annotation sitting on it.
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+    expect(screen.getAllByLabelText(/^画线文字/)).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^选中画线/ })).toHaveLength(1);
   });
 });
 

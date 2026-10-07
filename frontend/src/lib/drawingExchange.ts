@@ -253,10 +253,18 @@ export function drawingsFileName(symbol: string, interval: string, now = new Dat
  * annotations on the same bar that say different things are not the same line,
  * and without this the second one would be swallowed as a duplicate on import.
  * A line without text keeps its old key shape byte for byte.
+ *
+ * "actually has some" is decided the same way storage decides it, on both ends:
+ * only a `hasText` tool is asked (a non-text entry carrying a stray `text` would
+ * otherwise sign differently on the first import than on a re-import, once the
+ * writer has dropped the key), and the words go through `normalizeDrawingText`
+ * first, because `readBuckets` validates nothing — a hand-edited `" 前高 "` bucket
+ * entry must still be the same line as a file's `前高`.
  */
 export function drawingKey(d: StoredDrawing): string {
   const base = `${d.paneId || MAIN_PANE_ID}|${d.name}|${d.points.map((p) => `${p.timestamp}:${p.value ?? ""}`).join(",")}`;
-  return d.text ? `${base}|${d.text}` : base;
+  const text = toolOf(d.name)?.hasText === true ? normalizeDrawingText(d.text) : undefined;
+  return text ? `${base}|${text}` : base;
 }
 
 export interface DrawingMerge {

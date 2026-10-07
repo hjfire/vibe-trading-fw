@@ -393,6 +393,39 @@ describe("标注文字过交换", () => {
       `${MAIN_PANE_ID}|priceLine|${T0}:1300`,
     );
   });
+
+  // 义务 1（T3 评审席）：上面只钉了「文字不同 ⇒ 键不同」的一半，另一半（同文字 ⇒
+  // 同一条线）没人钉；而 text 进键的条件也得收口——`readBuckets` 不校验 text，
+  // 手改的 `" 前高 "` 若按原样进键，就和文件里的 `前高` 成了两条线；非 `hasText`
+  // 的工具带着 text 时，第一次导入与「写侧抹掉 text 后再次导入」键形不同，幂等就破了。
+  it("同点同名同文字的标注仍是一条线", () => {
+    const a = base({ text: "前高" });
+    expect(drawingKey(a)).toBe(drawingKey({ ...a }));
+    const again = mergeDrawings([a], [{ ...a, lock: true }]);
+    expect(again.added).toBe(0);
+    expect(again.duplicates).toBe(1);
+  });
+
+  it("进键前先 normalize：手改的 \" 前高 \" 与文件的 前高 同键", () => {
+    expect(drawingKey(base({ text: " 前高 " }))).toBe(drawingKey(base({ text: "前高" })));
+    const merged = mergeDrawings([base({ text: " 前高 " })], [base({ text: "前高" })]);
+    expect(merged.added).toBe(0);
+    expect(merged.duplicates).toBe(1);
+    // 截断也一并按同一口径：超上限的两条只算一条，别按原文各留一份。
+    expect(drawingKey(base({ text: "字".repeat(45) }))).toBe(drawingKey(base({ text: "字".repeat(40) })));
+    // 纯空白的 text 不改变键形（它落盘时根本不会带这个键）。
+    expect(drawingKey(base({ text: "   " }))).toBe(drawingKey(base()));
+  });
+
+  it("非 hasText 工具的 text 不进键，两次导入键形一致", () => {
+    const plain = { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: T0, value: 1300 }] };
+    expect(drawingKey({ ...plain, text: "不该进键" })).toBe(drawingKey(plain));
+    const merged = mergeDrawings([{ ...plain, text: "不该进键" }], [plain]);
+    expect(merged.added).toBe(0);
+    expect(merged.duplicates).toBe(1);
+    // 同几何、不同文字的两条**标注**仍是两条线（上面那条钉的反面）。
+    expect(drawingKey(base({ text: "前高" }))).not.toBe(drawingKey(base({ text: "前低" })));
+  });
 });
 
 /* ------------------------------------------------------------ share links */

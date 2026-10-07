@@ -60,8 +60,10 @@ import {
   DRAWING_SIZES,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  MAX_DRAWING_TEXT,
   applyDrawingFlags,
   applyDrawingStyle,
+  applyDrawingText,
   cancelInProgress,
   clampDrawingsToLastBar,
   drawingsBucket,
@@ -1807,6 +1809,22 @@ export function ProChart() {
   };
 
   /**
+   * Type an annotation's words. `overrideOverlay` is the channel (the library
+   * repaints `extendData` changes — it is one of the keys `shouldUpdate()`
+   * watches, dist 8314-8318), and the bank that follows is what puts the text in
+   * storage; the verdict is `applyDrawingText` reading the instance back, not the
+   * library's boolean — `null` means no such line, so nothing gets re-banked.
+   * `syncDrawings` re-reads the rows, so storage always holds exactly what the
+   * instance holds, including a value cut to `MAX_DRAWING_TEXT`.
+   */
+  const setDrawingText = (id: string, text: string) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (applyDrawingText(chart, id, text) === null) return;
+    syncDrawings(chart);
+  };
+
+  /**
    * Delete one line through the chart, so `onRemoved` runs the same way a
    * right-click delete runs it (⑮): selection and storage are cleaned by that
    * callback, not by this handler.
@@ -2356,6 +2374,24 @@ export function ProChart() {
                   {row.locked && <span className="shrink-0 text-muted-foreground">已锁定</span>}
                   {row.hidden && <span className="shrink-0 text-muted-foreground">已隐藏</span>}
                 </button>
+                {/*
+                 * Only a `hasText` tool gets the box — the tool decides, not the
+                 * row's words, because `applyDrawingText` checks neither
+                 * `isInProgress` nor `hasText`: the guard belongs here (and a
+                 * half-drawn line never becomes a row at all).
+                 * Uncontrolled on purpose: banking re-renders the row on every
+                 * keystroke, and a controlled `value` would fight the IME.
+                 */}
+                {toolOf(row.name)?.hasText === true && (
+                  <input
+                    aria-label={`画线文字 ${row.id}`}
+                    title={`标注文字（最多 ${MAX_DRAWING_TEXT} 字）：改完即存，刷新还在`}
+                    className="w-20 shrink-0 rounded-md border bg-transparent px-1 py-0.5"
+                    defaultValue={row.text ?? ""}
+                    key={row.id}
+                    onChange={(e) => setDrawingText(row.id, e.target.value)}
+                  />
+                )}
                 <button
                   type="button"
                   aria-label={`锁定画线 ${row.id}`}

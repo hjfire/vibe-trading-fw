@@ -1204,3 +1204,44 @@ describe("改掉一条标注的文字", () => {
     ]);
   });
 });
+
+/**
+ * 第③片 D 的清单行（T4）：行只有在自己的工具确实带文字时才把文字交出去，
+ * 页面那一侧按工具给不给输入框，`text` 是这个工具此刻说的话。
+ */
+describe("清单行带出标注文字", () => {
+  it("hasText 工具的行带出 text，其余工具不带", () => {
+    const dot = [{ timestamp: 1_700_000_000_000, value: 1300 }];
+    const a = describeDrawing(overlay({ id: "a", name: "simpleAnnotation", points: dot, extendData: "前高" }));
+    expect(a?.text).toBe("前高");
+    const b = describeDrawing(overlay({ id: "b", name: "simpleAnnotation", points: dot }));
+    expect(b).toBeTruthy();
+    expect(b).not.toHaveProperty("text");
+    const c = describeDrawing(overlay({ id: "c", name: "priceLine", points: dot, extendData: "不该出现" }));
+    expect(c).not.toHaveProperty("text");
+  });
+
+  // 义务 2（T3 评审席）：输入框的闸门在**行源**这一侧——`applyDrawingText` 既不认
+  // `isInProgress` 也不认 `hasText`，所以半成品与非 `hasText` 的工具必须压根拿不到行。
+  it("画到一半的标注拿不到行，也就拿不到输入框", () => {
+    const dot = [{ timestamp: 1_700_000_000_000, value: 1300 }];
+    const half = overlay({ id: "h", name: "simpleAnnotation", points: dot, extendData: "还没画完", drawing: true });
+    expect(describeDrawing(half)).toBeNull();
+    const chart = fakeChart([
+      overlay({ id: "done", name: "simpleAnnotation", points: dot, extendData: "前高" }),
+      half,
+    ]);
+    expect(listDrawings(chart as never).map((r) => r.id)).toEqual(["done"]);
+  });
+
+  it("行读的是同一个 normalize：函数型 extendData 不进 JSX，超长截到上限", () => {
+    const dot = [{ timestamp: 1_700_000_000_000, value: 1300 }];
+    expect(
+      describeDrawing(overlay({ id: "f", name: "simpleAnnotation", points: dot, extendData: () => "渲染回调" }))?.text,
+    ).toBeUndefined();
+    const row = describeDrawing(
+      overlay({ id: "g", name: "simpleAnnotation", points: dot, extendData: `  ${"字".repeat(45)}  ` }),
+    );
+    expect(row?.text).toBe("字".repeat(40));
+  });
+});

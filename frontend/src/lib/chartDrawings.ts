@@ -736,7 +736,7 @@ export function applyDrawingText(chart: OverlayHost, id: string, text: string): 
   if (!id) return null;
   const next = normalizeDrawingText(text) ?? "";
   chart.overrideOverlay({ id, extendData: next });
-  const current = chart.getOverlays({ id })[0] as { extendData?: unknown } | undefined;
+  const current = chart.getOverlays({ id })[0] as OverlayLike | undefined;
   if (!current) return null;
   return normalizeDrawingText(current.extendData) ?? "";
 }
@@ -755,6 +755,13 @@ export interface DrawingRow {
   paneId: string;
   /** Where the line sits: bar time(s) and/or the pane's own value. Empty when unknown. */
   detail: string;
+  /**
+   * An annotation's words, present only when this row's tool is a `hasText` one
+   * and the line actually says something — the list panel renders its input box
+   * off the *tool*, so a text row with nothing typed still earns a box, while
+   * "no text" and "not a text tool" must not collapse into the same shape.
+   */
+  text?: string;
   /** How many points the line is made of (brush can be in the hundreds). */
   pointCount: number;
 }
@@ -817,6 +824,20 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
     name,
     label: toolOf(name)?.label ?? name,
     style: styleOfOverlay(o) ?? { ...DEFAULT_DRAWING_STYLE },
+    // Read through the same normalizer storage uses, so a live instance holding
+    // a function (`extendData` also accepts one, dist 12485) never reaches JSX as
+    // a child. Only a `hasText` tool is asked: `extendData` is the library's
+    // generic per-overlay channel (`KD:1118`), and of our thirteen tools exactly
+    // one template prints it as words — `simpleAnnotation` (dist 12480; the other
+    // reader is `simpleTag`, which this app does not ship). Handing a row's
+    // `extendData` to the other twelve would offer a box for a value the user
+    // never typed, and `applyDrawingText` would then overwrite it.
+    ...(toolOf(name)?.hasText
+      ? (() => {
+          const text = normalizeDrawingText(o.extendData);
+          return text ? { text } : {};
+        })()
+      : {}),
     locked: o.lock === true,
     hidden: o.visible === false,
     paneId,
