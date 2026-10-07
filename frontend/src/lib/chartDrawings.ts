@@ -134,7 +134,7 @@ export const DRAW_TOOLS: DrawTool[] = [
   { label: "水平线", name: "horizontalStraightLine", clicks: 1 },
   { label: "价格线", name: "priceLine", clicks: 1 },
   { label: "斐波那契", name: "fibonacciLine", clicks: 2 },
-  { label: "画笔", name: "brush", clicks: -1 }, // freehand: drag, double-click to finish
+  { label: "画笔", name: "brush", clicks: -1 }, // freehand: press-drag-release; `mouseUpEvent` force-completes a continuous-mode overlay (dist 8589-8601), so no click count applies
   { label: "直线", name: "straightLine", clicks: 2 },
   { label: "垂直线", name: "verticalStraightLine", clicks: 1, dim: "time" },
   { label: "水平线段", name: "horizontalSegment", clicks: 2 },
