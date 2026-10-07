@@ -1273,6 +1273,65 @@ describe("/pro-chart 画线清单", () => {
     const bucket = readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>;
     expect(bucket[0]?.text).toBe("字".repeat(40));
   });
+
+  // 活体验收（第③片 T8，真实浏览器 127.0.0.1:8000）读到的真缺陷：合成期间每一次
+  // `input` 都被当成定稿写进实例与存储，罗马字缓冲一落库，用户按 Esc 取消输入法时
+  // 浏览器并不会再补一次 change 把它擦掉——留下的就是 `qian` 这种没人要的拼音。
+  // 判据两半，缺一半都放行：合成期间一个字都不许写（`overrideOverlay` 调用数不动），
+  // 合成结束必须把此刻框里的定稿写上（写的是值本身，不是事件里的 data，因为取消时
+  // 值已经回到合成前）。
+  it("输入法合成期间不落罗马字，合成结束才落定稿", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
+
+    fireEvent.compositionStart(box);
+    fireEvent.change(box, { target: { value: "qian" }, isComposing: true });
+    await flush();
+
+    expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore);
+    expect(h.overlays[0].extendData).toBeUndefined();
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]?.text).toBeUndefined();
+
+    // 定稿：Chrome 在 compositionend 时框里已经是汉字，此时必须落库。
+    fireEvent.change(box, { target: { value: "前高" }, isComposing: true });
+    fireEvent.compositionEnd(box, { data: "前高" });
+    await flush();
+
+    expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id, extendData: "前高" });
+    expect(h.overlays[0].extendData).toBe("前高");
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]?.text).toBe("前高");
+  });
+
+  // 取消合成（Esc）走的是同一条 compositionend：值已经退回合成前，那就写回空，
+  // 而不是把刚才的拼音留在库里。
+  it("取消输入法合成退回空值，库里也不留罗马字", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
+
+    fireEvent.compositionStart(box);
+    fireEvent.change(box, { target: { value: "qian" }, isComposing: true });
+    fireEvent.change(box, { target: { value: "" } }); // 浏览器把合成文本撤掉
+    fireEvent.compositionEnd(box, { data: "" });
+    await flush();
+
+    expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore + 1);
+    expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id, extendData: "" });
+    expect(h.overlays[0].extendData).toBe("");
+  });
 });
 
 /**

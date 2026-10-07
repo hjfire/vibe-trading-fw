@@ -1915,6 +1915,16 @@ export function ProChart() {
   };
 
   /**
+   * Which row's 输入法 buffer is open right now (only one element composes at a
+   * time). During composition the box holds pinyin letters, not a value the user
+   * chose, so every keystroke must not bank it — a real browser reads back
+   * `qian` in storage when the user cancels with Esc, because nothing sends a
+   * correcting change afterwards. `compositionend` is the commit point: it banks
+   * whatever the box holds then, which is the reverted (empty) value on a cancel.
+   */
+  const composingRow = useRef<string | null>(null);
+
+  /**
    * Delete one line through the chart, so `onRemoved` runs the same way a
    * right-click delete runs it (⑮): selection and storage are cleaned by that
    * callback, not by this handler.
@@ -2574,7 +2584,18 @@ export function ProChart() {
                     className="w-20 shrink-0 rounded-md border bg-transparent px-1 py-0.5"
                     defaultValue={row.text ?? ""}
                     key={row.id}
-                    onChange={(e) => setDrawingText(row.id, e.target.value)}
+                    onCompositionStart={() => {
+                      composingRow.current = row.id;
+                    }}
+                    onCompositionEnd={(e) => {
+                      if (composingRow.current !== row.id) return;
+                      composingRow.current = null;
+                      setDrawingText(row.id, e.currentTarget.value);
+                    }}
+                    onChange={(e) => {
+                      if (composingRow.current === row.id) return;
+                      setDrawingText(row.id, e.target.value);
+                    }}
                   />
                 )}
                 <button
