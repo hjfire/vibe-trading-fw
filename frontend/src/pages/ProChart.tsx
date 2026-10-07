@@ -1249,8 +1249,9 @@ export function ProChart() {
    * Hide the drawings that reach past the cursor. `null` cursor means replay is off: restore
    * everything this function hid and nothing else.
    *
-   * Nothing here writes storage. The bank path (`serializeDrawings(chart.getOverlays())`)
-   * takes the whole overlay list with no name filter, so a bank fired mid-hide would persist
+   * Nothing here writes storage. The bank path (`bankDrawings` → `serializeDrawings
+   * (hideFree(chart.getOverlays()), excludeId)`) takes the whole overlay list with no name
+   * filter, so a bank fired mid-hide would persist
    * `visible: false` as the user's own hidden line — surviving exit, reload and export.
    *
    * `overrideOverlay` repaints the overlay layer only (`updatePane(UpdateLevel.Overlay)`, dist
@@ -1297,7 +1298,7 @@ export function ProChart() {
     if (bars.length === 0) return;
     const last = bars[bars.length - 1].timestamp;
     // `getVisibleRange().to` is an *exclusive* bound (`_adjustVisibleRange` loops
-    // `for (i = realFrom; i < realTo)`, dist 13569), so the bar sitting at the right edge of
+    // `for (i = realFrom; i < realTo)`, dist 13574), so the bar sitting at the right edge of
     // the view is index `to - 1`; `cursorFromView` takes an index, not a count.
     const cursorTs =
       mode === "viewEdge"

@@ -8,9 +8,9 @@ import { cn } from "@/lib/utils";
  * instance, so the readout wording is testable without a canvas and the page keeps the only
  * copy of the cursor state.
  *
- * Deliberately absent: a vertical cursor line drawn as an overlay. `serializeDrawings
- * (chart.getOverlays())` banks every overlay on the chart by no name filter
- * (ProChart.tsx:844), so a replay marker would be written into the user's drawing bucket,
+ * Deliberately absent: a vertical cursor line drawn as an overlay. `ProChart.tsx`'s
+ * `bankDrawings` serializes every overlay on the chart by no name filter, so a replay marker
+ * would be written into the user's drawing bucket,
  * survive exit, come back on reload, and travel in the `.json`/`?d=` export. The truncated
  * window already says where "now" is — the newest bar on screen *is* the cursor.
  */
