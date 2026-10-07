@@ -760,8 +760,13 @@ describe("/pro-chart 画线样式", () => {
     await mountChart();
     const raw = (name: string) =>
       screen.getByRole("button", { name }).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    raw("画线粗细 2px");
-    raw("虚线");
+    // 两次点击必须在同一次同步批处理里落地（这正是这条钉要复现的prod形状），
+    // 又不能飘在 act 之外——React 的 `not wrapped in act` 警告会把「输出干净」
+    // 弄脏。放进同一个 act 回调：回调同步跑完才 flush，中间不会有第二次 render。
+    await act(async () => {
+      raw("画线粗细 2px");
+      raw("虚线");
+    });
     await flush();
 
     expect(readStylePref()).toEqual({ color: "#1677FF", size: 2, dashed: true });
