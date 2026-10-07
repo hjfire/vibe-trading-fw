@@ -62,6 +62,11 @@ interface FakeOverlay {
   visible?: boolean;
   // The annotation's words (第③片 D): `extendData` in the library, `text` here.
   extendData?: unknown;
+  // The magnet (第③片 B): `OverlayImp`'s constructor seeds `mode: 'normal'`
+  // (dist 8248) on every overlay, so a live instance always answers one of the
+  // three library states — and `applyMagnetMode` reads the instance back, which
+  // only means something if the double carries the seed.
+  mode?: string;
   // Set only when the caller asked; `simpleAnnotation` needs it to be clickable.
   needDefaultPointFigure?: boolean;
   // Event callbacks the component handed to `createOverlay`; the library keeps
@@ -151,6 +156,7 @@ function makeOverlay(patch: Partial<FakeOverlay>): FakeOverlay {
     drawing: true,
     lock: false,
     visible: true,
+    mode: "normal",
     ...patch,
     isDrawing: () => o.drawing,
   };
@@ -291,6 +297,7 @@ vi.mock("klinecharts", () => ({
           lock?: boolean;
           visible?: boolean;
           extendData?: unknown;
+          mode?: string;
           needDefaultPointFigure?: boolean;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
@@ -305,6 +312,7 @@ vi.mock("klinecharts", () => ({
           ...("needDefaultPointFigure" in v ? { needDefaultPointFigure: v.needDefaultPointFigure } : {}),
           ...(typeof v.lock === "boolean" ? { lock: v.lock } : {}),
           ...(typeof v.visible === "boolean" ? { visible: v.visible } : {}),
+          ...(typeof v.mode === "string" ? { mode: v.mode } : {}),
           onDrawEnd: v.onDrawEnd,
           onRemoved: v.onRemoved,
           onPressedMoveEnd: v.onPressedMoveEnd,
@@ -326,6 +334,7 @@ vi.mock("klinecharts", () => ({
           lock?: boolean;
           visible?: boolean;
           extendData?: unknown;
+          mode?: string;
         };
         const targets =
           v.id === undefined || v.id === null ? h.overlays.slice() : h.overlays.filter((o) => o.id === v.id);
@@ -341,6 +350,7 @@ vi.mock("klinecharts", () => ({
           if ("lock" in v) target.lock = v.lock;
           if ("visible" in v) target.visible = v.visible;
           if ("extendData" in v) target.extendData = v.extendData;
+          if ("mode" in v) target.mode = v.mode;
           if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
           // `points` is the one key `override()` does NOT blind-merge: it has its
           // own branch that replaces them wholesale and marks the drawing
@@ -353,7 +363,9 @@ vi.mock("klinecharts", () => ({
           }
           // `shouldUpdate()` repaints for styles/visible/points/zLevel but never
           // for `lock` alone (dist 8314-8318) — hence the read-back in
-          // `applyDrawingFlags`.
+          // `applyDrawingFlags`. `mode` is left out of this verdict for the same
+          // reason: a magnet change lands and still answers `false`, which is
+          // precisely the modelling the 磁吸 tests below depend on.
           draw =
             draw ||
             prevVisible !== target.visible ||
@@ -441,6 +453,9 @@ async function mountChart(): Promise<void> {
 
 const DRAWING_KEY = "pro-chart.drawings.v1";
 const STYLE_KEY = "pro-chart.drawStyle.v1";
+// The magnet preference (第③片 B): one key, `"1"`/`"0"`, and it must not exist
+// at all until the user turns it on.
+const MAGNET_KEY = "pro-chart.magnet.v1";
 const readBuckets = (): Record<string, unknown> =>
   JSON.parse(localStorage.getItem(DRAWING_KEY) ?? "{}");
 const readStylePref = (): Record<string, unknown> =>
@@ -1228,6 +1243,31 @@ describe("/pro-chart 画线清单", () => {
     expect(screen.getAllByLabelText(/^画线文字/)).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: /^选中画线/ })).toHaveLength(1);
   });
+
+  // 义务 2（第 4 任务评审席）：40 字这道闸门是**我们的处理函数**在截，不是浏览器的
+  // `maxLength` 在管——输入框上没有那个属性，jsdom 也不会替它截断，所以这行在页面层
+  // 是真判决：敲 45 个字，`overrideOverlay` 必须只收到 40 个，实例与落盘也必须是那
+  // 40 个。少了 `normalizeDrawingText` 这一趟，长出来的就是没人打过的一串。
+  it("标注文字在页面层也被截到 40 字：override、实例与落盘都不许带超长", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "字".repeat(45) } });
+    await flush();
+
+    expect(box.value).toBe("字".repeat(45)); // the DOM is not the gate
+    const call = h.chart?.overrideOverlay.mock.calls.at(-1)?.[0] as { id?: string; extendData?: unknown };
+    expect(call).toEqual({ id, extendData: "字".repeat(40) });
+    expect((call.extendData as string).length).toBe(40);
+    expect(h.overlays[0].extendData).toBe("字".repeat(40));
+    const bucket = readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>;
+    expect(bucket[0]?.text).toBe("字".repeat(40));
+  });
 });
 
 /**
@@ -1930,5 +1970,178 @@ describe("/pro-chart 落点必须在真实存在的 K 线上", () => {
     });
     await flush();
     expect(line.points).toEqual([{ timestamp: START + 260 * DAY, value: 1304.02 }]);
+  });
+});
+
+/**
+ * 第③片 B：磁吸（`overlay.mode`）。库里 `coordinateToPointValueFlag()` 只在
+ * `mode !== 'normal' && paneId === candle_pane` 时才把落点吸到那根 K 线的 OHLC 上
+ * （dist 8817），所以这个开关有三处作用面——建线、恢复、切换时批量 override 已有的
+ * 线——和一个不能瞒的边界：副图上的线永远不会吸。默认关，且没开过就没有这个存储键，
+ * 于是没用过它的用户升级后看到的图与今天一致。
+ */
+describe("/pro-chart 磁吸", () => {
+  const magnetButton = () => screen.getByRole("button", { name: "磁吸" });
+
+  it("磁吸开关：按钮反映状态，切换逐条指名道姓改 mode", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 5 * DAY, value: 1305 });
+    await flush();
+    const magnet = magnetButton();
+    expect(magnet.getAttribute("aria-pressed")).toBe("false");
+    // 默认态：一个键都不落盘——开了才有 `pro-chart.magnet.v1`。
+    expect(localStorage.getItem(MAGNET_KEY)).toBeNull();
+
+    fireEvent.click(magnet);
+    await flush();
+    expect(magnet.getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem(MAGNET_KEY)).toBe("1");
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledTimes(1);
+    expect(h.chart?.overrideOverlay.mock.calls[0][0]).toEqual({ id: h.overlays[0].id, mode: "strong_magnet" });
+    // 判决是实例，不是布尔：`mode` 不在 `shouldUpdate()` 里（dist 8314-8318），
+    // 改成功了库也回 `false`。替身按这条建模，所以两个都要在这里钉住。
+    expect(h.chart?.overrideOverlay.mock.results[0].value).toBe(false);
+    expect(h.overlays[0].mode).toBe("strong_magnet");
+
+    // Off must write the mode back: the instance still holds strong_magnet.
+    fireEvent.click(magnet);
+    await flush();
+    expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id: h.overlays[0].id, mode: "normal" });
+    expect(h.overlays[0].mode).toBe("normal");
+    expect(localStorage.getItem(MAGNET_KEY)).toBe("0");
+  });
+
+  it("磁吸开着画的线带上 mode，关着画的一个键都不多", async () => {
+    localStorage.setItem(MAGNET_KEY, "1");
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    let arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg.mode).toBe("strong_magnet");
+
+    // The armed line is still half-drawn, so the batch pass leaves it alone: it
+    // gets its `mode` from `armTool`, not from an override on a moving target.
+    fireEvent.click(magnetButton()); // off
+    await flush();
+    expect(h.chart?.overrideOverlay).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+    arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg).not.toHaveProperty("mode");
+  });
+
+  it("Pine 的线不被磁吸摸到（名字不在工具表里的那种）", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1299 });
+    await flush();
+    // A Pine drawing: an overlay name the toolbar does not ship, anchored by
+    // dataIndex only (see chartDrawings header note 6). The guard below is what
+    // keeps this from rotting into an empty pin if the toolbar ever grows.
+    const pineName = "simpleTag";
+    expect(DRAW_TOOLS.some((t) => t.name === pineName)).toBe(false);
+    h.chart?.createOverlay({ name: pineName, paneId: "candle_pane", points: [{ dataIndex: 3, value: 9 }] });
+    const pine = h.overlays.at(-1)!;
+    const before = pine.mode;
+
+    fireEvent.click(magnetButton());
+    await flush();
+    const ids = (h.chart?.overrideOverlay.mock.calls ?? []).map((c) => (c[0] as { id?: string }).id);
+    expect(ids).not.toContain(pine.id);
+    expect(pine.mode).toBe(before);
+    // Only the user's one line got touched.
+    expect(h.chart?.overrideOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("磁吸按钮的提示写明副图不受效（库闸门，不是我们藏的坑）", async () => {
+    await mountChart();
+    const title = magnetButton().getAttribute("title") ?? "";
+    expect(title).toContain("副图");
+    fireEvent.click(magnetButton());
+    await flush();
+    // 开着也得把同一句话说完，否则"开关能绕"这个误读只在关着时才说得清。
+    expect(magnetButton().getAttribute("title") ?? "").toContain("副图");
+  });
+
+  it("开着的磁吸跟着恢复：从存储画回来的线也是 strong_magnet", async () => {
+    localStorage.setItem(MAGNET_KEY, "1");
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [{ name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START, value: 1300 }] }],
+      }),
+    );
+    await mountChart();
+    expect(h.overlays).toHaveLength(1);
+    const arg = h.chart?.createOverlay.mock.calls.find((c) => (c[0] as { name?: string })?.name === "priceLine")?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(arg?.mode).toBe("strong_magnet");
+    expect(h.overlays[0].mode).toBe("strong_magnet");
+  });
+
+  it("磁吸没开时恢复也一个键都不多写（默认态逐字节不变）", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [{ name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START, value: 1300 }] }],
+      }),
+    );
+    await mountChart();
+    expect(h.overlays).toHaveLength(1);
+    const arg = h.chart?.createOverlay.mock.calls.find((c) => (c[0] as { name?: string })?.name === "priceLine")?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(arg).not.toHaveProperty("mode");
+    expect(h.overlays[0].mode).toBe("normal");
+    // 恢复这条道不写偏好：读的人不该被写。
+    expect(localStorage.getItem(MAGNET_KEY)).toBeNull();
+  });
+
+  it("导入的线按当前磁吸偏好上图", async () => {
+    localStorage.setItem(MAGNET_KEY, "1");
+    await mountChart();
+    const json = exportDrawingsJson(
+      [{ name: "priceLine", paneId: "candle_pane", points: [{ timestamp: START + DAY, value: 1300 }] }],
+      { symbol: "600519.SH", interval: "1D" },
+    );
+    fireEvent.change(screen.getByLabelText("画线文件"), {
+      target: { files: [new File([json], "magnet.json", { type: "application/json" })] },
+    });
+    await flush();
+    expect(h.overlays).toHaveLength(1);
+    expect(h.overlays[0].mode).toBe("strong_magnet");
+  });
+
+  it("暂存的线回到重开的副图时也听当前偏好（restoreDrawings 的第三条道）", async () => {
+    localStorage.setItem(MAGNET_KEY, "1");
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    h.overlays[h.overlays.length - 1].paneId = SUB_MACD;
+    finishDrawing({ timestamp: START + DAY, value: -0.42 });
+    await flush();
+
+    // Take MACD away the way ㉛'s picker does — the page stops wanting it and the
+    // pane goes with it, so the line parks (⑲).
+    fireEvent.click(screen.getByRole("button", { name: "副图指标" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭副图 MACD" }));
+    h.panes.splice(h.panes.findIndex((p) => p.id === SUB_MACD), 1);
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+    expect(screen.getByText(/在等 MACD/)).toBeTruthy();
+
+    // The pane comes back with the magnet still on: `flushParked` runs
+    // `restoreDrawings` again, and a line coming out of parking has to earn the
+    // same `mode` as one coming in from storage or from a click.
+    h.panes.push({ id: SUB_MACD, height: 60, minHeight: 30, state: "normal" });
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.overlays.map((o) => o.paneId)).toEqual([SUB_MACD]);
+    expect(h.overlays[0].mode).toBe("strong_magnet");
   });
 });

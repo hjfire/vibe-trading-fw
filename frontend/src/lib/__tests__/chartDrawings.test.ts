@@ -10,6 +10,7 @@ import {
   applyDrawingFlags,
   applyDrawingStyle,
   applyDrawingText,
+  applyMagnetMode,
   cancelInProgress,
   clampDrawingsToLastBar,
   clampPointsToLastBar,
@@ -24,6 +25,7 @@ import {
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
+  loadMagnet,
   makeDrawingEvents,
   normalizeDrawingStyle,
   normalizeDrawingText,
@@ -34,12 +36,14 @@ import {
   restoreDrawings,
   saveDrawingStyle,
   saveDrawings,
+  saveMagnet,
   serializeDrawings,
   styleOfOverlay,
   toolCreateExtras,
   toolOf,
   withAlpha,
   type DrawingStyle,
+  type MagnetMode,
   type StoredDrawing,
 } from "../chartDrawings";
 
@@ -59,7 +63,10 @@ interface FakeOverlay {
   id: string;
   name: string;
   paneId: string;
-  points: Array<{ timestamp?: number; value?: number }>;
+  // `dataIndex` is part of the shape because a Pine 画的线 anchors by bar index,
+  // not by timestamp (§二.6) — the 磁吸 batch test has to build one without a
+  // cast, or the double would hide the very field the filter keys off.
+  points: Array<{ timestamp?: number; value?: number; dataIndex?: number }>;
   currentStep: number;
   drawing?: boolean;
   isDrawing?: () => boolean;
@@ -87,12 +94,17 @@ function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
     paneId: MAIN_PANE_ID,
     points: [{ timestamp: 1_700_000_000_000, value: 1300 }],
     currentStep: -1,
-    // `OverlayImp`'s constructor seeds all three before merging what the caller
+    // `OverlayImp`'s constructor seeds all four before merging what the caller
     // passed (dist 8235-8248 vs `override()` at 8275), so a live instance always
-    // carries them.
+    // carries them. `needDefaultPointFigure` belongs in the list for the same
+    // reason `lock`/`visible` do: this suite reads instances back *after*
+    // `overrideOverlay`, and a double that leaves it `undefined` cannot tell
+    // "the override left it alone" from "it was never seeded" — `false` is the
+    // only value a real overlay answers with.
     lock: false,
     visible: true,
     mode: "normal",
+    needDefaultPointFigure: false,
     ...patch,
   };
   // The runtime instance has `isDrawing()`; the typed `Overlay` does not, so
@@ -1243,5 +1255,126 @@ describe("清单行带出标注文字", () => {
       overlay({ id: "g", name: "simpleAnnotation", points: dot, extendData: `  ${"字".repeat(45)}  ` }),
     );
     expect(row?.text).toBe("字".repeat(40));
+  });
+});
+
+/**
+ * 第③片 B：磁吸。库里本来就有 `mode`，本仓一行没用过（全仓 grep magnet 零命中）。
+ */
+describe("磁吸", () => {
+  const ts = 1_700_000_000_000;
+  const dot = [{ timestamp: ts, value: 1300 }];
+
+  /**
+   * A Pine 画的线的名字：问库要注册表，取第一个工具栏没有的内置模板（§二.6）。
+   * 不写死字符串是因为 `DRAW_TOOLS` 会涨——第 1 任务把 `straightLine` 挂上了工具栏，
+   * 于是"名字不在表里"这个判据必须由表本身来给，否则这条钉哪天变成空钉都没人知道。
+   */
+  const pineName = () => getSupportedOverlays().find((n) => !toolOf(n)) ?? "simpleTag";
+
+  it("偏好读写只有 1/0 两种值，脏值与读不到都回关", () => {
+    expect(loadMagnet()).toBe("normal");
+    saveMagnet(true);
+    expect(localStorage.getItem("pro-chart.magnet.v1")).toBe("1");
+    expect(loadMagnet()).toBe("strong_magnet");
+    saveMagnet(false);
+    expect(localStorage.getItem("pro-chart.magnet.v1")).toBe("0");
+    localStorage.setItem("pro-chart.magnet.v1", "weak_magnet");
+    expect(loadMagnet()).toBe("normal");
+    localStorage.removeItem("pro-chart.magnet.v1");
+    expect(loadMagnet()).toBe("normal");
+  });
+
+  it("toolCreateExtras 只在开的时候写 mode", () => {
+    expect(toolCreateExtras("priceLine")).toEqual({});
+    expect(toolCreateExtras("priceLine", "strong_magnet")).toEqual({ mode: "strong_magnet" });
+    expect(toolCreateExtras("priceLine", "normal")).toEqual({});
+    expect(toolCreateExtras("simpleAnnotation", "strong_magnet")).toEqual({
+      needDefaultPointFigure: true,
+      mode: "strong_magnet",
+    });
+  });
+
+  it("恢复带上 mode，默认参数不写这个键", () => {
+    const on = fakeChart();
+    restoreDrawings(on as never, [{ name: "priceLine", paneId: MAIN_PANE_ID, points: dot }], undefined, undefined, "strong_magnet");
+    expect(on.createOverlay.mock.calls.at(-1)?.[0]).toMatchObject({ mode: "strong_magnet" });
+
+    const off = fakeChart();
+    restoreDrawings(off as never, [{ name: "priceLine", paneId: MAIN_PANE_ID, points: dot }]);
+    expect(off.createOverlay.mock.calls.at(-1)?.[0]).not.toHaveProperty("mode");
+  });
+
+  it("批量切换只碰用户自己的已完成线", () => {
+    const name = pineName();
+    expect(toolOf(name), `${name} 已经进了 DRAW_TOOLS，这条钉需要另一个非工具名`).toBeUndefined();
+    const chart = fakeChart([
+      overlay({ id: "a", name: "priceLine", points: dot }),
+      overlay({ id: "b", name: "segment", points: [{ timestamp: ts, value: 1 }, { timestamp: ts + 1, value: 2 }] }),
+      // Pine 画的线：名字不在 DRAW_TOOLS 里，落点只有 dataIndex（所以也进不了存储）。
+      overlay({ id: "pine", name, points: [{ dataIndex: 3, value: 9 }], currentStep: -1 }),
+      // 半成品的用户线：正在放第二个点，不该被改。
+      overlay({ id: "c", name: "segment", points: dot, drawing: true, currentStep: 1 }),
+    ]);
+    const touched = applyMagnetMode(chart as never, "strong_magnet");
+    expect(touched).toBe(2);
+    const ids = chart.overrideOverlay.mock.calls.map((c) => (c[0] as { id?: string }).id);
+    expect(ids.sort()).toEqual(["a", "b"]);
+    expect(chart.overlays.find((o) => o.id === "pine")?.mode).not.toBe("strong_magnet");
+  });
+
+  it("每条 override 都指名道姓，且关掉也把 mode 写回去", () => {
+    const chart = fakeChart([overlay({ id: "a", name: "priceLine", points: dot, mode: "strong_magnet" })]);
+    applyMagnetMode(chart as never, "normal");
+    expect(chart.overrideOverlay.mock.calls).toEqual([[{ id: "a", mode: "normal" }]]);
+    // 判决只能是读实例：`mode` 不在 `shouldUpdate()` 的五个键里（dist 8314-8318），
+    // 改成功了库也回 `false`——替身按这条建模，所以这里的 `false` 同时也是在钉替身。
+    expect(chart.overrideOverlay.mock.results[0].value).toBe(false);
+    expect(chart.overlays[0].mode).toBe("normal");
+  });
+
+  it("两态都按名字写进实例，第三种 weak_magnet 不在这个 app 的词表里", () => {
+    // §三.B：`modeSensitivity` 像素带没有 UI，所以本仓的词表只有两态。这条的判决
+    // 在 `tsc`——下面那行 @ts-expect-error 一旦失效就是 "Unused '@ts-expect-error'
+    // directive"，词表被谁悄悄放宽了会当场报出来。
+    // @ts-expect-error weak_magnet 不是 MagnetMode
+    const weak: MagnetMode = "weak_magnet";
+    expect(weak).toBe("weak_magnet"); // 运行时它只是个字符串，闸门在类型面
+
+    const modes: MagnetMode[] = ["normal", "strong_magnet"];
+    expect(modes).toHaveLength(2);
+    for (const mode of modes) {
+      const chart = fakeChart([overlay({ id: "a", name: "priceLine", points: dot, mode: "strong_magnet" })]);
+      expect(applyMagnetMode(chart as never, mode)).toBe(1);
+      expect(chart.overrideOverlay).toHaveBeenLastCalledWith({ id: "a", mode });
+      expect(chart.overlays[0].mode).toBe(mode);
+    }
+  });
+
+  // 义务 1（评审席，第 2 任务交下来的）：替身得把构造器种下的 `needDefaultPointFigure`
+  // 种成真 `false`。批量磁吸之后要读实例，而 `undefined` 与 `false` 在
+  // `expect(...).toBe(false)` 上不等价——没种的替身会让"没被改动"这句话永远成立。
+  it("批量磁吸只写 mode，别的一个键都不动", () => {
+    const chart = fakeChart([
+      overlay({ id: "a", name: "simpleAnnotation", points: dot }),
+      overlay({ id: "b", name: "simpleAnnotation", points: dot, needDefaultPointFigure: true }),
+    ]);
+    expect(applyMagnetMode(chart as never, "strong_magnet")).toBe(2);
+    expect(chart.overlays[0].needDefaultPointFigure).toBe(false);
+    expect(chart.overlays[1].needDefaultPointFigure).toBe(true);
+    expect(chart.overlays.map((o) => o.mode)).toEqual(["strong_magnet", "strong_magnet"]);
+    // 线还是那条线：id、points、样式片段都没被这次批量改写动过。
+    expect(chart.overrideOverlay.mock.calls.every((c) => Object.keys(c[0] as object).length === 2)).toBe(true);
+    expect(chart.removeOverlay).not.toHaveBeenCalled();
+    expect(chart.createOverlay).not.toHaveBeenCalled();
+  });
+
+  it("空图与无 id 的孤儿都不报错，也不写盘", () => {
+    expect(applyMagnetMode(fakeChart() as never, "strong_magnet")).toBe(0);
+    const chart = fakeChart([overlay({ id: "", name: "priceLine", points: dot })]);
+    expect(applyMagnetMode(chart as never, "strong_magnet")).toBe(0);
+    expect(chart.overrideOverlay).not.toHaveBeenCalled();
+    // 磁吸是偏好，不是画线数据：开它绝不该让存储桶长出一个键。
+    expect(localStorage.getItem("pro-chart.drawings.v1")).toBeNull();
   });
 });

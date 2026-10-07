@@ -59,7 +59,9 @@ import { isSubPaneId, subPaneNameOf } from "./paneLayout";
  *    dist 8280-8281) — but `shouldUpdate()` (dist 8314-8318) watches
  *    zLevel/points/visible/extendData/styles and **not `lock`**, so a lock-only
  *    change repaints nothing and `overrideOverlay` answers `false` even though it
- *    worked. Trust the instance, not the return value.
+ *    worked. Trust the instance, not the return value. `mode` (第③片 B 的磁吸) sits
+ *    in exactly the same blind spot, so `applyMagnetMode` never asks the boolean
+ *    either — it counts what it named and lets the caller read the overlays back.
  *
  * 6. A drawing belongs to a **pane**, and ⑲ made that address worth storing.
  *    The first click re-homes the overlay (`updateProgressOverlayInfo`,
@@ -160,9 +162,20 @@ export function toolOf(name: string): DrawTool | undefined {
  * `restoreDrawings` has to ask the same question once the annotation's text
  * round-trips: if only one entry asked, a drawn annotation would be editable and
  * a restored one would not, which is the same asymmetry ⑮ had to fix for events.
+ *
+ * `mode` (第③片 B) joins the same question for the same reason: the magnet has to
+ * answer it identically at draw time, at restore time and on the batch override,
+ * or a line would come back from storage with a different magnet behaviour than
+ * the one the user is drawing with.
  */
-export function toolCreateExtras(name: string): Partial<OverlayCreate> {
-  return toolOf(name)?.hasText === true ? { needDefaultPointFigure: true } : {};
+export function toolCreateExtras(name: string, mode: MagnetMode = "normal"): Partial<OverlayCreate> {
+  return {
+    ...(toolOf(name)?.hasText === true ? { needDefaultPointFigure: true } : {}),
+    // Only written when it deviates from the library default, exactly like
+    // `lock`/`hidden`/`text` — so a chart drawn with the magnet off stores and
+    // creates precisely what it stored before this feature existed.
+    ...(mode === "strong_magnet" ? { mode } : {}),
+  };
 }
 
 /** Hint text for an armed tool; `-1` means freehand. */
@@ -584,12 +597,21 @@ export interface RestoreReport {
   parked: StoredDrawing[];
 }
 
-/** Re-create stored drawings; reports what landed and what is waiting for a pane. */
+/**
+ * Re-create stored drawings; reports what landed and what is waiting for a pane.
+ *
+ * `mode` is the caller's *current* magnet preference, not a stored field: a
+ * drawing carries where it is and what it looks like, while the magnet is one
+ * chart-wide switch (spec §三.B), so a line banked while the magnet was on comes
+ * back magnetised only if the switch is still on. Omit it and nothing extra is
+ * written — the pre-magnet behaviour, key for key.
+ */
 export function restoreDrawings(
   chart: OverlayHost,
   drawings: readonly StoredDrawing[],
   events?: ReturnType<typeof makeDrawingEvents>,
   paneExists: PaneLookup = ALL_PANES_PRESENT,
+  mode: MagnetMode = "normal",
 ): RestoreReport {
   const applied: StoredDrawing[] = [];
   const parked: StoredDrawing[] = [];
@@ -631,7 +653,7 @@ export function restoreDrawings(
       ...(text ? { extendData: text } : {}),
       ...(d.lock ? { lock: true } : {}),
       ...(d.hidden ? { visible: false } : {}),
-      ...toolCreateExtras(d.name),
+      ...toolCreateExtras(d.name, mode),
       ...events,
     });
     if (id) applied.push({ ...d, paneId });
@@ -964,4 +986,65 @@ export function saveDrawingStyle(style: DrawingStyle): void {
   } catch {
     /* best effort */
   }
+}
+
+// ---------------------------------------------------------------------------
+// Magnet: a chart-wide interaction preference, one key, default off.
+// ---------------------------------------------------------------------------
+
+/**
+ * The two states this app offers. The library also has `weak_magnet`, which only
+ * snaps inside `modeSensitivity` pixels (dist 8822-8835) — explaining "why did
+ * that one not snap" needs a UI for that band, which this app does not have, so
+ * the choice is TradingView's: land on the bar's OHLC or don't (spec §三.B).
+ */
+export type MagnetMode = "normal" | "strong_magnet";
+
+const MAGNET_KEY = "pro-chart.magnet.v1";
+
+/** Anything but the stored "1" is off, including a value this app never wrote. */
+export function loadMagnet(): MagnetMode {
+  try {
+    return localStorage.getItem(MAGNET_KEY) === "1" ? "strong_magnet" : "normal";
+  } catch {
+    return "normal";
+  }
+}
+
+export function saveMagnet(on: boolean): void {
+  try {
+    localStorage.setItem(MAGNET_KEY, on ? "1" : "0");
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Put the magnet choice on every finished drawing the user owns (spec §三.B.3).
+ *
+ * Three filters, each load-bearing:
+ * - `toolOf(name)` — Pine's overlays are not the user's drawings (they carry
+ *   `dataIndex` instead of a timestamp, and never reach storage; header note 6).
+ *   Changing their `mode` would be a page rewriting a script's layer.
+ * - `isInProgress` — a line still being placed has points on their way.
+ * - the return value is **never** read: `shouldUpdate()` does not watch `mode`
+ *   (dist 8314-8318), so a successful change answers `false` (header note 5,
+ *   now for `mode`). Turning the magnet off also writes `mode`, because the
+ *   instance may already hold `strong_magnet`.
+ *
+ * The library only ever honours `mode` on the candle pane (dist 8817), so a line
+ * on a sub pane is set and never magnetised. That is the button's title text,
+ * not something to hide in a wiki.
+ */
+export function applyMagnetMode(chart: OverlayHost, mode: MagnetMode): number {
+  let touched = 0;
+  for (const raw of chart.getOverlays()) {
+    const o = raw as OverlayLike;
+    if (!o || typeof o.id !== "string" || !o.id) continue;
+    if (!toolOf(o.name ?? "")) continue;
+    if (isInProgress(o)) continue;
+    chart.overrideOverlay({ id: o.id, mode });
+    touched += 1;
+  }
+  return touched;
 }

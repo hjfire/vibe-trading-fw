@@ -64,6 +64,7 @@ import {
   applyDrawingFlags,
   applyDrawingStyle,
   applyDrawingText,
+  applyMagnetMode,
   cancelInProgress,
   clampDrawingsToLastBar,
   drawingsBucket,
@@ -74,6 +75,7 @@ import {
   listDrawings,
   loadDrawingStyle,
   loadDrawings,
+  loadMagnet,
   makeDrawingEvents,
   overlayStylesOf,
   paneIndicator,
@@ -82,12 +84,14 @@ import {
   restoreDrawings,
   saveDrawingStyle,
   saveDrawings,
+  saveMagnet,
   serializeDrawings,
   toolCreateExtras,
   toolOf,
   type DrawingFlags,
   type DrawingRow,
   type DrawingStyle,
+  type MagnetMode,
   type PaneLookup,
   type StoredDrawing,
 } from "@/lib/chartDrawings";
@@ -482,6 +486,16 @@ export function ProChart() {
   // first — measured that way in prod, where 虚线 + 2px in one task kept only
   // the width.
   const drawStyleRef = useRef<DrawingStyle>(drawStyle);
+  // Magnet (第③片 B): a chart-wide interaction preference, default off so the
+  // page behaves exactly as it did before this feature existed.
+  const [magnet, setMagnet] = useState<MagnetMode>(() => loadMagnet());
+  // The mirror the closures read. The symbol/interval swap lives inside the
+  // DataLoader closure built once per chart (:955), so it can only ever see a
+  // ref — and `restoreDrawings` there has to stamp the same `mode` the toolbar
+  // armed with, or a line comes back from storage with a different magnet
+  // behaviour than the one the user is drawing with. Same reason as
+  // `drawStyleRef` above.
+  const magnetRef = useRef<MagnetMode>(magnet);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -1132,6 +1146,7 @@ export function ProChart() {
                 fixed.drawings,
                 drawingEvents(),
                 paneLookup(chart),
+                magnetRef.current,
               );
               replaceParked(report.parked);
             } finally {
@@ -1714,7 +1729,7 @@ export function ProChart() {
   const flushParked = (chart: Chart) => {
     const waiting = parkedRef.current;
     if (waiting.length === 0) return;
-    const report = restoreDrawings(chart, waiting, drawingEvents(), paneLookup(chart));
+    const report = restoreDrawings(chart, waiting, drawingEvents(), paneLookup(chart), magnetRef.current);
     if (report.applied.length === 0) return;
     replaceParked(report.parked);
     syncDrawings(chart);
@@ -1725,6 +1740,20 @@ export function ProChart() {
     replaceParked([]);
     const chart = chartRef.current;
     if (chart) syncDrawings(chart);
+  };
+
+  /**
+   * Flip the magnet. Everything already on the chart is re-stamped, because the
+   * library reads `mode` off the instance (dist 8817) and a line drawn while the
+   * magnet was off keeps `normal` forever otherwise.
+   */
+  const toggleMagnet = () => {
+    const chart = chartRef.current;
+    const next: MagnetMode = magnetRef.current === "strong_magnet" ? "normal" : "strong_magnet";
+    magnetRef.current = next;
+    setMagnet(next);
+    saveMagnet(next === "strong_magnet");
+    if (chart) applyMagnetMode(chart, next);
   };
 
   /**
@@ -1751,7 +1780,7 @@ export function ProChart() {
       name,
       paneId: MAIN_PANE_ID,
       styles: overlayStylesOf(drawStyleRef.current),
-      ...toolCreateExtras(name),
+      ...toolCreateExtras(name, magnetRef.current),
       ...drawingEvents(),
     });
   };
@@ -1815,7 +1844,12 @@ export function ProChart() {
    * storage; the verdict is `applyDrawingText` reading the instance back, not the
    * library's boolean — `null` means no such line, so nothing gets re-banked.
    * `syncDrawings` re-reads the rows, so storage always holds exactly what the
-   * instance holds, including a value cut to `MAX_DRAWING_TEXT`.
+   * instance holds, including a value cut to `MAX_DRAWING_TEXT`. That early
+   * return is the whole guard: an id the chart no longer has (deleted from the
+   * canvas a moment ago) leaves its row pointing at nothing until the next event
+   * refreshes `drawRows`, and since every removal path banks, that row is gone
+   * before anything else can point at it — benign and deliberate, not a leak to
+   * paper over with an extra re-read here.
    */
   const setDrawingText = (id: string, text: string) => {
     const chart = chartRef.current;
@@ -1881,7 +1915,7 @@ export function ProChart() {
     // A bucket the chart is not showing yet needs no live update: the swap in
     // `getBars` reads it from storage the moment it becomes current.
     if (chart && drawingsKeyRef.current === key) {
-      const report = restoreDrawings(chart, merged.fresh, drawingEvents(), paneLookup(chart));
+      const report = restoreDrawings(chart, merged.fresh, drawingEvents(), paneLookup(chart), magnetRef.current);
       if (report.parked.length > 0) replaceParked([...parkedRef.current, ...report.parked]);
       waiting = report.parked.length;
       refreshDrawCount(chart);
@@ -2156,6 +2190,23 @@ export function ProChart() {
               {t.label}
             </button>
           ))}
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+              magnet === "strong_magnet" && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            aria-label="磁吸"
+            aria-pressed={magnet === "strong_magnet"}
+            title={
+              magnet === "strong_magnet"
+                ? "磁吸已开：落点吸到那根 K 线的开/高/低/收上。只对主图生效——副图的 y 是指标量级，吸到 OHLC 才是错的（库的闸门，不是开关能绕的）"
+                : "磁吸已关：落点是鼠标的连续投影。打开后新画与已画的线都吸到那根 K 线的 OHLC 四个价上（仅主图；副图上的线不受磁吸，那也是库的 paneId 闸门，开关绕不过它）"
+            }
+            onClick={toggleMagnet}
+          >
+            磁吸
+          </button>
           <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             title="撤销最近一条画线"
