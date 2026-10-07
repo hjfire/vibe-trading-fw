@@ -9,6 +9,7 @@ import {
   MAX_DRAWING_TEXT,
   applyDrawingFlags,
   applyDrawingStyle,
+  applyDrawingText,
   cancelInProgress,
   clampDrawingsToLastBar,
   clampPointsToLastBar,
@@ -209,6 +210,11 @@ function fakeChart(overlays: FakeOverlay[] = []) {
 beforeEach(() => {
   localStorage.clear();
 });
+
+/** 去掉所有合法代理对后还剩代理位，就是串里有个"半个人字符"（孤立代理）。 */
+function hasLoneSurrogate(s: string): boolean {
+  return /[\uD800-\uDFFF]/.test(s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""));
+}
 
 /**
  * 第③片 A：七件库内置模板挂上工具栏。名字这一条不抄表——直接问库要注册表，
@@ -1050,6 +1056,23 @@ describe("标注文字的存储", () => {
     expect(normalizeDrawingText("字".repeat(41))?.length).toBe(40);
   });
 
+  // 义务 4（评审席）：上限数的是**字**（码点），不是 UTF-16 码元。`slice(0, 40)` 会把
+  // 一个 emoji 从代理对中间切断，剩下的孤立高位代理被 `JSON.stringify` 原样落盘，
+  // 读回来标注框里就是一个替换字符 —— 用户看到的是"我的标注炸了"。
+  it("截断按码点切：emoji 不会被切成孤立代理对", () => {
+    const cut = normalizeDrawingText("📈".repeat(41));
+    expect(cut).toBe("📈".repeat(40));
+    expect(Array.from(cut ?? "")).toHaveLength(MAX_DRAWING_TEXT);
+    expect(hasLoneSurrogate(cut ?? "")).toBe(false);
+    // 落盘读回一字不差（孤立代理会在这里变成 \udXXX 转义）。
+    expect(JSON.parse(JSON.stringify(cut))).toBe(cut);
+
+    // 切点正好落在代理对中间的形状：前面 39 个 BMP 字符，第 40 个码元是半个 emoji。
+    const mixed = normalizeDrawingText(`${"价".repeat(39)}📈📉`);
+    expect(mixed).toBe(`${"价".repeat(39)}📈`);
+    expect(hasLoneSurrogate(mixed ?? "")).toBe(false);
+  });
+
   it("恢复把文字送回 extendData，并与建线共用 toolCreateExtras", () => {
     const chart = fakeChart();
     restoreDrawings(chart as never, [
@@ -1088,5 +1111,96 @@ describe("标注文字的存储", () => {
     expect(arg).not.toHaveProperty("extendData");
     expect(arg).not.toHaveProperty("needDefaultPointFigure");
     expect(arg).not.toHaveProperty("styles");
+  });
+
+  // 义务 1（评审席）：`normalizeDrawingText` 在**两端**都要过。存储桶是可以手改的，
+  // 改脏了的 `text`（超长、纯空白）若原样送去 `extendData`，恢复出的线就和落盘的
+  // 不是同一份，下一次编辑还会把脏值重新落盘。
+  it("恢复侧也过 normalize：超长截到上限，纯空白不落键", () => {
+    const chart = fakeChart();
+    restoreDrawings(chart as never, [
+      { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot, text: "字".repeat(45) },
+    ]);
+    const long = chart.createOverlay.mock.calls.at(-1)?.[0] as { extendData?: string };
+    expect(long.extendData).toBe("字".repeat(40));
+
+    const blank = fakeChart();
+    restoreDrawings(blank as never, [
+      { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot, text: "   " },
+    ]);
+    const arg = blank.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg).not.toHaveProperty("extendData");
+  });
+
+  // 义务 3（评审席）：这条钉防的是 §二.11 那枚虚线针杀掉的同一种漂移——恢复侧一旦
+  // 给非 `hasText` 的工具也补默认样式片段，落盘就会长出一个没人要的 `style` 键，
+  // 并且从此再也删不掉。
+  it("端到端幂等：落盘→恢复→落盘逐字节稳定，且不给别的工具长出 style 键", () => {
+    const chart = fakeChart([
+      overlay({ id: "a", name: "simpleAnnotation", points: dot, extendData: "前高" }),
+      overlay({ id: "b", name: "simpleAnnotation", points: dot }),
+      overlay({ id: "c", name: "priceLine", points: dot, extendData: "不该被读" }),
+      overlay({ id: "d", name: "segment", points: [{ timestamp: ts, value: 1300 }, { timestamp: ts + 1, value: 1290 }] }),
+      overlay({ id: "e", name: "fibonacciLine", points: dot, lock: true, visible: false }),
+    ]);
+    const first = serializeDrawings(chart.overlays);
+    const restored = fakeChart();
+    expect(restoreDrawings(restored as never, first).applied).toEqual(first);
+    const second = serializeDrawings(restored.overlays);
+    expect(second).toEqual(first);
+    // 至少覆盖一件带文字的、一件不带文字的，否则这条钉是空的。
+    expect(second.map((s) => s.name)).toEqual(["simpleAnnotation", "simpleAnnotation", "priceLine", "segment", "fibonacciLine"]);
+    for (const s of second) {
+      if (toolOf(s.name)?.hasText === true) continue;
+      expect(s, s.name).not.toHaveProperty("style");
+      expect(s, s.name).not.toHaveProperty("text");
+    }
+  });
+});
+
+/**
+ * 第③片 D：`applyDrawingText` —— 清单行输入框（T4）要的那个"改完把读回的文字交回去"。
+ */
+describe("改掉一条标注的文字", () => {
+  it("指名道姓地 override，并把读回的文字交回去", () => {
+    const chart = fakeChart([
+      overlay({ id: "a", name: "simpleAnnotation", points: [{ timestamp: 1_700_000_000_000, value: 1300 }], extendData: "前高" }),
+    ]);
+    expect(applyDrawingText(chart as never, "a", "前低")).toBe("前低");
+    expect(chart.overrideOverlay.mock.calls).toEqual([[{ id: "a", extendData: "前低" }]]);
+    expect(chart.overlays[0].extendData).toBe("前低");
+  });
+
+  it("清空文字回空串；id 空或线不存在都不动图", () => {
+    const chart = fakeChart([overlay({ id: "a", name: "simpleAnnotation" })]);
+    expect(applyDrawingText(chart as never, "a", "   ")).toBe("");
+    expect(chart.overlays[0].extendData).toBe("");
+    // 空 id 在库外就被拒；不存在的 id 只会在库里匹配不到。两条都不许改到图上。
+    expect(applyDrawingText(chart as never, "", "x")).toBeNull();
+    expect(applyDrawingText(chart as never, "zz", "x")).toBeNull();
+    expect(chart.overlays.map((o) => o.extendData)).toEqual([""]);
+  });
+
+  it("超长输入截到上限再写进去", () => {
+    const chart = fakeChart([overlay({ id: "a", name: "simpleAnnotation" })]);
+    const out = applyDrawingText(chart as never, "a", "字".repeat(50));
+    expect(out?.length).toBe(40);
+    expect(chart.overlays[0].extendData).toBe("字".repeat(40));
+  });
+
+  // 义务 2（评审席）：`extendData` 是 `shouldUpdate()`（KC:8314-8318）里唯一被本片
+  // 用到的键——替身按它记重绘账，之前没有用例走过那两条分支。
+  it("改文字真的重绘（不同于 lock/magnet），同值再写一次不重绘", () => {
+    const chart = fakeChart([overlay({ id: "a", name: "simpleAnnotation", extendData: "前高" })]);
+    expect(applyDrawingText(chart as never, "a", "前低")).toBe("前低");
+    expect(chart.overrideOverlay.mock.results[0].value).toBe(true);
+    expect(applyDrawingText(chart as never, "a", "前低")).toBe("前低");
+    expect(chart.overrideOverlay.mock.results[1].value).toBe(false);
+    // 判决仍然是实例而不是布尔：没重绘不等于没改成。
+    expect(chart.overlays[0].extendData).toBe("前低");
+    expect(chart.overrideOverlay.mock.calls).toEqual([
+      [{ id: "a", extendData: "前低" }],
+      [{ id: "a", extendData: "前低" }],
+    ]);
   });
 });

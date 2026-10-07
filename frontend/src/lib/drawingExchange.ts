@@ -31,6 +31,7 @@ import {
   drawingsBucket,
   isRestorablePaneId,
   normalizeDrawingStyle,
+  normalizeDrawingText,
   toolOf,
   type StoredDrawing,
   type StoredPoint,
@@ -46,7 +47,14 @@ import {
 } from "./scriptExchange";
 
 export const DRAWING_BUNDLE_KIND = "vibe-trading.drawings";
-export const DRAWING_BUNDLE_VERSION = 1;
+/**
+ * 1 -> 2: entries can now carry an annotation's `text`.
+ *
+ * This is a label, never a gate — the reader does not look at it (see
+ * `resolveList`), so a v1 file still imports, and a v2 file read by an older
+ * build loses the words and keeps the line.
+ */
+export const DRAWING_BUNDLE_VERSION = 2;
 
 /** Query key for a drawing link; `s` is already taken by script shares. */
 export const DRAWING_SHARE_QUERY_KEY = "d";
@@ -105,6 +113,11 @@ function readDrawing(raw: unknown, index: number): ReadOutcome {
   }
   if (points.length === 0) return { reason: `${at}：没有落在某根 K 线上的落点` };
   const style = normalizeDrawingStyle(o.style);
+  // Key-by-key rebuild (the header's anti-prototype-pollution rule) means a
+  // file's `text` only survives if this line asks for it; `normalizeDrawingText`
+  // is the same cap the chart itself applies, so an import cannot smuggle a
+  // longer label past it.
+  const text = normalizeDrawingText(o.text);
   const wanted = typeof o.paneId === "string" ? o.paneId.trim() : "";
   const paneId = isRestorablePaneId(wanted) ? wanted : MAIN_PANE_ID;
   return {
@@ -113,6 +126,7 @@ function readDrawing(raw: unknown, index: number): ReadOutcome {
       paneId,
       points,
       ...(style ? { style } : {}),
+      ...(text ? { text } : {}),
       ...(o.lock === true ? { lock: true } : {}),
       ...(o.hidden === true ? { hidden: true } : {}),
     },
@@ -230,13 +244,19 @@ export function drawingsFileName(symbol: string, interval: string, now = new Dat
 /* ------------------------------------------------------------------- merge */
 
 /**
- * Identity of a line: pane + tool + geometry. Colour, width and the lock/hide
- * flags are **not** part of it — restyling and re-importing must not double up.
- * The pane *is* (⑲): the same two points on the price chart and on MACD are two
- * different lines, and collapsing them would drop one of them on import.
+ * Identity of a line: pane + tool + geometry (+ an annotation's words).
+ * Colour, width and the lock/hide flags are **not** part of it — restyling and
+ * re-importing must not double up. The pane *is* (⑲): the same two points on the
+ * price chart and on MACD are two different lines.
+ *
+ * Text joins the key only when a line actually has some (spec §五.8): two
+ * annotations on the same bar that say different things are not the same line,
+ * and without this the second one would be swallowed as a duplicate on import.
+ * A line without text keeps its old key shape byte for byte.
  */
 export function drawingKey(d: StoredDrawing): string {
-  return `${d.paneId || MAIN_PANE_ID}|${d.name}|${d.points.map((p) => `${p.timestamp}:${p.value ?? ""}`).join(",")}`;
+  const base = `${d.paneId || MAIN_PANE_ID}|${d.name}|${d.points.map((p) => `${p.timestamp}:${p.value ?? ""}`).join(",")}`;
+  return d.text ? `${base}|${d.text}` : base;
 }
 
 export interface DrawingMerge {

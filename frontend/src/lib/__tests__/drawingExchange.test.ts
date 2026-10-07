@@ -7,6 +7,7 @@ import {
 } from "../chartDrawings";
 import {
   DRAWING_BUNDLE_KIND,
+  DRAWING_BUNDLE_VERSION,
   DRAWING_SHARE_QUERY_KEY,
   createDrawingsShareLink,
   drawingsFileName,
@@ -64,7 +65,9 @@ describe("画线文件导出", () => {
     });
     const parsed = JSON.parse(json) as Record<string, any>;
     expect(parsed.kind).toBe(DRAWING_BUNDLE_KIND);
-    expect(parsed.version).toBe(1);
+    // The literal number is pinned once, in 标注文字过交换 below; here the point
+    // is that the envelope carries whatever the module declares.
+    expect(parsed.version).toBe(DRAWING_BUNDLE_VERSION);
     expect(parsed.from).toEqual({
       symbol: "600519.SH",
       interval: "1D",
@@ -327,6 +330,68 @@ describe("导入合并", () => {
   it("残缺条目不参与合并", () => {
     const junk = [null, { name: "priceLine" }, { points: [] }] as unknown as StoredDrawing[];
     expect(mergeDrawings(junk, junk).drawings).toEqual([]);
+  });
+});
+
+/**
+ * 第③片 D 的交换面。读侧本来就不校验 version（`resolveList` 只看 `drawings`），
+ * 所以 bump 只是自我描述：老文件必须照进，新文件被老版本读时丢的是文字、不是线。
+ */
+describe("标注文字过交换", () => {
+  const base = (patch: Partial<StoredDrawing> = {}): StoredDrawing => ({
+    name: "simpleAnnotation",
+    paneId: MAIN_PANE_ID,
+    points: [{ timestamp: T0, value: 1300 }],
+    ...patch,
+  });
+
+  it("文件里文字往返一致", () => {
+    const json = exportDrawingsJson([base({ text: "前高" })], { symbol: "600519.SH", interval: "1D" });
+    const out = importDrawingsJson(json);
+    expect(out.ok && out.drawings[0]?.text).toBe("前高");
+  });
+
+  it("超过 40 字截断，非字符串丢弃，空串不落键", () => {
+    const json = JSON.stringify({
+      kind: DRAWING_BUNDLE_KIND,
+      version: DRAWING_BUNDLE_VERSION,
+      drawings: [
+        base({ text: "字".repeat(45) }),
+        { ...base(), text: 7 },
+        { ...base(), text: "   " },
+      ],
+    });
+    const out = importDrawingsJson(json);
+    if (!out.ok) throw new Error(out.error);
+    expect(out.drawings[0]?.text).toBe("字".repeat(40));
+    expect(out.drawings[1]).not.toHaveProperty("text");
+    expect(out.drawings[2]).not.toHaveProperty("text");
+    expect(out.skipped).toEqual([]);
+  });
+
+  it("version 写 1／2／99／没有都能导入", async () => {
+    for (const version of [1, 2, 99, undefined]) {
+      const json = JSON.stringify({ kind: DRAWING_BUNDLE_KIND, ...(version === undefined ? {} : { version }), drawings: [base({ text: "前高" })] });
+      const out = importDrawingsJson(json);
+      expect(out.ok && out.drawings[0]?.text).toBe("前高");
+    }
+    expect(DRAWING_BUNDLE_VERSION).toBe(2);
+  });
+
+  it("同点同名的两条标注，文字不同就不是同一条线", () => {
+    const a = base({ text: "前高" });
+    const b = base({ text: "前低" });
+    expect(drawingKey(a)).not.toBe(drawingKey(b));
+    const merged = mergeDrawings([a], [b]);
+    expect(merged.added).toBe(1);
+    expect(merged.duplicates).toBe(0);
+  });
+
+  it("没有文字的线键形一字不改（防把全仓去重键换掉）", () => {
+    expect(drawingKey(base())).toBe(`${MAIN_PANE_ID}|simpleAnnotation|${T0}:1300`);
+    expect(drawingKey({ name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: T0, value: 1300 }] })).toBe(
+      `${MAIN_PANE_ID}|priceLine|${T0}:1300`,
+    );
   });
 });
 

@@ -200,12 +200,19 @@ export const MAX_DRAWING_TEXT = 40;
  * accepts a **function** (dist 12470), which is a rendering callback, not text —
  * storing `String(fn)` would bank a wall of source code as a label. Only a real
  * string survives.
+ *
+ * The cap counts **characters** (code points), not UTF-16 code units: an emoji is
+ * two units, so `slice(0, 40)` can cut one in half and bank a lone surrogate that
+ * `JSON.stringify` then persists as `\ud83d` — a label that comes back as a
+ * replacement glyph. `Array.from` iterates code points, so the cut can only land
+ * between whole characters.
  */
 export function normalizeDrawingText(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const text = raw.trim();
   if (!text) return undefined;
-  return text.length > MAX_DRAWING_TEXT ? text.slice(0, MAX_DRAWING_TEXT) : text;
+  const chars = Array.from(text);
+  return chars.length > MAX_DRAWING_TEXT ? chars.slice(0, MAX_DRAWING_TEXT).join("") : text;
 }
 
 export const DRAWING_COLORS: ReadonlyArray<{ label: string; value: string }> = [
@@ -611,12 +618,17 @@ export function restoreDrawings(
       : toolOf(d.name)?.hasText === true
         ? overlayStylesOf(DEFAULT_DRAWING_STYLE)
         : undefined;
+    // A bucket can be hand-edited, so the words get the same cap/trim the chart
+    // applies on the way in. Sending `d.text` raw would restore a longer label
+    // than was ever banked, and the next edit would bank *that* — the same drift
+    // the style fragment above exists to stop, one key over.
+    const text = normalizeDrawingText(d.text);
     const id = chart.createOverlay({
       name: d.name,
       paneId,
       points,
       ...(styles ? { styles } : {}),
-      ...(d.text ? { extendData: d.text } : {}),
+      ...(text ? { extendData: text } : {}),
       ...(d.lock ? { lock: true } : {}),
       ...(d.hidden ? { visible: false } : {}),
       ...toolCreateExtras(d.name),
@@ -706,6 +718,27 @@ export function applyDrawingFlags(chart: OverlayHost, id: string, flags: Drawing
   if (typeof flags.lock === "boolean" && (current.lock === true) !== flags.lock) return false;
   if (typeof flags.hidden === "boolean" && (current.visible === false) !== flags.hidden) return false;
   return true;
+}
+
+/**
+ * Set one annotation's words, and read them back.
+ *
+ * Unlike `mode` and `lock`, `extendData` **is** in `shouldUpdate()`
+ * (dist 8314-8318), so this one does repaint — but the verdict is still the
+ * instance, not the boolean: an id that matches nothing and an id that matched
+ * are both answers `overrideOverlay` gives, and the caller has to know which
+ * happened before it re-reads the list. `""` means "no text" (the template draws
+ * no label for it, and `serializeDrawings` then drops the key).
+ *
+ * Returns null when there is no such overlay; the normalized text otherwise.
+ */
+export function applyDrawingText(chart: OverlayHost, id: string, text: string): string | null {
+  if (!id) return null;
+  const next = normalizeDrawingText(text) ?? "";
+  chart.overrideOverlay({ id, extendData: next });
+  const current = chart.getOverlays({ id })[0] as { extendData?: unknown } | undefined;
+  if (!current) return null;
+  return normalizeDrawingText(current.extendData) ?? "";
 }
 
 /** One row of the drawing list: everything needed to name, aim at and clean up a line. */
