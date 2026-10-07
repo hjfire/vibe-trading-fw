@@ -217,6 +217,11 @@ describe("/pro-chart 图例偏好", () => {
     };
     expect(s.indicator?.tooltip?.showRule).toBe("always");
     expect(s.candle?.priceMark?.last).toEqual({ show: true, line: { show: true }, text: { show: true } });
+    // `setStyles` REPLACES the template (`StoreImp.setStyles` special-cases
+    // `candle.tooltip.legend.template`), so a push carrying a short template
+    // deletes legend rows for the user. The first screen must hand over the
+    // library's full six rows even when nothing was ever changed.
+    expect(tooltipTemplate(0)).toHaveLength(6);
     expect(localStorage.getItem(LEGEND_PREFS_KEY)).toBeNull(); // 偏好不落盘，除非用户改过
   });
 

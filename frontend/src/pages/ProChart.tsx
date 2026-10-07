@@ -106,7 +106,6 @@ import {
   readDrawingsShareLink,
 } from "@/lib/drawingExchange";
 import {
-  DEFAULT_LEGEND_PREFS,
   type LegendPrefs,
   legendStyles,
   loadLegendPrefs,
@@ -270,7 +269,11 @@ export function readSession(): ChartView & { symbol: string } {
   }
 }
 
-function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs = DEFAULT_LEGEND_PREFS) {
+// `legend` has deliberately no default: both push sites already pass it, and a
+// defaulted third param would let a future `chartStyles(dark, timeShare)`
+// compile, pass tsc, and silently strand the preference — the exact regression
+// this function exists to prevent.
+function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs) {
   // A-share convention: red = up, green = down. Candle colors live under
   // `candle.bar` in v10 (`.area` is for area/line charts).
   //
@@ -2495,7 +2498,7 @@ export function ProChart() {
             aria-pressed={legend.highLowMark}
             className="rounded-md border px-2 py-1 hover:bg-muted"
             title="高/低价位标记（库默认开）"
-            onClick={() => patchLegend({ highLowMark: !legend.highLowMark })}
+            onClick={() => patchLegend({ highLowMark: !legendRef.current.highLowMark })}
           >
             高低标记
           </button>
@@ -2505,7 +2508,7 @@ export function ProChart() {
             aria-pressed={legend.lastPriceLine}
             className="rounded-md border px-2 py-1 hover:bg-muted"
             title="最新价的虚线与价签一起开关（只关线会在轴上留一个孤立价签）"
-            onClick={() => patchLegend({ lastPriceLine: !legend.lastPriceLine })}
+            onClick={() => patchLegend({ lastPriceLine: !legendRef.current.lastPriceLine })}
           >
             最新价线
           </button>
