@@ -119,7 +119,10 @@ export interface DrawTool {
    * means "both axes apply"; `"price"` is reserved for a future axis-only tool.
    */
   dim?: "time" | "price" | "both";
-  /** The line's words come from `extendData`, so the list owes it a text box. */
+  /**
+   * The line's words live in `overlay.extendData`, and storage round-trips them
+   * as `StoredDrawing.text`; the other twelve tools have no such channel.
+   */
   hasText?: boolean;
 }
 
@@ -186,6 +189,24 @@ export interface DrawingStyle {
  * stored, so an old drawing stays in sync if the library ever changes its mind.
  */
 export const DEFAULT_DRAWING_STYLE: DrawingStyle = { color: "#1677FF", size: 1, dashed: false };
+
+/** What an annotation's text box accepts; longer gets cut, not refused. */
+export const MAX_DRAWING_TEXT = 40;
+
+/**
+ * The storable form of an annotation's text: trimmed, capped, or absent.
+ *
+ * `extendData` is `unknown` by contract (`KD:1118`) and the template also
+ * accepts a **function** (dist 12470), which is a rendering callback, not text —
+ * storing `String(fn)` would bank a wall of source code as a label. Only a real
+ * string survives.
+ */
+export function normalizeDrawingText(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const text = raw.trim();
+  if (!text) return undefined;
+  return text.length > MAX_DRAWING_TEXT ? text.slice(0, MAX_DRAWING_TEXT) : text;
+}
 
 export const DRAWING_COLORS: ReadonlyArray<{ label: string; value: string }> = [
   { label: "蓝", value: "#1677FF" },
@@ -295,6 +316,11 @@ export interface StoredDrawing {
   points: StoredPoint[];
   /** Absent means "whatever the library defaults to". */
   style?: DrawingStyle;
+  /**
+   * An annotation's words — `overlay.extendData` for a `hasText` tool, and only
+   * for that class. Absent means the template's own (empty) text.
+   */
+  text?: string;
   /** Absent means the line is still draggable (see header note 5). */
   lock?: true;
   /** Absent means the line is visible. */
@@ -316,6 +342,7 @@ interface OverlayLike {
   isDrawing?: () => boolean;
   lock?: boolean;
   visible?: boolean;
+  extendData?: unknown;
 }
 
 /** True while the user is still placing points. */
@@ -352,11 +379,13 @@ export function serializeDrawings(overlays: readonly unknown[], excludeId?: stri
     }));
     if (points.length === 0) continue;
     const style = styleOfOverlay(o);
+    const text = toolOf(o.name)?.hasText ? normalizeDrawingText(o.extendData) : undefined;
     out.push({
       name: o.name,
       paneId: o.paneId ?? MAIN_PANE_ID,
       points,
       ...(style ? { style } : {}),
+      ...(text ? { text } : {}),
       // Flags are only written when they deviate from the library default, so a
       // plain line keeps costing exactly what it costed before ⑰.
       ...(o.lock === true ? { lock: true as const } : {}),
@@ -569,13 +598,28 @@ export function restoreDrawings(
     // Restored drawings are editable too, so they carry the same events as a
     // tool-drawn one — otherwise only the drawings made *this session* stay in
     // sync, and a restored line that gets deleted comes back on reload.
+    //
+    // `simpleAnnotation`'s template pins `styles.line.style: 'dashed'`
+    // (dist 12465-12469) and `override` merges the caller's fragment *over* it
+    // (dist 8288-8291). `armTool` always sends an explicit solid, so a stored
+    // annotation that never had a style would come back dashed after a reload —
+    // and the next edit would bank that dashed as the user's own preference.
+    // Only the `hasText` class gets the default fragment; the other twelve
+    // templates pin no `line.style`, so they must keep costing nothing.
+    const styles = d.style
+      ? overlayStylesOf(d.style)
+      : toolOf(d.name)?.hasText === true
+        ? overlayStylesOf(DEFAULT_DRAWING_STYLE)
+        : undefined;
     const id = chart.createOverlay({
       name: d.name,
       paneId,
       points,
-      ...(d.style ? { styles: overlayStylesOf(d.style) } : {}),
+      ...(styles ? { styles } : {}),
+      ...(d.text ? { extendData: d.text } : {}),
       ...(d.lock ? { lock: true } : {}),
       ...(d.hidden ? { visible: false } : {}),
+      ...toolCreateExtras(d.name),
       ...events,
     });
     if (id) applied.push({ ...d, paneId });

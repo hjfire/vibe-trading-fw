@@ -6,6 +6,7 @@ import {
   DEFAULT_DRAWING_STYLE,
   DRAW_TOOLS,
   MAIN_PANE_ID,
+  MAX_DRAWING_TEXT,
   applyDrawingFlags,
   applyDrawingStyle,
   cancelInProgress,
@@ -24,6 +25,7 @@ import {
   loadDrawings,
   makeDrawingEvents,
   normalizeDrawingStyle,
+  normalizeDrawingText,
   overlayStylesOf,
   paneIndicator,
   reanchorOverlay,
@@ -63,6 +65,14 @@ interface FakeOverlay {
   styles?: Record<string, unknown>;
   lock?: boolean;
   visible?: boolean;
+  // `extendData` is what `simpleAnnotation` prints (dist 12466-12478); the
+  // library default is undefined, `OverlayImp`'s constructor does not seed it.
+  extendData?: unknown;
+  // `mode` is the magnet key: 'normal' | 'weak_magnet' | 'strong_magnet'
+  // (dist 8248, `KD:988`). A live instance always carries it.
+  mode?: string;
+  // Asked for by `toolCreateExtras`; false in the constructor (dist 8245).
+  needDefaultPointFigure?: boolean;
   onDrawEnd?: (e: unknown) => void;
   onRemoved?: (e: unknown) => void;
   onPressedMoveEnd?: (e: unknown) => void;
@@ -76,10 +86,12 @@ function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
     paneId: MAIN_PANE_ID,
     points: [{ timestamp: 1_700_000_000_000, value: 1300 }],
     currentStep: -1,
-    // `OverlayImp`'s constructor sets both before merging what the caller
-    // passed (dist 8240-8275), so a live instance always has them.
+    // `OverlayImp`'s constructor seeds all three before merging what the caller
+    // passed (dist 8235-8248 vs `override()` at 8275), so a live instance always
+    // carries them.
     lock: false,
     visible: true,
+    mode: "normal",
     ...patch,
   };
   // The runtime instance has `isDrawing()`; the typed `Overlay` does not, so
@@ -106,6 +118,9 @@ function fakeChart(overlays: FakeOverlay[] = []) {
         styles?: Record<string, unknown>;
         lock?: boolean;
         visible?: boolean;
+        mode?: string;
+        extendData?: unknown;
+        needDefaultPointFigure?: boolean;
         onDrawEnd?: (e: unknown) => void;
         onRemoved?: (e: unknown) => void;
         onPressedMoveEnd?: (e: unknown) => void;
@@ -121,6 +136,9 @@ function fakeChart(overlays: FakeOverlay[] = []) {
           styles: v.styles,
           ...(typeof v.lock === "boolean" ? { lock: v.lock } : {}),
           ...(typeof v.visible === "boolean" ? { visible: v.visible } : {}),
+          ...(typeof v.mode === "string" ? { mode: v.mode } : {}),
+          ...("extendData" in v ? { extendData: v.extendData } : {}),
+          ...("needDefaultPointFigure" in v ? { needDefaultPointFigure: v.needDefaultPointFigure } : {}),
           onDrawEnd: v.onDrawEnd,
           onRemoved: v.onRemoved,
           onPressedMoveEnd: v.onPressedMoveEnd,
@@ -150,6 +168,8 @@ function fakeChart(overlays: FakeOverlay[] = []) {
         points?: FakeOverlay["points"];
         lock?: boolean;
         visible?: boolean;
+        mode?: string;
+        extendData?: unknown;
       };
       const targets =
         v.id === undefined || v.id === null
@@ -160,20 +180,25 @@ function fakeChart(overlays: FakeOverlay[] = []) {
       for (const target of targets) {
         const prevStyles = target.styles;
         const prevVisible = target.visible;
+        const prevExtendData = target.extendData;
         const prevPoints = JSON.stringify(target.points);
         // `OverlayImp.override` merges everything except id/name/currentStep,
         // and handles styles/points on their own branches (dist 8277-8306).
         if ("lock" in v) target.lock = v.lock;
         if ("visible" in v) target.visible = v.visible;
+        if ("mode" in v) target.mode = v.mode;
+        if ("extendData" in v) target.extendData = v.extendData;
         if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
         if (v.points) target.points = v.points.slice();
-        // `shouldUpdate()` repaints for a visible/points/styles change and for
-        // zLevel sorts — never for `lock` alone (dist 8314-8318). That is why
-        // `applyDrawingFlags` verifies by reading the instance back.
+        // `shouldUpdate()` repaints for a visible/points/styles change, for
+        // `extendData` and for zLevel sorts — never for `lock` or `mode` alone
+        // (dist 8314-8318). That is why `applyDrawingFlags` verifies by reading
+        // the instance back, and why a magnet change cannot use the answer.
         draw =
           draw ||
           prevVisible !== target.visible ||
           prevStyles !== target.styles ||
+          prevExtendData !== target.extendData ||
           prevPoints !== JSON.stringify(target.points);
       }
       return draw;
@@ -979,5 +1004,89 @@ describe("落点必须在真实存在的 K 线上", () => {
     // Called with `undefined`, not with a fake overlay: the handler has to cope.
     expect(anchor).toHaveBeenCalledTimes(2);
     expect(anchor).toHaveBeenCalledWith(undefined);
+  });
+});
+
+/**
+ * 第③片 D：标注的文字。`extendData` 是库给 `simpleAnnotation` 的文案通道
+ * （dist 12466-12478），本仓要让它跟着线走。
+ */
+describe("标注文字的存储", () => {
+  const ts = 1_700_000_000_000;
+  const dot = [{ timestamp: ts, value: 1300 }];
+
+  it("带文字的标注落盘带 text，空白文字与别的工具都不落盘", () => {
+    const rows = serializeDrawings([
+      overlay({ id: "a", name: "simpleAnnotation", points: dot, extendData: "前高" }),
+      overlay({ id: "b", name: "simpleAnnotation", points: dot, extendData: "   " }),
+      overlay({ id: "c", name: "priceLine", points: dot, extendData: "不该被读" }),
+    ]);
+    expect(rows.map((r) => r.text)).toEqual(["前高", undefined, undefined]);
+    expect(rows[1]).not.toHaveProperty("text");
+    expect(rows[2]).not.toHaveProperty("text");
+  });
+
+  it("extendData 是函数时不崩也不落盘", () => {
+    const rows = serializeDrawings([
+      overlay({ id: "a", name: "simpleAnnotation", points: dot, extendData: () => "x" }),
+    ]);
+    expect(rows[0]).not.toHaveProperty("text");
+  });
+
+  it("超长文字截到 40 个字符", () => {
+    const long = "字".repeat(45);
+    const rows = serializeDrawings([overlay({ id: "a", name: "simpleAnnotation", points: dot, extendData: long })]);
+    expect(rows[0]?.text).toBe(long.slice(0, MAX_DRAWING_TEXT));
+    expect(MAX_DRAWING_TEXT).toBe(40);
+  });
+
+  it("normalizeDrawingText 只认字符串、去空白、截断", () => {
+    expect(normalizeDrawingText("  前高  ")).toBe("前高");
+    expect(normalizeDrawingText("")).toBeUndefined();
+    expect(normalizeDrawingText("   ")).toBeUndefined();
+    expect(normalizeDrawingText(7)).toBeUndefined();
+    expect(normalizeDrawingText(null)).toBeUndefined();
+    expect(normalizeDrawingText(undefined)).toBeUndefined();
+    expect(normalizeDrawingText("字".repeat(41))?.length).toBe(40);
+  });
+
+  it("恢复把文字送回 extendData，并与建线共用 toolCreateExtras", () => {
+    const chart = fakeChart();
+    restoreDrawings(chart as never, [
+      { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot, text: "前高" },
+    ]);
+    const arg = chart.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg.extendData).toBe("前高");
+    expect(arg.needDefaultPointFigure).toBe(true);
+  });
+
+  it("没落盘样式的标注恢复时是实线，价格线仍不落样式（§二.11 两半）", () => {
+    const a = fakeChart();
+    restoreDrawings(a as never, [{ name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot }]);
+    const argA = a.createOverlay.mock.calls.at(-1)?.[0] as { styles?: { line?: { style?: string } } };
+    expect(argA.styles?.line?.style).toBe("solid");
+
+    const b = fakeChart();
+    restoreDrawings(b as never, [{ name: "priceLine", paneId: MAIN_PANE_ID, points: dot }]);
+    const argB = b.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(argB).not.toHaveProperty("styles");
+  });
+
+  it("落盘了样式的标注仍用落盘的那份，不被默认片段盖掉", () => {
+    const chart = fakeChart();
+    restoreDrawings(chart as never, [
+      { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot, style: { color: "#F23645", size: 2, dashed: true } },
+    ]);
+    const arg = chart.createOverlay.mock.calls.at(-1)?.[0] as { styles: { line: Record<string, unknown> } };
+    expect(arg.styles.line).toMatchObject({ color: "#F23645", size: 2, style: "dashed" });
+  });
+
+  it("无文字的线一个键都不多写（默认态不落盘）", () => {
+    const chart = fakeChart();
+    restoreDrawings(chart as never, [{ name: "segment", paneId: MAIN_PANE_ID, points: dot }]);
+    const arg = chart.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg).not.toHaveProperty("extendData");
+    expect(arg).not.toHaveProperty("needDefaultPointFigure");
+    expect(arg).not.toHaveProperty("styles");
   });
 });
