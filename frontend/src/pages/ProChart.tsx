@@ -66,6 +66,7 @@ import {
   applyDrawingStyle,
   applyDrawingText,
   applyMagnetMode,
+  applyMagnetModeToArmed,
   cancelInProgress,
   clampDrawingsToLastBar,
   drawingsBucket,
@@ -1786,6 +1787,17 @@ export function ProChart() {
    * Flip the magnet. Everything already on the chart is re-stamped, because the
    * library reads `mode` off the instance (dist 8817) and a line drawn while the
    * magnet was off keeps `normal` forever otherwise.
+   *
+   * The line **currently being placed** gets its own named pass right after that
+   * (`applyMagnetModeToArmed`), because the batch pass deliberately skips
+   * half-drawn overlays (spec §三.B.3(b)) and `mode` is read at the instant each
+   * anchor lands — without it, the line under the cursor would snap by the *old*
+   * preference for the rest of its life. Anchors already down are **not**
+   * re-snapped: `mode` only affects points placed after it, which is library
+   * semantics (dist 8817), not a gap here. Naming the in-progress overlay is safe
+   * for exactly one reason worth keeping in mind: `OverlayImp.override` excludes
+   * `id/name/currentStep/points/styles` from the blind merge (dist 8277-8281), so
+   * a `{id, mode}` override cannot interrupt the step machine.
    */
   const toggleMagnet = () => {
     const chart = chartRef.current;
@@ -1793,7 +1805,14 @@ export function ProChart() {
     magnetRef.current = next;
     setMagnet(next);
     saveMagnet(next === "strong_magnet");
-    if (chart) applyMagnetMode(chart, next);
+    // Both counts are discarded on purpose: `shouldUpdate()` does not watch
+    // `mode`, so `overrideOverlay` answers `false` even when it worked (dist
+    // 8314-8316) — the instance is the only verdict, and there is nothing here
+    // that branches on it.
+    if (chart) {
+      applyMagnetMode(chart, next);
+      applyMagnetModeToArmed(chart, next);
+    }
   };
 
   /**
@@ -1913,16 +1932,6 @@ export function ProChart() {
     if (applyDrawingText(chart, id, text) === null) return;
     syncDrawings(chart);
   };
-
-  /**
-   * Which row's 输入法 buffer is open right now (only one element composes at a
-   * time). During composition the box holds pinyin letters, not a value the user
-   * chose, so every keystroke must not bank it — a real browser reads back
-   * `qian` in storage when the user cancels with Esc, because nothing sends a
-   * correcting change afterwards. `compositionend` is the commit point: it banks
-   * whatever the box holds then, which is the reverted (empty) value on a cancel.
-   */
-  const composingRow = useRef<string | null>(null);
 
   /**
    * Delete one line through the chart, so `onRemoved` runs the same way a
@@ -2353,7 +2362,7 @@ export function ProChart() {
           )}
           aria-label="图例"
           aria-pressed={legendPanelOpen}
-          title="图例与标记：主图数值块、副图指标图例、涨幅行、高低标记、最新价线（默认全部等于 klinecharts 出厂值）"
+          title="图例与标记：主图数值块、指标图例（含主图 MA／均价）、涨幅行、高低标记、最新价线（默认全部等于 klinecharts 出厂值）"
           onClick={() => setLegendPanelOpen((v) => !v)}
         >
           图例
@@ -2479,9 +2488,9 @@ export function ProChart() {
             </select>
           </label>
           <label className="flex items-center gap-1">
-            副图指标
+            指标图例
             <select
-              aria-label="副图图例显示规则"
+              aria-label="指标图例显示规则（含主图 MA／均价）"
               className="rounded-md border bg-transparent px-1 py-0.5"
               value={legend.indicatorRule}
               onChange={(e) => patchLegend({ indicatorRule: e.target.value as TooltipShowRule })}
@@ -2583,17 +2592,40 @@ export function ProChart() {
                     title={`标注文字（最多 ${MAX_DRAWING_TEXT} 字）：改完即存，刷新还在`}
                     className="w-20 shrink-0 rounded-md border bg-transparent px-1 py-0.5"
                     defaultValue={row.text ?? ""}
-                    key={row.id}
-                    onCompositionStart={() => {
-                      composingRow.current = row.id;
-                    }}
                     onCompositionEnd={(e) => {
-                      if (composingRow.current !== row.id) return;
-                      composingRow.current = null;
+                      // The one commit point, and it commits what the box holds
+                      // *then* — not the event's `data`. On a cancel (Esc) the
+                      // browser has already rolled the value back to before the
+                      // composition, so this writes the empty string and the
+                      // pinyin never reaches the library.
                       setDrawingText(row.id, e.currentTarget.value);
                     }}
-                    onChange={(e) => {
-                      if (composingRow.current === row.id) return;
+                    onChange={(e: ChangeEvent<HTMLInputElement> & { nativeEvent: InputEvent }) => {
+                      // Read the flag off the event the browser actually sent —
+                      // not off a page-level "which row is composing" ref. That
+                      // ref had exactly one reset point (`compositionend`), so an
+                      // input box unmounted mid-composition (panel closed, row
+                      // deleted, symbol/interval swapped) left it set forever and
+                      // the row then swallowed every *ordinary* keystroke after
+                      // it: nothing reached the instance or storage, and the
+                      // screen gave no sign. `isComposing` is per-event, so it
+                      // cannot outlive the element that carried it.
+                      //
+                      // Why the parameter is narrowed by intersection rather than
+                      // written `ChangeEvent<HTMLInputElement, InputEvent>`: in
+                      // React 19's own types the second parameter of `ChangeEvent`
+                      // is the **target element**, not the native event —
+                      // `interface ChangeEvent<CurrentTarget = Element, Target =
+                      // Element> extends SyntheticEvent<CurrentTarget>` and
+                      // `SyntheticEvent<T, E = Event>` puts `nativeEvent: E` back
+                      // to a bare `Event` (@types/react index.d.ts:2104 and 2054).
+                      // So that spelling narrows the wrong slot and `isComposing`
+                      // is still missing; re-declaring `nativeEvent` is the only
+                      // way to say "this one arrives as an InputEvent" without a
+                      // cast. `ChangeEventHandler` is the bivariance hack
+                      // (`{ bivarianceHack(event: E): void }["bivarianceHack"]`),
+                      // which is what lets this narrower parameter through.
+                      if (e.nativeEvent.isComposing) return;
                       setDrawingText(row.id, e.target.value);
                     }}
                   />

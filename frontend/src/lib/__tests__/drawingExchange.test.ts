@@ -65,9 +65,11 @@ describe("画线文件导出", () => {
     });
     const parsed = JSON.parse(json) as Record<string, any>;
     expect(parsed.kind).toBe(DRAWING_BUNDLE_KIND);
-    // The literal number is pinned once, in 标注文字过交换 below; here the point
-    // is that the envelope carries whatever the module declares.
-    expect(parsed.version).toBe(DRAWING_BUNDLE_VERSION);
+    // 席 A 的 M-7：这一句原来写的是 `toBe(DRAWING_BUNDLE_VERSION)` —— 拿模块自己
+    // 的常量去验模块自己写出的值，把常量改成 3 它照样绿，是一句自指的空话。
+    // 改回字面量钉：信封里那个数**就是 2**。版本字面量现在至少两处独立钉着
+    // （这里和 `标注文字过交换` 里 `DRAWING_BUNDLE_VERSION).toBe(2)` 那句）。
+    expect(parsed.version).toBe(2);
     expect(parsed.from).toEqual({
       symbol: "600519.SH",
       interval: "1D",
@@ -369,7 +371,30 @@ describe("标注文字过交换", () => {
     expect(out.skipped).toEqual([]);
   });
 
-  it("version 写 1／2／99／没有都能导入", async () => {
+  // 席 A 的 I-1 的写侧另一半：`readDrawing` 此前不问 `hasText`，只要文件里有 `text`
+  // 就原样重建进条目 —— 而 `importDrawingsJson` 的输出直接就是 `StoredDrawing`，
+  // 再往下就是 `restoreDrawings` 的 `extendData`。文件是外人写的，闸门必须在这一侧
+  // 也问一次。跟 `drawingKey`（读侧）用的是同一个判据：`toolOf(name)?.hasText === true`。
+  it("非 hasText 的工具带 text 进来，键直接不落，而不是落空值", () => {
+    const json = JSON.stringify({
+      kind: DRAWING_BUNDLE_KIND,
+      version: DRAWING_BUNDLE_VERSION,
+      drawings: [
+        { name: "priceLine", paneId: MAIN_PANE_ID, points: [{ timestamp: T0, value: 1 }], text: "x" },
+        { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: [{ timestamp: T0, value: 1 }], text: "x" },
+      ],
+    });
+    const out = importDrawingsJson(json);
+    if (!out.ok) throw new Error(out.error);
+    expect(out.drawings).toHaveLength(2);
+    // 键不存在 —— 写 `text: ""` 或 `text: undefined` 都算没兑现这条不变量，
+    // 因为前者会在 `drawingKey` 上改变键形，后者的键一旦存在就会被 `Object.keys` 数到。
+    expect(out.drawings[0]).not.toHaveProperty("text");
+    expect(out.drawings[0]?.name).toBe("priceLine");
+    expect(out.drawings[1]?.text).toBe("x");
+  });
+
+  it("version 写 1／2／99／没有都能导入", () => {
     for (const version of [1, 2, 99, undefined]) {
       const json = JSON.stringify({ kind: DRAWING_BUNDLE_KIND, ...(version === undefined ? {} : { version }), drawings: [base({ text: "前高" })] });
       const out = importDrawingsJson(json);

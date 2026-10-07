@@ -183,6 +183,7 @@ function fakeChart(overlays: FakeOverlay[] = []) {
         visible?: boolean;
         mode?: string;
         extendData?: unknown;
+        needDefaultPointFigure?: boolean;
       };
       const targets =
         v.id === undefined || v.id === null
@@ -201,6 +202,13 @@ function fakeChart(overlays: FakeOverlay[] = []) {
         if ("visible" in v) target.visible = v.visible;
         if ("mode" in v) target.mode = v.mode;
         if ("extendData" in v) target.extendData = v.extendData;
+        // 席 A 的 M-2：这一句是本套件里 `needDefaultPointFigure` 唯一的写侧建模。
+        // 没有它，`"批量磁吸只写 mode，别的一个键都不动"` 里那两行读回就是**恒过**
+        // —— 替身把没建模的键直接丢了，于是"没被改动"这句话永远为真，批量 pass
+        // 真送出 `needDefaultPointFigure` 也照测不出。库那边它是会被 merge 的：
+        // `OverlayImp.override` 的排除表只有 `id/name/currentStep/points/styles`
+        // （dist 8280），所以 `merge(this, others)` 会带上这一个 ⇒ 照这个语义建模。
+        if ("needDefaultPointFigure" in v) target.needDefaultPointFigure = v.needDefaultPointFigure;
         if (v.styles) target.styles = { ...(target.styles ?? {}), ...v.styles };
         if (v.points) target.points = v.points.slice();
         // `shouldUpdate()` repaints for a visible/points/styles change, for
@@ -1071,13 +1079,25 @@ describe("标注文字的存储", () => {
   // 义务 4（评审席）：上限数的是**字**（码点），不是 UTF-16 码元。`slice(0, 40)` 会把
   // 一个 emoji 从代理对中间切断，剩下的孤立高位代理被 `JSON.stringify` 原样落盘，
   // 读回来标注框里就是一个替换字符 —— 用户看到的是"我的标注炸了"。
+  //
+  // 席 A 的 M-4：这条原来还带一句
+  // `expect(JSON.parse(JSON.stringify(cut))).toBe(cut)`，已删 —— 它**恒真**，判不
+  // 了它声称要防的那个漂移。ES2019 的 well-formed `JSON.stringify` 会把孤立代理
+  // 转义成 `\udXXX` 再原样读回，所以对任何字符串这条都成立（控制器在 `e3b63669`
+  // 实测：`node -e "const lone='\uD83D'; JSON.parse(JSON.stringify(lone))===lone"`
+  // → true）。留着它只会给人"落盘往返有覆盖"的错觉。
+  // 这条用例的判别力全在 `hasLoneSurrogate`，所以这里给它补上**反向对照**：真切出
+  // 半个 emoji 的时候那个函数必须说 yes —— 否则上面的 `false` 可以是被写死的。
   it("截断按码点切：emoji 不会被切成孤立代理对", () => {
     const cut = normalizeDrawingText("📈".repeat(41));
     expect(cut).toBe("📈".repeat(40));
     expect(Array.from(cut ?? "")).toHaveLength(MAX_DRAWING_TEXT);
     expect(hasLoneSurrogate(cut ?? "")).toBe(false);
-    // 落盘读回一字不差（孤立代理会在这里变成 \udXXX 转义）。
-    expect(JSON.parse(JSON.stringify(cut))).toBe(cut);
+
+    // 反向对照：按码元切的 `slice(0, 40)` 留下的就是这样一个串。
+    const halfEmoji = `${"📈".repeat(39)}\uD83D`;
+    expect(halfEmoji).not.toBe(cut);
+    expect(hasLoneSurrogate(halfEmoji)).toBe(true);
 
     // 切点正好落在代理对中间的形状：前面 39 个 BMP 字符，第 40 个码元是半个 emoji。
     const mixed = normalizeDrawingText(`${"价".repeat(39)}📈📉`);
@@ -1093,6 +1113,31 @@ describe("标注文字的存储", () => {
     const arg = chart.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(arg.extendData).toBe("前高");
     expect(arg.needDefaultPointFigure).toBe(true);
+  });
+
+  // 席 A 的 I-1：`hasText` 闸门此前只在三条**读侧**有（`serializeDrawings`、
+  // `describeDrawing`、`drawingKey`），两条**写侧**没有。桶条目是手改得了的，
+  // 所以外来的一条 `priceLine` 能带上 `text`，被这侧原样送进 `extendData` ——
+  // 而 `priceLine` 模板压根不读 `extendData`（全库只有 `simpleAnnotation` 12475-12482
+  // 与 `simpleTag` 12565-12572 两个模板读它当文字），于是图上什么都没有，
+  // 下一次序列化却把它当"用户写过字"。不变量在 `chartDrawings.ts` 的 `DrawTool.hasText`
+  // 注释里已经写下：「the other twelve tools have no such channel」。
+  // 键必须**不写**，不是写成空值 —— 写空值会让这条线在 `drawingKey` 那边换个签名。
+  it("恢复只给 hasText 的工具写 extendData；别的工具连键都不带", () => {
+    const off = fakeChart();
+    restoreDrawings(off as never, [
+      { name: "priceLine", paneId: MAIN_PANE_ID, points: dot, text: "前高" } as never,
+    ]);
+    const priceLineArg = off.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(priceLineArg).not.toHaveProperty("extendData");
+
+    // 同一条里补正例：换成唯一 `hasText` 的工具，同样的文字必须照原样落键。
+    const on = fakeChart();
+    restoreDrawings(on as never, [
+      { name: "simpleAnnotation", paneId: MAIN_PANE_ID, points: dot, text: "前高" },
+    ]);
+    const annotationArg = on.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(annotationArg.extendData).toBe("前高");
   });
 
   it("没落盘样式的标注恢复时是实线，价格线仍不落样式（§二.11 两半）", () => {
@@ -1354,6 +1399,11 @@ describe("磁吸", () => {
   // 义务 1（评审席，第 2 任务交下来的）：替身得把构造器种下的 `needDefaultPointFigure`
   // 种成真 `false`。批量磁吸之后要读实例，而 `undefined` 与 `false` 在
   // `expect(...).toBe(false)` 上不等价——没种的替身会让"没被改动"这句话永远成立。
+  //
+  // 席 A 的 M-2 补上的是**另一半**：种了初值还不够，`overrideOverlay` 也得会写它
+  // （见上面那句建模），否则这两行读回仍然恒过 —— 键没建模 ⇒ 替身把它丢了 ⇒
+  // "它没变"。现在两行都咬得动：变异针（让 `applyMagnetMode` 顺手送
+  // `needDefaultPointFigure: false`）跑过，第二条会红。
   it("批量磁吸只写 mode，别的一个键都不动", () => {
     const chart = fakeChart([
       overlay({ id: "a", name: "simpleAnnotation", points: dot }),

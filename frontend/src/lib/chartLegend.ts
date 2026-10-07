@@ -29,7 +29,16 @@ import type { TooltipLegend, TooltipShowRule } from "klinecharts";
 export interface LegendPrefs {
   /** The 时间/开/高/低/收/量 block on the main chart. */
   candleRule: TooltipShowRule;
-  /** Each sub pane's indicator legend. */
+  /**
+   * Every indicator legend row — including the ones drawn on the **candle**
+   * pane, because the library gates all of them through one key,
+   * `indicator.tooltip.showRule` (dist 7055-7062 read, 7238-7239 as the gate
+   * itself). `IndicatorTooltipView.drawIndicatorTooltip` is called from the
+   * candle widget's own draw path too (dist 7399-7405), and this page does put
+   * indicators on the main pane (`createIndicator({paneId: MAIN_PANE_ID})`), so
+   * picking 隐藏 takes the main chart's MA rows away with them. The name says
+   * 指标图例, not 副图, for exactly that reason.
+   */
   indicatorRule: TooltipShowRule;
   /** The extra `{change}` row. Default off — it is the one row that *adds* pixels. */
   showChange: boolean;

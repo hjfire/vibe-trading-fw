@@ -163,10 +163,20 @@ export function toolOf(name: string): DrawTool | undefined {
  * round-trips: if only one entry asked, a drawn annotation would be editable and
  * a restored one would not, which is the same asymmetry ⑮ had to fix for events.
  *
- * `mode` (第③片 B) joins the same question for the same reason: the magnet has to
- * answer it identically at draw time, at restore time and on the batch override,
- * or a line would come back from storage with a different magnet behaviour than
- * the one the user is drawing with.
+ * `mode` (第③片 B) joins the **draw/restore** half of that question, and only
+ * that half: the magnet must be answered identically when the user draws a line
+ * and when the same line comes back from storage, or one line would snap by two
+ * different rules depending on whether the page was reloaded.
+ *
+ * It does *not* answer it on the batch override. `applyMagnetMode` and
+ * `applyMagnetModeToArmed` build `{ id, mode }` themselves, deliberately, because
+ * they need the opposite polarity of this function's key-presence rule:
+ * `toolCreateExtras` **omits** `mode` when the magnet is off — that is what keeps
+ * a magnet-off chart byte-identical to a pre-feature one, exactly like
+ * `lock`/`hidden`/`text` — while a switch pass must **write** `normal`
+ * explicitly, because the instance it is talking to may already hold
+ * `strong_magnet` and an omitted key would leave it there. Same value, same
+ * field, two different reasons for whether the key appears at all.
  */
 export function toolCreateExtras(name: string, mode: MagnetMode = "normal"): Partial<OverlayCreate> {
   return {
@@ -210,9 +220,10 @@ export const MAX_DRAWING_TEXT = 40;
  * The storable form of an annotation's text: trimmed, capped, or absent.
  *
  * `extendData` is `unknown` by contract (`KD:1118`) and the template also
- * accepts a **function** (dist 12470), which is a rendering callback, not text —
- * storing `String(fn)` would bank a wall of source code as a label. Only a real
- * string survives.
+ * accepts a **function** — `simpleAnnotation`'s reader tests `isFunction` at
+ * dist 12476 and *calls* it at dist 12480 (the whole branch is 12475-12482),
+ * which is a rendering callback, not text — storing `String(fn)` would bank a
+ * wall of source code as a label. Only a real string survives.
  *
  * The cap counts **characters** (code points), not UTF-16 code units: an emoji is
  * two units, so `slice(0, 40)` can cut one in half and bank a lone surrogate that
@@ -644,7 +655,19 @@ export function restoreDrawings(
     // applies on the way in. Sending `d.text` raw would restore a longer label
     // than was ever banked, and the next edit would bank *that* — the same drift
     // the style fragment above exists to stop, one key over.
-    const text = normalizeDrawingText(d.text);
+    //
+    // And only a `hasText` tool is asked at all, which is the same question the
+    // three read sides ask (`serializeDrawings`, `describeDrawing`, `drawingKey`).
+    // This is a **write** side, so the cost of skipping it is asymmetric: a
+    // hand-edited or imported `priceLine` carrying `text` would get an
+    // `extendData` its template never reads (only `simpleAnnotation` dist
+    // 12475-12482 and `simpleTag` 12565-12572 render `extendData` as words), so
+    // the user sees nothing while storage keeps insisting the line has a label —
+    // and `DrawTool.hasText`'s own comment ("the other twelve tools have no such
+    // channel") becomes a claim nothing enforces. Absent key, not empty value:
+    // `drawingKey` signs on the words it finds, so an empty one would fork the
+    // identity of the same line between the first import and a re-import.
+    const text = toolOf(d.name)?.hasText === true ? normalizeDrawingText(d.text) : undefined;
     const id = chart.createOverlay({
       name: d.name,
       paneId,
@@ -847,11 +870,13 @@ export function describeDrawing(overlay: unknown): DrawingRow | null {
     label: toolOf(name)?.label ?? name,
     style: styleOfOverlay(o) ?? { ...DEFAULT_DRAWING_STYLE },
     // Read through the same normalizer storage uses, so a live instance holding
-    // a function (`extendData` also accepts one, dist 12485) never reaches JSX as
+    // a function (`extendData` also accepts one; `simpleAnnotation` calls it at
+    // dist 12480) never reaches JSX as
     // a child. Only a `hasText` tool is asked: `extendData` is the library's
     // generic per-overlay channel (`KD:1118`), and of our thirteen tools exactly
-    // one template prints it as words — `simpleAnnotation` (dist 12480; the other
-    // reader is `simpleTag`, which this app does not ship). Handing a row's
+    // one template prints it as words — `simpleAnnotation` (its `extendData`
+    // branch is dist 12475-12482; the only other reader in the whole library is
+    // `simpleTag` at dist 12565-12572, which this app does not ship). Handing a row's
     // `extendData` to the other twelve would offer a box for a value the user
     // never typed, and `applyDrawingText` would then overwrite it.
     ...(toolOf(name)?.hasText
@@ -1043,6 +1068,55 @@ export function applyMagnetMode(chart: OverlayHost, mode: MagnetMode): number {
     if (!o || typeof o.id !== "string" || !o.id) continue;
     if (!toolOf(o.name ?? "")) continue;
     if (isInProgress(o)) continue;
+    chart.overrideOverlay({ id: o.id, mode });
+    touched += 1;
+  }
+  return touched;
+}
+
+/**
+ * Put the new magnet preference on the one line the user is **still placing**.
+ *
+ * `applyMagnetMode` skips in-progress overlays and must keep doing so — that
+ * skip is spelled out in spec §三.B.3(b), and the two passes have genuinely
+ * different jobs: the batch one restamps a finished set the user is done with,
+ * while a half-drawn line is a moving target. But `mode` is read off the
+ * instance at the instant every anchor lands (dist 8817), so if nothing
+ * compensates, the line under the cursor keeps snapping by the **old**
+ * preference for the rest of its life, and the toggle appears to do nothing
+ * until the next line is drawn. This is that compensation, and it is the page's
+ * job to call it (see `toggleMagnet`).
+ *
+ * Why naming an in-progress overlay is safe — read off the library, not assumed:
+ * - it can be named at all: `StoreImp.overrideOverlay` resolves the filter
+ *   through `getOverlaysByFilter`, which appends
+ *   `_progressOverlayInfo.overlay` to the result (dist 14308-14311). The library
+ *   itself overrides a progress overlay for `paneId` in
+ *   `updateProgressOverlayInfo` (dist 14427), so this is the documented route.
+ * - it cannot break the step machine: `OverlayImp.override` destructures
+ *   `id, name, currentStep, points, styles` out of the argument and blind-merges
+ *   only the **rest** (`merge(this, others)`, dist 8280-8281). Sending exactly
+ *   `{id, mode}` therefore reaches `mode` and nothing else — `currentStep` and
+ *   `points` stay byte for byte what the user has placed so far.
+ * - it does not repaint twice: `shouldUpdate()` watches
+ *   `zLevel/points/visible/extendData/styles` and not `mode` (dist 8314-8316),
+ *   so the answer stays `false`. As with `applyMagnetMode`, the return value is
+ *   **never** a verdict — the count is what this returns, and callers discard it.
+ *
+ * An already-placed anchor is not re-snapped by this call either: `mode` only
+ * affects anchors dropped after it. That is the library's semantics, not a gap
+ * we could close from here.
+ */
+export function applyMagnetModeToArmed(chart: OverlayHost, mode: MagnetMode): number {
+  let touched = 0;
+  for (const raw of chart.getOverlays()) {
+    const o = raw as OverlayLike;
+    if (!o || typeof o.id !== "string" || !o.id) continue;
+    // Same two ownership filters as the batch pass, in the same order; only the
+    // progress test is turned around, because that is the whole difference
+    // between the two passes.
+    if (!toolOf(o.name ?? "")) continue;
+    if (!isInProgress(o)) continue;
     chart.overrideOverlay({ id: o.id, mode });
     touched += 1;
   }

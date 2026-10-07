@@ -122,7 +122,7 @@ describe("/pro-chart 图例偏好", () => {
     expect((screen.getByLabelText("主图图例显示规则") as HTMLSelectElement).value).toBe(
       DEFAULT_LEGEND_PREFS.candleRule,
     );
-    expect((screen.getByLabelText("副图图例显示规则") as HTMLSelectElement).value).toBe(
+    expect((screen.getByLabelText("指标图例显示规则（含主图 MA／均价）") as HTMLSelectElement).value).toBe(
       DEFAULT_LEGEND_PREFS.indicatorRule,
     );
     expect((screen.getByLabelText("涨幅行") as HTMLInputElement).checked).toBe(DEFAULT_LEGEND_PREFS.showChange);
@@ -231,7 +231,7 @@ describe("/pro-chart 图例偏好", () => {
     fireEvent.click(screen.getByRole("button", { name: "图例" }));
     fireEvent.change(screen.getByLabelText("主图图例显示规则"), { target: { value: "none" } });
     await flush();
-    fireEvent.change(screen.getByLabelText("副图图例显示规则"), { target: { value: "follow_cross" } });
+    fireEvent.change(screen.getByLabelText("指标图例显示规则（含主图 MA／均价）"), { target: { value: "follow_cross" } });
     await flush();
 
     const stored = JSON.parse(localStorage.getItem(LEGEND_PREFS_KEY) ?? "{}");
@@ -253,5 +253,39 @@ describe("/pro-chart 图例偏好", () => {
     fireEvent.click(screen.getByLabelText("涨幅行"));
     await flush();
     expect(localStorage.getItem(LEGEND_PREFS_KEY)).toBeNull();
+  });
+
+  // 席 B 的 I-1：刷新后偏好仍在，此前在**页面层**零覆盖 —— 全套图例用例都是先
+  // render 再改，没有任何一条先写存储再挂载。于是 `useState<LegendPrefs>(() =>
+  // loadLegendPrefs())` 换成 `DEFAULT_LEGEND_PREFS` 也照样全绿（变异针已复证）。
+  // 这条补的就是那个方向：读侧的活。存储里只写**偏差键**，不是全量五键，所以这里
+  // 也只放一个键；另外四项必须从 `DEFAULT_LEGEND_PREFS` 补齐，否则"只写一个偏差"
+  // 这个形状会在首屏就把别的行刷掉。
+  //
+  // 偏差键用 `candleRule: "none"`（面板上那一档的文案是「隐藏」，值域里的字面量是
+  // `none` —— `RULE_OPTIONS` 就是这个对应表）。
+  it("先写存储再挂载：首屏那次 setStyles 就带上盘上的偏差", async () => {
+    localStorage.setItem(LEGEND_PREFS_KEY, JSON.stringify({ candleRule: "none" }));
+
+    render(<ProChart />);
+    await flush();
+
+    // 首屏那一次，不是某一次后续 push —— 用户看到的第一个画面就该是他的偏好。
+    expect(pushCount()).toBeGreaterThan(0);
+    expect(candleRule(0)).toBe("none");
+    // 面板里读到的也必须是盘上那份，否则开关与图不同步。
+    fireEvent.click(screen.getByRole("button", { name: "图例" }));
+    expect((screen.getByLabelText("指标图例显示规则（含主图 MA／均价）") as HTMLSelectElement).value).toBe(
+      DEFAULT_LEGEND_PREFS.indicatorRule,
+    );
+    // 没写的那几项仍从默认补齐，而不是变成 undefined 被下推出去。
+    const s = styleAt(0) as {
+      indicator?: { tooltip?: { showRule?: string } };
+      candle?: { priceMark?: Record<string, unknown> };
+    };
+    expect(s.indicator?.tooltip?.showRule).toBe(DEFAULT_LEGEND_PREFS.indicatorRule);
+    expect(s.candle?.priceMark?.last).toEqual({ show: true, line: { show: true }, text: { show: true } });
+    // 读侧只读不写：挂载一个偏差都不该往存储里添东西。
+    expect(JSON.parse(localStorage.getItem(LEGEND_PREFS_KEY) ?? "{}")).toEqual({ candleRule: "none" });
   });
 });

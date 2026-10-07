@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ProChart } from "../ProChart";
 import { planPaneHeights, subPaneIdOf } from "@/lib/paneLayout";
 import { createDrawingsShareLink, exportDrawingsJson, readDrawingsShareLink } from "@/lib/drawingExchange";
-import { DRAW_TOOLS } from "@/lib/chartDrawings";
+import { applyMagnetMode, applyMagnetModeToArmed, DRAW_TOOLS, isInProgress } from "@/lib/chartDrawings";
 
 /**
  * Drawing + pane-layout wiring of /pro-chart, driven through the real component
@@ -1280,6 +1280,30 @@ describe("/pro-chart 画线清单", () => {
   // 判据两半，缺一半都放行：合成期间一个字都不许写（`overrideOverlay` 调用数不动），
   // 合成结束必须把此刻框里的定稿写上（写的是值本身，不是事件里的 data，因为取消时
   // 值已经回到合成前）。
+  //
+  // 席 C 的 IMP-2 之后这里换了姿势：**不再维护"哪一行正在合成"这个页面状态**，
+  // 而是读事件自己带的 `isComposing`。所以用例也不能再用 `fireEvent.change(box,
+  // {…, isComposing: true})` —— dtl 的 `createEvent` 对 jsdom 原型上的只读
+  // `isComposing` 赋值会被吞掉，那个标记压根没上到事件上（旧用例其实是靠 ref
+  // 才红的，不是靠这个标记）。现在按浏览器真实的形状手造事件。
+  //
+  // 值必须走 `HTMLInputElement.prototype` 上的**原生 setter**：React 在挂载时给
+  // 输入框装了自己的 `value` 描述符（inputValueTracking），`box.value = "x"` 会
+  // 把 tracker 的 currentValue 一起改掉，`updateValueIfChanged` 于是回 `false`，
+  // `onChange` 根本不会被调用 —— 那这条用例就成了空跑。原生 setter 绕开 tracker，
+  // 是这条判据成立的前提。
+  function dispatchInput(el: HTMLInputElement, value: string, composing: boolean): void {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    const ev = new Event("input", { bubbles: true, cancelable: true });
+    if (composing) Object.defineProperty(ev, "isComposing", { value: true });
+    act(() => {
+      el.dispatchEvent(ev);
+    });
+  }
+
+  const textOf = (i: number) =>
+    (readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[i]?.text;
+
   it("输入法合成期间不落罗马字，合成结束才落定稿", async () => {
     await mountChart();
     fireEvent.click(screen.getByRole("button", { name: "标注" }));
@@ -1291,22 +1315,90 @@ describe("/pro-chart 画线清单", () => {
     const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
     const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
 
+    // 合成中：框里有罗马字，一个键都不许写。
     fireEvent.compositionStart(box);
-    fireEvent.change(box, { target: { value: "qian" }, isComposing: true });
+    dispatchInput(box, "qian", true);
     await flush();
-
+    expect(box.value).toBe("qian"); // 不写不是因为框里没东西
     expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore);
     expect(h.overlays[0].extendData).toBeUndefined();
-    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]?.text).toBeUndefined();
+    expect(textOf(0)).toBeUndefined();
 
-    // 定稿：Chrome 在 compositionend 时框里已经是汉字，此时必须落库。
-    fireEvent.change(box, { target: { value: "前高" }, isComposing: true });
+    // 同一条路径的**可达性对照**：把 `isComposing` 摘掉、其余一切不动，这次必须写。
+    // 没有这半边，上面的"没写"可能只是事件根本没送到 handler，用例就成了空跑。
+    // 旧实现（粘滞 ref）在这里必然红：ref 还钉着这一行，普通改动被同一个早退吞掉。
+    dispatchInput(box, "前高", false);
+    await flush();
+    expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore + 1);
+    expect(h.overlays[0].extendData).toBe("前高");
+    expect(textOf(0)).toBe("前高");
+  });
+
+  // 定稿：Chrome 在 compositionend 时框里已经是汉字，此时必须落库。
+  it("合成结束把此刻框里的值写成定稿", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
+
+    fireEvent.compositionStart(box);
+    dispatchInput(box, "qian", true);
+    await flush();
+    expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore);
+
+    box.value = "前高"; // Chrome 在 compositionend 前已把框里换成汉字
     fireEvent.compositionEnd(box, { data: "前高" });
     await flush();
 
     expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id, extendData: "前高" });
     expect(h.overlays[0].extendData).toBe("前高");
-    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]?.text).toBe("前高");
+    expect(textOf(0)).toBe("前高");
+  });
+
+  // 席 C 的 IMP-2 的本尊：`composingRow` 这个粘滞 ref 只有 `compositionend` 一个
+  // 复位点。合成中途输入框被卸载（关画线面板／删该行／切标的切周期）⇒ ref 残留
+  // ⇒ 同一行**普通**输入被永久吞掉，实例与存储都不写，界面上没有任何痕迹。
+  // 这条就是那条针：合成中 → 该行从 DOM 消失再回来（同一个 row.id）→ 普通改动必须落库。
+  // 粘滞 ref 还在的老实现下这条必然红。
+  it("合成途中那一行的输入框被卸载，回来后的普通改动仍要落库", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+
+    fireEvent.compositionStart(box);
+    dispatchInput(box, "qian", true);
+    await flush();
+    expect(h.overlays[0].extendData).toBeUndefined();
+
+    // 该行从 DOM 消失（面板收起 ⇒ 整张清单卸载），再回来，`row.id` 一个字没变。
+    const panelButton = screen.getByRole("button", { name: "画线清单" });
+    fireEvent.click(panelButton);
+    await flush();
+    expect(screen.queryByLabelText(`画线文字 ${id}`)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    const boxAgain = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    expect(boxAgain).not.toBe(box); // 确实是重挂的一个，不是同一个节点
+
+    // 合成早已结束，这一次是普通的用户输入：必须写。
+    const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
+    dispatchInput(boxAgain, "前高", false);
+    await flush();
+
+    expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore + 1);
+    expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id, extendData: "前高" });
+    expect(h.overlays[0].extendData).toBe("前高");
+    expect(textOf(0)).toBe("前高");
   });
 
   // 取消合成（Esc）走的是同一条 compositionend：值已经退回合成前，那就写回空，
@@ -1323,14 +1415,20 @@ describe("/pro-chart 画线清单", () => {
     const callsBefore = h.chart?.overrideOverlay.mock.calls.length ?? 0;
 
     fireEvent.compositionStart(box);
-    fireEvent.change(box, { target: { value: "qian" }, isComposing: true });
-    fireEvent.change(box, { target: { value: "" } }); // 浏览器把合成文本撤掉
+    dispatchInput(box, "qian", true);
+    // 浏览器把合成文本撤掉 —— 撤值仍在合成收尾的那一步里，所以它带的还是
+    // `isComposing`，落库的活留给下面那条 compositionend 独揽。
+    dispatchInput(box, "", true);
     fireEvent.compositionEnd(box, { data: "" });
     await flush();
 
     expect(h.chart?.overrideOverlay.mock.calls.length ?? 0).toBe(callsBefore + 1);
     expect(h.chart?.overrideOverlay.mock.calls.at(-1)?.[0]).toEqual({ id, extendData: "" });
     expect(h.overlays[0].extendData).toBe("");
+    // 席 C 的 MIN-1：这条用例此前只看了实例，没看存储。库里同样不能留罗马字 ——
+    // `serializeDrawings` 对空串不落键，所以这里钉的是"没有 text 键"。
+    expect(textOf(0)).toBeUndefined();
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0]).not.toHaveProperty("text");
   });
 });
 
@@ -2083,15 +2181,85 @@ describe("/pro-chart 磁吸", () => {
     let arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(arg.mode).toBe("strong_magnet");
 
-    // The armed line is still half-drawn, so the batch pass leaves it alone: it
-    // gets its `mode` from `armTool`, not from an override on a moving target.
+    // The armed line is still half-drawn, so the **batch** pass leaves it alone
+    // (spec §三.B.3(b); `chartDrawings.test.ts`「批量切换只碰用户自己的已完成线」
+    // pins that filter). It no longer stays on the *old* preference though:
+    // `toggleMagnet` follows up with `applyMagnetModeToArmed`, which names this
+    // one overlay and writes nothing but `{id, mode}`.
     fireEvent.click(magnetButton()); // off
     await flush();
-    expect(h.chart?.overrideOverlay).not.toHaveBeenCalled();
+    const armedId = h.overlays[0].id;
+    expect(h.chart?.overrideOverlay.mock.calls.map((c) => Object.keys(c[0] as object).sort())).toEqual([
+      ["id", "mode"],
+    ]);
+    expect(h.chart?.overrideOverlay).toHaveBeenLastCalledWith({ id: armedId, mode: "normal" });
 
     fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
     arg = h.chart?.createOverlay.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(arg).not.toHaveProperty("mode");
+  });
+
+  // 席 C 的 IMP-1。批量 pass 里那个 `isInProgress` 跳过是 spec 明文要的，保留；
+  // 缺的是页面那一半补偿：切换磁吸时手上这条半成品线一直吃**旧**偏好，因为
+  // `mode` 是库在每次落点瞬间从实例上读的（dist 8817）。
+  //
+  // 控制器读 dist 原文证明指名 override 半成品线是安全的，两处依据：
+  // - `StoreImp.overrideOverlay` → `getOverlaysByFilter` 把
+  //   `_progressOverlayInfo.overlay` 也算进结果（dist 14308-14311），而库自己在
+  //   `updateProgressOverlayInfo` 里就对 progress overlay 调 `override({paneId})`
+  //   （dist 14427）—— 半成品线**能**被指名 override。
+  // - `OverlayImp.override` 把 `id/name/currentStep/points/styles` 显式排除在
+  //   `merge(this, others)` 之外（dist 8280-8281），所以只送 `{id, mode}` 时
+  //   步进机与已落下的点一根手指都碰不到。
+  it("半成品线：批量 pass 不碰它，指名 pass 只改 mode，步进机与落点逐字不变", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    const armed = h.overlays[0];
+    // 替身把半成品建模成真库的形状：还没落点、`isDrawing()` 为真、停在第 1 步。
+    expect(armed.drawing).toBe(true);
+    expect(isInProgress(armed)).toBe(true);
+    expect(armed.currentStep).toBe(1);
+    expect(armed.points).toEqual([]);
+
+    // 批量 pass 那半边照旧：它不动，这条线也不该被动。
+    expect(applyMagnetMode(h.chart as never, "strong_magnet")).toBe(0);
+    expect(armed.mode).toBe("normal");
+
+    // 指名 pass 这一半边：它吃新偏好。
+    expect(applyMagnetModeToArmed(h.chart as never, "strong_magnet")).toBe(1);
+    expect(h.chart?.overrideOverlay).toHaveBeenLastCalledWith({ id: armed.id, mode: "strong_magnet" });
+    expect(armed.mode).toBe("strong_magnet");
+    // 判据的后半句才是这条针的重点：`currentStep` 与 `points` 一动不动 —— 步进机
+    // 没被打断，线还是用户手上那条。
+    expect(armed.currentStep).toBe(1);
+    expect(armed.drawing).toBe(true);
+    expect(armed.points).toEqual([]);
+
+    // 已经落下的点不回吸，也没有被这次改动牵连：再放第二个点，线照常完成。
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1288 });
+    await flush();
+    expect(isInProgress(armed)).toBe(false);
+    expect(armed.points).toEqual([{ timestamp: START + 2 * DAY, value: 1288 }]);
+  });
+
+  // 页面那一半：用户真的在画到一半时按了磁吸，补偿必须由 `toggleMagnet` 发起。
+  it("画到一半时按磁吸，按钮这条路也把新偏好盖到手上这条", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    const armed = h.overlays[0];
+    h.chart?.overrideOverlay.mockClear();
+
+    fireEvent.click(magnetButton());
+    await flush();
+    expect(localStorage.getItem(MAGNET_KEY)).toBe("1");
+    expect(armed.mode).toBe("strong_magnet");
+    // 只有 `{id, mode}` 这一个形状被送出去：没有第二个键顺手动了步进机。
+    expect(h.chart?.overrideOverlay.mock.calls.map((c) => Object.keys(c[0] as object).sort())).toEqual([
+      ["id", "mode"],
+    ]);
+    expect(armed.currentStep).toBe(1);
+    expect(armed.drawing).toBe(true);
+    expect(armed.points).toEqual([]);
   });
 
   it("Pine 的线不被磁吸摸到（名字不在工具表里的那种）", async () => {
@@ -2102,7 +2270,13 @@ describe("/pro-chart 磁吸", () => {
     // A Pine drawing: an overlay name the toolbar does not ship, anchored by
     // dataIndex only (see chartDrawings header note 6). The guard below is what
     // keeps this from rotting into an empty pin if the toolbar ever grows.
-    const pineName = "simpleTag";
+    //
+    // 席 C 的 MIN-3：以前这里借的是 `"simpleTag"`，那是个坏代表 —— 它恰好是库内
+    // 第二个把 `extendData` 当文字打印的模板（dist 12565-12572，见
+    // `chartDrawings.ts` 里 `describeDrawing` 的那段注释），拿它当"Pine 的线"会让
+    // 人读成"磁吸碰了一个会显示文字的模板"。换成 `pineDrawings.ts:39-47` 里真实
+    // 注册过的名字（`NAME` 是模块私有的，所以这里按它写下的字面量来）。
+    const pineName = "pineBox";
     expect(DRAW_TOOLS.some((t) => t.name === pineName)).toBe(false);
     h.chart?.createOverlay({ name: pineName, paneId: "candle_pane", points: [{ dataIndex: 3, value: 9 }] });
     const pine = h.overlays.at(-1)!;

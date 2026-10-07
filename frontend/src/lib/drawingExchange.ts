@@ -51,8 +51,19 @@ export const DRAWING_BUNDLE_KIND = "vibe-trading.drawings";
  * 1 -> 2: entries can now carry an annotation's `text`.
  *
  * This is a label, never a gate — the reader does not look at it (see
- * `resolveList`), so a v1 file still imports, and a v2 file read by an older
- * build loses the words and keeps the line.
+ * `resolveList`), so a v1 file still imports into this build, which is the right
+ * direction: version 2 only *added* an optional key.
+ *
+ * The other direction is not "the words are dropped and the line survives", as
+ * an earlier note here claimed — that was wrong, and `readDrawing` is the proof:
+ * it refuses any name `toolOf` does not know (its
+ * `${at}：${name} 不是可复现的画线工具` branch), and `simpleAnnotation`
+ * joined `DRAW_TOOLS` in this very slice. So an older build handed a v2 file
+ * throws away the **whole entry** for every text-bearing tool it has never heard
+ * of; the line does not come back wordless, it does not come back at all. What
+ * an older build *can* still read is the rest of the file, unchanged, because
+ * the twelve tools it knows never grew a `text` key — which is precisely the
+ * invariant the `hasText` gate on both write sides now holds open.
  */
 export const DRAWING_BUNDLE_VERSION = 2;
 
@@ -117,7 +128,16 @@ function readDrawing(raw: unknown, index: number): ReadOutcome {
   // file's `text` only survives if this line asks for it; `normalizeDrawingText`
   // is the same cap the chart itself applies, so an import cannot smuggle a
   // longer label past it.
-  const text = normalizeDrawingText(o.text);
+  //
+  // The `hasText` question is asked here too, in the same form as the write side
+  // in `restoreDrawings` and as `drawingKey` below — `toolOf` is the only
+  // implementation of it, deliberately: of the thirteen tools exactly one
+  // template turns `extendData` into words (`simpleAnnotation`), so a file that
+  // hands us `{name:"priceLine", text:"x"}` is describing a channel that tool
+  // does not have. Keeping the key would bank a label the chart can neither show
+  // nor edit, and the next `serializeDrawings` — which does ask `hasText` — would
+  // silently drop it, so the same line would differ before and after a reload.
+  const text = toolOf(name)?.hasText === true ? normalizeDrawingText(o.text) : undefined;
   const wanted = typeof o.paneId === "string" ? o.paneId.trim() : "";
   const paneId = isRestorablePaneId(wanted) ? wanted : MAIN_PANE_ID;
   return {
