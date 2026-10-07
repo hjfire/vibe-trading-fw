@@ -40,14 +40,19 @@ export interface LegendPrefs {
 }
 
 /** Every value below is the library's own default (spec §二.8), so a user who
- * never opens the 图例 panel gets the same picture as before this file. */
-export const DEFAULT_LEGEND_PREFS: LegendPrefs = {
+ * never opens the 图例 panel gets the same picture as before this file.
+ *
+ * Frozen because it is exported: the deviation filter below and `legendStyles`
+ * both read from it, and a consumer that mutated it in place would silently
+ * repaint the page for everyone else on the same tab. The module only ever hands
+ * out copies (`{ ...d }`), so freezing costs nothing. */
+export const DEFAULT_LEGEND_PREFS: Readonly<LegendPrefs> = Object.freeze({
   candleRule: "always",
   indicatorRule: "always",
   showChange: false,
   highLowMark: true,
   lastPriceLine: true,
-};
+});
 
 export const LEGEND_PREFS_KEY = "pro-chart.legend.v1";
 
@@ -136,9 +141,34 @@ export function loadLegendPrefs(): LegendPrefs {
   }
 }
 
+/**
+ * 未偏离默认的键一律不落盘（Global Constraint「默认态逐像素不变」的写侧）。
+ *
+ * Writing the whole object would freeze today's library defaults into user
+ * storage: the day klinecharts changes a default, every user who ever flipped
+ * one switch keeps the old value and no upgrade can reach them. So only
+ * deviations are persisted, and an all-defaults write deletes the key instead —
+ * which also makes the constraint true for the *second* case, not just for users
+ * who never touched the panel.
+ *
+ * Normalizing first is the same discipline as `load*` (`<select>` gives strings,
+ * a stale cast gives anything): junk never reaches storage, and a value the
+ * reader would answer as a default cannot be written as a deviation.
+ */
 export function saveLegendPrefs(p: LegendPrefs): void {
   try {
-    localStorage.setItem(LEGEND_PREFS_KEY, JSON.stringify(p));
+    const next = normalizeLegendPrefs(p);
+    const deviated: Partial<LegendPrefs> = {};
+    if (next.candleRule !== DEFAULT_LEGEND_PREFS.candleRule) deviated.candleRule = next.candleRule;
+    if (next.indicatorRule !== DEFAULT_LEGEND_PREFS.indicatorRule) deviated.indicatorRule = next.indicatorRule;
+    if (next.showChange !== DEFAULT_LEGEND_PREFS.showChange) deviated.showChange = next.showChange;
+    if (next.highLowMark !== DEFAULT_LEGEND_PREFS.highLowMark) deviated.highLowMark = next.highLowMark;
+    if (next.lastPriceLine !== DEFAULT_LEGEND_PREFS.lastPriceLine) deviated.lastPriceLine = next.lastPriceLine;
+    if (Object.keys(deviated).length === 0) {
+      localStorage.removeItem(LEGEND_PREFS_KEY);
+      return;
+    }
+    localStorage.setItem(LEGEND_PREFS_KEY, JSON.stringify(deviated));
   } catch {
     /* best effort */
   }

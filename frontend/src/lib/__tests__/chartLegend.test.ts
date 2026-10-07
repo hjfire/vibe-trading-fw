@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LEGEND_PREFS,
   LEGEND_PREFS_KEY,
+  type LegendPrefs,
   RULE_OPTIONS,
   legendStyles,
   legendTemplate,
@@ -176,9 +177,66 @@ describe("读偏好：脏值回默认，不抛", () => {
     const p = { candleRule: "follow_cross", indicatorRule: "none", showChange: true, highLowMark: false, lastPriceLine: true } as const;
     saveLegendPrefs(p);
     expect(loadLegendPrefs()).toEqual(p);
+    // 写侧只落偏差键（`lastPriceLine` 等于默认，不落盘），所以这条往返成立的方式是
+    // 「读侧把缺的默认补回来」——把真正进了存储的那几个键也钉住，免得往返悄悄换含义。
+    expect(Object.keys(JSON.parse(localStorage.getItem(LEGEND_PREFS_KEY) ?? "null") as Record<string, unknown>).sort()).toEqual([
+      "candleRule",
+      "highLowMark",
+      "indicatorRule",
+      "showChange",
+    ]);
   });
 
   it("下拉选项就是库的 TooltipShowRule 三值", () => {
     expect(RULE_OPTIONS.map((o) => o.value)).toEqual(["always", "follow_cross", "none"]);
+  });
+});
+
+/**
+ * The save path is the half of 默认态逐像素不变 that a panel can break: a flip of
+ * ONE switch must not freeze all five of today's library defaults into user
+ * storage, or a klinecharts upgrade that changes a default keeps the old value
+ * for every user who ever opened the panel. Pin 之外的四条钉的是「落盘形状」，
+ * 不是「读回来的值」——值由上一组往返测试管。
+ */
+describe("写偏好：未偏离默认的键一律不落盘", () => {
+  /** What actually reached storage (`null` = the key is gone). */
+  function stored(): Record<string, unknown> | null {
+    const raw = localStorage.getItem(LEGEND_PREFS_KEY);
+    return raw === null ? null : (JSON.parse(raw) as Record<string, unknown>);
+  }
+
+  it("只翻一项：落的就是那一个键，其余四键不出现", () => {
+    saveLegendPrefs({ ...DEFAULT_LEGEND_PREFS, showChange: true });
+    expect(stored()).toEqual({ showChange: true });
+    expect(Object.keys(stored() ?? {})).toEqual(["showChange"]);
+    expect(loadLegendPrefs()).toEqual({ ...DEFAULT_LEGEND_PREFS, showChange: true });
+  });
+
+  it("全部回默认是删键，不是写一份全默认", () => {
+    saveLegendPrefs({
+      candleRule: "none",
+      indicatorRule: "follow_cross",
+      showChange: true,
+      highLowMark: false,
+      lastPriceLine: false,
+    });
+    expect(localStorage.getItem(LEGEND_PREFS_KEY)).not.toBeNull();
+    saveLegendPrefs(DEFAULT_LEGEND_PREFS);
+    expect(localStorage.getItem(LEGEND_PREFS_KEY)).toBeNull();
+    expect(loadLegendPrefs()).toEqual(DEFAULT_LEGEND_PREFS);
+  });
+
+  it("<select> 的坏 cast／超宽值先归一再判定，垃圾进不了存储", () => {
+    saveLegendPrefs({
+      candleRule: "sometimes", // 不是库的三值 → 归一为默认 → 不落盘
+      indicatorRule: "always", // 等于默认 → 不落盘
+      showChange: "true", // 字符串布尔 → false（默认）→ 不落盘
+      highLowMark: false, // 合法偏差 → 落盘
+      lastPriceLine: 1, // 数字布尔 → true（默认）→ 不落盘
+      showTurnover: true, // 归一不会带出去的多余键
+    } as unknown as LegendPrefs);
+    expect(stored()).toEqual({ highLowMark: false });
+    expect(loadLegendPrefs()).toEqual({ ...DEFAULT_LEGEND_PREFS, highLowMark: false });
   });
 });
