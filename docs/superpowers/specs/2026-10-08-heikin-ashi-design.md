@@ -72,7 +72,7 @@ TV 的图表类型选择器里，`Heikin Ashi` 是使用率最高的一档：它
    ⇒ **HA 的开关必须同时进 `chartStyles` 形参表和这个依赖数组**；漏进依赖数组的后果
    是文件里已写死的历史故障（切主题把上一个状态冲掉，"开关像坏了"）。
 
-7. **隐藏原生蜡烛的通道是 `candle.bar` 的六个色键。** `CandleBarColor`
+7. **隐藏原生蜡烛的通道是 `candle.bar` 的九个色键。** `CandleBarColor`
    （`index.d.ts`）含 `upColor/downColor/noChangeColor` ＋ `upBorderColor/downBorderColor/noChangeBorderColor`
    ＋ `upWickColor/downWickColor/noChangeWickColor`；仓内在 `ProChart.tsx:301-311` 已经
    从 `lib/chartPalette.ts:10-14` 的 `CANDLE_COLORS`（红涨绿跌）取色。
