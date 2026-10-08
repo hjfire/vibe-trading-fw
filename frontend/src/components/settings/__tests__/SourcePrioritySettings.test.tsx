@@ -63,7 +63,14 @@ describe("SourcePrioritySettings", () => {
     apiMock.updateDataSourceSettings.mockReset();
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
-    apiMock.getDataSourceSettings.mockResolvedValue(dataSourceSettings());
+    // Resolve on a later task, the way a real fetch does. With an immediately-
+    // resolved mock the rows land in the same tick as the heading, so a synchronous
+    // `getByText` looks correct and this file's own timing bug can only show up
+    // under load; the delay turns "someone dropped the async gate" into a red test
+    // instead of a flake that needs 123 files running to appear.
+    apiMock.getDataSourceSettings.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(dataSourceSettings()), 20)),
+    );
   });
 
   afterEach(() => {
@@ -74,8 +81,14 @@ describe("SourcePrioritySettings", () => {
     render(<SourcePrioritySettings />);
 
     expect(await screen.findByText("Data Source Priority")).toBeInTheDocument();
-    // a_share is the first market: its default head renders as a row.
-    expect(screen.getByText("tencent")).toBeInTheDocument();
+    // a_share is the first market: its default head renders as a row. The gate has
+    // to be the **row**, not the heading above: the heading renders synchronously
+    // *before* the `{loading ? …}` branch (`SourcePrioritySettings.tsx:166`), so
+    // awaiting it is satisfied on the first frame and says nothing about the rows —
+    // a synchronous `getByText("tencent")` behind that heading therefore raced the
+    // fetch, while every other case in the file (which gates on
+    // `findByText("tencent")`) stayed green.
+    expect(await screen.findByText("tencent")).toBeInTheDocument();
     expect(screen.getByText("tushare")).toBeInTheDocument();
     // First row cannot move up, last row cannot move down.
     expect(screen.getByRole("button", { name: "Move up: tencent" })).toBeDisabled();
