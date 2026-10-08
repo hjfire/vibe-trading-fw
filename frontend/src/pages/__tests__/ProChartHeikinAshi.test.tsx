@@ -15,14 +15,23 @@ import { ProChart } from "../ProChart";
  *
  * 两条主判据：
  * 1. 样式只有一个合成点。`chartStyles` 整个对象会被主题 effect 在每次换主题时重推，
- *    所以「九色透明」这个状态如果没同时进形参表和依赖数组，切主题就会把真蜡烛刷回来——
- *    本文件里那条切主题的测试就是这个历史故障的形状（同 `ProChartLegend.test.tsx:150`）。
+ *    所以「九色透明」这个状态只要没进推送点的第四个实参，切主题就会把真蜡烛刷回来——
+ *    本文件那条切主题的测试钉的就是**第四个实参**（同 `ProChartLegend.test.tsx:150` 的形状）。
+ *    它钉不到**依赖数组**：本片页面没有 `haOn` 的写侧（`ProChart.tsx:545-550` 只有读侧），
+ *    值在整条测试里从不变化，换主题时 effect 是被 `dark` 叫醒的、闭包里已经是当前 `haOn`。
+ *    `haOn` 在 `:1293` 是写对了的，但那一格的钉子归第④片 T4 的按钮切换测试（见下）。
  * 2. HA 只改像素。开与关都不许动 `getDataList()` 的内容、不许动蜡烛图例模板、
  *    不许写 `candle.priceMark`（那是图例偏好的子树）。
  */
 
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
+  // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
+  // （`ProChart.tsx:1026`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1292` 那一处会写）
+  // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
+  initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
   created: [] as Array<Record<string, unknown>>,
   // 每次 `overrideOverlay` 收到的是什么。第⑤片的真值边界钉用它判「切 HA 不该重锚画线」，
@@ -85,9 +94,14 @@ function seed(count = 6): void {
   h.list = Array.from({ length: count }, (_, i) => barOf(i));
 }
 
-/** `candle.bar` as the i-th push carried it. */
+/** `candle.bar` as the i-th `setStyles` push carried it. */
 function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
+}
+
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1026`）carried it. */
+function initBarColors(): Record<string, unknown> {
+  return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
 
 function candleType(i: number): unknown {
@@ -107,69 +121,75 @@ vi.mock("klinecharts", () => ({
   getSupportedLocales: () => ["en-US", "zh-CN"],
   registerLocale: vi.fn(),
   dispose: vi.fn(),
-  init: () => ({
-    getSymbol: () => ({ ticker: "600519.SH", pricePrecision: 2, volumePrecision: 0 }),
-    getDataList: () => h.list,
-    // 有状态版本：第④片的挂卸判据要能回答「图上现在有哪些指标」。
-    getIndicators: (filter?: { name?: string; id?: string; paneId?: string }) =>
-      h.indicators.filter((ind) => {
-        if (filter?.name !== undefined && ind.name !== filter.name) return false;
-        if (filter?.id !== undefined && ind.id !== filter.id) return false;
-        if (filter?.paneId !== undefined && ind.paneId !== filter.paneId) return false;
+  // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
+  // （`ProChart.tsx:1026`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
+  init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
+    h.initStyles.push(options?.styles ?? {});
+    return {
+      getSymbol: () => ({ ticker: "600519.SH", pricePrecision: 2, volumePrecision: 0 }),
+      getDataList: () => h.list,
+      // 有状态版本：第④片的挂卸判据要能回答「图上现在有哪些指标」。
+      getIndicators: (filter?: { name?: string; id?: string; paneId?: string }) =>
+        h.indicators.filter((ind) => {
+          if (filter?.name !== undefined && ind.name !== filter.name) return false;
+          if (filter?.id !== undefined && ind.id !== filter.id) return false;
+          if (filter?.paneId !== undefined && ind.paneId !== filter.paneId) return false;
+          return true;
+        }),
+      createIndicator: (value: { name: string; paneId?: string }) => {
+        h.created.push(value as Record<string, unknown>);
+        h.indicators.push({ name: value.name, paneId: value.paneId ?? `sub:${value.name}`, id: `i${h.indicators.length}` });
         return true;
+      },
+      removeIndicator: (filter: { name?: string; id?: string; paneId?: string }) => {
+        const before = h.indicators.length;
+        h.indicators = h.indicators.filter(
+          (ind) =>
+            (filter?.name === undefined || ind.name !== filter.name) &&
+            (filter?.id === undefined || ind.id !== filter.id) &&
+            (filter?.paneId === undefined || ind.paneId !== filter.paneId),
+        );
+        return h.indicators.length < before;
+      },
+      getOverlays: () => [],
+      getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
+      setPaneOptions: vi.fn(),
+      // 装 loader 的那一格是整份替身的关键：不接，页面就没地方要数据，`barCount` 停在 0。
+      setDataLoader: (loader: typeof h.loader) => {
+        h.loader = loader;
+      },
+      // 真实库里 `setSymbol`/`setPeriod`/`resetData` 各自触发一次 `init` 取数
+      // （StoreImp.resetData, dist 13652）。分时切换走 `setPeriod`，所以三个都得问。
+      setSymbol: () => ask(),
+      setPeriod: () => ask(),
+      resetData: () => ask(),
+      setStyles: (s: Record<string, unknown>) => h.styles.push(s),
+      resize: vi.fn(),
+      createOverlay: vi.fn(),
+      removeOverlay: vi.fn(),
+      // 录制版：第⑤片的「切 HA 不重锚画线」判据读的是这个数组的长度增量。
+      overrideOverlay: (o: unknown) => {
+        h.overridden.push(o);
+        return true;
+      },
+      getOffsetRightDistance: () => 0,
+      setOffsetRightDistance: vi.fn(),
+      getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
+      setBarSpace: vi.fn(),
+      scrollToRealTime: vi.fn(),
+      // `to`/`realTo` 是排他的（klinecharts 游标契约），所以直接给数据长度。
+      getVisibleRange: () => ({
+        from: 0,
+        to: h.list.length,
+        realFrom: 0,
+        realTo: h.list.length,
       }),
-    createIndicator: (value: { name: string; paneId?: string }) => {
-      h.created.push(value as Record<string, unknown>);
-      h.indicators.push({ name: value.name, paneId: value.paneId ?? `sub:${value.name}`, id: `i${h.indicators.length}` });
-      return true;
-    },
-    removeIndicator: (filter: { name?: string; id?: string; paneId?: string }) => {
-      const before = h.indicators.length;
-      h.indicators = h.indicators.filter(
-        (ind) =>
-          (filter?.name === undefined || ind.name !== filter.name) &&
-          (filter?.id === undefined || ind.id !== filter.id) &&
-          (filter?.paneId === undefined || ind.paneId !== filter.paneId),
-      );
-      return h.indicators.length < before;
-    },
-    getOverlays: () => [],
-    getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
-    setPaneOptions: vi.fn(),
-    // 装 loader 的那一格是整份替身的关键：不接，页面就没地方要数据，`barCount` 停在 0。
-    setDataLoader: (loader: typeof h.loader) => {
-      h.loader = loader;
-    },
-    // 真实库里 `setSymbol`/`setPeriod`/`resetData` 各自触发一次 `init` 取数
-    // （StoreImp.resetData, dist 13652）。分时切换走 `setPeriod`，所以三个都得问。
-    setSymbol: () => ask(),
-    setPeriod: () => ask(),
-    resetData: () => ask(),
-    setStyles: (s: Record<string, unknown>) => h.styles.push(s),
-    resize: vi.fn(),
-    createOverlay: vi.fn(),
-    removeOverlay: vi.fn(),
-    // 录制版：第⑤片的「切 HA 不重锚画线」判据读的是这个数组的长度增量。
-    overrideOverlay: (o: unknown) => {
-      h.overridden.push(o);
-      return true;
-    },
-    getOffsetRightDistance: () => 0,
-    setOffsetRightDistance: vi.fn(),
-    getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
-    setBarSpace: vi.fn(),
-    scrollToRealTime: vi.fn(),
-    // `to`/`realTo` 是排他的（klinecharts 游标契约），所以直接给数据长度。
-    getVisibleRange: () => ({
-      from: 0,
-      to: h.list.length,
-      realFrom: 0,
-      realTo: h.list.length,
-    }),
-    // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-    // 那句「leave the zoom alone」（`ProChart.tsx:891`），这正是本片要的分支。
-    getDom: () => undefined,
-  }),
+      // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
+      // 那句「leave the zoom alone」（`ProChart.tsx:891`），这正是本片要的分支。
+      getDom: () => undefined,
+    };
+  },
 }));
 
 vi.mock("@/lib/marketApi", async (importOriginal) => {
@@ -209,6 +229,7 @@ const NINE_BAR_KEYS = [
 
 beforeEach(() => {
   h.styles = [];
+  h.initStyles = [];
   h.indicators = [];
   h.created = [];
   h.overridden = [];
@@ -233,17 +254,33 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  it("偏好开：首次推送就九色全透明，type 仍是 candle_solid", async () => {
+  it("偏好开：首屏两处推送点都九色全透明（init 选项＋setStyles 第 0 格），type 仍是 candle_solid", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
     render(<ProChart />);
     await flush();
+    // 首屏有两个合成点，各钉一次——只读 `last` 的话 init 点没人管：
+    // - `init` 的 `styles` 选项（`ProChart.tsx:1026`）＝真机落到图上的第一份样式；
+    // - 主题 effect（`:1292`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
+    //   挂载时它也正是 `last`（首屏只有这一次 `setStyles`）。
     const last = pushCount() - 1;
-    for (const key of NINE_BAR_KEYS) expect(barColors(last)[key]).toBe("transparent");
+    const initColors = initBarColors();
+    for (const key of NINE_BAR_KEYS) {
+      expect(initColors[key]).toBe("transparent");
+      expect(barColors(last)[key]).toBe("transparent");
+    }
     // `type` 归分时开关所有。HA 抢它＝破坏 chartStyles:294-298 的顺序契约。
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  it("开着 HA 切主题：九色仍透明，type 仍 candle_solid（漏依赖数组就红）", async () => {
+  // 这条钉的是**主题推送点 `ProChart.tsx:1292` 的第四个实参**：换主题时页面把整个
+  // `chartStyles` 重推一遍，重推那一次的 `candle.bar` 必须仍是九色透明（少传那个实参＝
+  // `ha` 退回调用点的默认，调色板值当场把真蜡烛刷回图上）。
+  // 它钉不到**依赖数组 `:1293`**：本片页面没有 `haOn` 的写侧（`:545-550` 只有读侧），
+  // `haOn` 的值在整条测试里从不变化，换主题时 effect 是被 `dark` 叫醒的、闭包拿到的
+  // 已经是当前 `haOn` ⇒ 把 `:1293` 里的 `haOn` 删掉，本文件四条仍全绿。
+  // `:1293` 的代码本身是对的；依赖数组那一半的钉子落在第④片 T4「指标挂卸＋工具栏按钮」
+  // 那条切换测试里——只有那里 `setHaOn` 存在，`haOn` 才会真的变。
+  it("开着 HA 切主题：主题重推那一次的第四个实参仍九色透明，type 仍 candle_solid", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
     render(<ProChart />);
     await flush();
@@ -259,8 +296,12 @@ describe("/pro-chart 平均K线的样式链", () => {
     const last = pushCount() - 1;
     for (const key of NINE_BAR_KEYS) expect(barColors(last)[key]).toBe("transparent");
     expect(candleType(last)).toBe("candle_solid");
-    // 同一次推送里两半都在：主题重推的是整个 chartStyles 对象。
-    expect(last).toBeGreaterThanOrEqual(1);
+    // 两半在**同一个**被推送的对象里：主题重推的是整个 `chartStyles`，不是各推一半的
+    // 两次调用。`toMatchObject` 读的是 `last` 那一格本身，所以任何一半漏了都会红
+    // （原来那句 `last >= 1` 只是把上一条 `pushCount() > before` 重说一遍，永远红不了）。
+    expect(styleAt(last)).toMatchObject({
+      candle: { bar: { upColor: "transparent" }, priceMark: { last: { show: true } } },
+    });
   });
 
   it("HA 不写 priceMark（那棵子树归图例偏好所有），也不动蜡烛图例模板", async () => {

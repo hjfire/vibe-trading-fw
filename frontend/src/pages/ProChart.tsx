@@ -286,9 +286,11 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   // the choice was made anywhere else, switching themes painted the candles back
   // over a 分时 line and the toggle looked like it had stopped working.
   const type: CandleType = timeShare ? "area" : "candle_solid";
-  // `heikinAshiActive` is the same predicate the mount effect asks, so the two
-  // channels (styles and indicator lifecycle) cannot drift: an HA that is painted
-  // but not mounted would show nine invisible rectangles and nothing else.
+  // `heikinAshiActive` is the one predicate both channels read: the styles side
+  // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
+  // T4, which does not exist yet) will ask the same one — so the two cannot drift
+  // once it lands: an HA that is painted but not mounted would show nine invisible
+  // rectangles and nothing else.
   const haShown = heikinAshiActive(ha, timeShare);
   // The legend fragment is composed *here*, the single style-composition point
   // (spec §三.C): v10 has no `setTooltipOptions`, and the theme effect below
