@@ -333,14 +333,22 @@ describe("/pro-chart 回放中的画线", () => {
     expect(inst("future")?.visible).toBe(true);
   });
 
-  it("全程没有写过画线存储（最重要的一条）", async () => {
-    await mountLoaded();
-    h.saved = 0;
-    await click("回放");
-    for (let i = 0; i < 20; i++) await click("后一根");
-    await click("退出回放");
-    expect(h.saved).toBe(0);
-  });
+  // 20 steps plus an exit, so this is the file's click-heavy one: 1146ms run alone,
+  // 5084ms when the whole suite runs it beside 119 other files — the vitest default
+  // 5s is a coin flip under that load. Only the budget moves; the assertion is the
+  // same `h.saved === 0` it always was.
+  it(
+    "全程没有写过画线存储（最重要的一条）",
+    async () => {
+      await mountLoaded();
+      h.saved = 0;
+      await click("回放");
+      for (let i = 0; i < 20; i++) await click("后一根");
+      await click("退出回放");
+      expect(h.saved).toBe(0);
+    },
+    30_000,
+  );
 
   // The identity-change exit (spec §7): 换周期 goes through `dropReplay`, which forgets the
   // bookkeeping — so the hides have to be put back *before* that, while the overlay list on the

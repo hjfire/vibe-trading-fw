@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { translatePineAlerts } from "@/lib/pineAlertRules";
@@ -17,6 +17,23 @@ import { translatePineAlerts } from "@/lib/pineAlertRules";
 
 const CORPUS_DIR = resolve(process.cwd(), process.env.PINE_CORPUS_DIR || "src/lib/__tests__/__fixtures__/corpus");
 
+/**
+ * The bulk corpus is local-only — `frontend/.gitignore:9` keeps it out of the
+ * checkout and `scripts/corpus/fetchPineCorpus.mjs` fills it on demand — so CI
+ * never has it and this gate has never run there. Absent therefore means *not
+ * installed*, not *broken*: it reports as a skip (the verbose log counts it
+ * `skipped`, never as a pass), while a directory that IS there but walks to
+ * fewer than 100 scripts still throws below, since that is the rot this gate
+ * exists to catch. Same shape as `pineCorpusReport.test.ts`'s `corpusReady`.
+ */
+const corpusReady = existsSync(CORPUS_DIR);
+if (!corpusReady) {
+  process.stdout.write(
+    `\n[corpus-absent] ${CORPUS_DIR} 不在这份检出里（语料只装本机），告警覆盖度门跳过 —— 跳过＝未覆盖，不是通过。\n`,
+  );
+}
+const gate = corpusReady ? it : it.skip;
+
 function pineFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -27,7 +44,7 @@ function pineFiles(dir: string): string[] {
   return out.sort();
 }
 
-it("translates some corpus alerts, refuses the rest with a reason, and never crashes", () => {
+gate("translates some corpus alerts, refuses the rest with a reason, and never crashes", () => {
   const files = pineFiles(CORPUS_DIR);
   if (files.length < 100) throw new Error(`语料只有 ${files.length} 份，遍历坏了：${CORPUS_DIR}`);
 
