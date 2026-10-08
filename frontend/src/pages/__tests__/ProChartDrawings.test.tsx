@@ -1274,6 +1274,30 @@ describe("/pro-chart 画线清单", () => {
     expect(bucket[0]?.text).toBe("字".repeat(40));
   });
 
+  // 第③片收口 ⑤：输入框是**非受控**的（受控值会与输入法抢字），所以敲 45 个字时框里
+  // 仍显示 45，而图上的标签与存储只有 40。上一条用例证明截断确实发生了，但界面上这件
+  // 事是**静默**的——用户看到的是「我写了 45 个字，标签少了 5 个」而没有任何解释。
+  // 两半都钉：超限要给提示，不超限**不许**给（写死一句恒定提示也能过第一半）。
+  it("超上限的标注文字在界面给出「已截到 40 字」，改短之后提示收回", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "标注" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1300 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    const box = (await screen.findByLabelText(`画线文字 ${id}`)) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "字".repeat(45) } });
+    await flush();
+    expect(screen.getByText(/已截到 40 字（你输入了 45）/)).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: "前高" } });
+    await flush();
+    expect(screen.queryByText(/已截到/)).toBeNull();
+    const bucket = readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>;
+    expect(bucket[0]?.text).toBe("前高");
+  });
+
   // 活体验收（第③片 T8，真实浏览器 127.0.0.1:8000）读到的真缺陷：合成期间每一次
   // `input` 都被当成定稿写进实例与存储，罗马字缓冲一落库，用户按 Esc 取消输入法时
   // 浏览器并不会再补一次 change 把它擦掉——留下的就是 `qian` 这种没人要的拼音。

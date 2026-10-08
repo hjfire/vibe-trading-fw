@@ -1931,6 +1931,19 @@ export function ProChart() {
     if (!chart) return;
     if (applyDrawingText(chart, id, text) === null) return;
     syncDrawings(chart);
+    // The cap cuts *code points* after trimming, which is what `normalizeDrawingText`
+    // does, so the count here has to use the same two steps or the number in the
+    // sentence is a second, contradicting measurement. The box is uncontrolled (a
+    // controlled value fights the IME), so an over-long entry keeps showing all of
+    // its characters while the label and storage hold only the first 40 — without
+    // this line that gap is silent, and the user sees a label that lost characters
+    // on its own.
+    const chars = Array.from(text.trim()).length;
+    setDrawNotice(
+      chars > MAX_DRAWING_TEXT
+        ? { bad: true, text: `标注文字已截到 ${MAX_DRAWING_TEXT} 字（你输入了 ${chars}）` }
+        : null,
+    );
   };
 
   /**
@@ -2251,7 +2264,10 @@ export function ProChart() {
           副图指标 · {activeSubNames().length}
         </button>
         <span className="text-xs text-muted-foreground">画线:</span>
-        <div className="flex gap-1">
+        {/* 20 buttons on one line: at narrow widths this row is the widest thing on
+            the page (measured 676px of content in a 532px viewport), so it wraps
+            instead of pushing the tail (导入/图例) out of reach. */}
+        <div className="flex flex-wrap gap-1">
           {DRAW_TOOLS.map((t) => (
             <button
               key={t.name}
