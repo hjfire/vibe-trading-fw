@@ -1283,9 +1283,12 @@ describe("/pro-chart 画线清单", () => {
   //
   // 席 C 的 IMP-2 之后这里换了姿势：**不再维护"哪一行正在合成"这个页面状态**，
   // 而是读事件自己带的 `isComposing`。所以用例也不能再用 `fireEvent.change(box,
-  // {…, isComposing: true})` —— dtl 的 `createEvent` 对 jsdom 原型上的只读
-  // `isComposing` 赋值会被吞掉，那个标记压根没上到事件上（旧用例其实是靠 ref
-  // 才红的，不是靠这个标记）。现在按浏览器真实的形状手造事件。
+  // {…, isComposing: true})` —— dtl 把 `change` 注册成 `EventType: 'Event'`
+  // （`@testing-library/dom/dist/event-map.js:120-126`），于是 `events.js:56` 取到
+  // 的是裸 `window.Event`，`:60` 的 `new EventConstructor("change", eventInit)`
+  // 直接把 init 里不认识的 `isComposing` 丢掉；那个逐键兜底赋值（`:71-72`）只在
+  // `:61` 的 `else`（构造函数取不到的 IE11 分支）里跑。所以那个标记压根没上到事件上
+  // （旧用例其实是靠 ref 才红的，不是靠这个标记）。现在按浏览器真实的形状手造事件。
   //
   // 值必须走 `HTMLInputElement.prototype` 上的**原生 setter**：React 在挂载时给
   // 输入框装了自己的 `value` 描述符（inputValueTracking），`box.value = "x"` 会

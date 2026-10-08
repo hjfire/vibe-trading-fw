@@ -1094,9 +1094,9 @@ describe("标注文字的存储", () => {
     expect(Array.from(cut ?? "")).toHaveLength(MAX_DRAWING_TEXT);
     expect(hasLoneSurrogate(cut ?? "")).toBe(false);
 
-    // 反向对照：按码元切的 `slice(0, 40)` 留下的就是这样一个串。
+    // 反向对照：一个「第 40 个字是半个 emoji」的串。`expect(…, false)` 与
+    // `expect(…, true)` 两头都钉着，所以写死成恒真或恒假都红。
     const halfEmoji = `${"📈".repeat(39)}\uD83D`;
-    expect(halfEmoji).not.toBe(cut);
     expect(hasLoneSurrogate(halfEmoji)).toBe(true);
 
     // 切点正好落在代理对中间的形状：前面 39 个 BMP 字符，第 40 个码元是半个 emoji。

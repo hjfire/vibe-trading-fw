@@ -62,8 +62,11 @@ export const DRAWING_BUNDLE_KIND = "vibe-trading.drawings";
  * throws away the **whole entry** for every text-bearing tool it has never heard
  * of; the line does not come back wordless, it does not come back at all. What
  * an older build *can* still read is the rest of the file, unchanged, because
- * the twelve tools it knows never grew a `text` key — which is precisely the
- * invariant the `hasText` gate on both write sides now holds open.
+ * the six tools it knew (`DRAW_TOOLS` at the base commit: segment, rayLine,
+ * horizontalStraightLine, priceLine, fibonacciLine, brush) never grew a `text`
+ * key — which is precisely the invariant the `hasText` gate on both write sides
+ * now holds open. Any other name in a v2 file is one of the seven this slice
+ * added, and an older build drops those entries whole too.
  */
 export const DRAWING_BUNDLE_VERSION = 2;
 
