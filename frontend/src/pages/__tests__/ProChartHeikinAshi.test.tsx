@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -137,8 +138,13 @@ vi.mock("klinecharts", () => ({
           if (filter?.paneId !== undefined && ind.paneId !== filter.paneId) return false;
           return true;
         }),
-      createIndicator: (value: { name: string; paneId?: string }) => {
-        h.created.push(value as Record<string, unknown>);
+      createIndicator: (value: { name: string; paneId?: string }, isStack?: boolean) => {
+        // `isStack`（库的第二参，`Chart.createIndicator(value, isStack)`）也记下来。
+        // 替身自己**不吃**这一参——返回值与挂载行为都不变，它只把「页面到底传了什么」
+        // 递到断言面前：真库里 `StoreImp.addIndicator(create, isStack)`（dist 14150）在
+        // `isStack` 为假时先 `removeIndicator({ paneId })` 清掉整格指标再挂新的，所以
+        // 主图那一路传假值就是把 MA 一起卸掉，而这在 `h.indicators` 里读不出来。
+        h.created.push({ ...(value as Record<string, unknown>), isStack });
         h.indicators.push({ name: value.name, paneId: value.paneId ?? `sub:${value.name}`, id: `i${h.indicators.length}` });
         return true;
       },
@@ -252,6 +258,27 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(colors.upColor).toBe(CANDLE_COLORS.up);
     expect(colors.downWickColor).toBe(CANDLE_COLORS.down);
     expect(candleType(last)).toBe("candle_solid");
+  });
+
+  // 上一条读的是 `h.styles`——那是主题 effect（`ProChart.tsx:1328`）在挂载那一次的推送。
+  // 这一条读的是 `h.initStyles`：`init` 的 `styles` 选项（`:1062`），首屏真正落到图上的
+  // 第一份样式。两个推送点必须各有各的 bucket，因为把 `:1062` 的第四个实参写成常量 `true`
+  // 只脏 init 那一格——主题 effect 拿的是当时的 `haOn`（默认关＝false），`h.styles` 仍是
+  // 调色板色，上一条照绿，而用户首屏那一眼已经是「真蜡烛被九个透明色藏掉、图上却没有
+  // 任何平均K线实体」。方向也反过来钉一次：开着偏好时那两个推送点由上面第 2 条管。
+  it("默认关：init 那一格（`h.initStyles[0]`）也是调色板色，九色一个 transparent 都不写", async () => {
+    render(<ProChart />);
+    await flush();
+    // 一次挂载只有一个 init 推送点：多出来的一格意味着有人在别处又 init 了一次，
+    // 那 `initBarColors()` 读的第 0 格就不再是「首屏第一份样式」。
+    expect(h.initStyles).toHaveLength(1);
+    const colors = initBarColors();
+    expect(Object.keys(colors)).toHaveLength(9);
+    for (const key of NINE_BAR_KEYS) expect(colors[key]).not.toBe("transparent");
+    expect(colors.upColor).toBe(CANDLE_COLORS.up);
+    expect(colors.noChangeWickColor).toBe(CANDLE_COLORS.noChange);
+    // 第四个实参之外的三个同样要对着：init 那一路传的是 `session.timeShare`。
+    expect((h.initStyles[0] as { candle?: { type?: string } }).candle?.type).toBe("candle_solid");
   });
 
   it("偏好开：首屏两处推送点都九色全透明（init 选项＋setStyles 第 0 格），type 仍是 candle_solid", async () => {
@@ -432,5 +459,109 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
     await flush();
     expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
     expect(h.indicators.some((i) => i.name === "HEIKIN_ASHI")).toBe(true);
+  });
+
+  // 这一条读的是 `createIndicator` 的**第二个**实参，替身不吃它（见上面 recorder 的注释），
+  // 所以「MA 还在主图上」那一条读 `h.indicators` 是判不出假值的——假值只在真库里发作：
+  // `StoreImp.addIndicator(create, isStack)`（dist 14150）的 `if (!isStack)` 那一支先
+  // `removeIndicator({ paneId })` 把整格清掉再挂新的 ⇒ 点一次平均K线就把用户的 MA 抹了。
+  it("创建 HEIKIN_ASHI 那一次传的是 isStack=true：假值会让库连主图的 MA 一起卸掉", async () => {
+    render(<ProChart />);
+    await flush();
+    h.created = [];
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    expect(haCreates()).toHaveLength(1);
+    expect(haCreates()[0]).toMatchObject({ name: "HEIKIN_ASHI", paneId: "candle_pane", isStack: true });
+  });
+
+  // `main.tsx:29` 是用 `React.StrictMode` 挂起来的：开发态每次挂载，effect 都跑两遍
+  // （挂→卸→挂）。第二遍的 `chartRef.current` 是新图表对象，而 `h.indicators` 里第一次
+  // 挂上去的那一份还在 ⇒ 走的就是 `syncHeikinAshi`（`ProChart.tsx:996`）的
+  // `live.length === 0` 那一夹。这一夹不是洁癖：`createIndicator(value, true)` 永远是追加
+  // （`ChartImp.createIndicator` 先给 create mint 一个新 id，`StoreImp.addIndicator` 的
+  // de-dup 用带 id 的过滤去查，永远匹配不上，dist 15270 ⇄ 14150），夹子摘掉就是主图多一个
+  // HEIKIN_ASHI 实例、多一行图例。形状照 `ProChartTimeShare.test.tsx:988-995` 的 StrictMode 那条。
+  it("StrictMode 的第二次挂载不追加第二个 HEIKIN_ASHI：去重那一支是活的", async () => {
+    localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
+    render(
+      <StrictMode>
+        <ProChart />
+      </StrictMode>,
+    );
+    await flush();
+    expect(haCreates()).toHaveLength(1);
+    expect(h.indicators.filter((i) => i.name === "HEIKIN_ASHI")).toHaveLength(1);
+  });
+});
+
+describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => {
+  // 这一片不另造 `seed`：`beforeEach` 已经 `seed()`，数据面在 render 之前就摆好了。
+  // 每条测试自己 `render(<ProChart />)` + `await flush()`——init 那一路的样式推送、
+  // `syncPriceOverlay` 挂 MA、`syncSubPanes` 挂副图都会发生，边界钉要判的就是
+  // 「在这条真实路径上再开一次 HA，那些东西没有被碰」。
+
+  it("开 HA 前后 getDataList() 的内容与身份都没变：像素改写不落数据面", async () => {
+    render(<ProChart />);
+    await flush();
+    const before = h.list;
+    const snapshot = JSON.stringify(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+
+    expect(JSON.stringify(h.list)).toBe(snapshot);
+    expect(h.list).toBe(before); // 同引用——没有 map 出来的副本，也没有原地覆写
+    // 真实四价仍是真实四价（第 3 根 close 102+3）。
+    expect(h.list[3]).toMatchObject({ open: 103, high: 108, low: 98, close: 105 });
+    // 而且开的这一格确实生效了，否则「数据没变」是空话。
+    for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).toBe("transparent");
+  });
+
+  it("开一次、关一次都不新增画线重写：overrideOverlay 的计数不变", async () => {
+    // 磁吸落点读的是 kline 数据自己的 high/low（dist 8822-8835，同 `chartDrawings.ts:1022`
+    // 记的那一段），HA 不动数据面 ⇒ 不动落点。
+    // 这一条钉的是「切换开关不会把用户已画的线重锚或重写」。
+    // 断的是**增量**而不是 0：init 那一路 `restoreDrawings` 本来就可能重写若干次
+    // （`ProChart.tsx:1234`），把它当 0 判是在钉替身，不是钉页面。
+    render(<ProChart />);
+    await flush();
+    const before = h.overridden.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+
+    expect(h.overridden).toHaveLength(before);
+  });
+
+  it("蜡烛图例那一行的六个占位符在开着 HA 时仍是真实价占位符", async () => {
+    localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
+    render(<ProChart />);
+    await flush();
+    const last = pushCount() - 1;
+    const rows = tooltipTemplate(last) as Array<{ title: string; value: string }>;
+    expect(rows.map((r) => r.value)).toEqual(["{time}", "{open}", "{high}", "{low}", "{close}", "{volume}"]);
+    // 变换值想上蜡烛图例得自己塞 template，而 template 是被 legendStyles 片段整体替换的
+    // 那一条通道（spec §二·7／记忆 chart-legend-style-single-composition）。
+    expect(JSON.stringify(rows)).not.toContain("平均");
+  });
+
+  it("指标图例规则仍由图例偏好说话：HA 那一行跟着「隐藏指标图例」消失，不是新写一条通道", async () => {
+    render(<ProChart />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "图例" }));
+    // label 原文就是带括号这一串（`ProChart.tsx:2618`）；写成「指标图例显示规则」会
+    // `Unable to find label` ——那是替身替测试编了个不存在的控件名。
+    fireEvent.change(screen.getByLabelText("指标图例显示规则（含主图 MA／均价）"), { target: { value: "none" } });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    const last = pushCount() - 1;
+    expect((styleAt(last) as { indicator: { tooltip: { showRule: string } } }).indicator.tooltip.showRule).toBe("none");
+    // HA 只写 bar 的九色，indicator 那棵子树仍归片段。
+    expect((styleAt(last) as { indicator: Record<string, unknown> }).indicator).toHaveProperty("tooltip");
+    expect(Object.keys((styleAt(last) as { indicator: Record<string, unknown> }).indicator)).toEqual(["tooltip"]);
   });
 });

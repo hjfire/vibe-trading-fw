@@ -174,13 +174,17 @@ function fmt(value: number | undefined): string {
 }
 
 /**
- * 一行四价。`crosshair.dataIndex` 缺省时读最后一根（图例在光标离开图上时也要有数），
- * 越界／na 读 `"-"` 而不是编一个数。标题用中文字面量是本仓既有做法：指标图例行不走 i18n
+ * 一行四价。`crosshair.dataIndex` 缺省时读**result 自己**的最后一根（图例在光标离开图上时也要有数），
+ * 越界／na 读 `"-"` 而不是编一个数。缺省那一路不取 `chart.getDataList().length - 1`：
+ * `dataList` 与 `indicator.result` 是两条更新时刻不同的数组（库把 calc 排成任务，
+ * `StoreImp.addIndicator` → `_calcIndicator`，dist 14150），按 data 的长度去索引 result
+ * 落后那一帧就正好过界，四格全读 `"-"`——一行四价读的是 HA 的值，下标就该由 HA 的值给。
+ * 标题用中文字面量是本仓既有做法：指标图例行不走 i18n
  * （库只对**蜡烛**图例的 title 再跑一次 `i18n`，`dist:7678`），`均价: ` 同例。
  */
-export function haTooltipDataSource({ chart, indicator, crosshair }: TooltipParams) {
+export function haTooltipDataSource({ indicator, crosshair }: TooltipParams) {
   const result = indicator.result;
-  const index = typeof crosshair.dataIndex === "number" ? crosshair.dataIndex : chart.getDataList().length - 1;
+  const index = typeof crosshair.dataIndex === "number" ? crosshair.dataIndex : result.length - 1;
   const row = result[index];
   return {
     name: HEIKIN_ASHI_SHORT_NAME,

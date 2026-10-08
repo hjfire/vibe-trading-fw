@@ -31,6 +31,10 @@ import { heikinAshi, type HaRow } from "../heikinAshi";
  * - result 只含四个价格键：像素量混进来会被当价格折进 y 轴。
  * - `draw` 返回 `true`：返回 false 会让库把默认图元再画一遍。
  * - `createTooltipDataSource` 出四价一行、行名写「平均K线」：变换值绝不进蜡烛图例（spec §五）。
+ *
+ * 在这个五件下面还有一层边：`draw` 的几何夹子（gapBar 0 与 1 各自那一支、平盘那根的零高影线、
+ * 可视区左界为负时的起点）和 `createTooltipDataSource` 缺省光标的下标由哪条数组给——
+ * 那几条钉的是「今天这条路径读起来对」之外的相邻分支，各自都点了名能杀掉哪个变异。
  */
 
 function bar(open: number, high: number, low: number, close: number, i = 0) {
@@ -54,7 +58,11 @@ type FakeRect = { x: number; y: number; w: number; h: number; color: string };
  * 没有隐式索引签名，喂 `heikinAshi()` 的真行会撞 TS2345；而生产里 `indicator.result` 本来就是
  * `HaRow[]`，这样写反而更贴。
  */
-function drawFixture(rows: HaRow[], visible = { realFrom: 0, realTo: rows.length }) {
+function drawFixture(
+  rows: HaRow[],
+  visible = { realFrom: 0, realTo: rows.length },
+  barSpace = { bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 },
+) {
   const rects: FakeRect[] = [];
   const ctx = {
     fillStyle: "",
@@ -65,7 +73,7 @@ function drawFixture(rows: HaRow[], visible = { realFrom: 0, realTo: rows.length
   // x: 每根 8px，从 20 起。y: 价格越高像素越小（100 - price），把「像素是现算的」变成交付判据。
   const chart = {
     getVisibleRange: () => ({ from: visible.realFrom, to: visible.realTo, realFrom: visible.realFrom, realTo: visible.realTo }),
-    getBarSpace: () => ({ bar: 8, halfBar: 4, gapBar: 5, halfGapBar: 2 }),
+    getBarSpace: () => barSpace,
     getDataList: () => rows,
   };
   const indicator = { result: rows };
@@ -221,10 +229,48 @@ describe("draw", () => {
     expect(out).toBe(true);
     expect(rects).toHaveLength(6);
   });
+
+  it("gapBar 0 与 gapBar 1 都得到宽 1 的实体，走的是两支", () => {
+    // `correction = gapBar % 2 === 0 ? 1 : 0`（库 `dist:6566`，偶数那一支才加 1，与直觉相反）。
+    // 两个下标分开摆就是为了让它们走不同的支：gapBar 0 是「偶数加 1」⇒ 0 + 1，
+    // gapBar 1 是「奇数不加」⇒ 1 + 0。写成常量 0 会红在 0 那一格，写成常量 1 或把判据
+    // 反成 `% 2 === 1` 会红在 1 那一格——两支都有人管。
+    const zero = drawFixture([rows[0]], { realFrom: 0, realTo: 1 }, { bar: 0, halfBar: 0, gapBar: 0, halfGapBar: 0 });
+    expect(zero.rects[1].w).toBe(1);
+    const one = drawFixture([rows[0]], { realFrom: 0, realTo: 1 }, { bar: 1, halfBar: 0, gapBar: 1, halfGapBar: 0 });
+    expect(one.rects[1].w).toBe(1);
+  });
+
+  it("一根平到底（四个 HA 价重合）：影线高度是 0，实体高度仍被 Math.max(1, …) 托住", () => {
+    // `priceY[3] - priceY[0] === 0` 那一格：影线就是那句减法，零高 `fillRect` 画不出东西，
+    // 库的 `_createSolidBar`（`dist:6652-6677`）同此形——给影线也补一个 `Math.max(1, …)`
+    // 就把这条平盘根画出一截不该存在的芯。实体那一侧必须仍是 `Math.max(1, …)`，
+    // 不然平盘那根在图上彻底消失（去掉它红在 rects[1].h）。
+    const flat = drawFixture([{ open: 7, high: 7, low: 7, close: 7 }], { realFrom: 0, realTo: 1 });
+    expect(flat.rects).toHaveLength(2);
+    expect(flat.rects[0]).toEqual({ x: 20, y: 93, w: 1, h: 0, color: CANDLE_COLORS.noChange });
+    expect(flat.rects[1]).toEqual({ x: 18, y: 93, w: 5, h: 1, color: CANDLE_COLORS.noChange });
+  });
+
+  it("可视区左界为负（向左拖过零界）：画的仍是可视区那两根，从 dataIndex 0 起", () => {
+    // 一句实话：`Math.max(0, realFrom)` 是**纯冗余**，不是分岔。库的循环对负下标是惰性的——
+    // `result[-3]` 是 `undefined`，`isHaRow` 先 `continue` 掉了，所以把这一夹整个删掉今天
+    // 一个像素都不变（负下标越不出 result 的实体范围，也产生不出矩形）。这一条不替那个夹子
+    // 求存，也不该被当成「留着它将来有用」的依据；它钉的是范围起点这头的真值：夹子写错成
+    // `Math.max(1, …)` 会少画最左边那一根（x 序列变成 [28, 26]）、写成 `realTo` 会一根不画、
+    // 写成 `Math.abs(realFrom)` 会从 [20, 18, 28, 26] 变成空——三种都只有这一条看得见
+    // （`Math.abs` 那一种其余测试全绿，因为正常路径的起点本来就是 0）。
+    const { rects, out } = drawFixture(rows, { realFrom: -3, realTo: 2 });
+    expect(out).toBe(true);
+    expect(rects.map((r) => r.x)).toEqual([20, 18, 28, 26]);
+  });
 });
 
 describe("createTooltipDataSource", () => {
-  function legends(index: number | undefined, rows = heikinAshi(GAP_BARS)) {
+  // `result` 单独一个入参：库把 `dataList` 与 `indicator.result` 分在两处更新
+  // （`StoreImp.addIndicator` 里排的是 `_calcIndicator`，dist 14150），缺省光标的下标
+  // 读的是哪一个，只有把两条长度拆开才判得出来。省略它＝两者同一个数组，即原有的全部用法。
+  function legends(index: number | undefined, rows = heikinAshi(GAP_BARS), result = rows) {
     const s = spec();
     return (
       s.createTooltipDataSource as (p: unknown) => {
@@ -235,7 +281,7 @@ describe("createTooltipDataSource", () => {
       }
     )({
       chart: { getDataList: () => rows },
-      indicator: { result: rows },
+      indicator: { result },
       crosshair: index === undefined ? {} : { dataIndex: index },
     });
   }
@@ -254,6 +300,22 @@ describe("createTooltipDataSource", () => {
     const na = legends(0, [{ open: 1, high: 2, low: 0.5 }]);
     expect(na.legends.map((l) => l.value)).toEqual(["1.00", "2.00", "0.50", "-"]);
     expect(legends(99).legends.map((l) => l.value)).toEqual(["-", "-", "-", "-"]);
+  });
+
+  it("result 落后 dataList 一格：缺省光标读的是 result 自己的末根，不是过界的四个「-」", () => {
+    // 图上「光标离开」那一格读的是最后一根的 HA 四价，而最后一份算好的四价只存在于
+    // `indicator.result` 里；按 `chart.getDataList().length - 1` 数下标，是在拿一条数组的
+    // 长度去索引另一条更新时刻不同的数组——落后那一帧正好数过界，四格全读「-」，
+    // 而 result[0] 明明有数。判据是这两条长度被拆开时读到谁。
+    const all = heikinAshi(GAP_BARS);
+    const lagged = all.slice(0, 1);
+    expect(all).toHaveLength(2);
+    expect(lagged).toHaveLength(1);
+    // 第 0 行 = {open:15, high:20, low:10, close:15}（GAP_BARS 第一根 (10,20,10,20)）。
+    expect(legends(undefined, all, lagged).legends.map((l) => l.value)).toEqual(["15.00", "20.00", "10.00", "15.00"]);
+    // 有光标那一路不跟着动：下标照 cursor 走，那根还没算出来就读「-」。
+    // 这一句钉的是「别把修复顺手扩到显式下标上」——给 `index` 也来一次 clamp 就当场红。
+    expect(legends(1, all, lagged).legends.map((l) => l.value)).toEqual(["-", "-", "-", "-"]);
   });
 });
 
