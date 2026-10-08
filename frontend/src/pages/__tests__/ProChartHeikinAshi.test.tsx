@@ -534,7 +534,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     await flush();
 
     expect(JSON.stringify(h.list)).toBe(snapshot);
-    expect(h.list).toBe(before); // 同引用——没有 map 出来的副本，也没有原地覆写
+    expect(h.list).toBe(before); // 替身自己那份数组的同一引用：防的是「将来给替身开一个 setDataList 出口后页面偷偷换数组」，不是防页面变异——数据面的真判据是上一条快照
     // 真实四价仍是真实四价（第 3 根 close 102+3）。
     expect(h.list[3]).toMatchObject({ open: 103, high: 108, low: 98, close: 105 });
     // 而且开的这一格确实生效了，否则「数据没变」是空话。
