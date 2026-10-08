@@ -113,6 +113,7 @@ import {
   RULE_OPTIONS,
   saveLegendPrefs,
 } from "@/lib/chartLegend";
+import { CANDLE_HIDDEN, heikinAshiActive, loadHeikinAshi } from "@/lib/heikinAshiChart";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
@@ -270,11 +271,13 @@ export function readSession(): ChartView & { symbol: string } {
   }
 }
 
-// `legend` has deliberately no default: both push sites already pass it, and a
-// defaulted third param would let a future `chartStyles(dark, timeShare)`
-// compile, pass tsc, and silently strand the preference — the exact regression
-// this function exists to prevent.
-function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs) {
+// `legend` and `ha` have deliberately no default: every push site already passes
+// both, and a defaulted trailing param would let a future `chartStyles(dark, timeShare)`
+// compile, pass tsc, and silently strand the preference — the exact regression this
+// function exists to prevent. For `ha` the stranded state is worse than a missing row:
+// the nine transparent colours and the mounted indicator would disagree, and the chart
+// would show real candles painted invisible (or the reverse).
+function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: boolean) {
   // A-share convention: red = up, green = down. Candle colors live under
   // `candle.bar` in v10 (`.area` is for area/line charts).
   //
@@ -283,6 +286,10 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs) {
   // the choice was made anywhere else, switching themes painted the candles back
   // over a 分时 line and the toggle looked like it had stopped working.
   const type: CandleType = timeShare ? "area" : "candle_solid";
+  // `heikinAshiActive` is the same predicate the mount effect asks, so the two
+  // channels (styles and indicator lifecycle) cannot drift: an HA that is painted
+  // but not mounted would show nine invisible rectangles and nothing else.
+  const haShown = heikinAshiActive(ha, timeShare);
   // The legend fragment is composed *here*, the single style-composition point
   // (spec §三.C): v10 has no `setTooltipOptions`, and the theme effect below
   // re-pushes this whole object, so a preference living anywhere outside this
@@ -298,17 +305,22 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs) {
       // `type` away from the 分时 toggle.
       ...legendFragment.candle,
       type,
-      bar: {
-        upColor: CANDLE_COLORS.up,
-        downColor: CANDLE_COLORS.down,
-        noChangeColor: CANDLE_COLORS.noChange,
-        upBorderColor: CANDLE_COLORS.up,
-        downBorderColor: CANDLE_COLORS.down,
-        noChangeBorderColor: CANDLE_COLORS.noChange,
-        upWickColor: CANDLE_COLORS.up,
-        downWickColor: CANDLE_COLORS.down,
-        noChangeWickColor: CANDLE_COLORS.noChange,
-      },
+      // Hiding the native candles is *only* these nine colour keys (`CandleBarColor`).
+      // `priceMark` is left alone on purpose: 高低价标记／最新价 keep measuring real
+      // prices while the bodies are transformed, which is a true reading, not leftovers.
+      bar: haShown
+        ? CANDLE_HIDDEN
+        : {
+            upColor: CANDLE_COLORS.up,
+            downColor: CANDLE_COLORS.down,
+            noChangeColor: CANDLE_COLORS.noChange,
+            upBorderColor: CANDLE_COLORS.up,
+            downBorderColor: CANDLE_COLORS.down,
+            noChangeBorderColor: CANDLE_COLORS.noChange,
+            upWickColor: CANDLE_COLORS.up,
+            downWickColor: CANDLE_COLORS.down,
+            noChangeWickColor: CANDLE_COLORS.noChange,
+          },
       area: {
         lineSize: 1.5,
         lineColor: TIME_SHARE_LINE,
@@ -530,6 +542,12 @@ export function ProChart() {
   // task would otherwise both compose onto the same stale snapshot and the
   // second would undo the first.
   const legendRef = useRef<LegendPrefs>(legend);
+  // Heikin-Ashi（第④片）：一个视图偏好，默认关，未偏离不落盘。写侧（`setHaOn` 与
+  // 那份 `haRef` 镜像——原因与 `legendRef`/`magnetRef` 同，同一个 task 里连点两次
+  // 都摊到同一份过期快照上，第二次就会撤销第一次）归下一格「指标挂卸＋按钮」，
+  // `noUnusedLocals` 不允许在这一片先把它们声明出来。这里只留读侧：样式两处推送
+  // 都读挂载值 `haOn`，主题 effect 把它并进依赖数组。
+  const [haOn] = useState(() => loadHeikinAshi());
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -1003,11 +1021,9 @@ export function ProChart() {
       // on every redraw (see `chartLocale`).
       locale: chartLocale(i18n.language),
       timezone: "Asia/Shanghai",
-      // `legend` here is the mount value, which is the right value: this effect
-      // runs once per mount, and every later change goes through the theme
-      // effect below (which lists `legend` as a dependency) rather than through
-      // a re-`init`.
-      styles: chartStyles(dark, session.timeShare, legend),
+      // `legend`/`haOn` here are the mount values, which is the right value: this effect
+      // runs once per mount, and every later change goes through the theme effect below.
+      styles: chartStyles(dark, session.timeShare, legend, haOn),
     });
     if (!chart) return;
     chartRef.current = chart;
@@ -1269,9 +1285,12 @@ export function ProChart() {
   // and by the same mechanism — the legend has no other lever in v10 (there is
   // no `setTooltipOptions`), so this effect is what puts a legend preference on
   // the chart, and leaving `legend` out would strand every panel control.
+  // `haOn` joins for the third time the same reason: the nine transparent colours
+  // ARE the switch on the styles side, and a colour set left out of this list is
+  // a preference the next dark-mode flip paints back.
   useEffect(() => {
-    chartRef.current?.setStyles(chartStyles(dark, timeShare, legend));
-  }, [dark, timeShare, legend]);
+    chartRef.current?.setStyles(chartStyles(dark, timeShare, legend, haOn));
+  }, [dark, timeShare, legend, haOn]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
