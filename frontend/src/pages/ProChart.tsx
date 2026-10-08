@@ -295,7 +295,7 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   const type: CandleType = timeShare ? "area" : "candle_solid";
   // `heikinAshiActive` is the one predicate both channels read: the styles side
   // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
-  // T4, `:1336`) asks the same one — so the two cannot drift: an HA that is painted
+  // T4, `:1341`) asks the same one — so the two cannot drift: an HA that is painted
   // but not mounted would show nine invisible rectangles and nothing else, and the
   // reverse would show real candles under a button reading 已开.
   const haShown = heikinAshiActive(ha, timeShare);
@@ -1333,6 +1333,11 @@ export function ProChart() {
   // 与 `timeShare` 进主题 effect 的理由一模一样。
   useEffect(() => {
     syncHeikinAshi(chartRef.current, heikinAshiActive(haOn, timeShare));
+    // Not deps: `chartRef.current` is a ref the init effect owns (a chart object appearing is
+    // not a state change it can react to), and `syncHeikinAshi` is a new function object every
+    // render — listing either would re-run this 先删后挂 sweep on every render rather than only
+    // when the switch or the view actually moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [haOn, timeShare]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
@@ -1879,7 +1884,7 @@ export function ProChart() {
 
   /**
    * Flip 平均K线. Nothing else has to happen here: `haOn` is in the theme effect's
-   * dependency list (`:1329`, nine colours) *and* in the mount effect's (`:1336`,
+   * dependency list (`:1329`, nine colours) *and* in the mount effect's (`:1341`,
    * indicator), so the two channels both move from the same state change. Unlike
    * `toggleMagnet` there is no live object to re-apply — a magnet is a property of
    * drawings that already exist, an HA is a repaint.
@@ -2265,10 +2270,12 @@ export function ProChart() {
             分时
           </button>
           {/* 平均K线 is a view switch, so it sits in 分时's group and speaks 分时's
-              `disabled` language (`timeShare || barCount === 0`, the two reasons
-              ReplayBar spells out). Both the gate and `aria-pressed` ask the one
-              predicate `heikinAshiActive`, never `haOn` — on a 分时 line the pressed
-              state would be a lie, since there is no candle to swap. */}
+              `disabled` language. Three expressions, three deliberate reads: the `disabled`
+              gate asks `timeShare || barCount === 0` — the two reasons ReplayBar spells out,
+              and *not* `heikinAshiActive`, which would grey the button every time HA happens
+              to be off; `aria-pressed` and the className ask that one predicate (on a 分时
+              line "已开" would be a lie, since there is no candle to swap); and the 已开/已关
+              `title` branch asks raw `haOn`, the preference itself, which 分时 never rewrites. */}
           <button
             disabled={timeShare || barCount === 0}
             aria-label="平均K线"

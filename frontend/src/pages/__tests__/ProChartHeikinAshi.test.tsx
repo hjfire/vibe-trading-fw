@@ -406,7 +406,7 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
     expect(localStorage.getItem(HEIKIN_ASHI_PREFS_KEY)).toBe("1");
   });
 
-  it("图上没有 bar 时按钮 disabled 且 reason 说实话；HA 不会被挂上", async () => {
+  it("空图表时按钮 disabled（affordance 本身就是判据），HA 仍按偏好挂上", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
     h.list = []; // 覆盖 `beforeEach` 的 seed：这条要的就是空图
     render(<ProChart />);
@@ -414,10 +414,14 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
     const button = screen.getByRole("button", { name: "平均K线" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.getAttribute("title")).toContain("图上还没有数据");
-    h.created = [];
-    fireEvent.click(button);
-    await flush();
-    expect(haCreates()).toHaveLength(0);
+    // 原来这里 `h.created = []` 再点一次、断 `haCreates()` 长度为 0，已经删掉：`disabled` 一成立
+    // jsdom 和真浏览器都不派发事件，那句永远绿——同一个理由写在 `ProChartReplay.test.tsx:560-563`。
+    // 而挂载 effect（`ProChart.tsx:1334-1341`）读 `[haOn, timeShare]`、没有 barCount 门：挂载是视图
+    // 偏好，与数据条数无关 ⇒ 偏好开＋零根 bar 时 HA 在挂载那一次就上了图，且先删后挂保证恰好一份。
+    // 这条的可杀处：给 effect 加上 `barCount > 0` 门、或把 `syncHeikinAshi` 的创建分支摘掉（挂载那一次就
+    // 不会再有任何 `HEIKIN_ASHI` 实例）⇒ 长度不是 1；上一条则可把 `disabled` 的门改成只看 `timeShare`。
+    // 一句实话（不是 TODO）：此刻这颗灰按钮的 `aria-pressed` 读起来是「已开」，数据到了才可点。
+    expect(h.indicators.filter((i) => i.name === "HEIKIN_ASHI")).toHaveLength(1);
   });
 
   it("挂 HA 不吃掉 MA：主图价格覆盖层那一条还在（syncPriceOverlay 的领地不被侵犯）", async () => {
