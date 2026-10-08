@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publishThemeChange } from "@/lib/theme-store";
 import { CANDLE_COLORS } from "@/lib/chartPalette";
-import { HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
+import { CANDLE_HIDDEN, HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
 import { ProChart } from "../ProChart";
 
 // `fireEvent`/`screen` 到本片（T4）才真有消费者：工具栏「平均K线」那颗按钮，以及为它
@@ -281,6 +281,28 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect((h.initStyles[0] as { candle?: { type?: string } }).candle?.type).toBe("candle_solid");
   });
 
+  // 这是「样式只有一个合成点」那条的身份面：拿**两格同为「关」**的推送比 `candle.bar` 的引用。
+  // 只比「关 vs 开」比不出 hoist——那两格今天本来就不同引用（一个是现拼的字面量，一个是
+  // `CANDLE_HIDDEN`）。把 `chartStyles` 的调色板那一支（`ProChart.tsx:322-332`）提到模块作用域
+  // 当常量，这两格就变成同一个引用：内容一样、身份也一样，任何一处往里写都会脏掉另一处，
+  // 而「每次现合成」这条契约就悄悄没了。判据是引用，不是内容。
+  it("两格同为「关」的推送，`candle.bar` 是两个字面量对象（把调色板 hoist 成常量即红）", async () => {
+    render(<ProChart />);
+    await flush();
+    const firstOff = pushCount() - 1;
+
+    act(() => {
+      document.documentElement.classList.add("dark");
+      publishThemeChange();
+    });
+    await flush();
+    const secondOff = pushCount() - 1;
+    expect(secondOff).toBeGreaterThan(firstOff);
+
+    expect(barColors(secondOff)).toEqual(barColors(firstOff));
+    expect(barColors(secondOff)).not.toBe(barColors(firstOff));
+  });
+
   it("偏好开：首屏两处推送点都九色全透明（init 选项＋setStyles 第 0 格），type 仍是 candle_solid", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
     render(<ProChart />);
@@ -501,11 +523,12 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
   // `syncPriceOverlay` 挂 MA、`syncSubPanes` 挂副图都会发生，边界钉要判的就是
   // 「在这条真实路径上再开一次 HA，那些东西没有被碰」。
 
-  it("开 HA 前后 getDataList() 的内容与身份都没变：像素改写不落数据面", async () => {
+  it("开 HA 前后 getDataList() 的内容与身份都没变，样式每次现合成：像素改写不落数据面", async () => {
     render(<ProChart />);
     await flush();
     const before = h.list;
     const snapshot = JSON.stringify(before);
+    const mountIdx = pushCount() - 1; // 主题 effect 挂载那一格（此刻是「关」）
 
     fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
     await flush();
@@ -516,6 +539,16 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     expect(h.list[3]).toMatchObject({ open: 103, high: 108, low: 98, close: 105 });
     // 而且开的这一格确实生效了，否则「数据没变」是空话。
     for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).toBe("transparent");
+
+    // 同一把尺子量样式合成点：两次推送交出去的是**两个现合成的对象**，不是同一个模块常量。
+    // `chartStyles` 如果被 hoist 成一个常量（或整份返回面被缓存），这两格就是同一个引用——
+    // 一处改写会脏掉另一处，而「唯一合成点」这条约束也就名存实亡了。
+    const onIdx = pushCount() - 1;
+    expect(onIdx).toBeGreaterThan(mountIdx);
+    expect(styleAt(onIdx)).not.toBe(styleAt(mountIdx));
+    // 「关」那一格的 `candle.bar` 更不许是 `CANDLE_HIDDEN` 本身：把那九个 transparent 交出去
+    // 就等于把藏蜡烛的键交给页面之外持有；今天它是每次现拼的字面量（`ProChart.tsx:322-332`）。
+    expect(barColors(mountIdx)).not.toBe(CANDLE_HIDDEN);
   });
 
   it("开一次、关一次都不新增画线重写：overrideOverlay 的计数不变", async () => {
