@@ -113,7 +113,14 @@ import {
   RULE_OPTIONS,
   saveLegendPrefs,
 } from "@/lib/chartLegend";
-import { CANDLE_HIDDEN, heikinAshiActive, loadHeikinAshi } from "@/lib/heikinAshiChart";
+import {
+  CANDLE_HIDDEN,
+  HEIKIN_ASHI_NAME,
+  ensureHeikinAshiIndicator,
+  heikinAshiActive,
+  loadHeikinAshi,
+  saveHeikinAshi,
+} from "@/lib/heikinAshiChart";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
@@ -288,9 +295,9 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   const type: CandleType = timeShare ? "area" : "candle_solid";
   // `heikinAshiActive` is the one predicate both channels read: the styles side
   // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
-  // T4, which does not exist yet) will ask the same one — so the two cannot drift
-  // once it lands: an HA that is painted but not mounted would show nine invisible
-  // rectangles and nothing else.
+  // T4, `:1336`) asks the same one — so the two cannot drift: an HA that is painted
+  // but not mounted would show nine invisible rectangles and nothing else, and the
+  // reverse would show real candles under a button reading 已开.
   const haShown = heikinAshiActive(ha, timeShare);
   // The legend fragment is composed *here*, the single style-composition point
   // (spec §三.C): v10 has no `setTooltipOptions`, and the theme effect below
@@ -544,12 +551,12 @@ export function ProChart() {
   // task would otherwise both compose onto the same stale snapshot and the
   // second would undo the first.
   const legendRef = useRef<LegendPrefs>(legend);
-  // Heikin-Ashi（第④片）：一个视图偏好，默认关，未偏离不落盘。写侧（`setHaOn` 与
-  // 那份 `haRef` 镜像——原因与 `legendRef`/`magnetRef` 同，同一个 task 里连点两次
-  // 都摊到同一份过期快照上，第二次就会撤销第一次）归下一格「指标挂卸＋按钮」，
-  // `noUnusedLocals` 不允许在这一片先把它们声明出来。这里只留读侧：样式两处推送
-  // 都读挂载值 `haOn`，主题 effect 把它并进依赖数组。
-  const [haOn] = useState(() => loadHeikinAshi());
+  // Heikin-Ashi（第④片）：一个视图偏好，默认关，未偏离不落盘。读写两侧都在这一格：
+  // `haOn` 被样式的两个推送点和挂卸 effect 同时读，`setHaOn` 只有 `toggleHeikinAshi`
+  // 一个写者。`haRef` 镜像同 `legendRef`/`magnetRef` 的理由——同一个 task 里连点两次
+  // 都摊到同一份过期的闭包快照上，第二次就会撤销第一次。
+  const [haOn, setHaOn] = useState(() => loadHeikinAshi());
+  const haRef = useRef(haOn);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -965,6 +972,33 @@ export function ProChart() {
   };
 
   /**
+   * Put the Heikin-Ashi overlay on the price pane, or take it off (第④片).
+   *
+   * Same 先删后挂 shape as `syncPriceOverlay` for the same reason (`:942-952`):
+   * `createIndicator(value, true)` always appends — `ChartImp.createIndicator` (dist 15270)
+   * mints a fresh `create.id` before `StoreImp.addIndicator` (dist 14150) de-dups, and a
+   * filter carrying an id matches on id alone (dist 14179) — so "is it already up?" cannot
+   * be answered by the library and a second copy means a second legend row.
+   *
+   * Unmounting is `removeIndicator({ name })` even when nothing is mounted: `ChartImp.removeIndicator`
+   * (dist 15323) only does work `if (removed)`, and the orphan-pane sweep explicitly skips the
+   * candle pane (dist 15332), so a no-match call cannot take the main chart down.
+   */
+  const syncHeikinAshi = (chart: Nullable<Chart>, on: boolean) => {
+    if (!chart) return;
+    if (!on) {
+      chart.removeIndicator({ name: HEIKIN_ASHI_NAME });
+      return;
+    }
+    ensureHeikinAshiIndicator();
+    const live = chart.getIndicators({ name: HEIKIN_ASHI_NAME });
+    live.slice(1).forEach((extra) => chart.removeIndicator({ id: extra.id }));
+    if (live.length === 0) {
+      chart.createIndicator({ name: HEIKIN_ASHI_NAME, paneId: MAIN_PANE_ID }, true);
+    }
+  };
+
+  /**
    * Is this pane on the chart right now? `getPaneOptions(id)` answers `null` for
    * a pane the chart does not hold, which is the only way to tell "the MACD pane
    * is closed" apart from "draw it wherever" (⑲) — and guessing wrong is exactly
@@ -1293,6 +1327,13 @@ export function ProChart() {
   useEffect(() => {
     chartRef.current?.setStyles(chartStyles(dark, timeShare, legend, haOn));
   }, [dark, timeShare, legend, haOn]);
+
+  // HA 的指标挂载与九色是同一个开关的两条通道：图上的实体是指标画的，真蜡烛是被
+  // 那九个透明色藏起来的。走 effect 而不是走点击处，是为了让「进分时」也把它卸下来——
+  // 与 `timeShare` 进主题 effect 的理由一模一样。
+  useEffect(() => {
+    syncHeikinAshi(chartRef.current, heikinAshiActive(haOn, timeShare));
+  }, [haOn, timeShare]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
@@ -1837,6 +1878,20 @@ export function ProChart() {
   };
 
   /**
+   * Flip 平均K线. Nothing else has to happen here: `haOn` is in the theme effect's
+   * dependency list (`:1329`, nine colours) *and* in the mount effect's (`:1336`,
+   * indicator), so the two channels both move from the same state change. Unlike
+   * `toggleMagnet` there is no live object to re-apply — a magnet is a property of
+   * drawings that already exist, an HA is a repaint.
+   */
+  const toggleHeikinAshi = () => {
+    const next = !haRef.current;
+    haRef.current = next;
+    setHaOn(next);
+    saveHeikinAshi(next);
+  };
+
+  /**
    * Change a legend pref. Nothing else has to happen: `legend` is in the theme
    * effect's dependency list, so the new value goes onto the chart through the
    * same single composition point that the theme flip uses.
@@ -2208,6 +2263,32 @@ export function ProChart() {
             onClick={pickTimeShare}
           >
             分时
+          </button>
+          {/* 平均K线 is a view switch, so it sits in 分时's group and speaks 分时's
+              `disabled` language (`timeShare || barCount === 0`, the two reasons
+              ReplayBar spells out). Both the gate and `aria-pressed` ask the one
+              predicate `heikinAshiActive`, never `haOn` — on a 分时 line the pressed
+              state would be a lie, since there is no candle to swap. */}
+          <button
+            disabled={timeShare || barCount === 0}
+            aria-label="平均K线"
+            aria-pressed={heikinAshiActive(haOn, timeShare)}
+            title={
+              timeShare
+                ? "分时是面积线，没有蜡烛可换成平均K线"
+                : barCount === 0
+                  ? "图上还没有数据，先等 K 线加载出来"
+                  : haOn
+                    ? "平均K线已开：主图按 Heikin-Ashi 重画，滤掉单根噪音把趋势段读成连续色块。只改像素——图例、磁吸落点、画线价位、下单读数都还是真实价（再点切回真实蜡烛）"
+                    : "平均K线已关：点开把主图换成 Heikin-Ashi 平滑蜡烛（haClose=(O+H+L+C)/4，haOpen 接上一根），真实四价一个字节都不改"
+            }
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+              heikinAshiActive(haOn, timeShare) && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            onClick={toggleHeikinAshi}
+          >
+            平均K线
           </button>
           {INTERVALS.map((i) => {
             // Greyed out only where no source can answer at all. Whether OpenD

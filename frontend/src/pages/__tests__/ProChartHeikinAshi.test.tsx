@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publishThemeChange } from "@/lib/theme-store";
@@ -6,9 +6,9 @@ import { CANDLE_COLORS } from "@/lib/chartPalette";
 import { HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
 import { ProChart } from "../ProChart";
 
-// 只有 `act`/`render`：`fireEvent`/`screen` 是点击类判据（工具栏按钮那一片）的活，
-// 现在写进来就是一份未使用声明——`tsconfig` 的 `noUnusedLocals` 会当场判红，页面的
-// import 面同理（见 `ProChart.tsx` 那条只此三项的 import）。
+// `fireEvent`/`screen` 到本片（T4）才真有消费者：工具栏「平均K线」那颗按钮，以及为它
+// 钉分时互斥而点的「分时」。上一片先把它们写进来就是一份未使用声明——`tsconfig` 的
+// `noUnusedLocals` 会当场判红，页面的 import 面同理（那里一项都没有要先删后挂的名字）。
 
 /**
  * Heikin-Ashi 的页面接线（推荐清单第④片，spec §二·6/§七·4/§七·5）。
@@ -16,10 +16,10 @@ import { ProChart } from "../ProChart";
  * 两条主判据：
  * 1. 样式只有一个合成点。`chartStyles` 整个对象会被主题 effect 在每次换主题时重推，
  *    所以「九色透明」这个状态只要没进推送点的第四个实参，切主题就会把真蜡烛刷回来——
- *    本文件那条切主题的测试钉的就是**第四个实参**（同 `ProChartLegend.test.tsx:150` 的形状）。
- *    它钉不到**依赖数组**：本片页面没有 `haOn` 的写侧（`ProChart.tsx:545-550` 只有读侧），
- *    值在整条测试里从不变化，换主题时 effect 是被 `dark` 叫醒的、闭包里已经是当前 `haOn`。
- *    `haOn` 在 `:1293` 是写对了的，但那一格的钉子归第④片 T4 的按钮切换测试（见下）。
+ *    本文件那条切主题的测试钉的是**第四个实参**（同 `ProChartLegend.test.tsx:150` 的形状）。
+ *    **依赖数组**那一半归下面第二个 describe（T4「挂卸与互斥」）的第一条：那里只有 `haOn`
+ *    在动，`dark`/`timeShare`/`legend` 一格都没变，所以把 `haOn` 从数组里摘掉，那一次点击
+ *    就不会有任何 `setStyles`，最后一格仍是挂载时那份调色板色 ⇒ 判据当场红。
  * 2. HA 只改像素。开与关都不许动 `getDataList()` 的内容、不许动蜡烛图例模板、
  *    不许写 `candle.priceMark`（那是图例偏好的子树）。
  */
@@ -27,9 +27,9 @@ import { ProChart } from "../ProChart";
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
   // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
-  // （`ProChart.tsx:1026`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // （`ProChart.tsx:1062`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
   // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
-  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1292` 那一处会写）
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1328` 那一处会写）
   // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
@@ -51,7 +51,7 @@ const h = vi.hoisted(() => ({
 
 /**
  * 页面唯一的数据入口。替身只驱动 `init`：本片不分页，但 `init` 必须真的被回答一次，
- * 因为 `setBarCount`（`ProChart.tsx:1112`）只在那一次发生，而按钮的 disabled 判据读它。
+ * 因为 `setBarCount`（`ProChart.tsx:1164`）只在那一次发生，而按钮的 disabled 判据读它。
  */
 function ask(): void {
   if (!h.loader) throw new Error("页面没有装 DataLoader");
@@ -99,7 +99,7 @@ function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
 }
 
-/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1026`）carried it. */
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1062`）carried it. */
 function initBarColors(): Record<string, unknown> {
   return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
@@ -122,7 +122,7 @@ vi.mock("klinecharts", () => ({
   registerLocale: vi.fn(),
   dispose: vi.fn(),
   // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
-  // （`ProChart.tsx:1026`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // （`ProChart.tsx:1062`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
   // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
   init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
     h.initStyles.push(options?.styles ?? {});
@@ -186,7 +186,7 @@ vi.mock("klinecharts", () => ({
         realTo: h.list.length,
       }),
       // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-      // 那句「leave the zoom alone」（`ProChart.tsx:891`），这正是本片要的分支。
+      // 那句「leave the zoom alone」（`ProChart.tsx:918`），这正是本片要的分支。
       getDom: () => undefined,
     };
   },
@@ -259,8 +259,8 @@ describe("/pro-chart 平均K线的样式链", () => {
     render(<ProChart />);
     await flush();
     // 首屏有两个合成点，各钉一次——只读 `last` 的话 init 点没人管：
-    // - `init` 的 `styles` 选项（`ProChart.tsx:1026`）＝真机落到图上的第一份样式；
-    // - 主题 effect（`:1292`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
+    // - `init` 的 `styles` 选项（`ProChart.tsx:1062`）＝真机落到图上的第一份样式；
+    // - 主题 effect（`:1328`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
     //   挂载时它也正是 `last`（首屏只有这一次 `setStyles`）。
     const last = pushCount() - 1;
     const initColors = initBarColors();
@@ -272,14 +272,12 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  // 这条钉的是**主题推送点 `ProChart.tsx:1292` 的第四个实参**：换主题时页面把整个
-  // `chartStyles` 重推一遍，重推那一次的 `candle.bar` 必须仍是九色透明（少传那个实参＝
-  // `ha` 退回调用点的默认，调色板值当场把真蜡烛刷回图上）。
-  // 它钉不到**依赖数组 `:1293`**：本片页面没有 `haOn` 的写侧（`:545-550` 只有读侧），
-  // `haOn` 的值在整条测试里从不变化，换主题时 effect 是被 `dark` 叫醒的、闭包拿到的
-  // 已经是当前 `haOn` ⇒ 把 `:1293` 里的 `haOn` 删掉，本文件四条仍全绿。
-  // `:1293` 的代码本身是对的；依赖数组那一半的钉子落在第④片 T4「指标挂卸＋工具栏按钮」
-  // 那条切换测试里——只有那里 `setHaOn` 存在，`haOn` 才会真的变。
+  // 这条钉的是**主题推送点（`ProChart.tsx:1328` 那一行 `setStyles`）的第四个实参**：换主题时
+  // 页面把整个 `chartStyles` 重推一遍，重推那一次的 `candle.bar` 必须仍是九色透明（那一格
+  // 写成常量，调色板值就当场把真蜡烛刷回图上，而挂载着的 HA 指标还在画它的平滑蜡烛）。
+  // 这条自己钉不到**依赖数组 `:1329`**：叫醒它的是 `dark`，闭包拿到的已经是当前 `haOn`
+  // ⇒ 单看这条，把 `:1329` 里的 `haOn` 删掉仍绿。那一格的钉子由下面 T4 那组的第一条负责
+  // ——那里只动 `haOn`，`dark`/`timeShare`/`legend` 一格都没变。
   it("开着 HA 切主题：主题重推那一次的第四个实参仍九色透明，type 仍 candle_solid", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
     render(<ProChart />);
@@ -326,5 +324,109 @@ describe("/pro-chart 平均K线的样式链", () => {
         { title: "volume", value: "{volume}" },
       ]),
     );
+  });
+});
+
+describe("/pro-chart 平均K线的挂卸与互斥", () => {
+  // `beforeEach` 已经 `seed()` 过，bar 是有的；`h.created` 之所以在点之前清一次，
+  // 是因为 init 那一路 `syncPriceOverlay`/`syncSubPanes` 已经创建过 MA／VOL／MACD
+  // （`ProChart.tsx:1280,1286`），计数判据要数的是「这次点按钮创建了几个」。
+  // `h.indicators` 与 `h.styles` **不许**清：它们是「主图现在载着什么」的唯一真相，
+  // 清掉就把「挂 HA 不吃掉 MA」那条钉成了假绿。
+  const haCreates = () => h.created.filter((c) => (c as { name?: string }).name === "HEIKIN_ASHI");
+
+  it("点一次：先删后挂到 candle_pane，并创建的是 HEIKIN_ASHI", async () => {
+    render(<ProChart />);
+    await flush();
+    h.created = [];
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    expect(haCreates()).toHaveLength(1);
+    expect(haCreates()[0]).toMatchObject({ name: "HEIKIN_ASHI", paneId: "candle_pane" });
+    expect(h.indicators.find((i) => i.name === "HEIKIN_ASHI")?.paneId).toBe("candle_pane");
+    for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).toBe("transparent");
+    expect(localStorage.getItem(HEIKIN_ASHI_PREFS_KEY)).toBe("1");
+    expect(screen.getByRole("button", { name: "平均K线" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("连点两次回到原样：指标卸掉、九色恢复、键被删", async () => {
+    render(<ProChart />);
+    await flush();
+    const button = screen.getByRole("button", { name: "平均K线" });
+    fireEvent.click(button);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    expect(h.indicators.find((i) => i.name === "HEIKIN_ASHI")).toBeUndefined();
+    for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).not.toBe("transparent");
+    expect(localStorage.getItem(HEIKIN_ASHI_PREFS_KEY)).toBeNull();
+    expect(screen.getByRole("button", { name: "平均K线" }).getAttribute("aria-pressed")).toBe("false");
+    // 卸载 HA 不能顺手把主图的 MA 也带走（removeIndicator 的过滤面只有 name）。
+    expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
+  });
+
+  it("反复开关不堆叠：HEIKIN_ASHI 在 created 里出现的次数等于按的次数", async () => {
+    render(<ProChart />);
+    await flush();
+    h.created = [];
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+      await flush();
+    }
+    expect(haCreates()).toHaveLength(3);
+    expect(h.indicators.filter((i) => i.name === "HEIKIN_ASHI")).toHaveLength(0);
+  });
+
+  it("开着 HA 进分时：指标卸掉、九色恢复、type 变 area；回 K 线又自己回来", async () => {
+    localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
+    render(<ProChart />);
+    await flush();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "分时" }));
+    });
+    await flush();
+    expect(h.indicators.find((i) => i.name === "HEIKIN_ASHI")).toBeUndefined();
+    const last = pushCount() - 1;
+    for (const key of NINE_BAR_KEYS) expect(barColors(last)[key]).not.toBe("transparent");
+    expect(candleType(last)).toBe("area");
+    // 分时那一行的按钮 pressed 必是 false：图上是面积线，说 true 就是骗。
+    expect(screen.getByRole("button", { name: "平均K线" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "平均K线" }).getAttribute("title")).toContain("分时是面积线");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "分时" }));
+    });
+    await flush();
+    expect(h.indicators.find((i) => i.name === "HEIKIN_ASHI")?.paneId).toBe("candle_pane");
+    for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).toBe("transparent");
+    expect(candleType(pushCount() - 1)).toBe("candle_solid");
+    // 偏好没被分时改写：回到 K 线 HA 自己回来了，键还在。
+    expect(localStorage.getItem(HEIKIN_ASHI_PREFS_KEY)).toBe("1");
+  });
+
+  it("图上没有 bar 时按钮 disabled 且 reason 说实话；HA 不会被挂上", async () => {
+    localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
+    h.list = []; // 覆盖 `beforeEach` 的 seed：这条要的就是空图
+    render(<ProChart />);
+    await flush();
+    const button = screen.getByRole("button", { name: "平均K线" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("title")).toContain("图上还没有数据");
+    h.created = [];
+    fireEvent.click(button);
+    await flush();
+    expect(haCreates()).toHaveLength(0);
+  });
+
+  it("挂 HA 不吃掉 MA：主图价格覆盖层那一条还在（syncPriceOverlay 的领地不被侵犯）", async () => {
+    render(<ProChart />);
+    await flush();
+    h.created = [];
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
+    expect(h.indicators.some((i) => i.name === "HEIKIN_ASHI")).toBe(true);
   });
 });
