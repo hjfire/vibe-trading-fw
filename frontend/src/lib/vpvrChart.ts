@@ -14,8 +14,19 @@ import { valueAreaOf, volumeProfile, VPVR_ROWS, type ProfileBar, type VolumeProf
  *
  * 1. **声明是空的**：`figures: []` 且 `calc: () => []`。`YAxisImp.createRangeImp`
  *    （`dist:984`，折叠体 `:1045-1056`）只把 `result[dataIndex][figure.key]` 里的数值
- *    当价格折进 min/max ⇒ 两把钥匙都不交，价格轴就结构上动不了。这不是「不需要轴」的
+ *    当价格折进 min/max ⇒ 两把钥匙都不交，价格轴的**区间**就结构上动不了。这不是「不需要轴」的
  *    侥幸：第④片是靠**把** HA 高低挂到 figure key 上免掉裁切，同一条规则的用法两面。
+ *    严格说还有**第三条通道**，但它动的不是区间：同一个 `createRangeImp` 除折叠 figures 之外，
+ *    还无条件折每个指标的**精度**——`:999` `indicatorPrecision = Math.min(indicatorPrecision,
+ *    indicator.precision)`，用于 `:1012`（蜡烛格：再与 symbol 的 `pricePrecision` 取小）与
+ *    `:1020`（非蜡烛格：直接取指标那个值）⇒ 挂上一个指标**能**改价格轴刻度的小数位，
+ *    改不了 from/to。它今天自中和：`IndicatorImp` 构造器在 `:3193 this.override(indicator)`
+ *    **之后**把锁放回（`:3194 this._lockSeriesPrecision = false`），于是 `:14160` 的
+ *    `_synchronizeIndicatorSeriesPrecision` 经 `:14221 indicator.setSeriesPrecision(pricePrecision)`
+ *    与 `:3226` 那道「未锁才写」的门，把声明的 `precision: 2` 覆写成 symbol 的 `pricePrecision`，
+ *    而本仓写死 `ProChart.tsx:1319` `chart.setSymbol({ …, pricePrecision: 2, … })` ⇒ 对 `Math.min`
+ *    不贡献新值。注意这条通道是**推导**出来的：本片的读数面没有一格判轴的小数位
+ *    （`getRange()` 那三条活体读数只有 from／to／realRange），所以它按「已推导、未取证」登记。
  * 2. **`draw` 照样会被调**：`IndicatorView.drawImp` 的门只有 `indicator.visible`
  *    （`:8042`）与 `indicator.draw !== null`（`:8050`），都不看 result／figures 的长度。
  * 3. **`return true` 的理由要说准**：本片 figures 为空，返回 `false` 也**不会**多画
@@ -218,6 +229,14 @@ export function ensureVpvrIndicator(): void {
   registerIndicator({
     name: VPVR_NAME,
     shortName: VPVR_SHORT_NAME,
+    // 这一格钉的是**注册对象**，不是挂载后的实例：针在 `vpvrChart.test.ts:133`
+    // （`expect(s.precision).toBe(2)`，读的是 `registerIndicator` 收到的那份字面量）。实例一
+    // 过 `:14160` 的精度同步就被覆写成 symbol 的 `pricePrecision`（机制见文件头第 1 条末那段）。
+    // **不许删这行声明**：删了就在「还没有 symbol」的窗口里（`:14216` `isValid(this._symbol)`
+    // 之前根本不进同步）退回构造器默认的 `precision = 4`（`:3156`），反倒把那条第三通道打开——
+    // 指标自己的读数会按 4 位格式化，而它折进 `:999` 的值也从 2 变成 4（蜡烛格 `:1012` 今天仍与
+    // `pricePrecision` 取小所以轴不变；非蜡烛格 `:1020` 会直接取到 4）。本片挂的是 `candle_pane`，
+    // 所以实际暴露的是前一半，但那一格是声明，不是运行时值，删得起头就删不起收尾。
     precision: 2,
     series: "price",
     shouldOhlc: false,
