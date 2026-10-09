@@ -32,7 +32,9 @@ import { ProChart } from "../ProChart";
  * 样式面本片零改动：不写任何样式键。这一张有**两处**判据——本文件的「样式面零影响」那条
  * 读 `Object.keys(...).indicator === ["tooltip"]` 与九色／图例模板，第④片文件自己那条同型钉
  * 在它落地后回归全绿。库行号一律指 `dist/index.esm.js`（`dist/umd/klinecharts.js` 是同一份代码的
- * 另一个打包，行号各偏 +5/+7，别在一句话里混用两个坐标）。
+ * 另一个打包，同一符号的行号恒比 esm 大 5——实测三对：`StoreImp.addIndicator` 14150/14155、
+ * `StoreImp.removeIndicator` 14195/14200、`StoreImp.overrideOverlay` 14430/14435；
+ * 别在一句话里混用两个坐标）。
  * 所以 harness 的 `h.styles`／`h.initStyles` 录制面原样带过来。
  */
 
