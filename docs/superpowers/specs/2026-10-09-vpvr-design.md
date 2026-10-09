@@ -234,8 +234,9 @@ return true
 - **末档右闭**：一根 `high === spanHigh` ⇒ 钳进最后一档；
 - **POC 并列取下**：两档同量 ⇒ `pocIndex` 是下标小的那个；
 - **价值区**：手工构造的集中分布 ⇒ `lowIndex/highIndex/coverage` 逐格；再加一根「两侧等量时先吃上侧」的针；「单侧到头」的针（POC 在第 0 档）；
-- **退化三条**：空输入／`spanHigh === spanLow`／全零量；
-- **反未来函数下毒针**：`volumeProfile(all.slice(0, k))` 与在 `all` 的 `k` 之后追加一根荒谬巨量（`volume: 1e12`，`high/low` 远超域）后的 `volumeProfile(all2.slice(0, k))` **逐档相等** ⇒ 前缀不吃后缀；
+- **反未来函数下毒针（三件一起才算立住）**：① `volumeProfile(all.slice(0, k))` 的期望**逐格写死**（域、逐档量、总量、`pocIndex` 全用字面值）；② 在 `all` 的 `k` 之后追加一根荒谬巨量（`volume: 1e12`、`high/low` 远超域）得到 `all2`，`volumeProfile(all2.slice(0, k))` 与 ① **整体 `toEqual` 相等**；③ **阳性对照**：`volumeProfile(all2)`（真把毒根喂进去）的域与总量必须改掉。
+  为什么非要这三件：`all2.slice(0, k)` 与 `all.slice(0, k)` **逐元素相同，只换了数组对象**，所以第一版把它写成「两条互比 ⇒ 前缀不吃后缀」时，针判的其实是「无跨调用状态、不改调用方数组、对同一批根确定」——两侧一起错也照样绿。字面参照点（①）把它撑成有牙的等值判据，阳性对照（③）证明毒根不是 inert 输入（本仓 [[verify-scan-guard-false-green]] 的「空集合真空通过」同型失效）。**判据边界要写进注释**：「切片本身取对没有」不属一个纯函数的判据面，它归 §九 里 `profileOfChart` 那条假 chart 逐索引针——那里才决定喂进哪些根。`all2` 的 `pocIndex` **不许钉**：`1e12` 摊到各档彼此等值，最大档由真实根零头决定，钉它等于把判据交给末位舍入；
+- **退化三条**：空输入／`spanHigh === spanLow`／全零量。全零量那条**同时钉「零量根照旧参与域扫描」**（极值循环在 `volume === 0` 的 `continue` 之前 ⇒ `spanLow/spanHigh` 仍是真实极值）。这条不是锦上添花：几何夹具靠一根零量锚根把域撑成 `[100,200]`、把档宽钉成 1 个价格单位，期望矩形才逐格写死得住——它一旦漂出，那批写死的矩形会整体错位，所以判据必须入库，不能只活在验收当天的 scratch 里；
 - **前缀单调**：`totalVolume(profile_k)` 随 `k` 不减，且 `sum(rows.volume)` 与 `totalVolume` 在**相对**误差 `1e-11` 内相等（摊派不丢量、不造量——这条同时钉住 §四 的钳位与摊派系数）。判相对界而不是绝对位数：档宽 `域宽 / rows` 在二进制里通常不精确（出厂 100 档配域宽 12 ⇒ 0.12），累加噪声随样本量级漂，而结构性漏档是 O(一档的量)——两者差十个数量级，绝对位数界反而会把针在无辜代码上判红（本轮实现席在 `rows = 100` 实测噪声 2.36e-9，`toBeCloseTo(…, 9)`＝5e-10 的绝对界当场红）。
 
 `frontend/src/lib/__tests__/vpvrChart.test.ts`（`vi.mock("klinecharts")` 只给 `registerIndicator: (spec) => pushed.push(spec)`，照 `heikinAshiChart.test.ts:6-8`）：
