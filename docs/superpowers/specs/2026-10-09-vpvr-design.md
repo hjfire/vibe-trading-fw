@@ -159,8 +159,9 @@ export function profileOfChart(chart): VolumeProfile;
 **形状声明**（承重，逐条钉）：`figures: []`、`calc: () => []`、`series: "price"`、`precision: 2`、`shouldOhlc: false`；`zLevel` **不写**（库 `IndicatorImp` 构造器已给 0，`dist:3161`，写它等于声明一个默认值）。
 
 **两个回调各读哪几格实参**（绑定层的形参面，写成结构化类型以便单测直接喂假对象，照 `heikinAshiChart.ts:110-132` 的 R11 口径**不要本地收窄**）：
-`vpvrDraw` 读 `{ ctx, bounding, chart, yAxis }`，其中 `chart` 只取 `Pick<Chart, "getDataList" | "getVisibleRange">`——**不需要 `xAxis`**（横向位置由 `bounding.width` 给）、也不需要 `getBarSpace`（档高度来自价格像素，不来自 bar 宽）。
-`vpvrTooltipDataSource` 读 `{ chart }`（`Pick<Chart, "getDataList" | "getVisibleRange">`），不读 `crosshair`：分布不随光标变，所以上一片那条「`dataIndex` 缺省回退」在这里没有对应物。
+`vpvrDraw` 读 `{ ctx, bounding, chart, yAxis }`，其中 `chart` 只取那两格——**不需要 `xAxis`**（横向位置由 `bounding.width` 给）、也不需要 `getBarSpace`（档高度来自价格像素，不来自 bar 宽）。
+`vpvrTooltipDataSource` 读 `{ chart }`（同样只取 `getDataList`／`getVisibleRange`），不读 `crosshair`：分布不随光标变，所以上一片那条「`dataIndex` 缺省回退」在这里没有对应物。
+这两格在绑定层写成一条私有别名 `ChartView`，而**不是** `Pick<Chart, "getDataList" | "getVisibleRange">`：后者的 `getDataList` 返回整个 `KLineData[]`，而库把 `open`/`close` 定成必填（`dist/index.d.ts:97-106`），本层的替身只交 `{timestamp, low, high, volume}` ⇒ 每个喂替身的调用点报 TS2345（`Type '…' is missing the following properties from type 'KLineData': open, close`）。改成交「真被读的三格」（`ReadonlyArray<Pick<KLineData, "high" | "low" | "volume">>`）后，替身交得出、真 `Chart` 仍结构上可赋进来（`KLineData` 是那三格的超集），Task 4 那边传的还是库的 `Chart`。
 §二·2 说价格轴只折 `figures[].key`；本片**两把钥匙都不交**——`figures` 空 ⇒ 折叠循环没有 key 可读，`result` 空 ⇒ 即便将来有人加了 key 也读不到数。测试要**同时**钉这两格（§九），并把库那条折叠规则在测试里写成六行镜像 helper，断言「本指标声明能并进轴的价格集合是空集」——诚实标注：这一格判的是**两把钥匙都在**，库行为的实地判据在 §八 活体那一步（`getYAxes()[0].getRange()` 开前事后逐字相同）。
 
 **几何**（`vpvrDraw`）：
