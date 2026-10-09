@@ -627,6 +627,15 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     //    `createTooltipDataSource`（`vpvrChart.ts`），不是往 `candle.tooltip.legend.template`
     //    后面追加第七行——追加了就是分布脏了图例面。
     expect(tooltipTemplate(last)).toHaveLength(6);
+    // 卸的一侧再数一次次数：第④片 R12 的教训是「只在开的一侧读，卸的那一路顺手推了一格就读不出来」。
+    // 针 H4b（本轮实测）：给 `syncVpvr` 的 `!on` 分支加一句「现活着才 `setStyles`」⇒ 这一句红
+    // （`expected 2 to be 1`，红点就在这一行）。补一句取证里的坑：针**不能**无条件推——挂载那一次
+    // `syncVpvr(chart, false)` 也会走 `!on` 分支，无条件推的那一版（H4）把红顶到了上面的
+    // `keysBefore` 读取（`TypeError: Cannot convert undefined or null to object`），
+    // 次数这一格反而没被读到；要判「次数」就得让针只在真卸下来的那一次发作。
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    expect(pushCount()).toBe(pushesBefore);
   });
 
   it("开着 VPVR 切主题：VPVR 实例不重挂、样式照常只由主题与图例说话", async () => {
