@@ -48,6 +48,10 @@ const BARS = [
 ];
 
 function spec(): Record<string, unknown> {
+  // 调用点自足：`registered` 是 `vi.mock` 里的模块级数组，用例之间不重置，谁先跑谁注册。
+  // 让它自己走一遍幂等守卫（`ensureVpvrIndicator` 靠模块布尔挡重复注册），
+  // 于是「上一条测试有没有先跑」不再是判据的一部分。
+  ensureVpvrIndicator();
   expect(registered).toHaveLength(1);
   return registered[0];
 }
@@ -145,6 +149,18 @@ describe("注册守卫与声明", () => {
     // 「helper 写错 ⇒ 永远返回空数组」这条假绿会被当成通过（本仓登记的假绿第一种）。
     expect(foldedPrices([{ key: "volume" }], [{ volume: 5 }], 1)).toEqual([5]);
   });
+
+  it("对外常量逐个钉字面量——参照点不从被测模块来", () => {
+    // 别的用例拿导入的常量当期望值，改值这一类变异就两侧一起动、永远绿。
+    // 这七格把「值」本身钉住：字面量写死在这里，参照点是档案（spec §六 的三枚色与键名）。
+    expect(VPVR_NAME).toBe("VPVR");
+    expect(VPVR_SHORT_NAME).toBe("量分布");
+    expect(VPVR_PREFS_KEY).toBe("pro-chart.vpvr.v1");
+    expect(VPVR_COLOR_BASE).toBe("rgba(66, 165, 245, 0.22)");
+    expect(VPVR_COLOR_VALUE_AREA).toBe("rgba(66, 165, 245, 0.38)");
+    expect(VPVR_COLOR_POC).toBe("rgba(255, 167, 38, 0.55)");
+    expect(VPVR_MAX_WIDTH_RATIO).toBe(0.35);
+  });
 });
 
 /** 把「空集」写成显式判据，而不是靠 `toEqual([])` 的形状蒙对。 */
@@ -174,6 +190,31 @@ describe("profileOfChart", () => {
     expect(p.spanHigh).toBe(200);
     expect(p.spanLow).toBe(100);
     expect(p.totalVolume).toBe(220);
+  });
+
+  it("`realFrom` 大于 0 时左边那几根不进切片（左边缘针）", () => {
+    // 这条同时钉两个变异体，因为库里 `from` 与 `realFrom` 真的会分家
+    // （`dist:13566`：右侧有留白时 `realFrom` 由 `_lastBarRightSideDiffBarCount` 另算）：
+    // ① `const from = 0`（把左边缘焊死）——被 `realFrom > 0` 杀；
+    // ② 解构读的是 `from` 那一格（写成 `const { from: realFrom } = …`）——被 `from ≠ realFrom` 杀。
+    // 原有三条 fixture 的 `from` 与 `realFrom` 恒等（0/0、0/0、-8/-8），所以两者此前都过。
+    // 不调 `ensureVpvrIndicator()`：`profileOfChart` 是直接导出的纯函数，不经过注册表。
+    const dropped = [
+      { timestamp: 0, low: 100, high: 110, volume: 500 },
+      { timestamp: 1, low: 100, high: 110, volume: 500 },
+    ];
+    const list = [...dropped, ...BARS];
+    const chart = {
+      getDataList: () => list,
+      getVisibleRange: () => ({ from: 0, to: list.length, realFrom: 2, realTo: list.length }),
+    };
+    const p = profileOfChart(chart);
+    // 判据是 `totalVolume` 而不是极值：被掉的这两根价格落在 `[100, 110]`，本来就在
+    // `BARS` 撑出的域 `[100, 200]` 之内 ⇒ 混进来 `spanLow`／`spanHigh` 察觉不到，
+    // 只有总量从 220 变 1220。左边缘差一根也红（`BARS[0]` 带 60 量）。
+    expect(p.totalVolume).toBe(220);
+    expect(p.spanLow).toBe(100);
+    expect(p.spanHigh).toBe(200);
   });
 
   it("`realTo` 越过数据长度时按长度截（右侧留白区有像素没有数据）", () => {
@@ -248,9 +289,10 @@ describe("vpvrDraw 几何", () => {
   });
 
   it("最大档恒等于 `bounding.width × 0.35`，换宽度就换比例", () => {
+    // 同表达式逐位相等，不用绝对小数位容差（本仓口径）。左侧 `x` 是右锚的直接推论。
     const { rects } = drawFixture(BARS, (p) => 300 - 2 * p, 400);
-    expect(rects[1].w).toBeCloseTo(400 * VPVR_MAX_WIDTH_RATIO, 10);
-    expect(rects[1].x).toBeCloseTo(400 - 400 * VPVR_MAX_WIDTH_RATIO, 10);
+    expect(rects[1].w).toBe(400 * VPVR_MAX_WIDTH_RATIO);
+    expect(rects[1].x).toBe(400 - 400 * VPVR_MAX_WIDTH_RATIO);
   });
 });
 
@@ -298,7 +340,7 @@ describe("偏好与互斥", () => {
     expect(vpvrActive(false, true)).toBe(false);
   });
 
-  it("`loadVpvr` 只把 \"1\" 读成开；垃圾值与抛错都读成关", () => {
+  it("`loadVpvr` 只把 \"1\" 读成开，垃圾值读成关", () => {
     expect(loadVpvr()).toBe(false);
     localStorage.setItem(VPVR_PREFS_KEY, "0");
     expect(loadVpvr()).toBe(false);
@@ -306,6 +348,24 @@ describe("偏好与互斥", () => {
     expect(loadVpvr()).toBe(false);
     localStorage.setItem(VPVR_PREFS_KEY, "1");
     expect(loadVpvr()).toBe(true);
+  });
+
+  it("storage 被禁时读成关、写时不抛（两个 catch 分支各有输入）", () => {
+    // 隐私模式／第三方 cookie 被挡时 `localStorage` 的存取直接抛。idiom 照
+    // `apiAuth.test.ts` 里那两条（`vi.spyOn(Storage.prototype, …)`），
+    // 收尾靠 vitest 配置里的 `restoreMocks: true`，不手写 finally。
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(loadVpvr()).toBe(false);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(() => saveVpvr(true)).not.toThrow();
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(() => saveVpvr(false)).not.toThrow();
   });
 
   it("`saveVpvr(false)` 删键而不是写 \"0\"（未偏离默认不落盘）", () => {

@@ -24,7 +24,12 @@ import { valueAreaOf, volumeProfile, VPVR_ROWS, type ProfileBar, type VolumeProf
  *
  * 图例只有本指标自己那一行（POC/VAH/VAL）：`createTooltipDataSource` 返回的 `legends`
  * 整段替换由 figures 生成的默认行（`IndicatorTooltipView.getIndicatorTooltipData`，
- * `dist:7241` ⇄ `:7321`），而 figures 本来就是空的。
+ * `dist:7241` ⇄ 覆写点 `:7334`），而 figures 本来就是空的。
+ *
+ * **单测里的图例字符串 ≠ 屏幕上的字形**：库在覆写前对每格 `value.text` 跑
+ * `decimalFold.format(thousandsSeparator.format(...))`（`:7329-7331`），千分位默认
+ * `sign: ','`（`:13095`，本仓没有任何地方覆写它）。所以价格 ≥ 1000 时活体读到的是
+ * `1,234.56`——Task 6 的逐字比对要先剥千分位分隔符再比。
  */
 
 export const VPVR_NAME = "VPVR";
@@ -46,8 +51,9 @@ export const VPVR_COLOR_POC = "rgba(255, 167, 38, 0.55)";
 export const VPVR_MAX_WIDTH_RATIO = 0.35;
 
 /**
- * VPVR 是否真的在图上。单一谓词，样式侧与挂卸侧同读（本仓 `lib/chartView.ts`
- * commit 3d06fafd 的同一个形状）。分时是面积线（`candle.type === "area"`），
+ * VPVR 是否真的在图上。单一谓词：Task 4 的挂卸侧与按钮态都读它，不再各写一遍
+ * `on && !timeShare`（形状照 `lib/chartView.ts` 里那几枚周期谓词，不是「样式侧也读」——
+ * 本片不写样式键，`chartStyles` 一格都不碰）。分时是面积线（`candle.type === "area"`），
  * 没有 `[low, high]` 区间可摊 ⇒ 一律压掉。
  */
 export function vpvrActive(on: boolean, timeShare: boolean): boolean {
