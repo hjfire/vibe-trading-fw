@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { init as initChartMock } from "klinecharts";
 
+import { publishThemeChange } from "@/lib/theme-store";
 import { HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
 import { VPVR_PREFS_KEY } from "@/lib/vpvrChart";
 import { ProChart } from "../ProChart";
@@ -27,7 +29,6 @@ import { ProChart } from "../ProChart";
  * 样式面本片零改动：不写任何样式键，「没脏样式」由第④片文件自身的样式钉
  * （`ProChartHeikinAshi.test.tsx`，`Object.keys(...).indicator === ["tooltip"]` 那条）
  * 在本片落地后回归全绿来判——所以 harness 的 `h.styles`／`h.initStyles` 录制面原样带过来。
- * 样式/数据/画线三面要读的 harness helper（`styleAt`／`pushCount`／`NINE_BAR_KEYS`／`barColors`／`initBarColors`／`candleType`／`priceMark`／`tooltipTemplate`）随 Task 5 的用例一起补回，本片留着就是 `noUnusedLocals` 的 TS6133。
  */
 
 const h = vi.hoisted(() => ({
@@ -40,6 +41,10 @@ const h = vi.hoisted(() => ({
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
   created: [] as Array<Record<string, unknown>>,
+  // `removeIndicator` 每次收到的过滤条件原样一份（Task 5 针牙②要读它）。「图上还剩几份」
+  // 只判得出结果、判不出它是**按什么**卸的：按 `name` 卸会连页面那一份一起吃掉，按 `paneId`
+  // 卸会连主图的 MA 一起吃掉，只有按 `{ id }` 卸才恰好是「切掉多出来的一份」。
+  removed: [] as Array<{ name?: string; id?: string; paneId?: string }>,
   // 每次 `overrideOverlay` 收到的是什么。第④片的真值边界钉用它判「切 HA 不该重锚画线」，
   // 所以判据是「切换前后这个数组没长」，不是「它等于空」。
   overridden: [] as unknown[],
@@ -82,6 +87,12 @@ function ask(): void {
   ).catch(() => undefined);
 }
 
+function styleAt(i: number): Record<string, unknown> {
+  return h.styles[i];
+}
+
+const pushCount = () => h.styles.length;
+
 function barOf(i: number): Record<string, unknown> {
   return {
     timestamp: 1_700_000_000_000 + i * 86_400_000,
@@ -101,6 +112,28 @@ function barOf(i: number): Record<string, unknown> {
  */
 function seed(count = 6): void {
   h.list = Array.from({ length: count }, (_, i) => barOf(i));
+}
+
+/** `candle.bar` as the i-th `setStyles` push carried it. */
+function barColors(i: number): Record<string, unknown> {
+  return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
+}
+
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1062`）carried it. */
+function initBarColors(): Record<string, unknown> {
+  return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
+}
+
+function candleType(i: number): unknown {
+  return (styleAt(i) as { candle?: { type?: string } }).candle?.type;
+}
+
+function priceMark(i: number): unknown {
+  return (styleAt(i) as { candle?: { priceMark?: unknown } }).candle?.priceMark;
+}
+
+function tooltipTemplate(i: number): unknown[] {
+  return (styleAt(i) as { candle: { tooltip: { legend: { template: unknown[] } } } }).candle.tooltip.legend.template;
 }
 
 vi.mock("klinecharts", () => ({
@@ -125,16 +158,22 @@ vi.mock("klinecharts", () => ({
           return true;
         }),
       createIndicator: (value: { name: string; paneId?: string }, isStack?: boolean) => {
-        // `isStack`（库的第二参，`Chart.createIndicator(value, isStack)`）也记下来。
-        // 替身自己**不吃**这一参——返回值与挂载行为都不变，它只把「页面到底传了什么」
-        // 递到断言面前：真库里 `StoreImp.addIndicator(create, isStack)`（dist 14150）在
-        // `isStack` 为假时先 `removeIndicator({ paneId })` 清掉整格指标再挂新的，所以
-        // 主图那一路传假值就是把 MA 一起卸掉，而这在 `h.indicators` 里读不出来。
+        // `isStack`（库的第二参，`Chart.createIndicator(value, isStack)`）照旧记进
+        // `h.created`——这一格的录制形状没变，既有 7 条读的就是它。
         h.created.push({ ...(value as Record<string, unknown>), isStack });
-        h.indicators.push({ name: value.name, paneId: value.paneId ?? `sub:${value.name}`, id: `i${h.indicators.length}` });
+        const paneId = value.paneId ?? `sub:${value.name}`;
+        // 针牙①：替身现在**吃**这一参了。真库 `StoreImp.addIndicator(create, isStack)`
+        // （klinecharts 10.0.3，`dist/umd/klinecharts.js:14167`）在 `isStack` 为假时先
+        // `removeIndicator({ paneId })` 把目标格上的每一个指标清掉再挂新的，而
+        // `ChartImp.createIndicator`（同文件 :15279）在调用方没传时按 `false` 算。
+        // 以前替身只记不吃 ⇒ 「页面把 `true` 写成假值」在 `h.indicators` 里读不出来，
+        // 那根针是等价变异、永不红。现在假值会把同格的指标一起带走，共挂那条才真判得到。
+        if (!isStack) h.indicators = h.indicators.filter((ind) => ind.paneId !== paneId);
+        h.indicators.push({ name: value.name, paneId, id: `i${h.indicators.length}` });
         return true;
       },
       removeIndicator: (filter: { name?: string; id?: string; paneId?: string }) => {
+        h.removed.push({ ...filter });
         const before = h.indicators.length;
         h.indicators = h.indicators.filter(
           (ind) =>
@@ -210,11 +249,24 @@ async function flush(): Promise<void> {
   });
 }
 
+const NINE_BAR_KEYS = [
+  "upColor",
+  "downColor",
+  "noChangeColor",
+  "upBorderColor",
+  "downBorderColor",
+  "noChangeBorderColor",
+  "upWickColor",
+  "downWickColor",
+  "noChangeWickColor",
+] as const;
+
 beforeEach(() => {
   h.styles = [];
   h.initStyles = [];
   h.indicators = [];
   h.created = [];
+  h.removed = [];
   h.overridden = [];
   h.loader = null;
   // 默认就带上 bar：真实使用里图上有数据，按钮的 `barCount > 0` 判据不该替测试挡路。
@@ -360,5 +412,186 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
     await flush();
     expect(vpLive()).toHaveLength(1);
   });
+
+  // 针牙②：`syncVpvr` 的 `live.slice(1)` 那一支（`ProChart.tsx:1039`）在页面自己的状态机里
+  // 到不了——全仓挂 VPVR 的入口只有那一处，而它只在 `live.length === 0` 时才走，所以「页面
+  // 挂出来的那份图」里 VPVR 永远是 0 或 1 份，那条 `forEach` 是个空转（判据 F 打在上面永不红）。
+  // 但第二份是**库侧真实存在**的起始态：`ChartImp.createIndicator`
+  // （klinecharts 10.0.3，`dist/umd/klinecharts.js:15272`）先给 create 铸一把新 id，
+  // `StoreImp.addIndicator`（同文件 :14157）再拿这把 id 去重，而带 id 的 filter 只按 id 匹配
+  // （:14182）⇒ `isStack` 为真时它**永远追加**，看不见格上已有的那份。页面那段注释写的就是
+  // 「the invariant holds from any starting state」⇒ 这一条钉的是那个起始态，不是页面造题的能力。
+  // 种那两份走的是替身自己的 `createIndicator` recorder（页面挂 VPVR 用的是同一格、同一个
+  // `paneId`、同一个 `isStack=true`，id 也由同一把 `i${length}` 铸），不是手写进 `h.indicators`
+  // 的字面量；把两份切回一份的那一刀，是**用户点「量分布」**点出来的。
+  it("格上已有两份时：点一次开关切回一份，多出来那份是按 `id` 卸的", async () => {
+    render(<ProChart />);
+    await flush();
+    // 再要一个图表对象：`init` 的替身把方法面交回来、状态面是共享的 `h.indicators`，
+    // 所以这两次 create 与页面那一次挂在同一张 `candle_pane` 上。
+    const chart = initChartMock("vpvr-two-copies");
+    if (!chart) throw new Error("替身的 init 没交出图表对象");
+    chart.createIndicator({ name: "VPVR", paneId: "candle_pane" }, true);
+    chart.createIndicator({ name: "VPVR", paneId: "candle_pane" }, true);
+    // 候选集先钉住：没有这两份，下面全是空转（R13 同型的「结构性不可红」）。
+    expect(vpLive()).toHaveLength(2);
+    const firstId = vpLive()[0].id;
+    const extraId = vpLive()[1].id;
+    // 只数按钮这一次：种的那两份自己也是 `createIndicator` 的调用，全记在 `h.created` 里。
+    h.created = [];
+    h.removed = [];
+
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+
+    // 活着的是且只是一份，且是**先挂的那一份**（`slice(1)` 留头切尾）。
+    expect(vpLive()).toHaveLength(1);
+    expect(vpLive()[0].id).toBe(firstId);
+    // 那一次 `removeIndicator` 收到的是且只是一条 `{ id }`，id 恰是多出来那一份的：
+    // 按 `name` 卸会连留着的那份一起吃掉，按 `paneId` 卸会连主图的 MA 一起吃掉。
+    expect(h.removed).toEqual([{ id: extraId }]);
+    // 已有两份 ⇒ 不该再 create（`live.length === 0` 那一夹）。
+    expect(vpCreates()).toHaveLength(0);
+    // 这一刀没伤及邻格：主图的 MA 还在。
+    expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
+    expect(localStorage.getItem(VPVR_PREFS_KEY)).toBe("1");
+  });
 });
+
+describe("/pro-chart 量分布的真值边界（spec §八）", () => {
+  // 不另造 `seed`：`beforeEach` 已经 `seed()`，数据面在 render 之前就摆好了。每条测试自己
+  // `render(<ProChart />)` ＋ `await flush()`——init 那一路的样式推送、`syncPriceOverlay`
+  // 挂 MA、`syncSubPanes` 挂副图都会发生，边界钉判的就是「在这条真实路径上再开一次
+  // VPVR，那些东西没有被碰」。
+
+  it("开→关来回：`getDataList()` 的内容与身份都没变（两侧都量）", async () => {
+    render(<ProChart />);
+    await flush();
+    const before = h.list;
+    const snapshot = JSON.stringify(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    // 「只量开的那一次」是第④片 R12 的教训：卸的一路（`removeIndicator({name})`）
+    // 要是顺手重建了 data，只在开的一侧读不出来。
+    expect(h.list).toBe(before);
+    expect(JSON.stringify(h.list)).toBe(snapshot);
+
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    expect(h.list).toBe(before);
+    expect(JSON.stringify(h.list)).toBe(snapshot);
+  });
+
+  it("分布不写画线面：锚点分毫未动、`overrideOverlay` 一次不多", async () => {
+    render(<ProChart />);
+    await flush();
+    const anchor = JSON.stringify(h.overlays[0].points);
+    const overrides = h.overridden.length;
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+      await flush();
+    }
+    // 判据是「相等」不是「长度增量为 0」——候选集（`beforeEach` 种的那条线）在，
+    // 但重锚会把 points 换掉，所以两条都得判（第④片 R13 的形状）。
+    expect(JSON.stringify(h.overlays[0].points)).toBe(anchor);
+    expect(h.overridden.length).toBe(overrides);
+    // 且 VPVR 没有以 overlay 的身份出现过（spec §〇 第 2 条：走 overlay 就会进落盘通道）。
+    expect(h.overlays.some((o) => o.name === "VPVR")).toBe(false);
+  });
+
+  it("画线落盘面逐字节不动：`pro-chart.drawings.v1` 开前事后相同", async () => {
+    // 候选集（第④片 R13 的形状）：`beforeEach` 清了 localStorage，而挂载那一路只在
+    // 「桶里有画线」时才读它、且只有吸回越界锚点时才回写——空桶时这一格从头到尾是 `null`，
+    // `null` 等于 `null` 就是一条结构性不可红的针。所以先按页面自己的格式
+    // （`chartDrawings.ts` 的 `BucketMap`：键 `标的|周期`，值是 `StoredDrawing[]`）种一条
+    // 真线进去，`mid` 才是**有内容的字节**，「开前事后相同」才判得出东西被改。
+    localStorage.setItem(
+      "pro-chart.drawings.v1",
+      JSON.stringify({
+        "600519.SH|1D": [
+          {
+            name: "horizontalStraightLine",
+            paneId: "candle_pane",
+            points: [{ timestamp: 1_700_000_000_000 + 5 * 86_400_000, value: 1234.5 }],
+          },
+        ],
+      }),
+    );
+    render(<ProChart />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    const mid = localStorage.getItem("pro-chart.drawings.v1");
+    // 候选集自检（第④片最贵教训的形状）：这一格没内容，上面那两条比较就是空转。
+    expect(mid).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    expect(localStorage.getItem("pro-chart.drawings.v1")).toBe(mid);
+  });
+
+  it("样式面零影响：`indicator` 子树仍恰是 [\"tooltip\"]，九色不因 VPVR 变化", async () => {
+    render(<ProChart />);
+    await flush();
+    const before = pushCount() - 1;
+    const keysBefore = Object.keys((styleAt(before) as { indicator: Record<string, unknown> }).indicator);
+    const barBefore = JSON.stringify(barColors(before));
+
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    // 挂 VPVR 不是一次样式事件：它不该推新格。若页面推了，那一格必须仍然只带 tooltip。
+    const last = pushCount() - 1;
+    expect(Object.keys((styleAt(last) as { indicator: Record<string, unknown> }).indicator)).toEqual(keysBefore);
+    expect(Object.keys((styleAt(last) as { indicator: Record<string, unknown> }).indicator)).toEqual(["tooltip"]);
+    expect(JSON.stringify(barColors(last))).toBe(barBefore);
+    for (const key of NINE_BAR_KEYS) expect(barColors(last)[key]).not.toBe("transparent");
+    expect(candleType(last)).toBe("candle_solid");
+    expect(priceMark(last)).toBeDefined();
+    // 八格里另两格的读数口，各钉一次——它们是「VPVR 不写样式」的另一半：
+    // ① init 推送点（`init` 的 `styles` 选项）也得是真蜡烛九色。挂分布不是把蜡烛藏起来的
+    //    理由；那九格被写成 `transparent` 时第④片会红，但「VPVR 没脏样式」得由本片自己判住。
+    for (const key of NINE_BAR_KEYS) expect(initBarColors()[key]).not.toBe("transparent");
+    // ② 主图图例模板仍是蜡烛那六格。VPVR 的三行读数走的是它自己指标的
+    //    `createTooltipDataSource`（`vpvrChart.ts`），不是往 `candle.tooltip.legend.template`
+    //    后面追加第七行——追加了就是分布脏了图例面。
+    expect(tooltipTemplate(last)).toHaveLength(6);
+  });
+
+  it("开着 VPVR 切主题：VPVR 实例不重挂、样式照常只由主题与图例说话", async () => {
+    render(<ProChart />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "量分布" }));
+    await flush();
+    const created = h.created.length;
+    // 切主题的姿势抄第④片那条（`documentElement` 加 `dark` ＋ `publishThemeChange()`，
+    // 包在 `act` 里）——工具栏上没有「深色」这颗按钮，`getByRole` 会报找不到。
+    act(() => {
+      document.documentElement.classList.add("dark");
+      publishThemeChange();
+    });
+    await flush();
+    expect(vpKept()).toBe(true);
+    // 主题 effect 推样式是它的本分；VPVR 不在这条链上，所以它不该因此被重挂。
+    expect(h.created).toHaveLength(created);
+    expect(h.indicators.filter((i) => i.name === "VPVR")).toHaveLength(1);
+  });
+
+  it("空图：按钮 disabled 且理由说「先等 K 线加载出来」（不声称不会挂指标）", async () => {
+    // 第④片 R9 的教训：effect 里没有 `barCount` 门，灰按钮在 jsdom 与浏览器一样
+    // 不派发事件 ⇒ 「空图时不会挂指标」那条针永远绿。所以这里只判按钮与其理由，
+    // **不**写「`h.indicators` 里没有 VPVR」。
+    h.list = [];
+    localStorage.setItem(VPVR_PREFS_KEY, "1");
+    render(<ProChart />);
+    await flush();
+    const button = screen.getByRole("button", { name: "量分布" });
+    expect(button).toBeDisabled();
+    expect(button.getAttribute("title")).toContain("先等 K 线加载出来");
+  });
+});
+
+/** 本 describe 自己的小 helper：活着的 VPVR 还在主图上吗。 */
+function vpKept(): boolean {
+  return h.indicators.some((i) => i.name === "VPVR");
+}
 
