@@ -47,10 +47,11 @@
 | 4b | 千分位符号是 store 的出厂默认，不是样式里能漏出来的东西：`_thousandsSeparator = { sign: ',' }` | `dist:13094-13096`；`formatThousands` 只在 `sign.length === 0` 时短路（`:773-783`） | 本仓 `frontend/src/` 全仓 grep 无任何 `thousandsSeparator` 覆写（Task 3 修复轮当场核过）⇒ 这一层格式化**必然生效**，不能靠「也许我们把它关了」省掉 |
 | 5 | 每帧只有一处清屏，且清的是整块 canvas 后 `save/scale/try` | `dist:9145` | 同 pane 上多个指标的 `draw` 是**叠加**关系：HA 与 VPVR 共挂时互不擦除 |
 | 6 | `IndicatorImp` 默认 `series: 'normal'`、`figures: []`；`series` 的唯一用途是 `_synchronizeIndicatorSeriesPrecision` 里 `'price' → pricePrecision` | `dist:3155-3163`／`:14215-14230` | `series: "price"` 只影响精度同步，不引入轴折叠；写它是为了让 `precision` 跟随 symbol 的 2 位小数 |
-| 7 | `StoreImp.prototype.addIndicator` 的 de-dup 用带 id 的过滤匹配不上 ⇒ `createIndicator(value, true)` 永远追加 | 第④片已实测并在 `ProChart.tsx:974-999` 的注释里写明 | VPVR 的挂卸照 `syncHeikinAshi` 的「先删后挂＋`live.length === 0` 才创」形状抄 |
+| 6b | **轴有第三条通道，折的不是数而是小数位**：`createRangeImp` 除折叠 `figures[].key` 外，还**无条件**把每个指标的 `precision` 折进去——`:999` `indicatorPrecision = Math.min(indicatorPrecision, indicator.precision)`，用于 `:1012`（蜡烛格 `Math.min(indicatorPrecision, pricePrecision)`）与 `:1020`（非蜡烛格直接 `precision = indicatorPrecision`） | `dist:984`／`:999`／`:1012`／`:1020` | ⇒ 挂载一个指标**改不了轴的 from/to**（第 2 行那两把钥匙管着），但**能改轴的刻度小数位**。今天它自中和：构造器在 `:3193 this.override(indicator)` 之后把 `:3194 this._lockSeriesPrecision = false` 放回，于是 `:14160` 的精度同步经 `:14221 indicator.setSeriesPrecision(pricePrecision)` 与 `:3226` 那道门，把声明的 `precision: 2` 覆写成 symbol 的 `pricePrecision`——本仓写死 2（`ProChart.tsx:1319` `setSymbol({ ..., pricePrecision: 2, volumePrecision: 0 })`，另一处 `:1714` 同）⇒ 对 `Math.min` 不贡献新值。**判据边界**：这一条是代码面推导，`getYAxes()[0].getRange()` 只读 from/to/realRange，没有任何一格读轴的小数位 ⇒ 按**未取证**登记，§七 的「区间结构上动不了」因此收窄为「**区间**结构上动不了」 |
+| 7 | `StoreImp.prototype.addIndicator` 的 de-dup 用带 id 的过滤匹配不上 ⇒ `createIndicator(value, true)` 永远追加 | 第④片已实测并在 `syncHeikinAshi`（交付态 `ProChart.tsx:999-1011`）的注释里写明 | VPVR 的挂卸照 `syncHeikinAshi` 的「先删后挂＋`live.length === 0` 才创」形状抄 |
 | 8 | 图元注册表七类、`registerFigure` 是公开口且**仓内零调用者** | `getSupportedFigures()` 实测七类；仓内 grep 无 caller | 走这条路要自己管 overlay 生命周期，且撞 §〇 第 2 条的落盘污染 |
 
-仓内三条配套事实：成交量键名恒为 `volume`、键恒在但值可为 `0`（`marketApi.ts:183` ＋ `market_routes.py:175-176` 整列补 `0.0`，先例判据见 `timeShare.ts:171-186` 的「零量前缀退化成收盘价算术均值」）；分时是 `candle.type === 'area'`（`ProChart.tsx:295`），HA 用 `heikinAshiActive(haOn, timeShare) = haOn && !timeShare` 压掉（`heikinAshiChart.ts:59-61`）；`syncPriceOverlay` 只删 `MA`/`AVG_PRICE`/`PREV_CLOSE`（`ProChart.tsx:954-972`）、`syncSubPanes` 的清扫显式跳过 `paneId === MAIN_PANE_ID`（`:775`）⇒ 挂在主图价格 pane 的 VPVR 既不会被顺手带走，也不会被副图选择器吃掉。
+仓内三条配套事实：成交量键名恒为 `volume`、键恒在但值可为 `0`（`marketApi.ts:183` ＋ `market_routes.py:175-176` 整列补 `0.0`，先例判据见 `timeShare.ts:171-186` 的「零量前缀退化成收盘价算术均值」）；分时是 `candle.type === 'area'`（`ProChart.tsx:302` `const type: CandleType = timeShare ? "area" : "candle_solid"`），HA 用 `heikinAshiActive(haOn, timeShare) = haOn && !timeShare` 压掉（`heikinAshiChart.ts:59-61`）；`syncPriceOverlay` 只删 `MA`/`AVG_PRICE`/`PREV_CLOSE`（`ProChart.tsx:966-984`，`:973-974` 那两行是删除本身）、`syncSubPanes` 的清扫显式跳过 `paneId === MAIN_PANE_ID`（`:788`）⇒ 挂在主图价格 pane 的 VPVR 既不会被顺手带走，也不会被副图选择器吃掉。
 
 ---
 
@@ -156,7 +157,7 @@ export function ensureVpvrIndicator(): void;
 export function profileOfChart(chart): VolumeProfile;
 ```
 
-**形状声明**（承重，逐条钉）：`figures: []`、`calc: () => []`、`series: "price"`、`precision: 2`、`shouldOhlc: false`；`zLevel` **不写**（库 `IndicatorImp` 构造器已给 0，`dist:3161`，写它等于声明一个默认值）。
+**形状声明**（承重，逐条钉）：`figures: []`、`calc: () => []`、`series: "price"`、`precision: 2`、`shouldOhlc: false`；`zLevel` **不写**（库 `IndicatorImp` 构造器已给 0，`dist:3161`，写它等于声明一个默认值）。**`precision: 2` 这根钉的是注册对象，不是挂载后的实例**（2026-10-10 评审后补）：实例一过 `:14160` 的精度同步就被覆写成 symbol 的 `pricePrecision`（§二·6b），声明值只在「还没有 symbol」的窗口里活着（`:14216` `isValid(this._symbol)` 之前根本不进同步）。**不许删这行声明**——删了在那个窗口里退回构造器默认的 `precision = 4`（`:3156`），反倒把 §二·6b 那条通道打开。
 
 **两个回调各读哪几格实参**（绑定层的形参面，写成结构化类型以便单测直接喂假对象，照 `heikinAshiChart.ts:110-132` 的 R11 口径**不要本地收窄**）：
 `vpvrDraw` 读 `{ ctx, bounding, chart, yAxis }`，其中 `chart` 只取那两格——**不需要 `xAxis`**（横向位置由 `bounding.width` 给）、也不需要 `getBarSpace`（档高度来自价格像素，不来自 bar 宽）。
@@ -196,10 +197,10 @@ return true
 
 抄第④片那套已验收的形状，五处：
 
-1. `const [vpOn, setVpOn] = useState(() => loadVpvr());` ＋ `const vpRef = useRef(vpOn);`（`haOn` 同形，`:554-559`）。唯一写者是 `toggleVpvr`，照 `toggleHeikinAshi`（`:1892-1897`）：翻 ref → `setVpOn` → `saveVpvr`。
-2. `syncVpvr(chart, on)`：照 `syncHeikinAshi`（`:974-999`）逐行同形——`on` 假只 `removeIndicator({ name: VPVR_NAME })`；真则 `ensureVpvrIndicator()` → `getIndicators({ name: VPVR_NAME })` → `live.slice(1).forEach(extra => removeIndicator({ id: extra.id }))` → `live.length === 0` 才 `createIndicator({ name: VPVR_NAME, paneId: MAIN_PANE_ID }, true)`（第二实参 `isStack` 必填真，否则 `StoreImp.addIndicator` 会把同 pane 的 HA/MA 一起卸掉——这条语义第④片探针 F 已实测）。
-3. `useEffect(() => syncVpvr(chartRef.current, vpvrActive(vpOn, timeShare)), [vpOn, timeShare])`，紧挨 HA 那个 effect（`:1331-1341`），注释照抄那条的「不列 `chartRef.current` 与 `syncVpvr` 的理由」。
-4. 工具栏按钮紧跟「平均K线」（`:2272-2299` 之后）：`aria-label="量分布"`、`disabled={timeShare || barCount === 0}`（**故意不用** `vpvrActive`，理由与 HA 那条注释同：开关关着时按钮不该天天灰）、`aria-pressed={vpvrActive(vpOn, timeShare)}`、reason 三分支文案——分时那句改成 `"分时是面积线，分档量能要按高低价摊派，这里没有可摊的区间"`，零数据那句照抄，另两句按 `vpOn` 说「已开／已关」。
+1. `const [vpOn, setVpOn] = useState(() => loadVpvr());` ＋ `const vpRef = useRef(vpOn);`（`haOn` 同形，`:561-566`）。唯一写者是 `toggleVpvr`，照 `toggleHeikinAshi`（`:1947-1952`）：翻 ref → `setVpOn` → `saveVpvr`。
+2. `syncVpvr(chart, on)`：照 `syncHeikinAshi`（`:999-1011`）逐行同形——`on` 假只 `removeIndicator({ name: VPVR_NAME })`；真则 `ensureVpvrIndicator()` → `getIndicators({ name: VPVR_NAME })` → `live.slice(1).forEach(extra => removeIndicator({ id: extra.id }))` → `live.length === 0` 才 `createIndicator({ name: VPVR_NAME, paneId: MAIN_PANE_ID }, true)`（第二实参 `isStack` 必填真，否则 `StoreImp.addIndicator` 会把同 pane 的 HA/MA 一起卸掉——这条语义第④片探针 F 已实测）。
+3. `useEffect(() => syncVpvr(chartRef.current, vpvrActive(vpOn, timeShare)), [vpOn, timeShare])`，紧挨 HA 那个 effect（`:1375-1385`），注释照抄那条的「不列 `chartRef.current` 与 `syncVpvr` 的理由」。
+4. 工具栏按钮紧跟「平均K线」（`:2340-2367` 之后，交付态落在 `:2368-2395`）：`aria-label="量分布"`、`disabled={timeShare || barCount === 0}`（**故意不用** `vpvrActive`，理由与 HA 那条注释同：开关关着时按钮不该天天灰）、`aria-pressed={vpvrActive(vpOn, timeShare)}`、reason 三分支文案——分时那句交付态为 `"分时是面积线，分档量能要按 [low, high] 与档的重叠摊派，这里没有可摊的区间"`（2026-10-10 裁定：spec 原写「按高低价摊派」，按计划与实现改权威而不是回退实现——`[low, high]` 那版把摊派的分母说清了，且「高低价」在面积线语境里恰恰是不存在的东西），零数据那句照抄（`"图上还没有数据，先等 K 线加载出来"`，交付态 `:2383` 一致），另两句按 `vpOn` 说「已开／已关」。三句都由 `ProChartVpvr.test.tsx` 逐字 `toBe` 钉住。
 5. **`chartStyles` 一处都不改**（§一 末条）。VPVR 不需要样式：它不藏任何东西、不改图例模板、不改价格轴。HA 需要九色是因为它要替换蜡烛绘制；VPVR 是**叠加**，没有需要覆写的样式键。
 
 **与 HA 的相互关系（要钉，不是要假设）**：两个指标同挂 `candle_pane`，`indicators.forEach` 按挂载顺序各画各的，每帧只清屏一次（§二·5）⇒ 叠加成立。判据落在测试侧（HA 在位时挂 VPVR，两者都仍只有一份实例、`createIndicator` 的 `isStack` 都为真）与活体侧（§八 第 3 步）。反向也钉：卸 VPVR 不动 HA，卸 HA 不动 VPVR。
@@ -223,7 +224,7 @@ return true
 
 每步同时读：`getIndicators({name:'VPVR'}).length === 1`、`getIndicators({name:'HEIKIN_ASHI'}).length` 与进入前相同、`getDataList()` 的**引用与 JSON 快照**在开关前后相同、`localStorage['pro-chart.drawings.v1']` 逐字节相同。
 
-**活体的现实约束**（预先登记，不假装能拿到拿不到的东西）：本环境的内置浏览器可能再次丢掉可见表面（第④片实测），`take_screenshot` 会恒报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`，且 `rAF` 停摆时 `getRange()` 读到的是**陈旧值**（已记入 [[chart-canvas-browser-forensics]]）。⇒ 轴读数必须在能出帧时取；拿不到帧就按「未判」登记，不许把状态读数写成截图级判据。
+**活体的现实约束**（预先登记，不假装能拿到拿不到的东西）：本环境的内置浏览器可能再次丢掉可见表面（第④片实测），`take_screenshot` 会恒报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`。**这一句的机制归因按交付后评审更正（2026-10-10；原写「`rAF` 停摆时 `getRange()` 读到的是**陈旧值**」，那是把绘制节流当成了范围重建的触发器）**：范围重建挂在**微任务**上，不挂在 rAF 上——`layout(options)` 只把 `_layoutPending` 置真并排一个 `Promise.resolve().then(() => _this._layout())`（`dist:14752-14762`），`_layout` 里 `:14845` 那道门后逐 pane 调 `axis.buildTicks(forceBuildYAxisTick)`（`:14848`），`:870` 的 `this._range = this.createRangeImp()` 才落，`:14995` 那两次调用是**无条件**的（不在任何 rAF 回调里）。`requestAnimationFrame` 在本库只有四处：`:237-239`（环境垫片）、`:287`/`:299`（滚动动画的 step）、`:9132`（`Canvas.prototype._scheduleDraw` 的绘制节流）、`:14635`（resize）。挂卸指标那一路（`:15284-15291`）与 `StoreImp.setBarSpace`（`:13675-13680`，且 `:13673` 已同步 `_adjustVisibleRange()` 过）都只要 `buildYAxisTick: true` ⇒ 触发面给得出新范围。**于是第④片那条真实陈旧读数（`setBarSpace` 后 `realHi=1451.9 > axisTo=1304.5`，`progress.md:87`）只能有另一种成因：读数取在触发**同一个 task 内**、微任务尚未排空之前。** 这一半是**代码面推导**，不是实测——④片没留「取数在 `await` 前还是后」的读数，所以归因按**未判**登记。⇒ 纪律**保留并加一条更硬的**：轴读数必须在能出帧时取，且必须**跨过一个微任务**（`await Promise.resolve()`／`await` 任何一次）之后再取；拿不到帧就按「未判」登记，不许把状态读数写成截图级判据。
 
 ---
 
