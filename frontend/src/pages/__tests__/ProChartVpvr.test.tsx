@@ -100,6 +100,16 @@ function styleAt(i: number): Record<string, unknown> {
 
 const pushCount = () => h.styles.length;
 
+/**
+ * 图上此刻活着几份 VPVR（M2：两个 describe 共用**这一个**问法）。
+ *
+ * 以前本文件有两把同义的尺：这一格与文件底部那个 `vpKept()`（`h.indicators.some(...)`）——
+ * 同一件事两种问法，于是「开着 VPVR 切主题」那条把同一个事实钉了两遍。`vpKept()` 已经删掉；
+ * `vpLive()` 从第一个 describe 提到模块作用域，因为两个 describe 都要读它。
+ * `vpCreates`／`haLive` 只有第一个 describe 用，留在原地。
+ */
+const vpLive = () => h.indicators.filter((i) => i.name === "VPVR");
+
 function barOf(i: number): Record<string, unknown> {
   return {
     timestamp: 1_700_000_000_000 + i * 86_400_000,
@@ -204,10 +214,45 @@ vi.mock("klinecharts", () => ({
       // （StoreImp.resetData, dist 13652）。分时切换走 `setPeriod`，所以三个都得问。
       setSymbol: () => ask(),
       setPeriod: () => ask(),
-      resetData: () => ask(),
+      // F2（补牙）：以前这一格是 `resetData: () => ask()`——**不吃参数**，所以「开→关来回
+      // `getDataList()` 的身份没变」那一半永远读不出东西：替身从头到尾没碰过 `h.list`，
+      // 页面无论怎么重建数据，`expect(h.list).toBe(before)` 都是绿的。现在它吃下实参。
+      // 取证要写清，别把这一格写成好像库本身就是按数组开的：
+      // `ChartImp.prototype.resetData`（klinecharts 10.0.3，`dist/index.esm.js:15253`）一个形参都不接，
+      // `StoreImp.prototype.resetData(fn)`（同文件 `:13652`）吃的是**回调**，它靠
+      // `_processDataUnsubscribe()` ＋ `_processDataLoad('init')` 重新取一遍数。页面那三处调用
+      // （`ProChart.tsx:1491`/`:1504`/`:1557`，回放与换周期那几路）都是**无参**的 ⇒ 这次改动对现有
+      // 14 条零行为影响，只是多开一扇门：有人把「重建 data」接进 VPVR 链路并交回一份新数组时，
+      // 这一半才判得到（针 H3 就是这一句的活性证明）。
+      resetData: (list?: unknown[]) => {
+        // 这一句的 `as` 只服务于替身内部的 store 形状（`h.list` 声明的是 `Record<string, unknown>[]`）：
+        // 语义是「谁交回一份数组，数据面就换成那一份」，判据读的是**身份**，不看元素类型。
+        if (Array.isArray(list)) h.list = list as Array<Record<string, unknown>>;
+        return ask();
+      },
       setStyles: (s: Record<string, unknown>) => h.styles.push(s),
       resize: vi.fn(),
-      createOverlay: vi.fn(),
+      // F1（补牙）：这一格以前是 `createOverlay: vi.fn()`——调用被吞掉、返回值是 `undefined`，
+      // 而 `h.overlays` 唯一的写手是 `beforeEach` 种的那条线，于是「VPVR 没有以 overlay 的身份
+      // 出现过」那条判据**结构上不可能红**：页面无论怎么走 overlay 通道都读不出来。真库
+      // `ChartImp.createOverlay(value)`（klinecharts 10.0.3，`dist/index.esm.js:15359`）把那条
+      // 交给 `addOverlays` 装进 store，非数组入参时返回铸出来的 id（`:15393-15396` 的 `ids[0]`），
+      // 随后 `getOverlays()`（`:15398-15400`）就读得到它 ⇒ 替身照这个语义 append 回**同一个桶**，
+      // 不新开一个桶：新开桶就等于承认「overlay 通道与画线面是两回事」，而 spec §〇 第 2 条怕的
+      // 恰恰是它进的是同一个落盘通道。
+      // 返回值给的是库的形状（一个真 id）而不是 `true`：页面 `createOverlay` 只有 `armTool`
+      // （`ProChart.tsx:2003`）一处、不吃返回值，但 `chartDrawings.restoreDrawings:671-683` 吃
+      // 它的真假来分「上图的」与「停放面的」——交回 `undefined` 会把每一张种进桶里的画线都停进
+      // 停放面，交回 `true` 也不如交回一个像样的 id（针 H 之后这条链还在，别把它喂坏）。
+      createOverlay: (o: Record<string, unknown>) => {
+        const id = `o${h.overlays.length + 1}`;
+        h.overlays.push({ ...o, id } as unknown as (typeof h.overlays)[number]);
+        return id;
+      },
+      // `removeOverlay` 不补记：页面确实调它（`:1262` 整面清、`:1877`/`:1882` 停放面、`:2037` 清画线、
+      // `:2106` 按 id），但本片没有任何一条判据读「overlay 少了哪条」。为没有判据的面加录制会把
+      // `h.overlays[0]` 的下标语义改掉（「分布不写画线面」那条读的就是这一格的 `points`），
+      // 那是拿死判据换活判据。
       removeOverlay: vi.fn(),
       // 录制版：第④片「切 HA 不重锚画线」那条判据读的是这个数组在两次穿越前后是否相等（不是长度增量：候选集补上以后，多录一次就是红）。
       overrideOverlay: (o: unknown) => {
@@ -302,8 +347,8 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
   // （副图 VOL／MACD）已经创建过指标，计数判据要数的是「这次点按钮创建了几个」。
   // `h.indicators` 与 `h.styles` **不许**清：它们是「主图现在载着什么」的唯一真相，
   // 清掉就把「挂 VPVR 不吃掉 MA／HA」那条钉成了假绿。
+  // `vpLive()` 在模块作用域（见文件上半部），两个 describe 共用同一个问法（M2）。
   const vpCreates = () => h.created.filter((c) => (c as { name?: string }).name === "VPVR");
-  const vpLive = () => h.indicators.filter((i) => i.name === "VPVR");
   const haLive = () => h.indicators.filter((i) => i.name === "HEIKIN_ASHI");
 
   it("点一次：先删后挂到 candle_pane，创建的是 VPVR，且 isStack 为真", async () => {
@@ -482,6 +527,10 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     await flush();
     // 「只量开的那一次」是第④片 R12 的教训：卸的一路（`removeIndicator({name})`）
     // 要是顺手重建了 data，只在开的一侧读不出来。
+    // 这一对里**身份**那一半不是自己就有牙的：它靠替身的 `resetData` 吃下实参（见 `h` 里
+    // `resetData` 那段注释）才读得出「VPVR 把数据重建了」——替身不吃参数时，`h.list` 谁也换不掉，
+    // 这一句就是恒绿的。内容那一半（下面 `JSON.stringify`）单独也有牙：数据被换成同样长度但
+    // 不同值的内容时它红。
     expect(h.list).toBe(before);
     expect(JSON.stringify(h.list)).toBe(snapshot);
 
@@ -514,6 +563,15 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     // `null` 等于 `null` 就是一条结构性不可红的针。所以先按页面自己的格式
     // （`chartDrawings.ts` 的 `BucketMap`：键 `标的|周期`，值是 `StoredDrawing[]`）种一条
     // 真线进去，`mid` 才是**有内容的字节**，「开前事后相同」才判得出东西被改。
+    //
+    // 锚点从**当次喂进去的数据**里取（M1）：这一格以前写的是 `1_700_000_000_000 + 5 * 86_400_000`,
+    // 那是把 `barOf()` 的公式在测试体里抄了一遍，还隐式依赖 `seed()` 默认 6 根——数据面一动，
+    // 这个字面量就与图无关了，而 `beforeEach` 种那条线时自己写过「锚点从当次喂进去的 `h.list`
+    // 里取，不是一个与图无关的数字字面量」。这里读的是最后一根的真实 timestamp，所以种下去的线
+    // 本来就落在最新那根上：挂载那一路（`clampDrawingsToLastBar`）不该吸回它，`mid` 判的确实是
+    // 「开／关 VPVR 之后没人动过桶」，而不是「恰好没人重新吸盘」。
+    // 读 `h.list` 要在 render 之前：它是 `beforeEach` 的 `seed()` 刚摆好的那一份。
+    const lastTs = (h.list[h.list.length - 1] as { timestamp: number }).timestamp;
     localStorage.setItem(
       "pro-chart.drawings.v1",
       JSON.stringify({
@@ -521,7 +579,7 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
           {
             name: "horizontalStraightLine",
             paneId: "candle_pane",
-            points: [{ timestamp: 1_700_000_000_000 + 5 * 86_400_000, value: 1234.5 }],
+            points: [{ timestamp: lastTs, value: 1234.5 }],
           },
         ],
       }),
@@ -544,13 +602,20 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
   it("样式面零影响：`indicator` 子树仍恰是 [\"tooltip\"]，九色不因 VPVR 变化", async () => {
     render(<ProChart />);
     await flush();
-    const before = pushCount() - 1;
+    // F3（补牙）：先抓一次**推送次数**。下面那两行读的是「最后一格里有什么」，而「挂 VPVR 不推
+    // 新格」这半句以前没有任何断言读它——不推新格时 `before === last`，那是同一个值自比（评审席
+    // 这点说对了）。次数这条钉子只管**次数**，键集／九色／模板那几条管的是「推出来的那格里有什么」，
+    // 两回事都留着。
+    const pushesBefore = pushCount();
+    const before = pushesBefore - 1;
     const keysBefore = Object.keys((styleAt(before) as { indicator: Record<string, unknown> }).indicator);
     const barBefore = JSON.stringify(barColors(before));
 
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
-    // 挂 VPVR 不是一次样式事件：它不该推新格。若页面推了，那一格必须仍然只带 tooltip。
+    // 挂 VPVR 不是一次样式事件：它不该推新格（`pushesBefore` 这一句判的就是这个）。
+    // 若页面推了，那一格必须仍然只带 tooltip——那是下面几条管的事。
+    expect(pushCount()).toBe(pushesBefore);
     const last = pushCount() - 1;
     expect(Object.keys((styleAt(last) as { indicator: Record<string, unknown> }).indicator)).toEqual(keysBefore);
     expect(Object.keys((styleAt(last) as { indicator: Record<string, unknown> }).indicator)).toEqual(["tooltip"]);
@@ -581,10 +646,12 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
       publishThemeChange();
     });
     await flush();
-    expect(vpKept()).toBe(true);
     // 主题 effect 推样式是它的本分；VPVR 不在这条链上，所以它不该因此被重挂。
     expect(h.created).toHaveLength(created);
-    expect(h.indicators.filter((i) => i.name === "VPVR")).toHaveLength(1);
+    // M2：以前这里上面还压着一条 `expect(vpKept()).toBe(true)`，与这一条判的是同一个事实
+    // （两个同义问法读同一个 `h.indicators`）。留**更强**的那一条：切主题后图上活的 VPVR
+    // 不是一堆、也不止「还在」，而是恰好一份——`some()` 判不出重挂出来的第二份，这一条判得出。
+    expect(vpLive()).toHaveLength(1);
   });
 
   it("空图：按钮 disabled 且理由说「先等 K 线加载出来」（不声称不会挂指标）", async () => {
@@ -600,9 +667,4 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     expect(button.getAttribute("title")).toContain("先等 K 线加载出来");
   });
 });
-
-/** 本 describe 自己的小 helper：活着的 VPVR 还在主图上吗。 */
-function vpKept(): boolean {
-  return h.indicators.some((i) => i.name === "VPVR");
-}
 
