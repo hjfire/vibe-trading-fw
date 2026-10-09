@@ -214,10 +214,10 @@ return true
 **Bar Replay 五步自查**（spec 交付必附，本仓纪律）：
 
 1. 进回放（游标在中段），记录 `getDataList().length = N`、可见区索引 `realFrom/realTo`；
-2. 读图例三格 POC/VAH/VAL，与**页内独立 oracle**（按 §四/§五 重算的那套，`window.__vp`）比对，容差 `1e-9`；
-3. `后一根` ×6 ⇒ 判据是**「oracle 用新前缀重算，逐档对 `1e-9`」**。这里**不能**断言 `totalVolume` 单调不减：分布域取的是**可视区自身**的极值，回放步进让库自动右滚时 `realFrom` 会前移，最早那几根掉出窗口，`totalVolume` 就**可以**下降——那不是缺陷而是本片的定义（§十二·4）。要读单调性只能读「`realFrom` 未动的相邻两帧之间」，且它不是交付判据。
-4. `前一根` ×1 ⇒ 末根消失，oracle 用短前缀重算，逐档对得上（不许留「已经画过的那一档还带着未来的量」）；
-5. `退出回放` ⇒ 全量分布与 `__vp` 全量重算逐档相等；VPVR 实例仍恰好一份；`getYAxes()[0].getRange()` 与 VPVR 开前**逐字相同**（这条就是 §六 那两把钥匙的实地判据）。
+2. 读图例三格 POC/VAH/VAL，与**页内独立 oracle**（按 §四/§五 重算的那套，`window.__vp`，喂与 `profileOfChart` 同一口径的可视区切片）比对，判据是**三个 `.toFixed(2)` 字符串逐字相等**，**不是**数值容差：图例本身已量化到分，一个真 bug 换掉的是**档下标**（差一整格价格），而不是小数末位；两侧循环形状不同（oracle 用「先造边界数组、逐档 `min/max` 求重叠」，生产用游标 `while`），最后一位必不相等，写绝对位数容差只会把针在无辜算术上判红。实测量级也否掉了绝对界——A 股档位量在 `1e6`～`1e9`，`1e-9` 那种界在这里从来不可满足。不等时按两条落点规则裁决（写在计划里，不留给执行席当场发明）：相对差 `< 1e-9` ⇒ 四舍五入落点；`POC` 对得上而 `VAH`/`VAL` 恰差一格且 oracle 的覆盖率离 70% 门槛在相对 `1e-9` 内 ⇒ 70% 落点分歧。两者都不是缺陷，都要把读数登记进台账；
+3. `后一根` ×6 ⇒ 判据是**「每步重读切片、重跑第 2 条的逐字比对」**。这里**不能**断言 `totalVolume` 单调不减：分布域取的是**可视区自身**的极值，回放步进让库自动右滚时 `realFrom` 会前移，最早那几根掉出窗口，`totalVolume` 就**可以**下降——那不是缺陷而是本片的定义（§十二·4）。要读单调性只能读「`realFrom` 未动的相邻两帧之间」，且它不是交付判据。**同样不能判「逐档与 oracle 相等」**：档量只活在 `vpvrDraw` 那一帧的局部变量里，`getIndicators()[0].result` 在 §六 那两把钥匙（`calc` 返回 `[]`）下恒空，页内没有任何面读得到它们——第一版把这条写成「逐档对 `1e-9`」，是指了一个不存在的读数口。逐档级的「前缀不吸收后缀」归 §九 那根下毒针，它是位级判据，比页内读数强；
+4. `前一根` ×1 ⇒ 末根消失，oracle 用短前缀重算，逐字比得上（不许留「已经画过的那一档还带着未来的量」）；
+5. `退出回放` ⇒ 全量切片下三格逐字相等；VPVR 实例仍恰好一份；`getYAxes()[0].getRange()` 与 VPVR 开前**逐字相同**（这条就是 §六 那两把钥匙的实地判据）。
 
 每步同时读：`getIndicators({name:'VPVR'}).length === 1`、`getIndicators({name:'HEIKIN_ASHI'}).length` 与进入前相同、`getDataList()` 的**引用与 JSON 快照**在开关前后相同、`localStorage['pro-chart.drawings.v1']` 逐字节相同。
 
@@ -229,14 +229,14 @@ return true
 
 `frontend/src/lib/__tests__/volumeProfile.test.ts`（纯算术，无 mock）：
 
-- **手算向量**（先写期望值，再写实现）：4 根小样本、`rows = 4`、每根 `[low, high]` 恰好跨两档 ⇒ 逐档 `volume` 精确到 `1e-12`；
+- **手算向量**（先写期望值，再写实现）：4 根小样本、`rows = 4`、每根 `[low, high]` 恰好跨两档 ⇒ 逐档 `volume` **精确相等**（夹具选成域宽 4、每根 `high − low = 2`，摊派系数只能是「除以 2」⇒ 二进制精确，所以计划用 `toEqual` 逐格钉死而不是写容差；写容差就等于放弃了这条针的一半杀伤力）；
 - **一字线** `high === low` ⇒ 整量进包含该价的那一档，且**不产生 `Infinity`/`NaN`**（摊派分母为 0 是唯一造得出 `NaN` 的地方）；
 - **末档右闭**：一根 `high === spanHigh` ⇒ 钳进最后一档；
 - **POC 并列取下**：两档同量 ⇒ `pocIndex` 是下标小的那个；
 - **价值区**：手工构造的集中分布 ⇒ `lowIndex/highIndex/coverage` 逐格；再加一根「两侧等量时先吃上侧」的针；「单侧到头」的针（POC 在第 0 档）；
 - **退化三条**：空输入／`spanHigh === spanLow`／全零量；
 - **反未来函数下毒针**：`volumeProfile(all.slice(0, k))` 与在 `all` 的 `k` 之后追加一根荒谬巨量（`volume: 1e12`，`high/low` 远超域）后的 `volumeProfile(all2.slice(0, k))` **逐档相等** ⇒ 前缀不吃后缀；
-- **前缀单调**：`totalVolume(profile_k)` 随 `k` 不减，且 `sum(rows.volume)` 与 `totalVolume` 在 `1e-9` 内相等（摊派不丢量、不造量——这条同时钉住 §四 的钳位与摊派系数）。
+- **前缀单调**：`totalVolume(profile_k)` 随 `k` 不减，且 `sum(rows.volume)` 与 `totalVolume` 在**相对**误差 `1e-11` 内相等（摊派不丢量、不造量——这条同时钉住 §四 的钳位与摊派系数）。判相对界而不是绝对位数：档宽 `域宽 / rows` 在二进制里通常不精确（出厂 100 档配域宽 12 ⇒ 0.12），累加噪声随样本量级漂，而结构性漏档是 O(一档的量)——两者差十个数量级，绝对位数界反而会把针在无辜代码上判红（本轮实现席在 `rows = 100` 实测噪声 2.36e-9，`toBeCloseTo(…, 9)`＝5e-10 的绝对界当场红）。
 
 `frontend/src/lib/__tests__/vpvrChart.test.ts`（`vi.mock("klinecharts")` 只给 `registerIndicator: (spec) => pushed.push(spec)`，照 `heikinAshiChart.test.ts:6-8`）：
 
