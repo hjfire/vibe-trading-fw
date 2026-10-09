@@ -87,6 +87,15 @@ export { HA_PRICE_KEYS as HA_PRICE_KEYS_FOR_TEST } from "./heikinAshi";
 
 type CompleteHaRow = Required<HaRow>;
 
+/**
+ * 「这一根拿得出四价吗」——只管四键齐全 vs `{}`（na 行）。
+ *
+ * 与 `fmt` 的分工要说清：`fmt` 走的是**更严**的 `Number.isFinite` 口径，因为它对着的是要写给
+ * 用户看的一格文本，NaN／Infinity 都得读成 `"-"`；`isHaRow` 对着的是绘制，它要区分的只有
+ * 「calc 这一根交出了四个数」还是「交出了 `{}`（na 行，链条断掉那一根）」。`heikinAshi()`
+ * 的算术吃的是真实四价，交不出 NaN 行，所以这里不需要再造一道 `Number.isFinite` 的滤网——
+ * 为不可达的场景加校验是本仓禁止的，行为因此不改。
+ */
 export function isHaRow(row: HaRow | undefined): row is CompleteHaRow {
   return (
     row !== undefined &&
@@ -99,20 +108,25 @@ export function isHaRow(row: HaRow | undefined): row is CompleteHaRow {
 
 /** `draw`／`createTooltipDataSource` 的形参面，写成结构化类型以便单测直接喂假对象。 */
 interface DrawCtx {
-  fillStyle: string;
+  // 取库自己的口径，不是 `string`：本地收窄成 `string` 之后，`registerIndicator` 交进来的那份
+  // `ctx`（`fillStyle: string | CanvasGradient | CanvasPattern`）就装不进来，于是两处调用点
+  // 只能靠 `as unknown as` 全量重断言（R11）。放宽这一格，cast 就没有存在的理由了。
+  fillStyle: CanvasRenderingContext2D["fillStyle"];
   fillRect(x: number, y: number, w: number, h: number): void;
 }
 
 interface DrawParams {
   ctx: DrawCtx;
-  chart: Pick<Chart, "getVisibleRange" | "getBarSpace" | "getDataList">;
+  // 只列 `haDraw` 真读的两格：它不碰 `getDataList`，HA 是像素层的改写者（spec §三.A）。
+  chart: Pick<Chart, "getVisibleRange" | "getBarSpace">;
   indicator: { result: HaRow[] };
   xAxis: Pick<XAxis, "convertToPixel">;
   yAxis: Pick<YAxis, "convertToPixel">;
 }
 
 interface TooltipParams {
-  chart: Pick<Chart, "getDataList">;
+  // 没有 `chart` 这一格：Task 5 的缺省光标修复之后 `haTooltipDataSource` 只读
+  // `{ indicator, crosshair }`，下标由 `indicator.result` 自己的长度给（见那里那段注释）。
   indicator: { result: HaRow[] };
   crosshair: { dataIndex?: number };
 }
@@ -189,7 +203,7 @@ export function haTooltipDataSource({ indicator, crosshair }: TooltipParams) {
   return {
     name: HEIKIN_ASHI_SHORT_NAME,
     calcParamsText: "",
-    features: [] as never[],
+    features: [],
     legends: [
       { title: "开: ", value: fmt(row?.open) },
       { title: "高: ", value: fmt(row?.high) },
@@ -224,7 +238,7 @@ export function ensureHeikinAshiIndicator(): void {
       { key: "low", title: "低: ", type: "line" as const },
     ],
     calc: (dataList: KLineData[]) => heikinAshi(dataList),
-    draw: (params) => haDraw(params as unknown as DrawParams),
-    createTooltipDataSource: (params) => haTooltipDataSource(params as unknown as TooltipParams),
+    draw: (params) => haDraw(params),
+    createTooltipDataSource: (params) => haTooltipDataSource(params),
   });
 }
