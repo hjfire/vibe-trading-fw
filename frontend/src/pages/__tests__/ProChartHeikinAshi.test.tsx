@@ -38,6 +38,15 @@ const h = vi.hoisted(() => ({
   // 每次 `overrideOverlay` 收到的是什么。第⑤片的真值边界钉用它判「切 HA 不该重锚画线」，
   // 所以判据是「切换前后这个数组没长」，不是「它等于空」。
   overridden: [] as unknown[],
+  // 图上现存的画线，**有内容**（R13）。以前下面那格 `getOverlays` 返回的是常量空集，
+  // 于是「切 HA 不重锚画线」那条针在页面上任何一轮遍历里都没有候选——结构性不可红。
+  // 现在 `beforeEach` 往里种一条真带 `points` 的线，那条针才真有杀伤力。
+  overlays: [] as Array<{
+    id: string;
+    name: string;
+    paneId: string;
+    points: Array<{ timestamp: number; value: number }>;
+  }>,
   list: [] as Array<Record<string, unknown>>,
   loader: null as null | {
     getBars: (p: {
@@ -158,7 +167,10 @@ vi.mock("klinecharts", () => ({
         );
         return h.indicators.length < before;
       },
-      getOverlays: () => [],
+      // 有状态版本（R13）：这一格以前是 `getOverlays: () => []`——返回常量空集，所以「切 HA
+      // 期间不许重锚画线」那条计数针没有候选，页面无论怎么写画线面都永远绿。现在它交出
+      // `beforeEach` 种下的那条线，判据才落到真东西上。
+      getOverlays: () => h.overlays,
       getPaneOptions: () => [{ id: "candle_pane", height: 300, minHeight: 30, state: "normal" }],
       setPaneOptions: vi.fn(),
       // 装 loader 的那一格是整份替身的关键：不接，页面就没地方要数据，`barCount` 停在 0。
@@ -243,6 +255,20 @@ beforeEach(() => {
   // 默认就带上 bar：真实使用里图上有数据，按钮的 `barCount > 0` 判据不该替测试挡路。
   // 要空图的那条自己 `h.list = []` 再 render（第⑤片那条就是）。
   seed();
+  // 种一条真带 `points` 的画线（R13）：锚点从**当次喂进去的** `h.list` 里取（最后一根），
+  // 所以它是数据里真实存在的 timestamp，不是一个与图无关的数字字面量；`paneId` 给
+  // `candle_pane`，那条线因此不归任何副图管，`parkOrphans` 不会把它卷进停放面。
+  // 要空图的那条把 `h.list` 清空时不动这一格——线还留在图上，正如真实使用里换了数据
+  // 也换不掉已画的线。
+  const seedAnchor = h.list[h.list.length - 1] as { timestamp: number };
+  h.overlays = [
+    {
+      id: "d1",
+      name: "horizontalStraightLine",
+      paneId: "candle_pane",
+      points: [{ timestamp: seedAnchor.timestamp, value: 1234.5 }],
+    },
+  ];
   localStorage.clear();
   document.documentElement.classList.remove("dark");
 });
@@ -523,7 +549,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
   // `syncPriceOverlay` 挂 MA、`syncSubPanes` 挂副图都会发生，边界钉要判的就是
   // 「在这条真实路径上再开一次 HA，那些东西没有被碰」。
 
-  it("开 HA 前后 getDataList() 的内容与身份都没变，样式每次现合成：像素改写不落数据面", async () => {
+  it("开→关来回：getDataList() 的内容与身份都没变，样式每次现合成：像素改写不落数据面", async () => {
     render(<ProChart />);
     await flush();
     const before = h.list;
@@ -549,24 +575,44 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     // 「关」那一格的 `candle.bar` 更不许是 `CANDLE_HIDDEN` 本身：把那九个 transparent 交出去
     // 就等于把藏蜡烛的键交给页面之外持有；今天它是每次现拼的字面量（`ProChart.tsx:322-332`）。
     expect(barColors(mountIdx)).not.toBe(CANDLE_HIDDEN);
+
+    // R12 的第三腿：数据面判据要量到**切换之后**，而不是只量「开」那一次。卸载路径同样是 HA
+    // 的代码，它一样不许碰数据面——所以这一趟重新读引用与内容两格。先证明这次点击真的动了
+    // （九色恢复），否则下面两句量的是一次空点击，等于没判。
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
+    for (const key of NINE_BAR_KEYS) expect(barColors(pushCount() - 1)[key]).not.toBe("transparent");
+    expect(JSON.stringify(h.list)).toBe(snapshot);
+    expect(h.list).toBe(before);
   });
 
-  it("开一次、关一次都不新增画线重写：overrideOverlay 的计数不变", async () => {
+  it("开→关→开两次穿越：一条 overrideOverlay 都没新增，种子线的锚点也分毫未动", async () => {
     // 磁吸落点读的是 kline 数据自己的 high/low（dist 8822-8835，同 `chartDrawings.ts:1022`
     // 记的那一段），HA 不动数据面 ⇒ 不动落点。
-    // 这一条钉的是「切换开关不会把用户已画的线重锚或重写」。
-    // 断的是**增量**而不是 0：init 那一路 `restoreDrawings` 本来就可能重写若干次
-    // （`ProChart.tsx:1234`），把它当 0 判是在钉替身，不是钉页面。
+    // 这一条断的是：**切换 HA 期间一条 `overrideOverlay` 都没新增，且 `beforeEach` 那条种子线的
+    // 锚点（timestamp/value）分毫未动**。它取代的是原来那条「计数不变」的针——原来 `getOverlays`
+    // 返回常量空集（R13：`getOverlays: () => []`），页面上任何一轮画线遍历都没有候选，所以那句
+    // 「init 那一路 restoreDrawings 本来就可能重写若干次，把它当 0 判是在钉替身」换来的增量钉
+    // 永远绿：不是页面重写少，而是替身一个都不交。现在种子线是真的带 `points`，页面只要在
+    // 这两次穿越里碰一次画线面——`overrideOverlay`（重锚／改样式／改可见性）或者就地改实例的
+    // 锚点——就当场红。`before` 取在挂载之后，所以 init 那一路（`ProChart.tsx:1234`）的
+    // `restoreDrawings` 落在快照之前，判的是「穿越期间」的增量 0，不是数组为空。
     render(<ProChart />);
     await flush();
-    const before = h.overridden.length;
+    const before = [...h.overridden];
+    const anchorBefore = { ...h.overlays[0].points[0] };
 
     fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
     await flush();
+    fireEvent.click(screen.getByRole("button", { name: "平均K线" }));
+    await flush();
 
-    expect(h.overridden).toHaveLength(before);
+    expect(h.overridden).toEqual(before);
+    // 第二腿判的是实例本身：真库里 `getOverlays()` 交出的是活的 `OverlayImp`，就地改
+    // `points` 不进 `overrideOverlay` 的录制面，所以这一格不是上一格的复述。
+    expect(h.overlays[0].points[0]).toEqual(anchorBefore);
   });
 
   it("蜡烛图例那一行的六个占位符在开着 HA 时仍是真实价占位符", async () => {
