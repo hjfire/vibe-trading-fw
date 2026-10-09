@@ -258,7 +258,7 @@ return true
 - 样式面零影响：`h.styles` 最后一次推送与 VPVR 无关——断言 `Object.keys(...).indicator` 仍**恰等于 `["tooltip"]`**，`candle.bar` 九键未因 VPVR 变化（这条是防「将来有人图省事给 VPVR 加样式键」）；
 - 空图：`barCount === 0` ⇒ 按钮 `disabled` 且 reason 说「先等 K 线加载出来」；**不**声称「空图时不会挂指标」（第④片 R9 的教训：effect 无 `barCount` 门，灰按钮在 jsdom 与浏览器一样不派发事件，那条针永远绿）。
 
-**变异自证（交付门槛，不是可选项）**：至少四根针，每根「恰 N 条红 ＋ 红的 `file:line` 归属写明」——① `figures` 从 `[]` 改成 `[{ key: "volume", type: "bar" }]` ⇒ 镜像折叠那条必须红（这条如果绿，说明 §六 那两把钥匙只剩一把）；② 摊派系数分母从 `(high - low)` 改成 `1` ⇒ 手算向量红；③ POC 扫描的 `>` 改成 `>=` ⇒ 并列取低那条红；④ `ctx.fillRect` 的 x 从 `bounding.width - len` 改成 `0` ⇒ 右锚那条红。注入一律 `cp` 备份/还原、禁用 `git checkout --`，还原后 `git hash-object` ＋ `git status --porcelain` 双校验。
+**变异自证（交付门槛，不是可选项）**：至少四根针，每根「恰 N 条红 ＋ 红的 `file:line` 归属写明」——① `figures` 从 `[]` 改成 `[{ key: "volume", type: "bar" }]` 而 `calc` 仍交空数组 ⇒ **只有声明钉该红，镜像折叠那条必须仍然绿**：两把钥匙判的是合取，第二把还挡着，这正是要「两把」而不是「一把」的理由。要证镜像 helper 自己有杀伤力，得再注入一次——`figures` 加 key **且** `calc` 返回 `[{ volume: 123.4 }]` ⇒ 那条红；反向只改 `calc`（`figures` 仍空）⇒ 那条仍绿。三次注入（单改 figures／双改／单改 calc）合起来才把「两把钥匙」写成可判活的针；② 摊派系数分母从 `(high - low)` 改成 `1` ⇒ 手算向量红；③ POC 扫描的 `>` 改成 `>=` ⇒ 并列取低那条红；④ `ctx.fillRect` 的 x 从 `bounding.width - len` 改成 `0` ⇒ 右锚那条红。注入一律 `cp` 备份/还原、禁用 `git checkout --`，还原后 `git hash-object` ＋ `git status --porcelain` 双校验。
 
 ---
 
