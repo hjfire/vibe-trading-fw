@@ -28,9 +28,9 @@ import { ProChart } from "../ProChart";
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
   // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
-  // （`ProChart.tsx:1062`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // （`ProChart.tsx:1106`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
   // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
-  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1328` 那一处会写）
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1372` 那一处会写）
   // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
@@ -109,7 +109,7 @@ function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
 }
 
-/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1062`）carried it. */
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1106`）carried it. */
 function initBarColors(): Record<string, unknown> {
   return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
@@ -132,7 +132,7 @@ vi.mock("klinecharts", () => ({
   registerLocale: vi.fn(),
   dispose: vi.fn(),
   // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
-  // （`ProChart.tsx:1062`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // （`ProChart.tsx:1106`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
   // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
   init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
     h.initStyles.push(options?.styles ?? {});
@@ -286,9 +286,9 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  // 上一条读的是 `h.styles`——那是主题 effect（`ProChart.tsx:1328`）在挂载那一次的推送。
-  // 这一条读的是 `h.initStyles`：`init` 的 `styles` 选项（`:1062`），首屏真正落到图上的
-  // 第一份样式。两个推送点必须各有各的 bucket，因为把 `:1062` 的第四个实参写成常量 `true`
+  // 上一条读的是 `h.styles`——那是主题 effect（`ProChart.tsx:1372`）在挂载那一次的推送。
+  // 这一条读的是 `h.initStyles`：`init` 的 `styles` 选项（`:1106`），首屏真正落到图上的
+  // 第一份样式。两个推送点必须各有各的 bucket，因为把 `:1106` 的第四个实参写成常量 `true`
   // 只脏 init 那一格——主题 effect 拿的是当时的 `haOn`（默认关＝false），`h.styles` 仍是
   // 调色板色，上一条照绿，而用户首屏那一眼已经是「真蜡烛被九个透明色藏掉、图上却没有
   // 任何平均K线实体」。方向也反过来钉一次：开着偏好时那两个推送点由上面第 2 条管。
@@ -334,8 +334,8 @@ describe("/pro-chart 平均K线的样式链", () => {
     render(<ProChart />);
     await flush();
     // 首屏有两个合成点，各钉一次——只读 `last` 的话 init 点没人管：
-    // - `init` 的 `styles` 选项（`ProChart.tsx:1062`）＝真机落到图上的第一份样式；
-    // - 主题 effect（`:1328`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
+    // - `init` 的 `styles` 选项（`ProChart.tsx:1106`）＝真机落到图上的第一份样式；
+    // - 主题 effect（`:1372`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
     //   挂载时它也正是 `last`（首屏只有这一次 `setStyles`）。
     const last = pushCount() - 1;
     const initColors = initBarColors();
@@ -347,7 +347,7 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  // 这条钉的是**主题推送点（`ProChart.tsx:1328` 那一行 `setStyles`）的第四个实参**：换主题时
+  // 这条钉的是**主题推送点（`ProChart.tsx:1372` 那一行 `setStyles`）的第四个实参**：换主题时
   // 页面把整个 `chartStyles` 重推一遍，重推那一次的 `candle.bar` 必须仍是九色透明（那一格
   // 写成常量，调色板值就当场把真蜡烛刷回图上，而挂载着的 HA 指标还在画它的平滑蜡烛）。
   // 这条自己钉不到**依赖数组 `:1329`**：叫醒它的是 `dark`，闭包拿到的已经是当前 `haOn`

@@ -15,7 +15,7 @@ import { ProChart } from "../ProChart";
 /**
  * 量分布 / VPVR 的页面接线（推荐清单第⑤片，spec §七 五处）。
  *
- * 本片要钉的四张面：
+ * 本片要钉的面：
  * 1. 挂卸：先删后挂到 `candle_pane`、`isStack` 为真（真库 `addIndicator(create, isStack)`
  *    在假值时先清整格指标，共挂那条判的就是这一参没丢）；反复开关不堆叠，
  *    StrictMode 的第二次挂载不追加第二份——`syncVpvr` 的 `live.length === 0` 那一夹
@@ -25,18 +25,23 @@ import { ProChart } from "../ProChart";
  * 3. 分时互斥：进分时必须卸掉 VPVR（面积线没有 [low, high] 区间可摊），
  *    `aria-pressed` 当场变 false，`title` 说的是面积线那个理由。
  * 4. 与 HA 的关系：共挂两个名字各一份、谁也没吃掉谁；卸一边不动另一边。
+ * 5. 真值边界（Task 5，spec §八）：开关前后数据面引用与快照都不动、画线面锚点与
+ *    `overrideOverlay` 都不动、`pro-chart.drawings.v1` 落盘面逐字节不动、样式面只读不写、
+ *    空图时按钮 disabled 且理由说实话。
  *
- * 样式面本片零改动：不写任何样式键，「没脏样式」由第④片文件自身的样式钉
- * （`ProChartHeikinAshi.test.tsx`，`Object.keys(...).indicator === ["tooltip"]` 那条）
- * 在本片落地后回归全绿来判——所以 harness 的 `h.styles`／`h.initStyles` 录制面原样带过来。
+ * 样式面本片零改动：不写任何样式键。这一张有**两处**判据——本文件的「样式面零影响」那条
+ * 读 `Object.keys(...).indicator === ["tooltip"]` 与九色／图例模板，第④片文件自己那条同型钉
+ * 在它落地后回归全绿。库行号一律指 `dist/index.esm.js`（`dist/umd/klinecharts.js` 是同一份代码的
+ * 另一个打包，行号各偏 +5/+7，别在一句话里混用两个坐标）。
+ * 所以 harness 的 `h.styles`／`h.initStyles` 录制面原样带过来。
  */
 
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
   // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
-  // （`ProChart.tsx:1062`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // （`ProChart.tsx:1106`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
   // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
-  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1328` 那一处会写）
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1372` 那一处会写）
   // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
@@ -119,7 +124,7 @@ function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
 }
 
-/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1062`）carried it. */
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1106`）carried it. */
 function initBarColors(): Record<string, unknown> {
   return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
@@ -142,7 +147,7 @@ vi.mock("klinecharts", () => ({
   registerLocale: vi.fn(),
   dispose: vi.fn(),
   // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
-  // （`ProChart.tsx:1062`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // （`ProChart.tsx:1106`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
   // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
   init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
     h.initStyles.push(options?.styles ?? {});
@@ -163,9 +168,9 @@ vi.mock("klinecharts", () => ({
         h.created.push({ ...(value as Record<string, unknown>), isStack });
         const paneId = value.paneId ?? `sub:${value.name}`;
         // 针牙①：替身现在**吃**这一参了。真库 `StoreImp.addIndicator(create, isStack)`
-        // （klinecharts 10.0.3，`dist/umd/klinecharts.js:14167`）在 `isStack` 为假时先
+        // （klinecharts 10.0.3，`dist/index.esm.js:14162-14164`）在 `isStack` 为假时先
         // `removeIndicator({ paneId })` 把目标格上的每一个指标清掉再挂新的，而
-        // `ChartImp.createIndicator`（同文件 :15279）在调用方没传时按 `false` 算。
+        // `ChartImp.createIndicator`（同文件 `:15274`）在调用方没传时按 `false` 算。
         // 以前替身只记不吃 ⇒ 「页面把 `true` 写成假值」在 `h.indicators` 里读不出来，
         // 那根针是等价变异、永不红。现在假值会把同格的指标一起带走，共挂那条才真判得到。
         if (!isStack) h.indicators = h.indicators.filter((ind) => ind.paneId !== paneId);
@@ -417,9 +422,10 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
   // 到不了——全仓挂 VPVR 的入口只有那一处，而它只在 `live.length === 0` 时才走，所以「页面
   // 挂出来的那份图」里 VPVR 永远是 0 或 1 份，那条 `forEach` 是个空转（判据 F 打在上面永不红）。
   // 但第二份是**库侧真实存在**的起始态：`ChartImp.createIndicator`
-  // （klinecharts 10.0.3，`dist/umd/klinecharts.js:15272`）先给 create 铸一把新 id，
-  // `StoreImp.addIndicator`（同文件 :14157）再拿这把 id 去重，而带 id 的 filter 只按 id 匹配
-  // （:14182）⇒ `isStack` 为真时它**永远追加**，看不见格上已有的那份。页面那段注释写的就是
+  // （klinecharts 10.0.3，`dist/index.esm.js:15270`）先给 create 铸一把新 id，
+  // `StoreImp.addIndicator`（同文件 `:14150`，去重那一格是 `:14152`）再拿这把 id 去查，
+  // 而带 id 的 filter 只按 id 匹配（`:14178-14180`）⇒ `isStack` 为真时它**永远追加**，
+  // 看不见格上已有的那份。页面那段注释写的就是
   // 「the invariant holds from any starting state」⇒ 这一条钉的是那个起始态，不是页面造题的能力。
   // 种那两份走的是替身自己的 `createIndicator` recorder（页面挂 VPVR 用的是同一格、同一个
   // `paneId`、同一个 `isStack=true`，id 也由同一把 `i${length}` 铸），不是手写进 `h.indicators`
@@ -520,6 +526,9 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     );
     render(<ProChart />);
     await flush();
+    // 判据的起点是「挂载之后」，比的是两次点分布之间：挂载那一路本来就有权吸回越界锚点并回写
+    // （`ProChart.tsx:1263` 读桶，`fixed.moved > 0` 才 `saveDrawings`），那是本片之外的事，
+    // 不归这条管。这条只管一件事：开／关 VPVR 不是任何一次 `saveDrawings` 的理由。
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
     const mid = localStorage.getItem("pro-chart.drawings.v1");
