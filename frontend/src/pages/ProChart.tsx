@@ -121,6 +121,13 @@ import {
   loadHeikinAshi,
   saveHeikinAshi,
 } from "@/lib/heikinAshiChart";
+import {
+  ensureVpvrIndicator,
+  loadVpvr,
+  saveVpvr,
+  VPVR_NAME,
+  vpvrActive,
+} from "@/lib/vpvrChart";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
@@ -557,6 +564,11 @@ export function ProChart() {
   // 都摊到同一份过期的闭包快照上，第二次就会撤销第一次。
   const [haOn, setHaOn] = useState(() => loadHeikinAshi());
   const haRef = useRef(haOn);
+  // VPVR（第⑤片）：又一个视图偏好，默认关，未偏离不落盘。形状逐字照 `haOn`/`haRef`——
+  // 包括「为什么要有 ref」：同一个 task 里连点两次都摊到同一份过期的闭包快照上，
+  // 第二次就会撤销第一次。
+  const [vpOn, setVpOn] = useState(() => loadVpvr());
+  const vpRef = useRef(vpOn);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -999,6 +1011,38 @@ export function ProChart() {
   };
 
   /**
+   * Put the volume-profile histogram on the price pane, or take it off (第⑤片).
+   *
+   * Same 先删后挂 shape as `syncHeikinAshi` (`:974-999`) for the same reason:
+   * `createIndicator(value, true)` always appends (`ChartImp.createIndicator` mints a fresh
+   * id before `StoreImp.addIndicator` de-dups, and a filter carrying an id matches on id
+   * alone — dist 15270 ⇄ 14150), so "is it already up?" cannot be answered by the library
+   * and a second copy means a second legend row.
+   *
+   * `isStack` (the second argument) is load-bearing in a way it is not for HA: the real
+   * `addIndicator(create, isStack)` removes every other indicator on the pane when it is
+   * falsy. HA survives that by accident of ordering; here the pair HA-plus-VPVR is asserted
+   * side by side (`ProChartVpvr.test.tsx`, 共挂那条), so dropping it goes red.
+   *
+   * Unmounting is `removeIndicator({ name })` even when nothing is mounted — the orphan-pane
+   * sweep explicitly skips the candle pane (dist 15332), so a no-match call cannot take the
+   * main chart down.
+   */
+  const syncVpvr = (chart: Nullable<Chart>, on: boolean) => {
+    if (!chart) return;
+    if (!on) {
+      chart.removeIndicator({ name: VPVR_NAME });
+      return;
+    }
+    ensureVpvrIndicator();
+    const live = chart.getIndicators({ name: VPVR_NAME });
+    live.slice(1).forEach((extra) => chart.removeIndicator({ id: extra.id }));
+    if (live.length === 0) {
+      chart.createIndicator({ name: VPVR_NAME, paneId: MAIN_PANE_ID }, true);
+    }
+  };
+
+  /**
    * Is this pane on the chart right now? `getPaneOptions(id)` answers `null` for
    * a pane the chart does not hold, which is the only way to tell "the MACD pane
    * is closed" apart from "draw it wherever" (⑲) — and guessing wrong is exactly
@@ -1339,6 +1383,17 @@ export function ProChart() {
     // when the switch or the view actually moves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [haOn, timeShare]);
+
+  // VPVR 的挂载与分时互斥走的是和 HA 同一条通道：进分时必须把它卸下来（面积线上
+  // 没有 [low, high] 区间可摊），回蜡烛必须自己挂回来。
+  useEffect(() => {
+    syncVpvr(chartRef.current, vpvrActive(vpOn, timeShare));
+    // Not deps: `chartRef.current` is a ref the init effect owns (a chart object appearing is
+    // not a state change it can react to), and `syncVpvr` is a new function object every
+    // render — listing either would re-run this 先删后挂 sweep on every render rather than only
+    // when the switch or the view actually moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vpOn, timeShare]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
@@ -1897,6 +1952,19 @@ export function ProChart() {
   };
 
   /**
+   * Flip the volume-profile switch. Same three writes as `toggleHeikinAshi`
+   * (`:1892-1897`) and for the same reason: the ref breaks the stale-closure tie, the state
+   * drives the effect, the pref outlives the session. Nothing to re-apply — VPVR is a
+   * repaint, not a property of objects that already exist.
+   */
+  const toggleVpvr = () => {
+    const next = !vpRef.current;
+    vpRef.current = next;
+    setVpOn(next);
+    saveVpvr(next);
+  };
+
+  /**
    * Change a legend pref. Nothing else has to happen: `legend` is in the theme
    * effect's dependency list, so the new value goes onto the chart through the
    * same single composition point that the theme flip uses.
@@ -2296,6 +2364,34 @@ export function ProChart() {
             onClick={toggleHeikinAshi}
           >
             平均K线
+          </button>
+          {/* 量分布 sits next to 平均K线 for the same reason: it is a view switch, so it
+              speaks 分时's `disabled` language. Three expressions, three deliberate reads,
+              copied from the HA button above — `disabled` asks the two reasons ReplayBar
+              spells out (and *not* `vpvrActive`, which would grey the button every time the
+              profile happens to be off); `aria-pressed` and the className ask the one
+              predicate (on a 分时 area line "已开" would be a lie); the `title` asks raw
+              `vpOn`, which 分时 never rewrites. */}
+          <button
+            disabled={timeShare || barCount === 0}
+            aria-label="量分布"
+            aria-pressed={vpvrActive(vpOn, timeShare)}
+            title={
+              timeShare
+                ? "分时是面积线，分档量能要按 [low, high] 与档的重叠摊派，这里没有可摊的区间"
+                : barCount === 0
+                  ? "图上还没有数据，先等 K 线加载出来"
+                  : vpOn
+                    ? "量分布已开：把可视区的成交量按价格分 100 档，画成右锚横向直方图，高亮 POC 档与 70% 价值区。分布随滚动/缩放现算，不改价格轴、不改真实价（再点切回）"
+                    : "量分布已关：点开画可视区成交量分布（每根的量按 [low, high] 与档的重叠比例摊进去，POC=最大档，VA=从 POC 吃满 70%）"
+            }
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+              vpvrActive(vpOn, timeShare) && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            onClick={toggleVpvr}
+          >
+            量分布
           </button>
           {INTERVALS.map((i) => {
             // Greyed out only where no source can answer at all. Whether OpenD
