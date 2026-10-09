@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { volumeProfile, VPVR_ROWS, type ProfileBar } from "../volumeProfile";
+import { valueAreaOf, volumeProfile, VPVR_ROWS, VPVR_VALUE_AREA_RATIO, type ProfileBar } from "../volumeProfile";
 
 /**
  * 手算向量（spec §九 第一条）。域 `[100, 104]`、4 档 ⇒ 档宽恰为 1。
@@ -197,5 +197,72 @@ describe("volumeProfile 不看游标之后（spec §八 的算术形式）", () 
       expect(total).toBeGreaterThanOrEqual(prev);
       prev = total;
     }
+  });
+});
+
+/** 造一张只关心档量的 profile；`valueAreaOf` 只读 `rows[].volume`／`pocIndex`／`totalVolume`。 */
+function shape(volumes: number[], pocIndex: number, totalVolume: number) {
+  return {
+    rows: volumes.map((volume) => ({ low: 0, high: 0, volume })),
+    pocIndex,
+    totalVolume,
+    spanLow: 0,
+    spanHigh: 0,
+  };
+}
+
+describe("valueAreaOf", () => {
+  it("经典口径：从 POC 出发每步吃较大的那一侧，直到累计 ≥ ratio × total", () => {
+    // Task 1 那条手算向量的 profile：[50,110,160,150]，POC=2，total=470，target=329。
+    const p = volumeProfile(VECTOR, 4);
+    const va = valueAreaOf(p);
+    // 第一步 up=150 vs down=110 ⇒ 吃上侧（highIndex=3, acc=310）；
+    // 第二步 up 越界 ⇒ 只能吃 down=110（lowIndex=1, acc=420 ≥ 329）⇒ 收。
+    expect(va).toEqual({ lowIndex: 1, highIndex: 3, coverage: 420 / 470 });
+  });
+
+  it("扩展并列取**上**侧（与 POC 的并列取下相反）", () => {
+    const va = valueAreaOf(shape([0, 10, 30, 10, 0], 2, 50));
+    // acc=30 < 35；up(10) === down(10) ⇒ 走上 ⇒ {2, 3}，acc=40。
+    expect(va).toEqual({ lowIndex: 2, highIndex: 3, coverage: 40 / 50 });
+  });
+
+  it("单侧越界：POC 在第 0 档时只能往上吃，不许 index 变负", () => {
+    const va = valueAreaOf(shape([40, 30, 10], 0, 80));
+    // acc=40 < 56 ⇒ 下侧不存在 ⇒ 吃上 30 ⇒ acc=70 ⇒ {0, 1}。
+    expect(va).toEqual({ lowIndex: 0, highIndex: 1, coverage: 70 / 80 });
+  });
+
+  it("两侧都到头而仍未达标 ⇒ 就地收摊（返回全区间）", () => {
+    // ratio 1.2 是**可达**输入而不是想象：target 大于总量，吃满也够不着。
+    const va = valueAreaOf(shape([10, 20, 30, 20, 10], 2, 90), 1.2);
+    expect(va).toEqual({ lowIndex: 0, highIndex: 4, coverage: 90 / 90 });
+  });
+
+  it("totalVolume === 0 ⇒ {0,0,0}，不出现 0/0", () => {
+    const va = valueAreaOf(shape([0, 0, 0], 0, 0));
+    expect(va).toEqual({ lowIndex: 0, highIndex: 0, coverage: 0 });
+    expect(Number.isNaN(va.coverage)).toBe(false);
+  });
+
+  it("ratio = 0 ⇒ 只剩 POC 那一档", () => {
+    const va = valueAreaOf(shape([10, 20, 30, 20, 10], 2, 90), 0);
+    expect(va).toEqual({ lowIndex: 2, highIndex: 2, coverage: 30 / 90 });
+  });
+
+  it("缺省比例是出厂的 0.7", () => {
+    expect(VPVR_VALUE_AREA_RATIO).toBe(0.7);
+    const p = shape([10, 20, 30, 20, 10], 2, 90);
+    expect(valueAreaOf(p)).toEqual(valueAreaOf(p, 0.7));
+  });
+
+  it("派生价格边界读的是档的**界**，不是档中点", () => {
+    // 这一条是 §五 那三行派生式的钉：VAL=rows[lowIndex].low、VAH=rows[highIndex].high。
+    const p = volumeProfile(VECTOR, 4);
+    const va = valueAreaOf(p);
+    expect(p.rows[va.lowIndex].low).toBe(101);
+    expect(p.rows[va.highIndex].high).toBe(104);
+    const poc = p.rows[p.pocIndex];
+    expect((poc.low + poc.high) / 2).toBe(102.5);
   });
 });

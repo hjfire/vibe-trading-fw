@@ -116,3 +116,56 @@ export function volumeProfile(bars: readonly ProfileBar[], rows: number = VPVR_R
 
   return { rows: out, pocIndex, totalVolume, spanLow, spanHigh };
 }
+
+/** 出厂价值区比例（经典口径 70%）。 */
+export const VPVR_VALUE_AREA_RATIO = 0.7;
+
+export interface ValueArea {
+  /** 闭区间，**含 POC 档自己**。 */
+  lowIndex: number;
+  highIndex: number;
+  coverage: number;
+}
+
+/**
+ * 经典 Volume Profile 价值区：从 POC 出发，每步比较**相邻的**上一档与下一档的量，
+ * 吃掉较大的那一侧，直到累计 ≥ `ratio × totalVolume`。
+ *
+ * `ratio` 形参只为测试的两个边界（0 与 >1）而留，生产侧不传——它不是参数面板
+ * （spec §一 否掉的是 UI 可调）。
+ */
+export function valueAreaOf(profile: VolumeProfile, ratio: number = VPVR_VALUE_AREA_RATIO): ValueArea {
+  const rows = profile.rows;
+  const total = profile.totalVolume;
+  // `totalVolume === 0` 时 `coverage` 是 0 而不是 `0/0`；两条退化（空片／全零量）
+  // 都从这一支出。
+  if (total === 0) return { lowIndex: 0, highIndex: 0, coverage: 0 };
+
+  const target = ratio * total;
+  let lowIndex = profile.pocIndex;
+  let highIndex = profile.pocIndex;
+  let acc = rows[profile.pocIndex].volume;
+
+  while (acc < target) {
+    const canUp = highIndex + 1 < rows.length;
+    const canDown = lowIndex - 1 >= 0;
+    // 两侧都到头而仍未达标是**可达**情形（极端集中的分布＋高档数，或 `ratio > 1`），
+    // 不是防御性代码：就地收摊返回当前区间。
+    if (!canUp && !canDown) break;
+    // 用 -1 当「这一侧不存在」的哨兵：档量非负，所以它一定输给真实档，
+    // 越界那一侧因此永远不会被选中。
+    const up = canUp ? rows[highIndex + 1].volume : -1;
+    const down = canDown ? rows[lowIndex - 1].volume : -1;
+    // **并列取上侧**（`up >= down` 走上）。注意这与 §四 的 POC 并列取下相反——
+    // 一个「先到的赢」是扫描副产物，一个是扩展方向的选择，两条都是定死的口径。
+    if (canDown && up < down) {
+      lowIndex -= 1;
+      acc += down;
+    } else {
+      highIndex += 1;
+      acc += up;
+    }
+  }
+
+  return { lowIndex, highIndex, coverage: acc / total };
+}
