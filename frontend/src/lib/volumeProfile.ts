@@ -152,18 +152,23 @@ export function valueAreaOf(profile: VolumeProfile, ratio: number = VPVR_VALUE_A
     // 两侧都到头而仍未达标是**可达**情形（极端集中的分布＋高档数，或 `ratio > 1`），
     // 不是防御性代码：就地收摊返回当前区间。
     if (!canUp && !canDown) break;
-    // 用 -1 当「这一侧不存在」的哨兵：档量非负，所以它一定输给真实档，
-    // 越界那一侧因此永远不会被选中。
-    const up = canUp ? rows[highIndex + 1].volume : -1;
-    const down = canDown ? rows[lowIndex - 1].volume : -1;
-    // **并列取上侧**（`up >= down` 走上）。注意这与 §四 的 POC 并列取下相反——
-    // 一个「先到的赢」是扫描副产物，一个是扩展方向的选择，两条都是定死的口径。
-    if (canDown && up < down) {
-      lowIndex -= 1;
-      acc += down;
-    } else {
+    // 走哪一侧只由**边界**与两侧的档量决定，不用「越界记作 -1」的哨兵：哨兵要靠
+    // 「档量非负」才必然输，而那是数据形状给的、不是这段代码给的。一旦有负量，越界那侧
+    // 的 -1 反而赢，`highIndex` 就一路越界、`acc` 逐轮减下去，循环永不退出——页签冻死
+    // 比算错一个数更糟。下面每一支都必然推进一个**存在的**下标，循环上界恒为
+    // `rows.length`，与取值无关。
+    // **并列取上侧**。注意这与 §四 的 POC 并列取下相反——一个「先到的赢」是扫描副产物，
+    // 一个是扩展方向的选择，两条都是定死的口径。
+    let takeUp: boolean;
+    if (!canUp) takeUp = false;
+    else if (!canDown) takeUp = true;
+    else takeUp = rows[highIndex + 1].volume >= rows[lowIndex - 1].volume;
+    if (takeUp) {
       highIndex += 1;
-      acc += up;
+      acc += rows[highIndex].volume;
+    } else {
+      lowIndex -= 1;
+      acc += rows[lowIndex].volume;
     }
   }
 

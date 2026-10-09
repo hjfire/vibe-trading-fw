@@ -250,14 +250,23 @@ describe("valueAreaOf", () => {
     expect(va).toEqual({ lowIndex: 2, highIndex: 2, coverage: 30 / 90 });
   });
 
-  it("缺省比例是出厂的 0.7", () => {
+  it("缺省比例走的是 0.7 而不是别的：同一夹具在 0.6 处必须换答案", () => {
     expect(VPVR_VALUE_AREA_RATIO).toBe(0.7);
-    const p = shape([10, 20, 30, 20, 10], 2, 90);
-    expect(valueAreaOf(p)).toEqual(valueAreaOf(p, 0.7));
+    // 夹具 [5,15,30,15,5]、POC=2、total=70。走的次序（并列取上侧）：
+    //   acc=30 →（up 15 = down 15，取上）45 →（up 5 < down 15，取下）60
+    // 0.7 ⇒ target 49 ⇒ 停在 60 ⇒ {1,3}；0.6 ⇒ target 42 ⇒ 停在 45 ⇒ {2,3}。
+    // 两个答案不同，所以「默认值＝0.7」这一条是被行为钉住的，而不是被带宽放过。
+    const p = shape([5, 15, 30, 15, 5], 2, 70);
+    expect(valueAreaOf(p)).toEqual({ lowIndex: 1, highIndex: 3, coverage: 60 / 70 });
+    expect(valueAreaOf(p, 0.6)).toEqual({ lowIndex: 2, highIndex: 3, coverage: 45 / 70 });
   });
 
-  it("派生价格边界读的是档的**界**，不是档中点", () => {
-    // 这一条是 §五 那三行派生式的钉：VAL=rows[lowIndex].low、VAH=rows[highIndex].high。
+  it("该夹具的三个候选价格读数互不相等——这是 Task 3 那根图例钉能有牙的前提", () => {
+    // 这条**不判**「图例读档界还是读档中点」：本片没有任何代码读档界，那一条归
+    // `vpvrChart.test.ts` 的「三行 POC/VAH/VAL，读的是档界而不是档中点（POC 除外）」。
+    // 这里只钉两件事：① `valueAreaOf` 交出的下标能直接拿去读档界（`rows[1].low`／`rows[3].high`
+    // 都是真实存在的档）；② 101／104／102.5 三个候选读数**互不相等**——若它们撞成同一个数，
+    // Task 3 那根针读错也发现不了。把 102.5 这一行删掉之前，先确认 Task 3 的针另有自己的夹具。
     const p = volumeProfile(VECTOR, 4);
     const va = valueAreaOf(p);
     expect(p.rows[va.lowIndex].low).toBe(101);
