@@ -65,6 +65,9 @@ const h = vi.hoisted(() => ({
     points: Array<{ timestamp: number; value: number }>;
   }>,
   list: [] as Array<Record<string, unknown>>,
+  // `resetData()` 被叫过几次。替身里 `h.list` 换不掉（`ask()` 的 callback 是 `() => undefined`，
+  // 真库那条通道也不接受新数组），所以「VPVR 有没有重建数据」只能问这个计数，问不了数组身份。
+  resets: 0,
   loader: null as null | {
     getBars: (p: {
       type: string;
@@ -214,20 +217,11 @@ vi.mock("klinecharts", () => ({
       // （StoreImp.resetData, dist 13652）。分时切换走 `setPeriod`，所以三个都得问。
       setSymbol: () => ask(),
       setPeriod: () => ask(),
-      // F2（补牙）：以前这一格是 `resetData: () => ask()`——**不吃参数**，所以「开→关来回
-      // `getDataList()` 的身份没变」那一半永远读不出东西：替身从头到尾没碰过 `h.list`，
-      // 页面无论怎么重建数据，`expect(h.list).toBe(before)` 都是绿的。现在它吃下实参。
-      // 取证要写清，别把这一格写成好像库本身就是按数组开的：
-      // `ChartImp.prototype.resetData`（klinecharts 10.0.3，`dist/index.esm.js:15253`）一个形参都不接，
-      // `StoreImp.prototype.resetData(fn)`（同文件 `:13652`）吃的是**回调**，它靠
-      // `_processDataUnsubscribe()` ＋ `_processDataLoad('init')` 重新取一遍数。页面那三处调用
-      // （`ProChart.tsx:1491`/`:1504`/`:1557`，回放与换周期那几路）都是**无参**的 ⇒ 这次改动对现有
-      // 14 条零行为影响，只是多开一扇门：有人把「重建 data」接进 VPVR 链路并交回一份新数组时，
-      // 这一半才判得到（针 H3 就是这一句的活性证明）。
-      resetData: (list?: unknown[]) => {
-        // 这一句的 `as` 只服务于替身内部的 store 形状（`h.list` 声明的是 `Record<string, unknown>[]`）：
-        // 语义是「谁交回一份数组，数据面就换成那一份」，判据读的是**身份**，不看元素类型。
-        if (Array.isArray(list)) h.list = list as Array<Record<string, unknown>>;
+      // `resetData()` 在真库一个形参都不接（`ChartImp.prototype.resetData`，klinecharts 10.0.3，
+      // `dist/index.esm.js:15253`；`:13652` 那个 `fn` 是**回调**，不是新数组）。所以这一格只能记账、
+      // 不能换数组——数据面那条钉子判「VPVR 没有重建数据」读的就是 `h.resets`。
+      resetData: () => {
+        h.resets++;
         return ask();
       },
       setStyles: (s: Record<string, unknown>) => h.styles.push(s),
@@ -320,6 +314,7 @@ beforeEach(() => {
   h.created = [];
   h.removed = [];
   h.overridden = [];
+  h.resets = 0;
   h.loader = null;
   // 默认就带上 bar：真实使用里图上有数据，按钮的 `barCount > 0` 判据不该替测试挡路。
   // 要空图的那条自己 `h.list = []` 再 render（第④片那条就是）。
@@ -517,26 +512,27 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
   // 挂 MA、`syncSubPanes` 挂副图都会发生，边界钉判的就是「在这条真实路径上再开一次
   // VPVR，那些东西没有被碰」。
 
-  it("开→关来回：`getDataList()` 的内容与身份都没变（两侧都量）", async () => {
+  it("开→关来回：数据面没被重建、也没被就地改写（两侧都量）", async () => {
     render(<ProChart />);
     await flush();
-    const before = h.list;
-    const snapshot = JSON.stringify(before);
+    const snapshot = JSON.stringify(h.list);
+    const resets = h.resets;
 
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
     // 「只量开的那一次」是第④片 R12 的教训：卸的一路（`removeIndicator({name})`）
     // 要是顺手重建了 data，只在开的一侧读不出来。
-    // 这一对里**身份**那一半不是自己就有牙的：它靠替身的 `resetData` 吃下实参（见 `h` 里
-    // `resetData` 那段注释）才读得出「VPVR 把数据重建了」——替身不吃参数时，`h.list` 谁也换不掉，
-    // 这一句就是恒绿的。内容那一半（下面 `JSON.stringify`）单独也有牙：数据被换成同样长度但
-    // 不同值的内容时它红。
-    expect(h.list).toBe(before);
+    // 两半各有各的牙，且都是**当场测得出**的形状：`h.resets` 判「有没有走 `resetData()` 重建」
+    // （针：`chart.resetData()` 一句就红），`snapshot` 判「有没有把已有 bar 的值改掉」
+    // （针：`chart.getDataList()[0].volume = 0` 就红）。数组**身份**判不了——替身里没有任何
+    // 合法通道能换掉 `h.list`（`ask()` 的 callback 是 `() => undefined`，真库 `resetData()` 不吃数组），
+    // 一条 `expect(h.list).toBe(before)` 是恒绿的，所以这一版把它换成了计数。
+    expect(h.resets).toBe(resets);
     expect(JSON.stringify(h.list)).toBe(snapshot);
 
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
-    expect(h.list).toBe(before);
+    expect(h.resets).toBe(resets);
     expect(JSON.stringify(h.list)).toBe(snapshot);
   });
 
