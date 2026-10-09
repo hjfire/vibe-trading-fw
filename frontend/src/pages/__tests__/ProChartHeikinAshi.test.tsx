@@ -35,7 +35,7 @@ const h = vi.hoisted(() => ({
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
   created: [] as Array<Record<string, unknown>>,
-  // 每次 `overrideOverlay` 收到的是什么。第⑤片的真值边界钉用它判「切 HA 不该重锚画线」，
+  // 每次 `overrideOverlay` 收到的是什么。第④片的真值边界钉用它判「切 HA 不该重锚画线」，
   // 所以判据是「切换前后这个数组没长」，不是「它等于空」。
   overridden: [] as unknown[],
   // 图上现存的画线，**有内容**（R13）。以前下面那格 `getOverlays` 返回的是常量空集，
@@ -186,7 +186,7 @@ vi.mock("klinecharts", () => ({
       resize: vi.fn(),
       createOverlay: vi.fn(),
       removeOverlay: vi.fn(),
-      // 录制版：第⑤片的「切 HA 不重锚画线」判据读的是这个数组的长度增量。
+      // 录制版：第④片「切 HA 不重锚画线」那条判据读的是这个数组在两次穿越前后是否相等（不是长度增量：候选集补上以后，多录一次就是红）。
       overrideOverlay: (o: unknown) => {
         h.overridden.push(o);
         return true;
@@ -253,7 +253,7 @@ beforeEach(() => {
   h.overridden = [];
   h.loader = null;
   // 默认就带上 bar：真实使用里图上有数据，按钮的 `barCount > 0` 判据不该替测试挡路。
-  // 要空图的那条自己 `h.list = []` 再 render（第⑤片那条就是）。
+  // 要空图的那条自己 `h.list = []` 再 render（第④片那条就是）。
   seed();
   // 种一条真带 `points` 的画线（R13）：锚点从**当次喂进去的** `h.list` 里取（最后一根），
   // 所以它是数据里真实存在的 timestamp，不是一个与图无关的数字字面量；`paneId` 给
