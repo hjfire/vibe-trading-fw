@@ -27,9 +27,12 @@ import { valueAreaOf, volumeProfile, VPVR_ROWS, type ProfileBar, type VolumeProf
  * `dist:7241` ⇄ 覆写点 `:7334`），而 figures 本来就是空的。
  *
  * **单测里的图例字符串 ≠ 屏幕上的字形**：库在覆写前对每格 `value.text` 跑
- * `decimalFold.format(thousandsSeparator.format(...))`（`:7329-7331`），千分位默认
- * `sign: ','`（`:13095`，本仓没有任何地方覆写它）。所以价格 ≥ 1000 时活体读到的是
- * `1,234.56`——Task 6 的逐字比对要先剥千分位分隔符再比。
+ * `decimalFold.format(thousandsSeparator.format(...))`（`:7329-7331`，`"-"` 那格过不了
+ * 它前面 `isNumber` 那道门，原样留着），千分位默认 `sign: ','`（`:13095`，本仓没有任何
+ * 地方覆写它）。所以价格 ≥ 1000 时屏幕上那格是 `1,234.56`。图例画在 canvas 上、DOM 读不到，
+ * 故 Task 6 的判据分两层：值从 `getIndicators({name:'VPVR'})[0].createTooltipDataSource({chart})`
+ * 读回与 oracle 逐字比，字形用库自己的 `getThousandsSeparator()`／`getDecimalFold()` 复现
+ * （spec §二·4/4b）。逗号那一格是**预期**，不是缺陷。
  */
 
 export const VPVR_NAME = "VPVR";
