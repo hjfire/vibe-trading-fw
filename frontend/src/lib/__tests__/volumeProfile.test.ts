@@ -124,8 +124,11 @@ describe("volumeProfile 退化", () => {
   it("全零量：各档为 0、`totalVolume` 为 0、`pocIndex` 仍是 0（绘制侧另有不画的规矩）", () => {
     const p = volumeProfile(
       [
-        { high: 104, low: 100, volume: 0 },
+        // 顺序**刻意**不让撑满域的那根排在 `bars[0]`：实现是先用 `bars[0]` 播种极值再无条件扫描
+        // （`volumeProfile.ts:48-53`），若第一根就是 `[100,104]`，那「在极值循环里加一句
+        // `if (volume === 0) continue`」这种缺陷也能得到 100/104 ⇒ 针被夹具自己喂绿。
         { high: 103, low: 101, volume: 0 },
+        { high: 104, low: 100, volume: 0 },
       ],
       4,
     );
@@ -165,7 +168,7 @@ describe("volumeProfile 不看游标之后（spec §八 的算术形式）", () 
     const fromPoisoned = volumeProfile(poisoned.slice(0, k), 6);
     expect(fromPoisoned).toEqual(prefix);
     // 这条**判的是什么**要说准：`poisoned.slice(0, k)` 与 `all.slice(0, k)` 内容相同，
-    // 所以它判的是「无跨调用状态、不改调用方数组、对同一批根确定」——
+    // 所以它判的是「无跨调用状态、对同一批根给出同一结果」——
     // 「切片本身取对没有」不在一个纯函数的判据面里，它归 Task 3 的 `profileOfChart`
     // （只有那里才决定喂进哪些根，判据是假 chart 逐索引那条）。
     // 阳性对照：毒根**确实有药**。把它真喂进去就必须改掉域与总量——否则上面那条相等
@@ -176,6 +179,10 @@ describe("volumeProfile 不看游标之后（spec §八 的算术形式）", () 
     expect(full.totalVolume).toBe(1_000_000_006_660); // 1e12 ＋ 前 12 根的 6_660
     // 不钉 `full.pocIndex`：1e12 摊到 6 档上每档 `1e12/6` 完全等值，最大档由真实根的
     // 零头决定，那是浮点落点而不是判据——钉它就是把针交给最后一位舍入。
+    // 回读**我们自己持有的**那个数组：前两次调用喂的是 `slice()` 出来的临时数组，
+    // 实现若就地改写传入数组（`sort`／写脏某根），只有这一支抓得住——`full` 的域与总量
+    // 对元素顺序不敏感，所以不读这一行，「不改调用方传入的数组」就只是注释里的声称。
+    expect(poisoned.map((b) => b.volume)).toEqual([500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 1e12]);
   });
 
   it("前缀单调：`totalVolume` 随 `k` 不减", () => {
