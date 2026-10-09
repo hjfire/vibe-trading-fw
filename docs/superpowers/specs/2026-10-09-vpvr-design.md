@@ -148,11 +148,11 @@ export function saveVpvr(on: boolean): void;  // 关时 removeItem，不写 "0"
 export function vpvrDraw(params): boolean;
 export function vpvrTooltipDataSource(params): { name; calcParamsText; features; legends };
 export function ensureVpvrIndicator(): void;
-// 可视区切片 → `VolumeProfile` 的唯一实现，`vpvrDraw` 与 `vpvrTooltipDataSource` 都调它
-// （两处各写一遍就是本仓禁止的重复逻辑）。`rows` 带默认值 `VPVR_ROWS`：默认让生产侧
-// 只有出厂 100 档这一个事实，参数让 §九 的几何测试能开一张 4 档的小网格逐格手算——
-// 这不是「参数面板」（§一 否掉的是 UI 可调），是纯算术层同一个旋钮的透传。
-export function profileOfChart(chart, rows?: number): VolumeProfile;
+// 可视区切片 → `VolumeProfile` 的**唯一**实现，`vpvrDraw` 与 `vpvrTooltipDataSource` 都调它
+// （各写一遍就是本仓禁止的重复逻辑）。**不带 `rows` 旋钮**：生产侧只有出厂 100 档这一个
+// 事实，而几何测试要手算期望矩形也不需要小网格——把样本域摆成「宽度＝档数」
+// （`[100, 200]` × 100 档 ⇒ 档宽恰为 1 个价格单位），期望值就能逐格写死。
+export function profileOfChart(chart): VolumeProfile;
 ```
 
 **形状声明**（承重，逐条钉）：`figures: []`、`calc: () => []`、`series: "price"`、`precision: 2`、`shouldOhlc: false`；`zLevel` **不写**（库 `IndicatorImp` 构造器已给 0，`dist:3161`，写它等于声明一个默认值）。
@@ -242,7 +242,7 @@ return true
 
 - 声明逐格钉（按条目名钉，不数格数）：`figures` **是空数组**、`calc(喂真实 bar)` **返回 `[]`**（不是 `undefined`）、`series === "price"`、`precision === 2`、`shouldOhlc === false`、**没有 `zLevel` 键**（§六：不声明，让库的构造器默认生效；这条针同时是「实现者别顺手加」的门）、`draw`/`createTooltipDataSource` 都在；
 - §六 那个「镜像折叠」helper：把本指标声明的 `figures[].key` 集合喂给 min/max 折叠，断言得到的价格集合为空 ⇒ 轴只能来自蜡烛高低价；
-- `vpvrDraw` 的几何：假 ctx 收 `fillRect`（模板抄 `heikinAshiChart.test.ts:61-84` 的 `drawFixture`，`yAxis.convertToPixel: (p) => 100 - p`、`bounding: {width: 200, height: 100}`、假 `chart` 只交两格 `getDataList`/`getVisibleRange`——**喂多出来的成员就等于替身替实现者兜底**，实现误读 `xAxis` 时这条针要能红），期望**矩形列表逐格相等**（含右锚 `x = 200 - len`、最大档 `len = 200 * 0.35`、零档不出现、亚像素档高度取 1）；
+- `vpvrDraw` 的几何：假 ctx 录制 `fillRect`（模板抄 `heikinAshiChart.test.ts:61-84` 的 `drawFixture`，但**喂的是假 chart 的 `getDataList`/`getVisibleRange` 而不是 `indicator.result`**，且假 chart **只交这两格**——喂多出来的成员等于替身替实现者兜底，实现误读 `xAxis` 时这条针要能红）。样本域摆成 `[100, 200]` 配出厂 100 档 ⇒ 档宽恰为 1 个价格单位，期望**矩形列表逐格写死**（右锚 `x = bounding.width - len`、最大档 `len = bounding.width * 0.35`、零档不出现）；另开一条 `convertToPixel: (p) => 100 - p * 0.25` 的小比例 fixture，档高 0.25px 被 `Math.max(1, …)` 抬成 1，这条就是亚像素那格的针。像素映射选成整数倍（`300 - 2*p`），所有期望值都是二进制精确数，`toEqual` 不用容差。
 - 三枚颜色的归属：POC 档取 POC 色、价值区档取 VA 色、其余取 BASE 色——**用档量刻意造出「POC 同时是价值区端点」**，否则这条针会被上一格吃掉（本仓 [[verify-mutation-probe-blindness]] 的归属教训）；
 - `vpvrDraw` 恒返回 `true`；空可视区返回 `true` 且**一根都不画**；
 - `vpvrTooltipDataSource`：正常三行 ＋ `totalVolume === 0` 三格 `"-"`；
