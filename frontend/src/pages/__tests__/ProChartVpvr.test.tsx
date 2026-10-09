@@ -386,6 +386,28 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
     expect(screen.getByRole("button", { name: "量分布" }).getAttribute("aria-pressed")).toBe("false");
   });
 
+  it("开关那两支 title 也逐字钉住：按 vpOn 换话，动一个字就红", async () => {
+    // I3 的第二半。上一轮只把分时与零数据那两支升成逐字 `toBe`，「已开／已关」两支在全仓
+    // 没有任何针（`grep -rn '量分布已开\|量分布已关'` 只命中实现与计划）。参照点是页面那两格
+    // 的字面量，不是本测试自造的第二份权威。
+    render(<ProChart />);
+    await flush();
+    const button = () => screen.getByRole("button", { name: "量分布" });
+    expect(button().getAttribute("title")).toBe(
+      "量分布已关：点开画可视区成交量分布（每根的量按 [low, high] 与档的重叠比例摊进去，POC=最大档，VA=从 POC 吃满 70%）",
+    );
+    fireEvent.click(button());
+    await flush();
+    expect(button().getAttribute("title")).toBe(
+      "量分布已开：把可视区的成交量按价格分 100 档，画成右锚横向直方图，高亮 POC 档与 70% 价值区。分布随滚动/缩放现算，不改价格轴、不改真实价（再点切回）",
+    );
+    fireEvent.click(button());
+    await flush();
+    expect(button().getAttribute("title")).toBe(
+      "量分布已关：点开画可视区成交量分布（每根的量按 [low, high] 与档的重叠比例摊进去，POC=最大档，VA=从 POC 吃满 70%）",
+    );
+  });
+
   it("反复开关不堆叠：4 次按 ⇒ 2 次创建（关着的那两次不该 create），活着的始终是一份", async () => {
     render(<ProChart />);
     await flush();

@@ -302,7 +302,7 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   const type: CandleType = timeShare ? "area" : "candle_solid";
   // `heikinAshiActive` is the one predicate both channels read: the styles side
   // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
-  // T4, `:1385`) asks the same one — so the two cannot drift: an HA that is painted
+  // T4, `:1378`) asks the same one — so the two cannot drift: an HA that is painted
   // but not mounted would show nine invisible rectangles and nothing else, and the
   // reverse would show real candles under a button reading 已开.
   const haShown = heikinAshiActive(ha, timeShare);
