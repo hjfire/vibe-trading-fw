@@ -82,14 +82,28 @@ export function volumeProfile(bars: readonly ProfileBar[], rows: number = VPVR_R
     // 区间按价格重叠比例摊派。循环上界用「档下界 < bar.high」而不是
     // `floor(bar.high …)`：后者在 `high` 正落在档边界上时会多带出一个**零重叠**档，
     // 而 `high === spanHigh` 那一档靠循环体里的右闭处理。
-    let j = Math.max(0, Math.floor((bar.low - spanLow) / rowHeight));
+    // 起点这一格**不钳** `Math.max(0, …)`，不是漏了钳：`spanLow` 取的是 `:48-53` 无条件扫描出来的
+    // **全局**最低，于是 `bar.low - spanLow >= 0` 恒成立（两个 double 相减、再除以正的 `rowHeight`，
+    // 符号都不会被舍入翻过来），`floor` 出来的 `j` 天生非负 ⇒ 那一钳折不动任何东西。
+    // 与上面 `:78` 那一格**不对称**，且那一格必须留钳：那里 `floor((price - spanLow) / rowHeight)`
+    // 在 `price === spanHigh` 时恰好给出行数，`Math.min(rows - 1, …)` 就是 spec §四「末档右闭」的
+    // 实现，删了会红（本轮实测：把那一钳摘掉 ⇒ `volumeProfile.test.ts:50`「末档右闭」那条针红，
+    // 连带 `:23` 手算向量与 `valueAreaOf` 的经典口径那条，共 3 红）。
+    let j = Math.floor((bar.low - spanLow) / rowHeight);
     while (j < rows && spanLow + j * rowHeight < bar.high) {
       const rowLow = spanLow + j * rowHeight;
       // 末档右闭：它的上界直接取 `spanHigh`，不让 `spanLow + rows * rowHeight` 的
       // 浮点误差把最高那一小条量丢掉。
       const rowHigh = j === rows - 1 ? spanHigh : rowLow + rowHeight;
+      // 同理**不写** `if (overlap > 0)`：进循环的前提就是 `rowLow < bar.high`（上面 while 条件里的
+      // `spanLow + j * rowHeight` 与这一行的 `rowLow` 是**同一个表达式**，浮点同值 ⇒ 判的就是同一个数），
+      // 而 `span === 0` 的单点线已经在 `:73-80` 那一支单独走掉了 ⇒ 到这里的根满足
+      // `bar.high > bar.low`（数据形状：一根线的 high 不会低于它的 low），首档有
+      // `rowLow <= bar.low < rowHigh`、其后各档有 `rowLow > bar.low` 且仍 `< bar.high`，
+      // 两端夹出来的 `overlap` 恒正。零重叠档是上面那句「循环上界为什么要用档下界」替我们挡掉的，
+      // 不是靠这一判挡的。
       const overlap = Math.min(bar.high, rowHigh) - Math.max(bar.low, rowLow);
-      if (overlap > 0) acc[j] += (bar.volume * overlap) / span;
+      acc[j] += (bar.volume * overlap) / span;
       j += 1;
     }
   }
