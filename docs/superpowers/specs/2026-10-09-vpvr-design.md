@@ -40,7 +40,7 @@
 
 | # | 事实 | 坐标 | 对本片意味着 |
 |---|---|---|---|
-| 1 | `IndicatorView.prototype.drawImp` 取 `bounding = widget.getBounding()`（本 pane 主 widget 的包围盒），逐个指标调 `indicator.draw({ctx, chart, indicator, bounding, xAxis, yAxis})`，`isCover` 为真则**跳过**默认图元通道 | `dist:8028`／`:8031-8034`／`:8049-8062` | 直方图的几何源＝`bounding.width/height` ＋ `yAxis.convertToPixel(price)`，不需要 `xAxis` |
+| 1 | `IndicatorView.prototype.drawImp` 取 `bounding = widget.getBounding()`（本 pane 主 widget 的包围盒），逐个指标调 `indicator.draw({ctx, chart, indicator, bounding, xAxis, yAxis})`，`isCover` 为真则**跳过**默认图元通道。**调 `draw` 只有两道门**：`:8042` `indicator.visible`（默认真）与 `:8050` `indicator.draw !== null`——**都不看 `result.length` 或 `figures.length`** | `dist:8028`／`:8031-8034`／`:8042`／`:8050`／`:8052`／`:8062` | 直方图的几何源＝`bounding.width/height` ＋ `yAxis.convertToPixel(price)`，不需要 `xAxis`；且**空声明（`figures: []`＋`result: []`）的指标 `draw` 仍被调**——方案 A 不是空想，这一格是它能不能存在的前提 |
 | 2 | `YAxisImp.prototype.createRangeImp` 只把 `result[dataIndex][figure.key]` 里 `isNumber` 的值并进 min/max | `dist:984`，折叠体 `:1045-1056`（`:1045` `indicators.forEach` ⇄ `:1056` 收尾） | **`figures: []` ⇒ 折叠循环空转 ⇒ 价格轴只来自蜡烛高低价**（本片的承重判据） |
 | 3 | `shouldCompareHighLow = (shouldUseCandleData && !isArea) \|\| (!inCandle && shouldOhlc)`，`shouldOhlc` 默认 `false`（`dist:3158`） | `dist:1028` | 挂在 `candle_pane` 的指标不会替蜡烛做高低比对；本片不碰这个键 |
 | 4 | `createTooltipDataSource` 的实参是 `{chart, indicator, crosshair, bounding, xAxis, yAxis}`；返回的 `legends` **整段替换**由 figures 生成的默认行 | `dist:7241`（getIndicatorTooltipData）／`:7293-7299`（实参）／`:7321`（`customLegends` 覆写） | 图例那行 POC/VAH/VAL 由我们自己给，且它**能拿到 `chart`** ⇒ 可就地按可视区重算 |
@@ -148,6 +148,11 @@ export function saveVpvr(on: boolean): void;  // 关时 removeItem，不写 "0"
 export function vpvrDraw(params): boolean;
 export function vpvrTooltipDataSource(params): { name; calcParamsText; features; legends };
 export function ensureVpvrIndicator(): void;
+// 可视区切片 → `VolumeProfile` 的唯一实现，`vpvrDraw` 与 `vpvrTooltipDataSource` 都调它
+// （两处各写一遍就是本仓禁止的重复逻辑）。`rows` 带默认值 `VPVR_ROWS`：默认让生产侧
+// 只有出厂 100 档这一个事实，参数让 §九 的几何测试能开一张 4 档的小网格逐格手算——
+// 这不是「参数面板」（§一 否掉的是 UI 可调），是纯算术层同一个旋钮的透传。
+export function profileOfChart(chart, rows?: number): VolumeProfile;
 ```
 
 **形状声明**（承重，逐条钉）：`figures: []`、`calc: () => []`、`series: "price"`、`precision: 2`、`shouldOhlc: false`；`zLevel` **不写**（库 `IndicatorImp` 构造器已给 0，`dist:3161`，写它等于声明一个默认值）。
@@ -175,7 +180,7 @@ return true
 
 - **右锚向左生长**，`x ∈ [bounding.width - len, bounding.width]`。
 - 颜色三枚，半透明 so 蜡烛仍在底下读得出来：`BASE = "rgba(66, 165, 245, 0.22)"`、`VA = "rgba(66, 165, 245, 0.38)"`、`POC = "rgba(255, 167, 38, 0.55)"`。**不读 `chart.getStyles()`**、不随主题变——与第④片 `colorsOf` 同一个取舍（读常量而不是现样式，`heikinAshiChart.ts` 的既记 Minor），理由是三枚都带 alpha，暗/亮底上都可读，而接主题要把它们塞进 `chartStyles`，撞上 §一 那两条既有钉。
-- **`return true` 是判据不是礼貌**（§二·1：返回 false 会连库的默认图元通道一起走）。
+- **`return true` 要，但理由要说准**（本轮读 `drawImp` 才知道的）：`isCover` 为真时跳过的是 `:8063` 起那段 `eachChildren` 逐根遍历；而本片 `figures: []`，`prepareIndicatorFigures` 交回空数组，**即使返回 `false` 也不会多画任何东西**——所以返回 `true` 换到的是「省掉每根一次的空遍历」＋「与第④片同一契约（`haDraw` 的返回值本身就是它的接管声明）」，**不是**「防止重复绘制」。测试仍钉 `=== true`，注释不许把它写成防重复（那是上一片的情形，不是本片的）。
 - 不做任何缓存/记忆化：每帧重算，键多一个就多一份状态，而 §九 有一根针要验「滚动到同一可视区必然得到同一张图」，靠的就是「无状态」。
 
 **图例那一行**（`vpvrTooltipDataSource`）：三行 `POC: `／`VAH: `／`VAL: `，值 `toFixed(2)`；`totalVolume === 0` ⇒ 三格都 `"-"`。`legends` 会整段替换 figures 生成的默认行（§二·4），而 figures 是空的，所以这一行就是 VPVR 在图上的全部文字。标题用中文字面量、不走 i18n，与 `haTooltipDataSource` 同例（库只对**蜡烛**图例的 title 再跑一次 i18n，`dist:7678`）。
