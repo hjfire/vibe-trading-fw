@@ -162,7 +162,7 @@ export function profileOfChart(chart): VolumeProfile;
 `vpvrDraw` 读 `{ ctx, bounding, chart, yAxis }`，其中 `chart` 只取那两格——**不需要 `xAxis`**（横向位置由 `bounding.width` 给）、也不需要 `getBarSpace`（档高度来自价格像素，不来自 bar 宽）。
 `vpvrTooltipDataSource` 读 `{ chart }`（同样只取 `getDataList`／`getVisibleRange`），不读 `crosshair`：分布不随光标变，所以上一片那条「`dataIndex` 缺省回退」在这里没有对应物。
 这两格在绑定层写成一条私有别名 `ChartView`，而**不是** `Pick<Chart, "getDataList" | "getVisibleRange">`：后者的 `getDataList` 返回整个 `KLineData[]`，而库把 `open`/`close` 定成必填（`dist/index.d.ts:97-106`），本层的替身只交 `{timestamp, low, high, volume}` ⇒ 每个喂替身的调用点报 TS2345（`Type '…' is missing the following properties from type 'KLineData': open, close`）。改成交「真被读的三格」（`ReadonlyArray<Pick<KLineData, "high" | "low" | "volume">>`）后，替身交得出、真 `Chart` 仍结构上可赋进来（`KLineData` 是那三格的超集），Task 4 那边传的还是库的 `Chart`。
-§二·2 说价格轴只折 `figures[].key`；本片**两把钥匙都不交**——`figures` 空 ⇒ 折叠循环没有 key 可读，`result` 空 ⇒ 即便将来有人加了 key 也读不到数。测试要**同时**钉这两格（§九），并把库那条折叠规则在测试里写成六行镜像 helper，断言「本指标声明能并进轴的价格集合是空集」——诚实标注：这一格判的是**两把钥匙都在**，库行为的实地判据在 §八 活体那一步（`getYAxes()[0].getRange()` 开前事后逐字相同）。
+§二·2 说价格轴只折 `figures[].key`；本片**两把钥匙都不交**——`figures` 空 ⇒ 折叠循环没有 key 可读，`result` 空 ⇒ 即便将来有人加了 key 也读不到数。测试要**同时**钉这两格（§九），并把库那条折叠规则在测试里写成六行镜像 helper，断言「本指标声明能并进轴的价格集合是空集」——诚实标注：这一格判的是**两把钥匙都在**，库行为的实地判据在 §八 活体那一步（`getYAxes({ paneId: 'candle_pane' })[0].getRange()` 开前事后逐字相同）。
 
 **几何**（`vpvrDraw`）：
 
@@ -219,7 +219,7 @@ return true
 2. 读图例三格 POC/VAH/VAL，与**页内独立 oracle**（按 §四/§五 重算的那套，`window.__vp`，喂与 `profileOfChart` 同一口径的可视区切片）比对，判据是**三个 `.toFixed(2)` 字符串逐字相等**，**不是**数值容差：图例本身已量化到分，一个真 bug 换掉的是**档下标**（差一整格价格），而不是小数末位；两侧循环形状不同（oracle 用「先造边界数组、逐档 `min/max` 求重叠」，生产用游标 `while`），最后一位必不相等，写绝对位数容差只会把针在无辜算术上判红。实测量级也否掉了绝对界——A 股档位量在 `1e6`～`1e9`，`1e-9` 那种界在这里从来不可满足。**比对口径分两层（先定死，别到执行席发明）**：屏幕上那串字在 canvas 里，DOM 读不到 ⇒ 「值」那一层从公开口读回来——`getIndicators({name:'VPVR'})[0].createTooltipDataSource({chart})` 的三个 `value` 串与 oracle **逐字相等**；「字形」那一层由库自己那两枚函数复现（`:7329-7331` 跑的就是 `decimalFold.format(thousandsSeparator.format(text))`，`getThousandsSeparator().sign` 出厂 `,`、`getDecimalFold().threshold` 出厂 3，本仓无覆写），对每格算出「原始串 → 格式化串」并**两串都登记**，价格 ≥ 1000 时带逗号的那串是**预期**不是缺陷（`"-"` 那格不过 `isNumber` 那道门，原样留着）。若哪天改成从带逗号的串回解数值再比，必须**先剥分组符再 `Number()`**——`parseFloat("1,234.56")` 会截成 `1`，那是个真陷阱。不等时按两条落点规则裁决（写在计划里，不留给执行席当场发明）：相对差 `< 1e-9` ⇒ 四舍五入落点；`POC` 对得上而 `VAH`/`VAL` 恰差一格且 oracle 的覆盖率离 70% 门槛在相对 `1e-9` 内 ⇒ 70% 落点分歧。两者都不是缺陷，都要把读数登记进台账；「屏幕上真有没有这一行」只有可读截图才判得了，拿不到截图就登记「未判」，不许拿读数冒充；
 3. `后一根` ×6 ⇒ 判据是**「每步重读切片、重跑第 2 条的逐字比对」**。这里**不能**断言 `totalVolume` 单调不减：分布域取的是**可视区自身**的极值，回放步进让库自动右滚时 `realFrom` 会前移，最早那几根掉出窗口，`totalVolume` 就**可以**下降——那不是缺陷而是本片的定义（§十二·4）。要读单调性只能读「`realFrom` 未动的相邻两帧之间」，且它不是交付判据。**同样不能判「逐档与 oracle 相等」**：档量只活在 `vpvrDraw` 那一帧的局部变量里，`getIndicators()[0].result` 在 §六 那两把钥匙（`calc` 返回 `[]`）下恒空，页内没有任何面读得到它们——第一版把这条写成「逐档对 `1e-9`」，是指了一个不存在的读数口。逐档级的「不吸收被喂进去的那批根之外的量」按 §八·2 那三件分头判（纯函数面归 §九 下毒针三件套，切片面归 §九 `profileOfChart` 的逐索引针，回放截断是库的既有事实），三件都比页内读数强；
 4. `前一根` ×1 ⇒ 末根消失，oracle 用短前缀重算，逐字比得上（不许留「已经画过的那一档还带着未来的量」）；
-5. `退出回放` ⇒ 全量切片下三格逐字相等；VPVR 实例仍恰好一份；`getYAxes()[0].getRange()` 与 VPVR 开前**逐字相同**（这条就是 §六 那两把钥匙的实地判据）。
+5. `退出回放` ⇒ 全量切片下三格逐字相等；VPVR 实例仍恰好一份；`getYAxes({ paneId: 'candle_pane' })[0].getRange()` 与 VPVR 开前**逐字相同**（这条就是 §六 那两把钥匙的实地判据）。
 
 每步同时读：`getIndicators({name:'VPVR'}).length === 1`、`getIndicators({name:'HEIKIN_ASHI'}).length` 与进入前相同、`getDataList()` 的**引用与 JSON 快照**在开关前后相同、`localStorage['pro-chart.drawings.v1']` 逐字节相同。
 
