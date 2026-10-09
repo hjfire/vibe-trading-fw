@@ -84,7 +84,7 @@ describe("volumeProfile 摊派", () => {
       high: 100 + (i % 10) + 3,
       volume: 1_000 + i,
     }));
-    for (const rows of [2, 7, 8, 100]) {
+    for (const rows of [2, 7, 8, VPVR_ROWS]) {
       const p = volumeProfile(bars, rows);
       const sum = p.rows.reduce((acc, r) => acc + r.volume, 0);
       expect(Math.abs(sum - p.totalVolume) / p.totalVolume).toBeLessThan(1e-11);
@@ -132,6 +132,11 @@ describe("volumeProfile 退化", () => {
     expect(p.totalVolume).toBe(0);
     expect(p.rows.every((r) => r.volume === 0)).toBe(true);
     expect(p.pocIndex).toBe(0);
+    // 零量根**照旧参与域扫描**（极值循环在 `volume === 0` 那一支的 `continue` 之前）——
+    // Task 3 的几何夹具靠一根零量锚根把域撑成 `[100,200]`、把档宽钉成 1，
+    // 这条要是漂了那批逐格写死的矩形就全错，所以它必须在这里入库，不能只活在验收当天的 scratch 里。
+    expect(p.spanLow).toBe(100);
+    expect(p.spanHigh).toBe(104);
   });
 });
 
@@ -144,13 +149,33 @@ describe("volumeProfile 不看游标之后（spec §八 的算术形式）", () 
     }));
     const k = 7;
     const prefix = volumeProfile(all.slice(0, k), 6);
+    // 前缀的期望值**逐格写死**：7 根、域 [100,112]、6 档 ⇒ 档宽恰为 2（二进制精确），
+    // 每根 `high - low` = 4 恰跨两档、各吃 1/2。
+    //   档0 = 250+275 = 525   档1 = 250+255+275+280 = 1060   档2 = 255+260+280 = 795
+    //   档3 = 260+265 = 525   档4 = 265+270 = 535            档5 = 270
+    // 没有这几行字面值，下面那条「毒数组的切片与干净数组的切片相等」就是拿
+    // `all.slice(0,7)` 与 `poisoned.slice(0,7)`（**内容逐元素相同、只换了数组对象**）互比，
+    // 两侧一起错也照样绿。字面值把参照点钉死，等值那条才有意义。
+    expect(prefix.spanLow).toBe(100);
+    expect(prefix.spanHigh).toBe(112);
+    expect(prefix.rows.map((r) => r.volume)).toEqual([525, 1060, 795, 525, 535, 270]);
+    expect(prefix.totalVolume).toBe(3_710);
+    expect(prefix.pocIndex).toBe(1);
     const poisoned: ProfileBar[] = [...all.slice(0, k), ...all.slice(k), { high: 9_999, low: -9_999, volume: 1e12 }];
     const fromPoisoned = volumeProfile(poisoned.slice(0, k), 6);
-    expect(fromPoisoned.rows.map((r) => r.volume)).toEqual(prefix.rows.map((r) => r.volume));
-    expect(fromPoisoned.totalVolume).toBe(prefix.totalVolume);
-    expect(fromPoisoned.pocIndex).toBe(prefix.pocIndex);
-    expect(fromPoisoned.spanLow).toBe(prefix.spanLow);
-    expect(fromPoisoned.spanHigh).toBe(prefix.spanHigh);
+    expect(fromPoisoned).toEqual(prefix);
+    // 这条**判的是什么**要说准：`poisoned.slice(0, k)` 与 `all.slice(0, k)` 内容相同，
+    // 所以它判的是「无跨调用状态、不改调用方数组、对同一批根确定」——
+    // 「切片本身取对没有」不在一个纯函数的判据面里，它归 Task 3 的 `profileOfChart`
+    // （只有那里才决定喂进哪些根，判据是假 chart 逐索引那条）。
+    // 阳性对照：毒根**确实有药**。把它真喂进去就必须改掉域与总量——否则上面那条相等
+    // 可能只是在比一个对结果毫无影响力的输入（本仓 [[verify-scan-guard-false-green]] 的空集失效）。
+    const full = volumeProfile(poisoned, 6);
+    expect(full.spanLow).toBe(-9_999);
+    expect(full.spanHigh).toBe(9_999);
+    expect(full.totalVolume).toBe(1_000_000_006_660); // 1e12 ＋ 前 12 根的 6_660
+    // 不钉 `full.pocIndex`：1e12 摊到 6 档上每档 `1e12/6` 完全等值，最大档由真实根的
+    // 零头决定，那是浮点落点而不是判据——钉它就是把针交给最后一位舍入。
   });
 
   it("前缀单调：`totalVolume` 随 `k` 不减", () => {
