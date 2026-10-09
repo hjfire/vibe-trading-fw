@@ -55,6 +55,11 @@ const h = vi.hoisted(() => ({
   // 每次 `overrideOverlay` 收到的是什么。第④片的真值边界钉用它判「切 HA 不该重锚画线」，
   // 所以判据是「切换前后这个数组没长」，不是「它等于空」。
   overridden: [] as unknown[],
+  // 每次 `removeOverlay` 收到的过滤条件原样一份（M5）。只**记录**、不施加删除：施加删除会把
+  // `h.overlays[0]` 的下标语义改掉（「分布不写画线面」那条读的就是这一格的 `points`），记录调用
+  // 不动下标 ⇒ 「整面清画线」这一类回归从此读得到。同上一格的口径：判据是「没长」，不是「为空」
+  // ——挂载那一路（`ProChart.tsx:1262` 换标的/换周期时的整面清）本来就会调它一次。
+  removedOverlays: [] as Array<Record<string, unknown>>,
   // 图上现存的画线，**有内容**（R13）。以前下面那格 `getOverlays` 返回的是常量空集，
   // 于是「切 HA 不重锚画线」那条针在页面上任何一轮遍历里都没有候选——结构性不可红。
   // 现在 `beforeEach` 往里种一条真带 `points` 的线，那条针才真有杀伤力。
@@ -230,8 +235,9 @@ vi.mock("klinecharts", () => ({
       // 而 `h.overlays` 唯一的写手是 `beforeEach` 种的那条线，于是「VPVR 没有以 overlay 的身份
       // 出现过」那条判据**结构上不可能红**：页面无论怎么走 overlay 通道都读不出来。真库
       // `ChartImp.createOverlay(value)`（klinecharts 10.0.3，`dist/index.esm.js:15359`）把那条
-      // 交给 `addOverlays` 装进 store，非数组入参时返回铸出来的 id（`:15393-15396` 的 `ids[0]`），
-      // 随后 `getOverlays()`（`:15398-15400`）就读得到它 ⇒ 替身照这个语义 append 回**同一个桶**，
+      // 交给 `addOverlays` 装进 store，非数组入参时返回铸出来的 id（`:15395` 的 `ids[0]`；
+      // `:15393` 那句 `return ids;` 是数组入参的另一支，与本替身无关），
+      // 随后 `getOverlays()`（`:15397-15399`）就读得到它 ⇒ 替身照这个语义 append 回**同一个桶**，
       // 不新开一个桶：新开桶就等于承认「overlay 通道与画线面是两回事」，而 spec §〇 第 2 条怕的
       // 恰恰是它进的是同一个落盘通道。
       // 返回值给的是库的形状（一个真 id）而不是 `true`：页面 `createOverlay` 只有 `armTool`
@@ -243,11 +249,18 @@ vi.mock("klinecharts", () => ({
         h.overlays.push({ ...o, id } as unknown as (typeof h.overlays)[number]);
         return id;
       },
-      // `removeOverlay` 不补记：页面确实调它（`:1262` 整面清、`:1877`/`:1882` 停放面、`:2037` 清画线、
-      // `:2106` 按 id），但本片没有任何一条判据读「overlay 少了哪条」。为没有判据的面加录制会把
-      // `h.overlays[0]` 的下标语义改掉（「分布不写画线面」那条读的就是这一格的 `points`），
-      // 那是拿死判据换活判据。
-      removeOverlay: vi.fn(),
+      // M5（补牙）：这一格以前是 `removeOverlay: vi.fn()`——**只吞不记**。页面确实调它
+      // （`:1262` 换标的/换周期时的整面清、`:1877`/`:1882` 停放面、`:2037` 清画线、`:2106` 按 id，
+      // 五处本席当场 `grep -n removeOverlay` 读到），而真库 `ChartImp.prototype.removeOverlay`
+      // （klinecharts 10.0.3，`dist/index.esm.js:15403`）会把命中的线从 store 里**删掉**⇒ 替身什么都不做，
+      // 于是「画线面没被动」那条判据只覆盖「移动锚点／新增线」，**不覆盖删线**：真库若整面清，
+      // `h.overlays` 会变空，而 `h.overlays[0].points` 读到的仍是种下的那条，恒绿。
+      // 原注释反对的是**施加删除**（会把 `h.overlays[0]` 的下标语义改掉，那是拿死判据换活判据），
+      // 不反对**记录调用** ⇒ 现在只往一只独立的桶里记一笔，零副作用、下标一格不动。
+      removeOverlay: (filter?: Record<string, unknown>) => {
+        h.removedOverlays.push(filter ?? {});
+        return true;
+      },
       // 录制版：第④片「切 HA 不重锚画线」那条判据读的是这个数组在两次穿越前后是否相等（不是长度增量：候选集补上以后，多录一次就是红）。
       overrideOverlay: (o: unknown) => {
         h.overridden.push(o);
@@ -314,6 +327,7 @@ beforeEach(() => {
   h.created = [];
   h.removed = [];
   h.overridden = [];
+  h.removedOverlays = [];
   h.resets = 0;
   h.loader = null;
   // 默认就带上 bar：真实使用里图上有数据，按钮的 `barCount > 0` 判据不该替测试挡路。
@@ -433,7 +447,13 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
     await flush();
     expect(vpLive()).toHaveLength(0);
     expect(screen.getByRole("button", { name: "量分布" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByRole("button", { name: "量分布" }).getAttribute("title")).toContain("面积线");
+    // I3（升针）：以前只 `toContain("面积线")`——整句没有一格被钉住，而 spec §七·4 的字面量与
+    // 交付串恰好差在中间那一小句（`按高低价摊派` vs `按 [low, high] 与档的重叠摊派`）。控制端已裁定
+    // **保留交付串**（那一版把摊派的分母说清了），spec 侧由控制端改；针这边升成逐字，动一个字就红。
+    // 参照点是 `ProChart.tsx:2381` 那一格的字面量，不是本测试自己造的第二份权威。
+    expect(screen.getByRole("button", { name: "量分布" }).getAttribute("title")).toBe(
+      "分时是面积线，分档量能要按 [low, high] 与档的重叠摊派，这里没有可摊的区间",
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "分时" }));
@@ -541,6 +561,17 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     await flush();
     const anchor = JSON.stringify(h.overlays[0].points);
     const overrides = h.overridden.length;
+    // M5（补牙）：删线那一路。判据是「没长」而不是「等于空」——挂载那一路自己就调过一次
+    // 整面清（`ProChart.tsx:1262` `chart.removeOverlay()`，换标的/换周期的那一支，本席当场
+    // 把这一格改成 `toBe(0)` 试过：读数是 **1**，三次点击前后都是同一格 ⇒ `toEqual([])` 的写法
+    // 天生红在挂载那一步，判不到 VPVR）。所以基线取在挂载之后。
+    const removals = h.removedOverlays.length;
+    // M6（补牙）：整只桶的逐字节快照，同样取在挂载之后（`restoreDrawings` 有权往桶里放线）。
+    // 这一格以前写的是 `h.overlays.some((o) => o.name === "VPVR") === false`——名字写死了，
+    // 而 overlay 通道的入口名是实现者定的（本片的画线名会是 `vpvrChart.ts` 里那两枚常量之外的
+    // 任何东西，例如 `vpvr-dist`）：一条自绘的 `segment`／`priceLine` 读不到。
+    // 整桶快照一次判掉名字、条数与顺序，不再赌某个名字。
+    const bucket = JSON.stringify(h.overlays);
     for (let i = 0; i < 3; i++) {
       fireEvent.click(screen.getByRole("button", { name: "量分布" }));
       await flush();
@@ -549,8 +580,8 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     // 但重锚会把 points 换掉，所以两条都得判（第④片 R13 的形状）。
     expect(JSON.stringify(h.overlays[0].points)).toBe(anchor);
     expect(h.overridden.length).toBe(overrides);
-    // 且 VPVR 没有以 overlay 的身份出现过（spec §〇 第 2 条：走 overlay 就会进落盘通道）。
-    expect(h.overlays.some((o) => o.name === "VPVR")).toBe(false);
+    expect(h.removedOverlays.length).toBe(removals);
+    expect(JSON.stringify(h.overlays)).toBe(bucket);
   });
 
   it("画线落盘面逐字节不动：`pro-chart.drawings.v1` 开前事后相同", async () => {
@@ -558,13 +589,13 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     // 「桶里有画线」时才读它、且只有吸回越界锚点时才回写——空桶时这一格从头到尾是 `null`，
     // `null` 等于 `null` 就是一条结构性不可红的针。所以先按页面自己的格式
     // （`chartDrawings.ts` 的 `BucketMap`：键 `标的|周期`，值是 `StoredDrawing[]`）种一条
-    // 真线进去，`mid` 才是**有内容的字节**，「开前事后相同」才判得出东西被改。
+    // 真线进去，`afterMount` 才是**有内容的字节**，「开前事后相同」才判得出东西被改。
     //
     // 锚点从**当次喂进去的数据**里取（M1）：这一格以前写的是 `1_700_000_000_000 + 5 * 86_400_000`,
     // 那是把 `barOf()` 的公式在测试体里抄了一遍，还隐式依赖 `seed()` 默认 6 根——数据面一动，
     // 这个字面量就与图无关了，而 `beforeEach` 种那条线时自己写过「锚点从当次喂进去的 `h.list`
     // 里取，不是一个与图无关的数字字面量」。这里读的是最后一根的真实 timestamp，所以种下去的线
-    // 本来就落在最新那根上：挂载那一路（`clampDrawingsToLastBar`）不该吸回它，`mid` 判的确实是
+    // 本来就落在最新那根上：挂载那一路（`clampDrawingsToLastBar`）不该吸回它，`afterMount` 判的确实是
     // 「开／关 VPVR 之后没人动过桶」，而不是「恰好没人重新吸盘」。
     // 读 `h.list` 要在 render 之前：它是 `beforeEach` 的 `seed()` 刚摆好的那一份。
     const lastTs = (h.list[h.list.length - 1] as { timestamp: number }).timestamp;
@@ -582,17 +613,27 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     );
     render(<ProChart />);
     await flush();
-    // 判据的起点是「挂载之后」，比的是两次点分布之间：挂载那一路本来就有权吸回越界锚点并回写
-    // （`ProChart.tsx:1263` 读桶，`ProChart.tsx:1274` 的 `fixed.moved > 0 || fixed.dropped > 0` 才 `saveDrawings`），那是本片之外的事，
-    // 不归这条管。这条只管一件事：开／关 VPVR 不是任何一次 `saveDrawings` 的理由。
+    // I1（补牙）：基线以前取在**「开」那次点击之后**（旧 `mid`），于是这条实际比的是
+    // 「开之后 == 关之后」，「开前」那一格从未参与比较——`syncVpvr` 的挂载支
+    // （`ProChart.tsx:1031-1043`）若将来顺手回写一次桶，那次写会**留在**桶里，两侧读到同一个串
+    // ⇒ 针恒绿，这一半是空的；而它是 spec §〇 那条决定性裁定（走 overlay 通道会往
+    // `pro-chart.drawings.v1` 写假画线）在 CI 里唯一的长期防线。基线挪到挂载之后、点击之前。
+    //
+    // 起点仍是「挂载之后」而不是「render 之前」：挂载那一路本来就有权吸回越界锚点并回写
+    // （`ProChart.tsx:1263` 读桶，`ProChart.tsx:1274` 的 `fixed.moved > 0 || fixed.dropped > 0` 才
+    // `saveDrawings`），吸回发生在这一行**之前**，那是本片之外的事，不归这条管。这条只管一件事：
+    // 开／关 VPVR 不是任何一次 `saveDrawings` 的理由——所以两侧各与挂载态比一次，而不是互相干。
+    const afterMount = localStorage.getItem("pro-chart.drawings.v1");
+    // 候选集自检（第④片最贵教训的形状）：这一格没内容，下面两条比较就是空转。
+    expect(afterMount).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
-    const mid = localStorage.getItem("pro-chart.drawings.v1");
-    // 候选集自检（第④片最贵教训的形状）：这一格没内容，上面那两条比较就是空转。
-    expect(mid).not.toBeNull();
+    // 「开」的一侧：与挂载态逐字节比。
+    expect(localStorage.getItem("pro-chart.drawings.v1")).toBe(afterMount);
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
-    expect(localStorage.getItem("pro-chart.drawings.v1")).toBe(mid);
+    // 「关」的一侧：也与挂载态比，不是与「开之后」比。
+    expect(localStorage.getItem("pro-chart.drawings.v1")).toBe(afterMount);
   });
 
   it("样式面零影响：`indicator` 子树仍恰是 [\"tooltip\"]，九色不因 VPVR 变化", async () => {
@@ -669,7 +710,9 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     await flush();
     const button = screen.getByRole("button", { name: "量分布" });
     expect(button).toBeDisabled();
-    expect(button.getAttribute("title")).toContain("先等 K 线加载出来");
+    // I3（升针）：同上一条升成逐字。这一句 spec §七·4 说的是「照抄」，交付串（`ProChart.tsx:2383`）
+    // 与之一致，所以钉整句不会与绑定权威打架；参照点仍是页面那一格，不是本测试的第二份权威。
+    expect(button.getAttribute("title")).toBe("图上还没有数据，先等 K 线加载出来");
   });
 });
 
