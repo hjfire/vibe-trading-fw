@@ -11,7 +11,7 @@ import { ProChart } from "../ProChart";
  * 1. A line with any anchor after the cursor is a visual lookahead — hide it while the cursor
  *    is behind it, show it again once the replay reaches it.
  * 2. Hiding and restoring must never touch storage. `serializeDrawings(hideFree(…))` inside
- *    `ProChart.tsx:939` `bankDrawings` walks the *whole* overlay list with no name filter, so
+ *    `ProChart.tsx:1088` `bankDrawings` walks the *whole* overlay list with no name filter, so
  *    a single bank fired mid-replay would persist `visible: false` as the user's own hidden
  *    line, and it would still be hidden after exit, after a reload, and in the `.json` / `?d=`
  *    export.

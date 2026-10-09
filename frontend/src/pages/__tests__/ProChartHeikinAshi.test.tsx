@@ -61,7 +61,7 @@ const h = vi.hoisted(() => ({
 
 /**
  * 页面唯一的数据入口。替身只驱动 `init`：本片不分页，但 `init` 必须真的被回答一次，
- * 因为 `setBarCount`（`ProChart.tsx:1164`）只在那一次发生，而按钮的 disabled 判据读它。
+ * 因为 `setBarCount`（`ProChart.tsx:1208`）只在那一次发生，而按钮的 disabled 判据读它。
  */
 function ask(): void {
   if (!h.loader) throw new Error("页面没有装 DataLoader");
@@ -204,7 +204,7 @@ vi.mock("klinecharts", () => ({
         realTo: h.list.length,
       }),
       // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-      // 那句「leave the zoom alone」（`ProChart.tsx:918`），这正是本片要的分支。
+      // 那句「leave the zoom alone」（`ProChart.tsx:930`），这正是本片要的分支。
       getDom: () => undefined,
     };
   },
@@ -405,7 +405,7 @@ describe("/pro-chart 平均K线的样式链", () => {
 describe("/pro-chart 平均K线的挂卸与互斥", () => {
   // `beforeEach` 已经 `seed()` 过，bar 是有的；`h.created` 之所以在点之前清一次，
   // 是因为 init 那一路 `syncPriceOverlay`/`syncSubPanes` 已经创建过 MA／VOL／MACD
-  // （`ProChart.tsx:1280,1286`），计数判据要数的是「这次点按钮创建了几个」。
+  // （`ProChart.tsx:1324` 与 `:1330`），计数判据要数的是「这次点按钮创建了几个」。
   // `h.indicators` 与 `h.styles` **不许**清：它们是「主图现在载着什么」的唯一真相，
   // 清掉就把「挂 HA 不吃掉 MA」那条钉成了假绿。
   const haCreates = () => h.created.filter((c) => (c as { name?: string }).name === "HEIKIN_ASHI");
@@ -491,7 +491,7 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
     expect(button.getAttribute("title")).toContain("图上还没有数据");
     // 原来这里 `h.created = []` 再点一次、断 `haCreates()` 长度为 0，已经删掉：`disabled` 一成立
     // jsdom 和真浏览器都不派发事件，那句永远绿——同一个理由写在 `ProChartReplay.test.tsx:560-563`。
-    // 而挂载 effect（`ProChart.tsx:1334-1341`）读 `[haOn, timeShare]`、没有 barCount 门：挂载是视图
+    // 而挂载 effect（`ProChart.tsx:1385` 那一格的依赖数组）读 `[haOn, timeShare]`、没有 barCount 门：挂载是视图
     // 偏好，与数据条数无关 ⇒ 偏好开＋零根 bar 时 HA 在挂载那一次就上了图，且先删后挂保证恰好一份。
     // 这条的可杀处：给 effect 加上 `barCount > 0` 门、或把 `syncHeikinAshi` 的创建分支摘掉（挂载那一次就
     // 不会再有任何 `HEIKIN_ASHI` 实例）⇒ 长度不是 1；上一条则可把 `disabled` 的门改成只看 `timeShare`。
@@ -631,7 +631,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     render(<ProChart />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "图例" }));
-    // label 原文就是带括号这一串（`ProChart.tsx:2618`）；写成「指标图例显示规则」会
+    // label 原文就是带括号这一串（`ProChart.tsx:2714`）；写成「指标图例显示规则」会
     // `Unable to find label` ——那是替身替测试编了个不存在的控件名。
     fireEvent.change(screen.getByLabelText("指标图例显示规则（含主图 MA／均价）"), { target: { value: "none" } });
     await flush();

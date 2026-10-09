@@ -25,8 +25,8 @@ import { ProChart } from "../ProChart";
  * 3. 分时互斥：进分时必须卸掉 VPVR（面积线没有 [low, high] 区间可摊），
  *    `aria-pressed` 当场变 false，`title` 说的是面积线那个理由。
  * 4. 与 HA 的关系：共挂两个名字各一份、谁也没吃掉谁；卸一边不动另一边。
- * 5. 真值边界（Task 5，spec §八）：开关前后数据面引用与快照都不动、画线面锚点与
- *    `overrideOverlay` 都不动、`pro-chart.drawings.v1` 落盘面逐字节不动、样式面只读不写、
+ * 5. 真值边界（Task 5，spec §八）：开关前后数据面既没被重建（`resetData` 计数不变）也没被
+ *    就地改写（内容快照不变）、画线面锚点与 `overrideOverlay` 都不动、`pro-chart.drawings.v1` 落盘面逐字节不动、样式面只读不写、
  *    空图时按钮 disabled 且理由说实话。
  *
  * 样式面本片零改动：不写任何样式键。这一张有**两处**判据——本文件的「样式面零影响」那条
@@ -81,7 +81,7 @@ const h = vi.hoisted(() => ({
 
 /**
  * 页面唯一的数据入口。替身只驱动 `init`：本片不分页，但 `init` 必须真的被回答一次，
- * 因为 `setBarCount`（`ProChart.tsx:1164`）只在那一次发生，而按钮的 disabled 判据读它。
+ * 因为 `setBarCount`（`ProChart.tsx:1208`）只在那一次发生，而按钮的 disabled 判据读它。
  */
 function ask(): void {
   if (!h.loader) throw new Error("页面没有装 DataLoader");
@@ -266,7 +266,7 @@ vi.mock("klinecharts", () => ({
         realTo: h.list.length,
       }),
       // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-      // 那句「leave the zoom alone」（`ProChart.tsx:918`），这正是本片要的分支。
+      // 那句「leave the zoom alone」（`ProChart.tsx:930`），这正是本片要的分支。
       getDom: () => undefined,
     };
   },
@@ -583,7 +583,7 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     render(<ProChart />);
     await flush();
     // 判据的起点是「挂载之后」，比的是两次点分布之间：挂载那一路本来就有权吸回越界锚点并回写
-    // （`ProChart.tsx:1263` 读桶，`fixed.moved > 0` 才 `saveDrawings`），那是本片之外的事，
+    // （`ProChart.tsx:1263` 读桶，`ProChart.tsx:1274` 的 `fixed.moved > 0 || fixed.dropped > 0` 才 `saveDrawings`），那是本片之外的事，
     // 不归这条管。这条只管一件事：开／关 VPVR 不是任何一次 `saveDrawings` 的理由。
     fireEvent.click(screen.getByRole("button", { name: "量分布" }));
     await flush();
