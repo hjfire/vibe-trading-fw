@@ -2093,6 +2093,9 @@ export function ProChart() {
    * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
    * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
+   * 关掉要清 `cmpStatus`：那三格里装着的是**这一趟取数**的说法——`error` 会在输入框的
+   * `title` 上不带 `cmpOn` 门地说「原因：……」，`source` 会让「来源：主 … · 对 …」那行小字
+   * 继续印一个图上已经不存在的序列。线没了，这些话就是说谎的；`loading` 顺带一起归零。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -2108,6 +2111,7 @@ export function ProChart() {
     cmpRef.current = next;
     setCmpOn(next);
     saveCompare(next ? cmpSymbol : "");
+    if (!next) setCmpStatus({ loading: false, error: null, source: "" });
   };
 
   /**
@@ -2540,7 +2544,9 @@ export function ProChart() {
             量分布
           </button>
           {/* 对比（第⑥片）：一个输入框＋一个开关。三处表达式三种问法与前两颗按钮同形——
-              `disabled` 问三个原因（分时／空图／没填标的），`aria-pressed` 与 className 问
+              `disabled` 问三个原因（分时／空图／**既没填也没有已应用**——只问"输入框是空的"会让
+              开关在锁上之后自己锁死：线已挂上、`aria-pressed` 已是 `true`，此时全选删空输入框
+              就再也点不灭了，而第二次点击是「关掉」的唯一入口），`aria-pressed` 与 className 问
               `compareActive` 这一枚谓词（未就绪时不亮，说的是"图上现在没有对比线"这件事实），
               而 `title` 的五支按 §七 定稿的**顺序**问：分时 → 没有已应用标的 → 已开但数据
               未就绪 → 已开 → 已关。第 3 支必须排在 4/5 **之前**，它排在后面就永远读不到，
@@ -2560,7 +2566,7 @@ export function ProChart() {
             className="h-7 w-28 rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
           <button
-            disabled={timeShare || barCount === 0 || cmpInput.trim() === ""}
+            disabled={timeShare || barCount === 0 || (cmpInput.trim() === "" && cmpSymbol === "")}
             aria-label="对比"
             aria-pressed={compareActive(cmpOn, timeShare, cmpReady)}
             title={

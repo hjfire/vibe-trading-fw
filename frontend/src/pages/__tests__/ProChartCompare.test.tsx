@@ -229,7 +229,9 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
       }
       if (h.cmpError !== null) throw new Error(h.cmpError);
       return {
-        bars: h.cmpBars,
+        // `.slice()` 不是礼貌性复制：交回**同一个数组对象**会让「页面不重排」那根针假绿——
+        // 页面若就地 `data.bars.sort(…)`/`reverse()`，期望值 `h.cmpBars` 跟着一起被改，两侧永远相等。
+        bars: h.cmpBars.slice(),
         source: "fake-cmp",
         symbol: params.symbol,
         interval: params.interval,
@@ -338,8 +340,9 @@ beforeEach(() => {
   ];
   localStorage.clear();
   // 模块 store 跨 `render` 存活：上一支用例交付进桶的序列若不清，本支就可能在页面自己
-  // 还没取到数时读到它（控制端裁的正是这条——`clearCompareSeries()` 的生产侧调用被否了，
-  // 它的消费者就是这里）。`setActiveCompareKey("")` 同理，`calc` 读的就是这一格。
+  // 还没取到数时读到它——这正是 `clearCompareSeries()` 在**生产侧**没有调用者的原因：
+  // 页面自己清就会把挂卸 effect 正在读的桶掏空，得到一条永远不存在的线。
+  // `setActiveCompareKey("")` 同理，`calc` 读的就是这一格。
   clearCompareSeries();
   setActiveCompareKey("");
   document.documentElement.classList.remove("dark");
@@ -347,6 +350,16 @@ beforeEach(() => {
 
 describe("/pro-chart 多标的叠加对比", () => {
   it("填标的再点一次：挂到 candle_pane、走自定义轴、isStack 为真，且不调 createYAxis", async () => {
+    // 这一支故意把对比序列种成**降序**（D3 在 D1 前面）：「页面不重排」那根针若喂升序样本，
+    // 页面加一次升序 `.sort()` 就是 no-op，针永远绿。升序由生产者保证（`sort_index()`），
+    // 页面这一半的职责是**原样透传**，所以这里要的正是"乱序进来也必须乱序进 store"。
+    h.cmpBars = [
+      { timestamp: D(3), close: 12 },
+      { timestamp: D(1), close: 10 },
+    ];
+    // 点击**之前**抄一份时间戳：替身交回的是 `h.cmpBars.slice()`（见 harness 那格的理由），
+    // 页面就地重排改不到 `h.cmpBars`，但快照把这层保护也钉住，不依赖实现细节。
+    const fetched = h.cmpBars.map((b) => b.timestamp);
     render(<ProChart />);
     await flush();
     typeCompare("600036.SH");
@@ -367,13 +380,18 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(h.createdYAxis).toHaveLength(0);
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBe("600036.SH");
     expect(button().getAttribute("aria-pressed")).toBe("true");
+    // 独立一趟（§五）：对比是**单独一次** `fetchKline`，不与主序列同批；深度 2000 是
+    // spec §十一·5 登记的代价（后端把 `countback` 静默钳在 2000）。这里写**字面量**而不是
+    // import `COMPARE_BARS`：常量已经被 T2 的「七枚常量逐字钉」钉过一次，测试面再钉一次线值，
+    // 常量被改时两处同时红才是想要的耦合——同一条理由也决定了轴 id 在这份文件里是字面量。
+    // `toMatchObject` 而不是 `toEqual`：记录的是页面传进去的那一整格参数，还带一个 `signal`。
+    const cmpCalls = h.fetchCalls.filter((c) => c.symbol === "600036.SH");
+    expect(cmpCalls).toHaveLength(1);
+    expect(cmpCalls[0]).toMatchObject({ interval: "1D", count: 2000 });
     // 升序契约里**页面这一半**（T1 评审的裁定）：页面不重排取数回来的顺序——喂进 store 的数组
-    // 必须与 `fetchKline` 交出的逐根同序。升序本身由生产者保证（`agent/src/api/market_routes.py:177`
-    // 的 `sort_index()`），纯件按 spec §三 不校验 ⇒ 将来页面加一次 `.sort()`/`.reverse()`，
-    // 线会「提前冻住」且不报任何错，这一根是它唯一的读数位置。
-    expect(getCompareSeries("600036.SH|1D").map((b) => b.timestamp)).toEqual(
-      h.cmpBars.map((b) => b.timestamp),
-    );
+    // 必须与 `fetchKline` 交出的逐根同序。纯件按 spec §三 不校验 ⇒ 将来页面加一次
+    // `.sort()`/`.reverse()`，线会「提前冻住」且不报任何错，这一根是它唯一的读数位置。
+    expect(getCompareSeries("600036.SH|1D").map((b) => b.timestamp)).toEqual(fetched);
   });
 
   it("数据到达前一次都不挂；到达那一轮必须挂上（§十·②b / R10）", async () => {
@@ -410,15 +428,38 @@ describe("/pro-chart 多标的叠加对比", () => {
     fireEvent.click(button());
     await flush();
     expect(cmpLive()).toHaveLength(1);
+    // 来源小字跟着**已取回的那一趟**走：数据到家才印，线关掉就一起收掉（同一行印着
+    // 「对 fake-cmp」，而那个标的此刻不在图上）。
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
     fireEvent.click(button());
     await flush();
     expect(cmpLive()).toHaveLength(0);
+    expect(screen.queryByText(/对 fake-cmp/)).toBeNull();
     // 孤儿回收（`index.esm.js:15234` 那一支）判得到：漏一根轴就是这里多一根。
     expect(h.axes).toEqual([DEFAULT_AXIS_ID]);
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBeNull();
     // §四 会话内不清：关掉再点一次不用重敲。
     expect(field().getAttribute("value")).toBe("600036.SH");
     expect(button().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("已挂上之后删空输入框：开关不会被自己锁死，第二次点击仍然关得掉线", async () => {
+    // 这一支钉的是 `disabled` 的**第三个**条件为什么必须问两格。只问「输入框是空的」会得到
+    // 一个自锁的开关：线已经挂在图上、`aria-pressed` 已经是 `true`，用户全选删掉输入框之后
+    // 按钮变死，而第二次点击是把线关掉的唯一入口（`saveCompare("")` 那条路走不到）。
+    // 已应用标的还在 ⇒ 必须还能点；点下去 ⇒ 线真的被卸、键真的被删。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(1);
+    typeCompare("");
+    expect(button().disabled).toBe(false);
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(0);
+    expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBeNull();
   });
 
   it("五支 title 逐字钉，且第 3 支排在 4/5 之前才读得到（§十·⑥ / §七 的判别顺序）", async () => {
@@ -513,6 +554,11 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(button().getAttribute("aria-pressed")).toBe("false");
     // 失败只丢叠加层（§五）：主图的数据面与指标面一格没动。
     expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
+    // 关掉要把这一趟的说法一起收掉：输入框 `title` 的那句「原因：」没有 `cmpOn` 门，
+    // 不清 `cmpStatus` 就会在图上既没线、也再无在飞请求时继续报一个不存在的原因。
+    fireEvent.click(button());
+    await flush();
+    expect(field().getAttribute("title")).not.toContain("原因：");
   });
 
   it("空图：按钮 disabled 且理由说实话（不声称画得上线）", async () => {
