@@ -826,6 +826,10 @@ vi.mock("klinecharts", () => ({
       // §十·① 的结构钉：真库 `ChartImp.createYAxis` 会给轴打 manual（`index.esm.js:15483`），
       // 而 manual 轴把主图蜡烛撑进自己的量程（`:980-983`）且不被孤儿回收（`:15234`）。
       // 页面一次都不该调它——吞掉调用（`vi.fn()` 不带录制）就等于没这根钉。
+      // **替身只录调用、不摆轴，而这一格读不出东西不是偷懒**：库的指标挂载路径会把已存在轴上
+      // 的 manual 标记取消（`_createOrUseIndicatorYAxis`，`index.esm.js:15245-15248`），于是
+      // 「先 `createYAxis` 再 `createIndicator`」这种用法得到的轴表与压根不调它时逐字相同 ⇒
+      // 轴表那两格对这条用法没有牙，见证只有下面那格的调用计数。
       createYAxis: (yAxis: unknown) => {
         h.createdYAxis.push(yAxis);
         return "manual-axis";
@@ -1528,15 +1532,15 @@ cd frontend && npx vitest run src/lib/__tests__/symbolCompare.test.ts src/lib/__
 | # | 毒化 | 期望变红的那根针 |
 |---|---|---|
 | 1 | `symbolCompare.ts` 里 `<=` 改 `<` | 「并列取等号那侧」 |
-| 2 | 把 `out.push(cursor >= 0 ? ... : null)` 的 `null` 改成 `usable[0]?.close ?? null`（= bfill） | 「拒绝 bfill」＋「前缀不变量」 |
+| 2 | 把 `out.push(cursor >= 0 ? ... : null)` 的 `null` 改成 `usable[0]?.close ?? null`（= bfill） | 「拒绝 bfill」。**只有这一格有牙**：变异写在逐根独立的那一支（第 `i` 项仍只读 `mainTimestamps[i]` 与 `usable`，不读任何其它输出项）⇒ 对任意 k 前缀等式照样成立，「前缀不变量」那格读不出它。前缀不变量判的是「有没有读右边的 bar」，bfill 只犯「左边有没有被填上值」 |
 | 3 | 坏值判据删掉 `&& bar.close > 0`（只挡非有限） | 「坏值整根跳过：0／负数／NaN」 |
 | 4 | 坏值处理改成「到了那根交 `null`」（不整根跳过） | 「坏值整根跳过」的后半（9 那格被截断） |
 | 5 | `symbolCompareChart.ts` 里 `type: "line"` 整格删掉 | 「figures 恰一条且 `type` 逐字是 line」 |
 | 6 | `precision: 2` 改 `4` | 「其余声明逐格钉」 |
-| 7 | 页面 `syncCompare` 加回 `live.length === 0` 那一夹（只在不存在的条件下创建） | 「数据到达前一次都不挂；到达那一轮必须挂上」 |
+| 7 | 页面 `syncCompare` 加回 `live.length === 0` 那一夹（只在不存在的条件下创建） | 「数据到达前一次都不挂；到达那一轮必须挂上」——**执行结果：这一针未证伪**（两种读法都全绿）。成因是两条叠起来：夹子在当前结构下**恒真**（`removeIndicator` 无条件先跑，替身那一句就是同名全删，读回来必是 0），而夹子本该挡住的伤害（少一次重挂 ⇒ `calc` 不重跑）在页面套件里**没有出口**（`registerIndicator` 是 `vi.fn()`，`calc` 根本不执行）。R10 那个失效形状本身由下一行（删 `cmpSeries`）钉住了 ⇒ 不许为红而加断言，登记后交整支评审 |
 | 8 | 挂卸 effect 依赖数组删掉 `cmpSeries` | 「数据到达前一次都不挂；到达那一轮必须挂上」（R10 的失效形状） |
 | 9 | 取数 effect 的 cleanup 只 `abort()`、不 `compareInflight.delete(key)` | 「StrictMode 双挂载：请求可能发两次，但数据必须到」（R13） |
-| 10 | `createYAxis` 在 `syncCompare` 里被调一次（手动 `chart.createYAxis?.({ id: COMPARE_AXIS_ID })`） | 「…且不调 createYAxis」＋轴表那一格 |
+| 10 | `createYAxis` 在 `syncCompare` 里被调一次（手动 `chart.createYAxis?.({ id: COMPARE_AXIS_ID })`） | 「…且不调 createYAxis」的 `h.createdYAxis` 计数那一格。**轴表两格对这一针无牙**，且不是替身偷懒：轴**集合**两种写法都是 `[默认, 对比]`，差别只在 manual **标记**；而真库 `_createOrUseIndicatorYAxis`（`dist:15241-15249`）在轴已存在时有一句 `setManualYAxis(yAxisId, false)`——被指标接管的 manual 标记会被库自己取消，这一针的注入点正在 `createIndicator` **之前**，所以连「漏一根轴不被孤儿回收」那个后果都在库语义里被中和了。⇒ 这一格的合法见证只有调用计数（本任务开头给它的定位就是「判据是零调用」） |
 | 11 | 把关掉那一下改成第 1 轮写过的那版修法：`if (!next) setCmpStatus({ loading: false, error: null, source: "" });`（渲染侧的 `cmpOn` 门留着不动） | 「关掉再开：来源小字跟着线一起回来」——这一根是第 2 轮改判唯一的牙，它必须能红，否则那支用例什么都没钉 |
 | 12 | 来源小字与输入框 `title` 的 `cmpOn` 门各删掉一次（两趟，各自复原） | 「连点两次回到原样」的关后那一格／「错误臂」尾部的 `not.toContain("原因：")` |
 | 13 | `disabled` 去掉 `&& cmpSymbol === ""`（回到只问未提交输入框那一版） | 「已挂上之后删空输入框：开关不会被自己锁死，第二次点击仍然关得掉线」 |
