@@ -31,6 +31,14 @@
    - 关掉之后会不会留下一条死空白？`removeYAxis` 触发的 layout 不带 `cacheYAxisWidth`（`index.esm.js:15528-15534`），而 `cacheYAxisWidth` 只在为 `true` 时把宽度取 `Math.max(缓存, 现算)`（`index.esm.js:14905-14908`）、且每次 `_layout` 跑完就把选项位复位（`index.esm.js:15003-15012`）⇒ 不带该位的那次 layout 会**按现存轴重算并把缓存覆盖成小值**（`index.esm.js:14909-14910` 无条件写回）。**结论：会缩回去**，但要活体读数背书（§十·④）。
 6. **图例走库自己的指标块，不碰第③片的合成点**：`IndicatorTooltipView.prototype.getIndicatorTooltipData` 在 `index.esm.js:7272-7285` 遍历 figures，**`isString(figure.title)` 才 push 一行**（`index.esm.js:7273`），数值经 `formatPrecision(value, indicator.precision)`（`index.esm.js:7277`）；标题用 `indicator.shortName`（`index.esm.js:7249-7259`）。而蜡烛 pane 的 tooltip 会把**同 pane 所有指标**的行追在下面（`index.esm.js:7396-7401`、收集点 `index.esm.js:7062`）。⇒ 给对比指标一个 `title: "对比收盘"` 就自带读数行，**一行样式键都不必写**，`chartStyles` 那个唯一合成点不动。
 7. **精度不新增规则**：那根轴的刻度文本精度在非蜡烛路径取 `Math.max(precision, indicator.precision)`（`index.esm.js:1160-1175`，实际分支 `index.esm.js:1167-1175`）；同时 `StoreImp.prototype._synchronizeIndicatorSeriesPrecision`（`index.esm.js:14215-14239`）会把 `series === "price"` 的指标精度**覆写成主标的的 `pricePrecision`**（`index.esm.js:14221`）。本页出厂就是 `pricePrecision: 2`（`frontend/src/pages/ProChart.tsx:1319`、`frontend/src/pages/ProChart.tsx:1714`）。⇒ 裁定：对比指标声明 `series: "price"` ＋ `precision: 2`，**继承本页已有的那一条精度约定**，不自造"根据数据估小数位"的第二套规则；代价（低价标的会被显示成 `0.00`）作为**本页既有**限制登记在 §十一·2，不是本片引入的。
+   - 同一支 `createOptimalTicks` 在 `index.esm.js:1188` 对每格刻度文本跑 `decimalFold.format(thousandsSeparator.format(v))`，而千分位默认 `sign: ','` 且本仓没有任何覆写点（第⑤片 `lib/vpvrChart.ts` 文件头末段记过同一条）⇒ 对比轴上 ≥1000 的刻度与图例读数一样带逗号，是**预期**不是缺陷。
+
+8. **`figures[].type` 必须写，且 `null` 在折线上是真缺口**（这条决定 §三 的输出形状能不能直接用）：
+   - `type` 是**分发钥匙**：`prepareIndicatorFigures`（`index.esm.js:3081-3133`）只对 `'text'|'circle'|'bar'|'line'` 四个 case 设 `defaultFigureStyles`，随后 `index.esm.js:3128` 用 `isValid(figure.type)` 决定这条 figure 进不进渲染清单。`isValid`（`index.esm.js:213-215`）＝「非 null 且非 undefined」⇒ **省略 `type` 会静默丢掉整条 figure**（线一条都不画，且不报错）。所以 §四 那句 `type: "line"` 是承重的，不是样式。
+   - `null` 的一侧是**双向**缺口：`IndicatorView.drawImp` 的 figure 分支被 `index.esm.js:8095` 的 `isValid(currentData[figure.key])` 挡（null ⇒ 整根跳过），而 `line` 那一支（`index.esm.js:8133-8146`）额外要求**当前与下一根都有像素**（`index.esm.js:8137`），坐标只在 `isNumber(value)` 时才写入（`index.esm.js:8084-8091`，`isNumber`＝`typeof number && Number.isFinite`，`index.esm.js:210-212`）。⇒ 第 `i` 项为 `null` 会同时吃掉 `(i-1→i)` 与 `(i→i+1)` 两段。
+   - 缺口**不会被桥接**：线段先按 figureIndex 汇聚进 `lines`（`index.esm.js:8134-8135`），再由 `index.esm.js:8161-8190` 合并成折线，合并条件是上一折线的**末点与当前折线的起点逐坐标相等**（`index.esm.js:8174-8175`）⇒ 中间断了就得到两条独立折线，而不是一条跨过缺口的长线。
+   - 缺口**不会掉到基线**：`baseValue`/`yAxis.getRange().from` 那套只属于 `'rect'|'bar'` 分支（`index.esm.js:8114-8131`），`line` 分支不读它 ⇒ `null` 绝不会画出一条落到 0 的线。
+   - 同一条 `isNumber` 门也守在那根独立轴的量程上（`index.esm.js:1049-1055`）⇒ `null` 不进 min/max，缺口的存在不会把对比轴拽宽。这也是 §三 为什么「非有限值必须交 `null`、绝不能交 `0`」：`0` 在 `isValid` 与 `isNumber` 两道门上**都是合法数值**，会真画出来并把量程拽到 0。
 
 **公开类型面已核对**（本片所有活体读数都走 `frontend/node_modules/klinecharts/dist/index.d.ts` 里有声明的方法，不碰未导出的内部件）：`createIndicator` `index.d.ts:1163`、`getIndicators` `index.d.ts:1164`、`createYAxis`/`removeYAxis`/`getYAxes` `index.d.ts:1168-1170`（`getYAxes` 的 `filter` 是**必填**形参，`index.d.ts:1154-1158` 只有 `paneId`/`id`/`name` 三个键）、`Axis.getRange()` `index.d.ts:672`、`YAxis extends Axis, Required<YAxisTemplate>` `index.d.ts:681-685` ⇒ 每根轴都带可读的 `id`，"哪根是默认轴"用 `id !== COMPARE_AXIS_ID` 判，不靠数组下标。绘图区宽度与轴控件的宽度用 `getSize(paneId, position)` `index.d.ts:1162`，`DomPosition = "root" | "main" | "yAxis"` `index.d.ts:1148`，返回的就是带 `width` 的 `Bounding` `index.d.ts:52-59`。
 
@@ -57,12 +65,15 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 
 停牌／休市期间对比线会**平着走**（carry forward 的定义就是"最近已知价"），这是语义不是缺陷；跨多久都照 carry，**不设**"超过 N 天就断线"的参数（那是给假想的精确性加复杂度）。
 
-输入契约：两个数组都按时间戳升序。`compare` 里 `close` 非有限的根**跳过**（不进游标），因为后端缺列时填的是 `0`（`frontend/src/lib/marketApi.ts:179-183`）而非 null，一个 0 会把那根独立轴的量程拽到 0——这是本片**特有**的一条防御性判据，要专门一针。
+`(number | null)[]` 这个形状**可以直接交给库**，不需要任何适配层——依据是 §二·8：`null` 在 `line` 图元上是双向缺口且不桥接、不掉基线，在那根独立轴的量程上被 `isNumber` 跳过。所以「主图已收盘、对比标的还没开盘」的左侧那段是真的没有线，而不是一条 0 线或一条被拉平的线。
+
+输入契约：两个数组都按时间戳升序。`compare` 里 `close` 非有限的根**跳过**（不进游标），因为后端缺列时填的是 `0`（`frontend/src/lib/marketApi.ts:179-183`）而非 null，一个 0 会把那根独立轴的量程拽到 0——这是本片**特有**的一条防御性判据，要专门一针。注意「跳过」的口径是**整根不进游标**（连时间戳一起丢），不是"到了那根就交 `null`"：后者会让一根坏 bar 把后面的好价格一起截断。
 
 ## 四、库绑定面（`frontend/src/lib/symbolCompareChart.ts`）
 
-- 注册名 `SYMBOL_COMPARE`，`shortName` 「对比」；`figures: [{key: "cmp", title: "对比收盘", type: "line"}]`（**不写 `styles`**）；`calc` 从本模块的会话级 store 取当前 key 的对比序列，`calc(dataList)` 用 `dataList` 的时间戳现算——**必须算在 `calc` 里**，因为任何一次分页加根都会带着**新的全量** `_dataList` 把所有指标全量重跑（`StoreImp.prototype._addData` 尾部 `index.esm.js:13501-13506`、`_calcIndicator` 传全量 `index.esm.js:14145`），而 `extendData` **不参与**重算判定（默认 `shouldUpdate` 里 `calc` 只由 `calcParams`/`figures`/`calc` 三件事决定，`index.esm.js:3167-3168`；`extendData` 只进 `draw` 那一档 `index.esm.js:3181`）。把对齐结果当外部闭包常量喂进来，滚到边界加载后必然错位。
-- `paneId: "candle_pane"` ＋ `yAxisId: COMPARE_AXIS_ID`（模块导出的稳定常量字符串）。挂载只走 `createIndicator`，**不碰 `createYAxis`**（理由见 §二·2/4）。
+- 注册名 `SYMBOL_COMPARE`，`shortName` 「对比」；`figures: [{key: "cmp", title: "对比收盘", type: "line"}]`（**不写 `styles`**；`type` 是 §二·8 那条分发钥匙，删掉它就得到一条静默不画的线）；`calc` 从本模块的会话级 store 取当前 key 的对比序列，`calc(dataList)` 用 `dataList` 的时间戳现算——**必须算在 `calc` 里**，因为任何一次分页加根都会带着**新的全量** `_dataList` 把所有指标全量重跑（`StoreImp.prototype._addData` 尾部 `index.esm.js:13501-13506`、`_calcIndicator` 传全量 `index.esm.js:14145`），而 `extendData` **不参与**重算判定（默认 `shouldUpdate` 里 `calc` 只由 `calcParams`/`figures`/`calc` 三件事决定，`index.esm.js:3167-3168`；`extendData` 只进 `draw` 那一档 `index.esm.js:3181`）。把对齐结果当外部闭包常量喂进来，滚到边界加载后必然错位。
+- `calc` 的返回形状是 `{cmp: number | null}` 逐根一行，且**行数必须恰等于 `dataList.length`**：`createRangeImp` 与 `drawImp` 都按**绝对下标**取行（`index.esm.js:1048` `result[dataIndex] ?? {}`、`index.esm.js:8072-8074` 同形），少一行就等于在尾部静默丢一根。时间戳这一格不需要额外的非有限值分支——`columnsToBars` 的 `timestamp` 是 `sec * 1000`（`frontend/src/lib/marketApi.ts:178`），缺的是**整列**（`data.t ?? []`，`marketApi.ts:175`）而不是列里的 `null`，所以「主图时间戳不可用」在这一层不是一个可达的形状，不给它写校验。
+- `paneId` 用现成常量 `MAIN_PANE_ID`（`frontend/src/lib/chartDrawings.ts:92`，值就是 `"candle_pane"`；`ProChart.tsx:63` 已经把它 import 进来了），不新造第二个字面量；`yAxisId: COMPARE_AXIS_ID`（模块导出的稳定常量字符串）。挂载只走 `createIndicator`，**不碰 `createYAxis`**（理由见 §二·2/4）。
 - store：`setCompareSeries(key, bars)` / `getCompareSeries(key)` / `clearCompareSeries()`，key = `${symbol}|${interval}`。`syncCompare(chart, active)` 挂载前先把当前 key 记成 store 的 `activeKey`，`calc` **只读 `activeKey`** ⇒ 不给指标传参：参数一旦走 `calcParams`，就撞上 `index.esm.js:3168` 那条 `JSON.stringify` 比较，等于把同一份状态存两处。`syncCompare(chart, active)` 走第④⑤片同一套**先删后挂**（切对比标的、切周期都必须重挂以触发重算）。
 - 偏好键 `pro-chart.compare.v1`，只存**已应用的对比标的字符串**（不存数据）。读写形态照 `frontend/src/lib/vpvrChart.ts:53`、`frontend/src/lib/vpvrChart.ts:80`、`frontend/src/lib/vpvrChart.ts:89-90`。
 
@@ -105,7 +116,7 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 
 ## 十、验收判据
 
-- **① jsdom 声明面**：`createIndicator` 被调时 `paneId === "candle_pane"`、`yAxisId === COMPARE_AXIS_ID`、`series === "price"`、`figures` 恰一条且带 `title`；`createYAxis` **零调用**（这条正是"不建 manual 轴"的结构钉）。
+- **① jsdom 声明面**：`createIndicator` 被调时 `paneId === "candle_pane"`、`yAxisId === COMPARE_AXIS_ID`、`series === "price"`、`figures` 恰一条且带 `title`；`createYAxis` **零调用**（这条正是"不建 manual 轴"的结构钉）。注册对象那一侧另钉一格 `figures[0].type === "line"` **逐字** `toBe`——判的是 `registerIndicator` 收到的那份字面量（形状照第⑤片 `vpvrChart.test.ts` 钉 `precision` 的那格）：§二·8 说省略 `type` 会得到一条**静默不画**的线，而这种失效在 jsdom 与活体像素上都读不出来，只能钉声明。
 - **② 纯函数面**：手算向量 + 前缀不变量 + 三根下毒针（`<=`、拒绝 bfill、非有限值跳过）。
 - **③ 卸载面**：切走对比后 `chart.getIndicators()` 不含 `SYMBOL_COMPARE`，且 `getYAxes({paneId:'candle_pane'})` 回到**恰 1 根**轴（这条同时覆盖 §二·4 的孤儿回收与"没有漏轴"）。
 - **④ 活体面**：开对比前后，`getYAxes({paneId:'candle_pane'})` 里 `id !== COMPARE_AXIS_ID` 那根（默认轴）的 `getRange()` **逐字相同**＝主图量程不受叠加影响的那条不变量；绘图区宽度用 `getSize("candle_pane", "main").width` 读，开了对比后**必然变小**（多了一条右外列，属预期），关掉要**回到开前的像素值**——这一条就是 §二·5「会不会留死空白」的活体背书，读数当场登记。新轴 `getRange()` 等于对齐后 close 的 min/max 现算值。若仍无可见表面（第⑤片遇过的情形），按同一降级形态：判据落在**公开读数**（`getRange()`/`getSize()`）与库的调用面上，像素色值与"屏幕上真有没有那条线"登记为**未判**，不假称已验。
@@ -130,3 +141,4 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 - **R5 失败要报、空不算失败** —— 理由：那条 errmsg 是用户排障的唯一线索（`marketApi.ts:253-257`），而 `no_data`→`bars: []` 是正常形状（`marketApi.ts:260`）—— 错了代价：静默吞掉一条能定位的错误。
 - **R6 精度继承 `series:"price"` 不估小数位** —— 理由：本页已有唯一精度约定 `frontend/src/pages/ProChart.tsx:1319`，`index.esm.js:14221` 那条同步通道是库给的 —— 错了代价：多出一套没人维护的精度规则。
 - **R7 对齐必须算在 `calc` 里** —— 理由：`index.esm.js:13501-13506`/`index.esm.js:14145` 每次加分页都全量重跑、`extendData` 不触发重算（`index.esm.js:3167-3168`、`index.esm.js:3181`）—— 错了代价：滚到边界加载后线整体错位，且只有活体能发现。
+- **R8 缺口交给库的 `null` 语义，不自绘、不桥接** —— 理由：`index.esm.js:8095`+`index.esm.js:8137` 让 `null` 成为双向缺口，`index.esm.js:8174-8175` 保证缺口不被跨过，`index.esm.js:8114-8131` 那套 `baseValue` 只属于 `bar`/`rect` 所以不会掉到基线 —— 错了代价：若哪天改成"用前值桥接"或走 `draw` 自绘，「主图有 bar 而对比没有」会被画成一条不该存在的连线，而这条线在活体上和真数据无法区分。
