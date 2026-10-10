@@ -594,7 +594,7 @@ export function compareRows(
  *
  * `precision: 2` 是**继承本页已有的那一条精度约定**（`ProChart.tsx` 写死
  * `pricePrecision: 2`，而 `_synchronizeIndicatorSeriesPrecision` 会把 `series === "price"`
- * 的指标精度覆写成它，`index.esm.js:14215-14239`），不是自造"按数据估小数位"的第二套规则
+ * 的指标精度覆写成它，`index.esm.js:14215-14241`），不是自造"按数据估小数位"的第二套规则
  * （spec §十二 R6）。覆写整体包在 `if (isValid(this._symbol))` 里（`:14216`）⇒ 没设标的时
  * 声明的 `precision: 2` 原样生效，这一格不是"等着被覆写的占位值"。
  * 低价标的被显示成 `0.00` 是本页出厂就有的代价（§十一·2）。
