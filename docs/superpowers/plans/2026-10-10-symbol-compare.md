@@ -668,7 +668,12 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { COMPARE_PREFS_KEY, clearCompareSeries, setActiveCompareKey } from "@/lib/symbolCompareChart";
+import {
+  COMPARE_PREFS_KEY,
+  clearCompareSeries,
+  getCompareSeries,
+  setActiveCompareKey,
+} from "@/lib/symbolCompareChart";
 import { HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
 import { VPVR_PREFS_KEY } from "@/lib/vpvrChart";
 import { ProChart } from "../ProChart";
@@ -986,6 +991,13 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(h.createdYAxis).toHaveLength(0);
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBe("600036.SH");
     expect(button().getAttribute("aria-pressed")).toBe("true");
+    // 升序契约里**页面这一半**（T1 评审的裁定）：页面不重排取数回来的顺序——喂进 store 的数组
+    // 必须与 `fetchKline` 交出的逐根同序。升序本身由生产者保证（`agent/src/api/market_routes.py:177`
+    // 的 `sort_index()`），纯件按 spec §三 不校验 ⇒ 将来页面加一次 `.sort()`/`.reverse()`，
+    // 线会「提前冻住」且不报任何错，这一根是它唯一的读数位置。
+    expect(getCompareSeries("600036.SH|1D").map((b) => b.timestamp)).toEqual(
+      h.cmpBars.map((b) => b.timestamp),
+    );
   });
 
   it("数据到达前一次都不挂；到达那一轮必须挂上（§十·②b / R10）", async () => {
@@ -1154,7 +1166,6 @@ Expected: FAIL（找不到「对比」按钮 / `textbox` 不存在）。原文�
 **① import**——插在 `} from "@/lib/vpvrChart";` 之后：
 
 ```tsx
-import { alignCloseToTimestamps } from "@/lib/symbolCompare";
 import type { CompareBar } from "@/lib/symbolCompare";
 import {
   COMPARE_AXIS_ID,
@@ -1170,7 +1181,9 @@ import {
 } from "@/lib/symbolCompareChart";
 ```
 
-（`alignCloseToTimestamps` 页面**不**直接调——它经 store 间接进 `calc`。若 `tsc` 报未使用，就删掉这一行，不要留悬空 import；本条留给执行席自查，因为画线面那条 `pro-chart.drawings.v1` 判据不需要它。）
+（页面从纯件 `symbolCompare` 只 import **类型**：`alignCloseToTimestamps` 经 store 间接进 `calc`，
+页面自己调一次就是第二处对齐权威（spec §三 的单一实现）。这一格是写定时定的，不是「先写着、
+tsc 报未使用再删」——草稿里那行悬空 import 已删，别搬回来。）
 
 **② 模块级在飞集合**——插在 `export function ProChart()` 之前：
 
