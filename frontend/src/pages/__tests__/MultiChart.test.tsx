@@ -36,13 +36,24 @@
  * - a peer that cannot align (no bars yet, or none inside the window) has to keep
  *   its own view rather than zoom to "zero bars in window", which reads as blank;
  * - a stale session must not leave a minute cell on a symbol with no minute
- *   source, and the user has to be *told* the cell was moved.
+ *   source, and the user has to be *told* the cell was moved;
+ * - a live channel that outlives the period it was opened for. The library calls
+ *   `subscribeBar` once per *init* landing (dist 13613-13626), so the symbol+period
+ *   double write a repair performs opens two channels; whichever survives has to
+ *   read the period the cell now intends, or a stale poll pushes yesterday's
+ *   hourly tail into a chart that has moved to daily bars.
+ * - a sub-indicator strip left at the library's own default height. A pane costs
+ *   the flexible candle pane a flat 100px (`ChartImp.createIndicator` builds the
+ *   missing pane from `layoutOptions.pane`, dist 15277-15281), which is how the
+ *   single-chart page once ended up with a 29px candle chart in a 360px host.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataLoader, KLineData, Period, SymbolInfo } from "klinecharts";
 
 import { MultiChart, blockedAny, intervalsForSymbol, readSession, CELL_COUNT } from "../MultiChart";
+import { LIVE_POLL_MS } from "@/components/charts/ChartCell";
+import { BUILTIN_SUB_NAMES } from "@/lib/subIndicators";
 import { intervalToPeriod } from "@/lib/marketApi";
 import { barTimestamps, coarseBarSpanMs, countWithin, windowOfIndices } from "@/lib/mtfSync";
 
@@ -144,6 +155,20 @@ const h = vi.hoisted(() => ({
    *  observable and not just call presence. */
   applyLog: [] as Array<{ chart: number; call: string; value: unknown }>,
   localePatches: [] as Array<{ tag: string; patch: Record<string, string> }>,
+  /** Rewrites one period's page before the feed hands it back. This is how a live
+   *  tick is modelled: the newest bar of the feed moves while everything older
+   *  than it stays exactly where it was. */
+  livePatch: null as ((interval: string, bars: KLineData[]) => KLineData[]) | null,
+  /** A live read for this interval parks inside the mock until the test calls
+   *  `liveRelease`. Holding one response in flight across a period change is the
+   *  only way to ask what the cell does with news that arrived too late. */
+  liveGate: null as string | null,
+  liveRelease: null as (() => void) | null,
+  /** Same park, for the *page* read: holds a cell's first page in flight across an
+   *  unmount, which is how a test reaches the case the library really leaves the
+   *  cell in — `subscribeBar` arriving after the chart it was meant for is gone. */
+  pageGate: null as string | null,
+  pageRelease: null as (() => void) | null,
 }));
 
 /** The fake's state plus the few methods the tests drive it with. The page's own
@@ -168,7 +193,19 @@ interface FakeChart {
   actions: Array<{ type: string; data: unknown }>;
   subscribed: string[];
   unsubscribed: string[];
-  indicators: string[];
+  /** Where each indicator actually sits, because "which panes exist" is a
+   *  question about indicators on them (`ChartImp.removeIndicator`, dist
+   *  15323-15347 destroys a pane the moment its last indicator leaves). */
+  indicators: Array<{ name: string; paneId: string }>;
+  panes: Array<{ id: string; height: number; minHeight: number }>;
+  /** The node handed to `init` — the cell measures *this* element for its height
+   *  budget, so a test that wants a 400px cell sets it here. */
+  host: HTMLElement;
+  /** `subscribeBar` / `unsubscribeBar` invocations, counted, so a leaked second
+   *  live channel is visible as a number rather than as a race. */
+  liveSubs: number;
+  liveUnsubs: number;
+  paneOptionCalls: Array<{ id: string; height: number }>;
   spaceCalls: number[];
   offsetCalls: Array<{ distance: number; atSpace: number }>;
   scrolls: Array<{ timestamp: number; animationDuration: number }>;
@@ -270,6 +307,33 @@ function log(c: FakeChart, call: string, value: unknown): void {
   h.applyLog.push({ chart: c.id, call, value });
 }
 
+/** `StoreImp._addData`'s single-bar branch (dist 13480-13502), which is what the
+ *  live channel writes through: newer than the tail appends, equal to it replaces
+ *  the tail, older is dropped without a word. Any accepted write re-derives the
+ *  range and re-runs every mounted indicator's calculation. */
+function applyUpdate(c: FakeChart, bar: KLineData): void {
+  const last = c.list[c.list.length - 1];
+  if (last && bar.timestamp < last.timestamp) return;
+  c.list =
+    last && bar.timestamp === last.timestamp
+      ? [...c.list.slice(0, -1), bar]
+      : [...c.list, bar];
+  emitRange(c);
+}
+
+/** `StoreImp.resetData` (dist 13652): unsubscribe the live channel *first* — but
+ *  only when the store already holds both a symbol and a period, which is
+ *  `_processDataUnsubscribe`'s own guard (13643) — then swap, then re-ask. */
+function resetData(c: FakeChart, swap: () => void): void {
+  if (c.loader?.unsubscribeBar && c.symbol && c.period) {
+    c.liveUnsubs += 1;
+    c.loader.unsubscribeBar({ symbol: c.symbol as never, period: c.period as never });
+  }
+  swap();
+  c.loading = false;
+  startLoad(c, "init");
+}
+
 /** `StoreImp.resetData` (dist 13652) clears the in-flight flag and re-asks, so a
  *  period written right after a symbol still gets its load; paging, which comes
  *  from `_adjustVisibleRange`, respects `_loading` and waits (dist 13607). */
@@ -310,6 +374,19 @@ function startLoad(c: FakeChart, type: "init" | "forward" | "backward"): void {
         // test shows the bus stayed quiet while four feeds of different depth
         // filled up.
         emitRange(c);
+        // `_processDataLoad` opens the live channel immediately *after* an `init`
+        // page lands (dist 13613-13626) — so a cell that never implements
+        // `subscribeBar` is not merely un-polled, it is a loader the library is
+        // already asking for updates. Note this runs for the error path's
+        // `callback([])` too.
+        if (type === "init" && c.loader?.subscribeBar) {
+          c.liveSubs += 1;
+          c.loader.subscribeBar({
+            symbol: c.symbol as never,
+            period: c.period as never,
+            callback: (data: KLineData) => applyUpdate(c, data),
+          });
+        }
       },
     }),
   )
@@ -369,7 +446,17 @@ vi.mock("klinecharts", () => ({
       actions: [] as Array<{ type: string; data: unknown }>,
       subscribed: [] as string[],
       unsubscribed: [] as string[],
-      indicators: [] as string[],
+      indicators: [] as Array<{ name: string; paneId: string }>,
+      // The two panes the library builds itself, at its own default height, so
+      // `getPaneOptions("candle_pane")` answers the way the real chart does.
+      panes: [
+        { id: "candle_pane", height: 100, minHeight: 30 },
+        { id: "x_axis_pane", height: 26, minHeight: 30 },
+      ] as Array<{ id: string; height: number; minHeight: number }>,
+      host,
+      liveSubs: 0,
+      liveUnsubs: 0,
+      paneOptionCalls: [] as Array<{ id: string; height: number }>,
       spaceCalls: [] as number[],
       offsetCalls: [] as Array<{ distance: number; atSpace: number }>,
       scrolls: [] as Array<{ timestamp: number; animationDuration: number }>,
@@ -386,7 +473,24 @@ vi.mock("klinecharts", () => ({
         halfGapBar: c.barSpace / 2,
       }),
       getOffsetRightDistance: () => c.offsetRightBars * c.barSpace,
-      getIndicators: () => c.indicators.map((name: string) => ({ name, paneId: "candle_pane" })),
+      getIndicators: () => c.indicators.map((i: { name: string; paneId: string }) => ({ ...i })),
+      getPaneOptions: (id?: string) =>
+        id === undefined
+          ? c.panes.map((p: { id: string; height: number; minHeight: number }) => ({ ...p }))
+          : (c.panes.find((p: { id: string }) => p.id === id) ?? null),
+      setPaneOptions: (options: { id?: string; height?: number }) => {
+        for (const p of c.panes) {
+          if (options.id !== undefined && p.id !== options.id) continue;
+          // The x-axis pane auto-sizes and the library skips it here (dist
+          // 15418-15421); every other pane takes `max(minHeight, height)`.
+          if (p.id === "x_axis_pane") continue;
+          if (typeof options.height === "number" && options.height > 0) {
+            p.height = Math.max(p.minHeight, options.height);
+            c.paneOptionCalls.push({ id: p.id, height: p.height });
+            log(c, "setPaneOptions", { id: p.id, height: p.height });
+          }
+        }
+      },
       getOverlays: () => [],
       getDom: (paneId?: string, position?: string) =>
         paneId === undefined ? host : position === "main" ? mainWidget : null,
@@ -398,14 +502,38 @@ vi.mock("klinecharts", () => ({
       resize: () => {
         c.resizes += 1;
       },
-      createIndicator: (value: { name: string }) => {
+      createIndicator: (value: { name: string; paneId?: string }, isStack?: boolean) => {
         // Never idempotent, because the library is not (`ChartImp.createIndicator`
         // mints a fresh id, dist 15270), so a cell that re-ran this on every symbol
         // change would stack one legend row per change.
-        c.indicators.push(value.name);
-        return true;
+        const paneId = value.paneId ?? "candle_pane";
+        c.indicators.push({ name: value.name, paneId });
+        // A missing pane is built from `layoutOptions.pane` — height 100 — which is
+        // precisely the charge the cell's own budget exists to override
+        // (dist 15277-15281).
+        if (!c.panes.some((p: { id: string }) => p.id === paneId)) {
+          c.panes.push({ id: paneId, height: 100, minHeight: 30 });
+        }
+        void isStack;
+        return `${value.name}_${c.indicators.length}`;
       },
-      removeIndicator: () => true,
+      removeIndicator: (filter: { paneId?: string; name?: string } = {}) => {
+        const before = c.indicators.length;
+        c.indicators = c.indicators.filter(
+          (i: { name: string; paneId: string }) =>
+            !(filter.paneId !== undefined && i.paneId === filter.paneId) &&
+            !(filter.name !== undefined && i.name === filter.name),
+        );
+        // The pane follows its indicators: destroyed once the last one leaves, and
+        // never the candle or the axis strip (dist 15328-15347).
+        for (const p of [...c.panes]) {
+          if (p.id === "candle_pane" || p.id === "x_axis_pane") continue;
+          if (!c.indicators.some((i: { paneId: string }) => i.paneId === p.id)) {
+            c.panes = c.panes.filter((x: { id: string }) => x.id !== p.id);
+          }
+        }
+        return c.indicators.length !== before;
+      },
       setDataLoader: (loader: DataLoader) => {
         c.loader = loader;
       },
@@ -415,15 +543,17 @@ vi.mock("klinecharts", () => ({
       // four-cell grid is the cell's own guard. A fake that quietly refused the
       // repeat would hide that wiring entirely.
       setSymbol: (symbol: SymbolInfo) => {
-        // Replaced, not merged: the store merges the precisions it holds, but no
-        // assertion here reads them — only `getSymbol().ticker`, which is what the
-        // cell's own guard compares against.
-        c.symbol = symbol;
-        startLoad(c, "init");
+        resetData(c, () => {
+          // Replaced, not merged: the store merges the precisions it holds, but no
+          // assertion here reads them — only `getSymbol().ticker`, which is what the
+          // cell's own guard compares against.
+          c.symbol = symbol;
+        });
       },
       setPeriod: (period: Period) => {
-        c.period = period;
-        startLoad(c, "init");
+        resetData(c, () => {
+          c.period = period;
+        });
       },
       setBarSpace: (space: number) => {
         // Outside the library's own window this returns without doing anything —
@@ -600,12 +730,27 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
       h.requests.push(params);
       const interval = String(params.interval);
       if (interval === h.failInterval) throw new Error(`no source for ${interval}`);
+      if (interval === h.liveGate) {
+        await new Promise<void>((resolve) => {
+          h.liveRelease = () => resolve();
+        });
+      }
+      if (interval === h.pageGate) {
+        await new Promise<void>((resolve) => {
+          h.pageRelease = () => resolve();
+        });
+      }
+      const page = backendPage(
+        interval,
+        (params.before as number | null) ?? null,
+        Number(params.count),
+      );
       return {
         status: "ok",
         symbol: params.symbol,
         interval,
         source: `fake:${interval}`,
-        bars: backendPage(interval, (params.before as number | null) ?? null, Number(params.count)),
+        bars: h.livePatch ? h.livePatch(interval, page) : page,
       };
     },
   };
@@ -625,10 +770,26 @@ function chart(interval: IntervalKey): FakeChart {
   return asFake(found);
 }
 
+/** One macrotask turn, so the `getBars` promise chains below it all run.
+ *
+ * Fake-aware, because a live poll armed under the real clock is invisible to
+ * `advanceTimersByTimeAsync`: sinon replaces `setInterval`, it does not adopt
+ * timers the real clock already holds. So the tests that drive the poll install
+ * fake timers *before* mounting, and this has to flush without advancing —
+ * otherwise the first `tick()` would fire the poll before the test had set up
+ * its feed. */
+async function flush(): Promise<void> {
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0);
+    return;
+  }
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 async function settle(): Promise<void> {
   for (let round = 0; round < 40 && h.inFlight > 0; round++) {
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
+      await flush();
     });
   }
 }
@@ -680,6 +841,11 @@ beforeEach(() => {
   h.busEvents = 0;
   h.echoOverflow = 0;
   h.applyLog = [];
+  h.livePatch = null;
+  h.liveGate = null;
+  h.liveRelease = null;
+  h.pageGate = null;
+  h.pageRelease = null;
 });
 
 describe("the stored view", () => {
@@ -690,6 +856,10 @@ describe("the stored view", () => {
       intervals: ["1D", "60m", "15m", "5m"],
       sync: true,
       blocked: false,
+      // Every cell starts with its main-pane MA and no sub strip: the grid is four
+      // charts tall, and a default strip on each is four strips the user did not
+      // ask for.
+      subs: [null, null, null, null],
     });
   });
 
@@ -777,7 +947,12 @@ describe("mounting the grid", () => {
   it("puts exactly one MA on each chart", async () => {
     await mount();
     expect(h.charts).toHaveLength(CELL_COUNT);
-    for (const c of h.charts) expect(asFake(c).indicators).toEqual(["MA"]);
+    for (const c of h.charts) {
+      // The cell's own default: one main-pane MA and nothing else, so a restored
+      // or newly-picked sub indicator is the only thing that can add a row here.
+      expect(asFake(c).indicators).toEqual([{ name: "MA", paneId: "candle_pane" }]);
+      expect(asFake(c).panes.map((p) => p.id)).toEqual(["candle_pane", "x_axis_pane"]);
+    }
   });
 
   it("names the cells a stale session had to move", async () => {
@@ -1225,5 +1400,417 @@ describe("the per-cell period picker", () => {
     // The retry has to survive the library's reference check, not be swallowed by
     // it: same period, fresh object, so it really re-reads.
     expect(h.requests.filter((r) => r.interval === "5m").length).toBe(before + 1);
+  });
+});
+
+/** The cadence the cell says it polls at, spelled out here rather than imported,
+ *  so a missing export fails on the value and not on `advanceTimersByTimeAsync`.
+ *  The pin below keeps the two from drifting apart silently. */
+const LIVE_MS = 5_000;
+
+/** The period the live read asks for: the newest bar, plus the one before it so
+ *  the cell's header can still print a change percentage without a second
+ *  request. */
+const LIVE_TAIL = 2;
+
+/** Model a tick: the feed's newest bar now says something else, everything older
+ *  than it is untouched. */
+function moveLastBar(interval: IntervalKey, close: number, volume = 4_242): void {
+  h.livePatch = (iv, bars) =>
+    iv !== interval
+      ? bars
+      : bars.map((b, i) =>
+          i === bars.length - 1
+            ? ({
+                ...b,
+                close,
+                high: Math.max(b.high, close),
+                low: Math.min(b.low, close),
+                volume,
+              } as KLineData)
+            : b,
+        );
+}
+
+/** Tell one cell's host how tall it is. jsdom answers 0 for every element, and
+ *  the cell reads the host's own `clientHeight` for its height budget. */
+function hostHeight(c: FakeChart, px: number): void {
+  Object.defineProperty(c.host, "clientHeight", { value: px, configurable: true });
+}
+
+/** Advance the cell's own timer. The fake clock is installed *before* mounting
+ * (see the describe below) so the interval the cell arms at subscribe time is
+ * the one being advanced; `settle()` flushes without moving the clock, so the
+ * first tick stays one full period away. */
+async function tick(ms = LIVE_MS): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+describe("the live tail", () => {
+  beforeEach(() => {
+    // Before mount, not after: a poll armed on the real clock never fires under
+    // `advanceTimersByTimeAsync`, so every test below would be asserting against
+    // a timer that cannot be reached.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens one live channel per cell when its page lands", async () => {
+    await mount();
+    // Not optional behaviour the cell may skip: `_processDataLoad` asks for the
+    // channel after every `init` (dist 13613-13626), so a loader without
+    // `subscribeBar` is a chart the library is already trying to update.
+    for (const c of h.charts.map(asFake)) expect(c.liveSubs).toBe(1);
+    // And opening the channel costs no request of its own: the init page that just
+    // landed is the freshest data there is, so the first tick is one period away.
+    expect(h.requests).toHaveLength(CELL_COUNT);
+  });
+
+  it("asks once per cell per poll period, for a tail rather than a page", async () => {
+    await mount();
+    expect(LIVE_POLL_MS).toBe(LIVE_MS);
+    const before = h.requests.length;
+    await tick();
+    expect(h.requests.slice(before)).toHaveLength(CELL_COUNT);
+    expect(new Set(h.requests.slice(before).map((r) => r.interval))).toEqual(
+      new Set(["1D", "60m", "15m", "5m"]),
+    );
+    expect(new Set(h.requests.slice(before).map((r) => r.count))).toEqual(new Set([LIVE_TAIL]));
+    // No `before`: a live read always wants the newest end of the feed.
+    expect(new Set(h.requests.slice(before).map((r) => r.before))).toEqual(new Set([undefined]));
+    await tick(LIVE_MS * 3);
+    expect(h.requests.slice(before)).toHaveLength(CELL_COUNT * 4);
+  });
+
+  it("patches the cell's newest bar when the feed moves", async () => {
+    await mount();
+    const daily = chart("1D");
+    const n = daily.list.length;
+    const tail = daily.list[n - 1];
+    const close = tail.close + 3;
+    moveLastBar("1D", close);
+    await tick();
+    // Patched in place, not appended: the store replaces the bar whose timestamp it
+    // already has (`_addData`, dist 13495-13498).
+    expect(daily.list).toHaveLength(n);
+    expect(daily.list[n - 1].timestamp).toBe(tail.timestamp);
+    expect(daily.list[n - 1].close).toBe(close);
+    // The header follows the bar. Four cells printed the same newest close, so
+    // exactly one of them moved.
+    expect(screen.getAllByText(new RegExp(close.toFixed(2)))).toHaveLength(1);
+  });
+
+  it("appends a bar when the feed rolls to the next one", async () => {
+    await mount();
+    const daily = chart("1D");
+    const n = daily.list.length;
+    const tail = daily.list[n - 1];
+    h.livePatch = (iv, bars) =>
+      iv === "1D"
+        ? [...bars.slice(0, -1), { ...tail, timestamp: tail.timestamp + DAY } as KLineData]
+        : bars;
+    await tick();
+    expect(daily.list).toHaveLength(n + 1);
+    expect(daily.list[n].timestamp).toBe(tail.timestamp + DAY);
+  });
+
+  it("leaves a feed that has not moved alone", async () => {
+    await mount();
+    const daily = chart("1D");
+    const before = daily.list;
+    const asked = h.requests.length;
+    await tick(LIVE_MS * 3);
+    // The poll really ran, three times...
+    expect(h.requests.length).toBe(asked + CELL_COUNT * 3);
+    // ...and wrote nothing. Handing the store an identical bar would still replace
+    // it and re-run every mounted indicator's calculation (`_addData`, dist
+    // 13505-13512) — on a closed market that is four charts recomputing for a bar
+    // that says the same thing, forever.
+    expect(daily.list).toBe(before);
+  });
+
+  it("follows the cell's new period, not the one the channel opened on", async () => {
+    await mount();
+    fireEvent.change(selectOf(2), { target: { value: "30m" } });
+    await tick(0);
+    const half = chart("30m");
+    // Two `init` landings for this chart (its hourly page, then its half-hour one)
+    // and exactly one unsubscribe between them: `resetData` closes the channel
+    // before it swaps (`StoreImp.setPeriod`, dist 13652 → 13641).
+    expect(half.liveSubs).toBe(2);
+    expect(half.liveUnsubs).toBe(1);
+    const before = h.requests.length;
+    await tick(LIVE_MS * 2);
+    // One timer per cell, at the period each cell holds *now*. A second channel
+    // left running would push the previous period's tail into a list the store has
+    // just reset, and nothing on screen would explain the extra bar.
+    const since = h.requests.slice(before);
+    expect(new Set(since.map((r) => r.interval))).toEqual(new Set(["1D", "30m", "15m", "5m"]));
+    expect(since.filter((r) => r.interval === "60m")).toHaveLength(0);
+    for (const c of h.charts.map(asFake)) expect(c.liveSubs - c.liveUnsubs).toBe(1);
+  });
+
+  it("drops a live read that lands after the cell moved on", async () => {
+    await mount();
+    const cell = chart("60m");
+    h.liveGate = "60m";
+    moveLastBar("60m", 777);
+    await tick();
+    // The read is genuinely in flight — the mock parked it and handed back the
+    // release — so what follows is a late answer, not a missing one.
+    expect(h.liveRelease).not.toBeNull();
+    fireEvent.change(selectOf(2), { target: { value: "30m" } });
+    await settle();
+    const tail = cell.list[cell.list.length - 1];
+    expect(tail.close).not.toBe(777);
+    // Release with the feed still patched: the response the cell is about to
+    // receive has to *be* the moved bar, or the guard has nothing to reject and the
+    // test passes because `sameBar` did the work instead.
+    const release = h.liveRelease;
+    h.liveGate = null;
+    release!();
+    await tick(0);
+    h.livePatch = null;
+    // In this fixture the hourly and half-hour feeds end on the same timestamp, so
+    // a late bar would not even be rejected as old: `_addData` (dist 13495-13498)
+    // replaces the tail it matches, and the half-hour chart would carry a bar from
+    // a period it no longer shows. The generation guard is what stops that, and the
+    // header is the second half of the same write — `setStatus` runs after the push.
+    expect(cell.list[cell.list.length - 1]).toBe(tail);
+    expect(screen.queryByText("777.00")).toBeNull();
+  });
+
+  it("stops polling when the page goes away", async () => {
+    const view = render(<MultiChart />);
+    await settle();
+    // Positive leg first, so the negative one below cannot pass by there being no
+    // timer in the first place.
+    const opened = h.requests.length;
+    await tick();
+    expect(h.requests.length).toBe(opened + CELL_COUNT);
+    view.unmount();
+    const before = h.requests.length;
+    await tick(LIVE_MS * 3);
+    // `dispose()` never closes the channel — only `resetData` calls
+    // `unsubscribeBar` (dist 13641-13657) — so the cell's own cleanup is the only
+    // thing between a navigated-away grid and four timers writing into destroyed
+    // charts for the rest of the session.
+    expect(h.requests).toHaveLength(before);
+    for (const c of h.charts.map(asFake)) expect(c.disposed).toBe(true);
+  });
+
+  it("refuses a live channel that arrives after the cell was torn down", async () => {
+    h.pageGate = "1D";
+    const view = render(<MultiChart />);
+    // The other three pages land and the daily one stays in flight — the only way
+    // to reach the ordering the library really produces. Read in the browser
+    // 2026-10-11: navigating away from /multi-chart while a page was still loading
+    // left four-cell grids polling every five seconds *after* the route was gone,
+    // because `_processDataLoad` hands over `subscribeBar` when the response
+    // arrives, which is after the cleanup, so the cleanup's own `stopLive()` had
+    // nothing to clear and the arming site outlived the chart it was armed for.
+    await settle();
+    expect(h.pageRelease).not.toBeNull();
+    view.unmount();
+    expect(chart("1D").disposed).toBe(true);
+    h.pageRelease!();
+    h.pageGate = null;
+    await settle();
+    await tick(LIVE_MS * 3);
+    // Not one live read. A timer whose cell is gone is unreachable from here on:
+    // nothing left mounted owns it, and it asks for bars nobody will look at for the
+    // rest of the session.
+    expect(h.requests.filter((r) => Number(r.count) === LIVE_TAIL)).toHaveLength(0);
+  });
+
+  it("keeps a chart whose poll failed, and tries again", async () => {
+    await mount();
+    const daily = chart("1D");
+    const n = daily.list.length;
+    const close = daily.list[n - 1].close;
+    h.failInterval = "1D";
+    await tick();
+    // A failed poll is not a dead chart: the bars already on screen stay, and the
+    // error overlay is the *page* load's answer, not this one — covering a chart
+    // that still has data with a message about a request that will be retried is a
+    // lie.
+    expect(daily.list).toHaveLength(n);
+    expect(screen.queryByText("取数失败")).toBeNull();
+    h.failInterval = null;
+    moveLastBar("1D", close + 2);
+    await tick();
+    expect(daily.list[n - 1].close).toBe(close + 2);
+  });
+
+  it("clears a stale failure the moment a live read lands", async () => {
+    h.failInterval = "5m";
+    await mount();
+    expect(screen.getAllByText("取数失败")).toHaveLength(1);
+    h.failInterval = null;
+    // The *feed's* newest close, not the chart's: the page that would have put
+    // bars on this cell failed, so its list is empty and has no tail to read.
+    const newest = backendPage("5m", null, LIVE_TAIL).at(-1)!.close;
+    moveLastBar("5m", newest + 1);
+    await tick();
+    // The cell has just read this feed successfully; leaving 「取数失败」 up would
+    // be reporting a state the chart is no longer in.
+    expect(screen.queryByText("取数失败")).toBeNull();
+  });
+});
+
+describe("the per-cell indicator", () => {
+  /** `cell` is 1-based, like the period picker's label. */
+  function indicatorOf(cell: number): HTMLSelectElement {
+    return screen.getByLabelText(`第 ${cell} 格指标`) as HTMLSelectElement;
+  }
+
+  it("offers nothing-plus-the-built-ins, and starts empty", async () => {
+    await mount();
+    const select = indicatorOf(1);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", ...BUILTIN_SUB_NAMES]);
+    expect(select.value).toBe("");
+    expect(screen.getAllByText("无").length).toBe(CELL_COUNT);
+  });
+
+  it("mounts the pick on its own strip, at the height the budget says", async () => {
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(1), { target: { value: "MACD" } });
+    await settle();
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "MACD", paneId: "sub:MACD" },
+    ]);
+    // `planPaneHeights`'s answer for a 400px cell holding one strip: the candle
+    // chart keeps its floor and the strip takes its ceiling. Not the library's flat
+    // 100px pane default (`createIndicator` builds a missing pane from
+    // `layoutOptions.pane`, dist 15277-15281), which is what once left a 360px host
+    // with a 29px candle chart.
+    expect(daily.paneOptionCalls).toEqual([{ id: "sub:MACD", height: 120 }]);
+    expect(daily.panes.find((p) => p.id === "sub:MACD")?.height).toBe(120);
+  });
+
+  it("replaces one strip with another instead of stacking them", async () => {
+    await mount();
+    const daily = chart("1D");
+    fireEvent.change(indicatorOf(1), { target: { value: "VOL" } });
+    await settle();
+    fireEvent.change(indicatorOf(1), { target: { value: "KDJ" } });
+    await settle();
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "KDJ", paneId: "sub:KDJ" },
+    ]);
+    // The old pane is gone rather than hidden: `removeIndicator` destroys a pane
+    // once its last indicator leaves (dist 15328-15347), and a stray empty strip
+    // still costs the candle chart its height.
+    expect(daily.panes.map((p) => p.id)).toEqual(["candle_pane", "x_axis_pane", "sub:KDJ"]);
+    // One MA, still: `createIndicator` always appends, so a cell that re-mounted it
+    // on every picker change would draw the legend N times over.
+    expect(daily.indicators.filter((i) => i.name === "MA")).toHaveLength(1);
+  });
+
+  it("takes the strip away again on 无", async () => {
+    await mount();
+    const daily = chart("1D");
+    fireEvent.change(indicatorOf(1), { target: { value: "VOL" } });
+    await settle();
+    fireEvent.change(indicatorOf(1), { target: { value: "" } });
+    await settle();
+    expect(daily.indicators).toEqual([{ name: "MA", paneId: "candle_pane" }]);
+    expect(daily.panes.map((p) => p.id)).toEqual(["candle_pane", "x_axis_pane"]);
+    expect(indicatorOf(1).value).toBe("");
+  });
+
+  it("refits the strip when the cell gets shorter", async () => {
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(1), { target: { value: "MACD" } });
+    await settle();
+    expect(daily.panes.find((p) => p.id === "sub:MACD")?.height).toBe(120);
+    // A shrunken window: 220px cannot hold a 120px strip and the candle chart's
+    // floor, so the strip goes to the budget's minimum instead of eating the bars.
+    hostHeight(daily, 220);
+    fireEvent(window, new Event("resize"));
+    await settle();
+    expect(daily.panes.find((p) => p.id === "sub:MACD")?.height).toBe(44);
+    // A second resize that changes nothing must not write the pane again:
+    // `setPaneOptions` relayouts, the relayout is what the library's own
+    // ResizeObserver reports, and without the near-equal guard the two ping-pong
+    // forever (the same guard `ProChart.applyPaneLayout` carries). `resizes` is the
+    // proof the handler ran this time too, so the unchanged count cannot be a
+    // resize that never reached the cell.
+    const writes = daily.paneOptionCalls.length;
+    const reread = daily.resizes;
+    fireEvent(window, new Event("resize"));
+    await settle();
+    expect(daily.resizes).toBe(reread + 1);
+    expect(daily.paneOptionCalls).toHaveLength(writes);
+  });
+
+  it("touches one cell's chart and nobody else's", async () => {
+    await mount();
+    fireEvent.change(indicatorOf(2), { target: { value: "RSI" } });
+    await settle();
+    expect(chart("60m").indicators.map((i) => i.name)).toEqual(["MA", "RSI"]);
+    for (const interval of ["1D", "15m", "5m"] as const) {
+      expect(chart(interval).indicators.map((i) => i.name)).toEqual(["MA"]);
+      expect(chart(interval).panes).toHaveLength(2);
+    }
+  });
+
+  it("keeps each strip when the symbol moves", async () => {
+    await mount();
+    fireEvent.change(indicatorOf(1), { target: { value: "VOL" } });
+    await settle();
+    const input = screen.getByLabelText("多周期看盘标的") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "EURUSD" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await settle();
+    // An indicator is computed from whatever bars the chart holds, so a symbol
+    // switch is not its business — and re-creating it here would stack a second
+    // copy onto the same pane.
+    expect(chart("1D").indicators.map((i) => i.name)).toEqual(["MA", "VOL"]);
+    expect(chart("1D").panes.map((p) => p.id)).toContain("sub:VOL");
+  });
+
+  it("remembers each cell's strip and puts it back on the next visit", async () => {
+    const view = render(<MultiChart />);
+    await settle();
+    fireEvent.change(indicatorOf(1), { target: { value: "VOL" } });
+    fireEvent.change(indicatorOf(3), { target: { value: "RSI" } });
+    await settle();
+    expect(JSON.parse(String(localStorage.getItem(SESSION_KEY))).subs).toEqual([
+      "VOL",
+      null,
+      "RSI",
+      null,
+    ]);
+    view.unmount();
+    h.charts = [];
+    await mount();
+    expect(chart("1D").indicators.map((i) => i.name)).toEqual(["MA", "VOL"]);
+    expect(chart("15m").indicators.map((i) => i.name)).toEqual(["MA", "RSI"]);
+    expect(indicatorOf(1).value).toBe("VOL");
+    expect(indicatorOf(2).value).toBe("");
+  });
+
+  it("drops a stored indicator the shelf does not offer", () => {
+    // `MA` is a price-series indicator owned by the main pane; a hand-edited row
+    // naming it would put a moving average on a strip of its own next to the bars
+    // it is already drawn over. Anything unknown goes the same way.
+    seed({ symbol: "600519.SH", intervals: ["1D", "60m", "15m", "5m"], subs: ["MACD", "nope", "MA", 42] });
+    expect(readSession().subs).toEqual(["MACD", null, null, null]);
+    seed({ symbol: "600519.SH", subs: "MACD" });
+    expect(readSession().subs).toEqual([null, null, null, null]);
+    localStorage.removeItem(SESSION_KEY);
+    expect(readSession().subs).toHaveLength(CELL_COUNT);
   });
 });

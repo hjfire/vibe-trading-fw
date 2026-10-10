@@ -5,6 +5,7 @@ import { useThemeDark } from "@/lib/theme-store";
 import { INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { intervalAllowed, repairInterval } from "@/lib/chartView";
 import { MAIN_PANE_ID } from "@/lib/chartDrawings";
+import { BUILTIN_SUB_INDICATORS, isBuiltinSubIndicator } from "@/lib/subIndicators";
 import { ChartCell } from "@/components/charts/ChartCell";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
 import {
@@ -30,7 +31,10 @@ import {
  * assumes "one chart per page" in six places (`hostRef`, `chartRef`,
  * `syncSubPanes`, `drawingsKey`, `readSession`, the pane-height budget); turning
  * those into arrays would put 314 existing page tests at risk to serve a view
- * that does not need drawings, 分时 or the user indicator shelf at all.
+ * that does not need drawings, 分时 or more than one sub pane per chart. What it
+ * does share with /pro-chart is the indicator shelf (`subIndicators`) and the
+ * pane budget (`paneLayout`) — one strip per cell, chosen here, mounted by the
+ * cell that holds the chart.
  */
 
 const SESSION_KEY = "multi-chart.session.v1";
@@ -56,6 +60,12 @@ export interface MultiChartSession {
    * instead.
    */
   blocked: boolean;
+  /**
+   * One sub-indicator strip per cell, `null` for none. Persisted with the
+   * periods it sits beside, because "which four charts am I watching, and what
+   * is drawn under each" is one decision the user makes once and expects back.
+   */
+  subs: (string | null)[];
 }
 
 const isIntervalKey = (v: unknown): v is IntervalKey =>
@@ -73,16 +83,18 @@ export function readSession(): MultiChartSession {
     intervals: [...DEFAULT_INTERVALS],
     sync: true,
     blocked: false,
+    subs: Array.from({ length: CELL_COUNT }, () => null),
   };
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return fallback;
     const obj: unknown = JSON.parse(raw);
     if (!obj || typeof obj !== "object") return fallback;
-    const { symbol, intervals, sync } = obj as {
+    const { symbol, intervals, sync, subs } = obj as {
       symbol?: unknown;
       intervals?: unknown;
       sync?: unknown;
+      subs?: unknown;
     };
     const nextSymbol =
       typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
@@ -95,11 +107,21 @@ export function readSession(): MultiChartSession {
       { length: CELL_COUNT },
       (_, i) => (isIntervalKey(list[i]) ? list[i] : DEFAULT_INTERVALS[i]),
     );
+    const subList = Array.isArray(subs) ? subs : [];
     return {
       symbol: nextSymbol,
       intervals: asked.map((iv) => repairInterval(nextSymbol, iv)),
       sync: sync !== false,
       blocked: blockedAny(nextSymbol, asked),
+      // Position-matched to `intervals`, and name-checked against the shelf the
+      // picker offers: `MA` is a price-series indicator that belongs to the main
+      // pane, and honouring a stored one would mount a second moving average on a
+      // strip of its own next to the bars it is already drawn over. Anything the
+      // shelf does not offer goes the same way.
+      subs: Array.from({ length: CELL_COUNT }, (_, i) => {
+        const name = subList[i];
+        return typeof name === "string" && isBuiltinSubIndicator(name) ? name : null;
+      }),
     };
   } catch {
     return fallback;
@@ -123,6 +145,7 @@ export function MultiChart() {
   const [symbol, setSymbol] = useState(initial.symbol);
   const [draft, setDraft] = useState(initial.symbol);
   const [intervals, setIntervals] = useState<IntervalKey[]>(initial.intervals);
+  const [subs, setSubs] = useState<(string | null)[]>(initial.subs);
   const [sync, setSync] = useState(initial.sync);
   // Carried separately from `intervals`, because that list is repaired on the way
   // in and so no longer records that anything was repaired.
@@ -148,11 +171,11 @@ export function MultiChart() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, intervals, sync }));
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, intervals, sync, subs }));
     } catch {
       // Private mode / full quota: the page still works, it just reopens wide.
     }
-  }, [symbol, intervals, sync]);
+  }, [symbol, intervals, sync, subs]);
 
   /**
    * The sync bus.
@@ -315,6 +338,16 @@ export function MultiChart() {
       return next;
     });
 
+  /** One strip per cell, and it stays with the *cell* rather than the period: the
+   *  four charts are what the user arranged, and a period change inside one of
+   *  them is not a reason to lose the indicator they put under it. */
+  const setCellSub = (index: number, value: string) =>
+    setSubs((current) => {
+      const next = [...current];
+      next[index] = value === "" ? null : value;
+      return next;
+    });
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 p-2">
       <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -350,20 +383,41 @@ export function MultiChart() {
             symbol={symbol}
             interval={interval}
             dark={dark}
+            subName={subs[i]}
             onChart={chartSlots.current[i]}
             headerRight={
-              <select
-                value={interval}
-                onChange={(e) => setCellInterval(i, e.target.value as IntervalKey)}
-                className="shrink-0 rounded border border-black/15 bg-transparent px-1 py-0.5 text-[11px] dark:border-white/20"
-                aria-label={`第 ${i + 1} 格周期`}
-              >
-                {INTERVALS.map((o) => (
-                  <option key={o.key} value={o.key} disabled={!intervalAllowed(symbol, o.key)}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={subs[i] ?? ""}
+                  onChange={(e) => setCellSub(i, e.target.value)}
+                  className="shrink-0 rounded border border-black/15 bg-transparent px-1 py-0.5 text-[11px] dark:border-white/20"
+                  aria-label={`第 ${i + 1} 格指标`}
+                  title="该图下方的副图指标"
+                >
+                  {/* The shelf is /pro-chart's, narrowed to one pick: the same
+                      built-in list, the same `sub:` pane address, and the same
+                      refusal of price-series indicators like `MA`, which belong
+                      on the bars rather than on a strip beside them. */}
+                  <option value="">无</option>
+                  {BUILTIN_SUB_INDICATORS.map((o) => (
+                    <option key={o.name} value={o.name} title={o.hint}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={interval}
+                  onChange={(e) => setCellInterval(i, e.target.value as IntervalKey)}
+                  className="shrink-0 rounded border border-black/15 bg-transparent px-1 py-0.5 text-[11px] dark:border-white/20"
+                  aria-label={`第 ${i + 1} 格周期`}
+                >
+                  {INTERVALS.map((o) => (
+                    <option key={o.key} value={o.key} disabled={!intervalAllowed(symbol, o.key)}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </>
             }
           />
         ))}
