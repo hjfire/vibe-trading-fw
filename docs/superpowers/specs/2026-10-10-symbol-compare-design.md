@@ -85,7 +85,7 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 - 一次 `fetchKline({symbol: cmpSymbol, interval, count: COMPARE_BARS, signal})`，`COMPARE_BARS = 2000`：后端把 `countback` **静默钳**到 `_MAX_BARS = 2000`（`agent/src/api/udf_routes.py:473-474`、`agent/src/api/market_routes.py:52`），所以 2000 就是一次取满的深度上限；不传 `before`（要最新窗口），不传 `session`。
 - **必须继续走 `fetchKline`**，不许手写 `fetch`：鉴权头（`frontend/src/lib/marketApi.ts:244-247` → `frontend/src/lib/apiAuth.ts:18-21`）、秒↔毫秒的唯一换算位（`marketApi.ts:177-184`）、以及「HTTP 200 里装 `s:"error"`」这条协议怪癖（`marketApi.ts:252-259`）都在它里面各只有一份。桌面宿主另有覆盖式注入（`desktop/electron/src/main.ts:88-98`），但那**不能**当作"漏带头也没事"的依据——浏览器侧没有它。
 - 独立 `try/catch`，**绝不**与主序列 `Promise.all`：失败只丢叠加层并把原因显示出来（降级形状与 `indicatorLang.ts:1124-1127` 的静默降级不同，这里**要**报，因为那条 errmsg 是用户区分「重启 OpenD」和「查不存在的网络故障」的唯一线索——`marketApi.ts:253-257` 原文理由）。`no_data` 是 `bars: []` 不是错误（`marketApi.ts:260`）。
-- 并发就是 1，不引池；`AbortSignal` 在重切／卸载／换周期时 abort，并按 key 去重防 StrictMode 双挂载重复请求。仓内已有同款形状可照抄：模块级 `Set` 在请求前 `has(key)` 就 `return`、否则 `add(key)`、`finally` 里 `delete(key)`（`frontend/src/lib/indicatorLang.ts:1116-1118` 与 `frontend/src/lib/indicatorLang.ts:1128`）。**不要**拿 `frontend/src/lib/mtfSync.ts:240-253` 的 `createApplyGate` 当这个闸——它是同步重入深度闸（`depth += 1`／`finally { depth -= 1 }`），拦不住跨两次挂载的异步在飞请求。
+- 并发就是 1，不引池；`AbortSignal` 在重切／卸载／换周期时 abort，并按 key 去重防 StrictMode 双挂载重复请求。仓内已有同款形状可照抄：模块级 `Set` 在请求前 `has(key)` 就 `return`、否则 `add(key)`、`finally` 里 `delete(key)`（`frontend/src/lib/indicatorLang.ts:1116-1118` 与 `frontend/src/lib/indicatorLang.ts:1128`）。**照抄时要补一笔**：那件是 calc 路径、没有 effect cleanup，本片有 ⇒ cleanup 里 abort 的同一行必须把键也删掉（R13），否则 StrictMode 的第二次挂载会跳过一次已经作废的请求。**不要**拿 `frontend/src/lib/mtfSync.ts:240-253` 的 `createApplyGate` 当这个闸——它是同步重入深度闸（`depth += 1`／`finally { depth -= 1 }`），拦不住跨两次挂载的异步在飞请求。
 - **计量风险已读实**：`/history` 这条路上**没有**任何按 symbol 的计数器、没有 429、没有内存缓存或 TTL（`agent/api_server.py:183-185` 三个 middleware 都不是限流器；唯一的 `_SlidingWindowRateLimiter` 只挂两条相关系数路（`/correlation` 与 `/correlation/regime`），`agent/src/api/system_routes.py:62-129`、`agent/src/api/system_routes.py:288`、`agent/src/api/system_routes.py:332`）。真正的串行化在上游：所有 akshare/Sina 调用被 `_sina_lock` + `_run_sina` 钉在**同一条复用工线程**上（`agent/src/api/market_routes.py:103-129`），loader 链本身也明确不是线程安全的（`agent/src/api/market_routes.py:723-733`）。⇒ 第二个请求最多**等**第一个，不会打爆，也不会变快。
 - **复权口径必须诚实**：日/周/月线的 `adjust` 是**死参数**——`_kline_sync`（`market_routes.py:631-661`）只把它透给分钟线（`agent/src/api/market_routes.py:639`、`agent/src/api/market_routes.py:646`），`1W/1M` 走 `_fetch_calendar_bars(symbol, interval, count, before)`（`agent/src/api/market_routes.py:654`）、`1D` 走 `_fetch_daily(symbol, count, before)`（`agent/src/api/market_routes.py:661`），**签名里没有这个参数**。日线实际口径由服务它的 loader 决定，且 `split_dividend_additive` 与 `split_dividend` **不是同一把尺**（`agent/backtest/loaders/registry.py:308-357`、`agent/backtest/loaders/registry.py:386-391`），而 `caliber` **完全不回传**（`agent/src/api/udf_routes.py:589` 只回 `source`；`frontend/src` grep `caliber` = 0）。⇒ 裁定：两个标的共用 `fetchKline` 的同一个默认 `adjust`（`marketApi.ts:94`、`marketApi.ts:241`），**不给对比标的单独选复权档**；把两个 `source` 字符串显示在按钮旁边（`frontend/src/lib/marketApi.ts:265` 真回传的东西，不是我们造的精度）。
 
@@ -107,7 +107,9 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 4. 已开：`对比已开：把可视区间同一把时间轴上的 <cmp> 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）`
 5. 已关：`对比已关：点开把 <cmp> 的收盘叠到主图，走独立标尺、不改主图价格轴`
 
-输入框 `title`：失败时是 `原因：<errmsg 原文>`（errmsg 由后端自己给，见 §五）。
+输入框 `title`：失败时是 `原因：<errmsg 原文>`（errmsg 由后端自己给，见 §五），否则是那句定稿说明。
+
+五支的**判别顺序**是设计的一部分，不是实现细节：分时 → 没有已应用标的 → **已开但数据未就绪**（`cmpOn && (loading || error || !ready)`）→ 已开 → 已关。第 3 支必须排在 4/5 **之前**——它排在后面就永远读不到，因为「已开但没数据」这一格里 `cmpOn` 已经为真；那正是本片唯一会把"进行中"说成"已完成"的形状。`aria-pressed` 与 className 走 `compareActive(cmpOn, timeShare, cmpReady)` 这**一枚**谓词（未就绪时按钮不亮，说的是"图上现在没有对比线"这件事实），而 `title` 的第 4/5 支问的是裸 `cmpOn`（偏好态），与第④⑤片那两颗按钮「三处表达式三种问法」的分工同形。
 
 ## 八、不做的事（范围钉）
 
@@ -120,8 +122,8 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 ## 十、验收判据
 
 - **① jsdom 声明面**：`createIndicator` 被调时 `paneId === "candle_pane"`、`yAxisId === COMPARE_AXIS_ID`、`series === "price"`、`figures` 恰一条且带 `title`；`createYAxis` **零调用**（这条正是"不建 manual 轴"的结构钉）。注册对象那一侧另钉一格 `figures[0].type === "line"` **逐字** `toBe`——判的是 `registerIndicator` 收到的那份字面量（形状照第⑤片 `vpvrChart.test.ts` 钉 `precision` 的那格）：§二·8 说省略 `type` 会得到一条**静默不画**的线，而这种失效在 jsdom 与活体像素上都读不出来，只能钉声明。
-- **② 纯函数面**：手算向量 + 前缀不变量 + 三根下毒针（`<=`、拒绝 bfill、非有限值跳过）。
-- **②b 重挂面**（§四 那条宽触发面的判据）：先点亮开关、此时 store 里还没有序列 ⇒ 挂上一次；再把序列喂进 store 并让承载它的那格 state 变身份 ⇒ 必须**再** remove＋create 一次，且第二次挂载之后 `calc` 对同一份 `dataList` 交出的行里**有非 null 值**。只写 `cmpOn`/`timeShare`/key 三个依赖的实现在这条上会红（它第二次不会跑），而这条在活体上表现为「点了开关、线永远不出来」。
+- **② 纯函数面**：手算向量 + 前缀不变量 + 三根下毒针（`<=`、拒绝 bfill、坏值跳过——坏值按 §三 的判据是「非有限**或**非正」，所以针要同时喂 `0`／负数／`NaN`，只喂 `NaN` 的那支挡不住 R11 说的那半个）。
+- **②b 重挂面**（§四 那条宽触发面的判据）：点亮开关、数据还没到手 ⇒ `compareActive` 为假、**一次都不挂**（§六 那枚谓词的第三个入参就是 ready，未就绪不挂是它的定义）；再把序列喂进 store 并让承载它的那格 state 变身份 ⇒ 这一次**必须**挂上，且挂载之后 `calc` 对同一份 `dataList` 交出的行里**有非 null 值**。**按 §十 起草时的原句这里写的是「先挂上一次、再 remove＋create 一次」——两处都改：ready 门使第一次不成立，而判据的牙没丢**：依赖数组只写 `cmpOn`/`timeShare`/key 的实现，在数据到达那一轮根本不会重跑，于是开关亮着而线永远不存在——正是 R10 的失效形状，这条针照样抓得住它。
 - **③ 卸载面**：切走对比后 `chart.getIndicators()` 不含 `SYMBOL_COMPARE`，且 `getYAxes({paneId:'candle_pane'})` 回到**恰 1 根**轴（这条同时覆盖 §二·4 的孤儿回收与"没有漏轴"）。
 - **④ 活体面**：开对比前后，`getYAxes({paneId:'candle_pane'})` 里 `id !== COMPARE_AXIS_ID` 那根（默认轴）的 `getRange()` **逐字相同**＝主图量程不受叠加影响的那条不变量；绘图区宽度用 `getSize("candle_pane", "main").width` 读，开了对比后**必然变小**（多了一条右外列，属预期），关掉要**回到开前的像素值**——这一条就是 §二·5「会不会留死空白」的活体背书，读数当场登记。新轴 `getRange()` 等于对齐后 close 的 min/max 现算值。若仍无可见表面（第⑤片遇过的情形），按同一降级形态：判据落在**公开读数**（`getRange()`/`getSize()`）与库的调用面上，像素色值与"屏幕上真有没有那条线"登记为**未判**，不假称已验。
 - **⑤ 未来函数自查**：Bar Replay 五步（进／`后一根`×6／`前一根`×1／退出）逐格对齐；对比序列的 `getRange()` 全程不因游标前进而引用游标右侧的根。
@@ -150,3 +152,4 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 - **R10 对比数据到达要触发重挂** —— 理由：`calc` 只在挂载与 `dataList` 变化时跑（`index.esm.js:13501-13506`），而本片的输入有一半在 store 里 —— 错了代价：开关先点亮、数据后到时线永远不出现，且这条只能在活体上看见，所以配了 §十·②b 那条 jsdom 判据。
 - **R11 坏值判据写成「非有限或非正」，并把它登记为代价** —— 理由：§三 要防的那个坏值是后端补的 `0`，而 `0` 有限，所以只挡非有限的过滤器挡不住它 —— 错了代价：漏掉"非正"这一半，后端缺列的对比标的会拖出一条 0 线并把独立轴量程拽到 0（§二·8 末条）；带上"非正"这一半的代价是真实负价标的（商品期货连续合约）会被整根当坏值丢弃，而 `/pro-chart` 的标的池是股票/ETF/指数，`close` 为负不是一个可达形状，所以按「不为不可达场景加校验」的口径这条判据不再细分。
 - **R12 `syncCompare` 定义在页面，本模块只交注册＋偏好＋store** —— 理由：与第④⑤片既有分工一致（`syncHeikinAshi` `ProChart.tsx:999-1011`、`syncVpvr` `ProChart.tsx:1031-1043`，两个 lib 模块都不 import `Chart` 类型）—— 错了代价：把页面的 `chartRef` 搬进 lib 只是多出一条跨模块句柄参数，且 lib 面变得需要 chart 替身才能测。
+- **R13 取数 effect 的 cleanup 里 abort 与删在飞键两件事都要做** —— 理由：§五 引的那个形状（`indicatorLang.ts:1116-1118` 判键、`indicatorLang.ts:1128` `finally` 删键）本身没有 effect cleanup，所以不带这个坑；照搬到 effect 里、只在 `finally` 删键，StrictMode 的第二次挂载会看见键还在 ⇒ 跳过，而第一次的请求已被自己 abort 掉、永远不会交付，于是对比数据到不了页面 —— 错了代价：dev 下一次挂载发出两个请求（第二个完成、第一个被取消；§五 已读实后端只是排队，不会打爆），换来的是「数据必然到手」。
