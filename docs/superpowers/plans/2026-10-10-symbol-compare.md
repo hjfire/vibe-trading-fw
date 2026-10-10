@@ -1589,11 +1589,21 @@ cd /e/Vibe-Trading-main/Vibe-Trading-main/frontend && npx vite --port 5899
 ```
 两端点都要**探真实进程**（本仓登记过 SPA 兜底把未注册路径答成 200+HTML）：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/health` 与 `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5899/` 都得是 200，且后端那条的响应体是健康检查的形状而不是 index.html。
 
+> **（2026-10-11 执行期就地更正，三条都是计划面、不改交付面）**
+> 1. 本 Step 写的 `http://127.0.0.1:8000/api/health` 现场 **404**——真健康端点是 `/health`（`agent/src/api/system_routes.py:252`），`/api/*` 那层前缀属于业务路由注册面而非系统路由。按字面跑会把一个活着的后端读成死的。
+> 2. **5899 可被别的进程独占，且那个进程只 bind `[::1]`**（实测 `curl 127.0.0.1:5899` = `000`，`netstat` 只见 v6）⇒ `127.0.0.1` 上的探测失败不等于端口空闲。执行期改用 5900，且浏览器侧**必须写 `localhost`**（不是 `127.0.0.1`）才落到那个双栈绑定上。
+> 3. vite 代理出厂即 8000 这一条（Global Constraints 与 §7.19 都记过）**现场成立**，本 Step 没有动任何配置。
+
 - [ ] **Step 2: 打开页面并取图表实例**
 
 浏览器（`browser-use` MCP）进 `http://127.0.0.1:5899/pro-chart`，等主图有数据（`barCount` 那条状态行不再是「加载中…」）。
 
 canvas 页面读不到 DOM，取实例走 fiber（本仓手法）：在 `[tabindex="1"]` 那个容器上找 `__reactFiber$` 键，沿 `return` 向上遍历 `hook.memoizedState` 链，用 `typeof v.getDataList === "function"` 识别出 chart 对象。**注意后台标签页 rAF 不跑**：所有需要绘制产物的读数之前先 `take_screenshot` 把标签页带到前台，或直接把"读数为陈旧值"当作已知失真登记下来重读。
+
+> **（2026-10-11 执行期就地更正，两处写法在本 build 不可用）**
+> 1. `[tabindex="1"]` 那个容器**没有任何 `__reactFiber$` 键**（实测 `Object.keys(el)` = `[]`，它不是 React 挂载点）⇒ 取实例的可行姿势是**全树扫描**：任取一个带键的元素 → 沿 `return` 上溯到 root → BFS 遍历 `hook.memoizedState`，用 `typeof v.getDataList === "function"` 识别 chart。
+> 2. 「先 `take_screenshot` 把标签页带到前台」这一条本轮**不可执行**（截图通道直接报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … visible=false, visibilityState=hidden`）⇒ 按 Step 6 的降级形态走，并把下面第 3 条当作比「陈旧」更精确的口径。
+> 3. **陈旧分两条通道，不是笼统的「rAF 不跑」**：`ChartImp.prototype.layout` 走**微任务**（`index.esm.js:14752-14762`）⇒ 隐藏页里指标挂卸、`calc` 重跑、量程重算**照常发生**；而宽度变化后的**可视域刷新**走 `resize()`，它挂在 `_scheduleResize` 的 **rAF** 上（`index.esm.js:14633-14642`）⇒ rAF 不跑时 `getRange()` 读到的是**滞后于当前可视域**的陈旧值。现场证据：关掉对比后主图轴读到 `1224.8604000000003..1303.1151999999981`，而当时域按库折叠式算出 `1220.7938666666664..1315.7736000000007` ⇒ 不等；手动连调两次 `chart.resize()` ＋ 跨两个宏任务再读，actual 与 expect **逐位相等**。⇒ 隐藏页取证的标准姿势：**每次量程读数前手动 `resize()`**，并把「量程」与「它所折的域」**成对**抄录，只抄量程等于没抄。
 
 - [ ] **Step 3: 页内独立 oracle（必须与生产不同形）**
 
@@ -1623,7 +1633,7 @@ function cmpOracle(mainTs, series) {
 
 - [ ] **Step 4: 四组读数（每组都是开关前/后各读一次，读数原样抄进报告）**
 
-1. **默认轴量程不变量**：`chart.getYAxes({paneId:"candle_pane"}).filter(a => a.id !== "pro-chart-compare-y").map(a => a.getRange())` 开对比前后**逐字相同**。这是 §十·④ 那条主图不受叠加影响的判据，也是整片通道的地基。
+1. **默认轴量程不变量**：`chart.getYAxes({paneId:"candle_pane"}).filter(a => a.id !== "pro-chart-compare-y").map(a => a.getRange())` 开对比前后**逐字相同**。这是 §十·④ 那条主图不受叠加影响的判据，也是整片通道的地基。**（2026-10-11 执行期改判——本条与本 Step 第 3 条互为反证，spec §十·④ 已按改判后的形态改写并带三格判别力）** 主图轴的折叠域就是 `getVisibleRangeDataList()`（`index.esm.js:1023`），行数是宽度÷`barSpace` 派生的（现读 `barSpace=10`：宽 147 那次读到 17 行，宽 96 读到 11 行其中 3 行有真实蜡烛）⇒ 宽度一缩域就换、min/max 必变，"逐字相同"按字面执行只能读到「不符」，而那条不符正是第 3 条的必然结果。改判成它真正要断的那件事、且严格更强的一版：**主图轴量程恰好等于「只折主图自己的数据（蜡烛 low/high ＋ 同轴指标的 `figures[].key`）」按 `createRangeImp`（`index.esm.js:1029-1057`）算出的值，逐位相等**。
 2. **新轴量程带留白**：对比轴 `getRange()` 的期望**不是 min/max**，而是
    `from == min - gap.bottom * (max - min)`、`to == max + gap.top * (max - min)`，
    其中 min/max 折的是**可视区**那些行的非 null 对齐 close（折叠域 `getVisibleRangeDataList()`，`index.esm.js:1023`；平移/缩放会变，属预期），`gap` 从 `axis.gap` **现读**（出厂 `{top: 0.2, bottom: 0.1}`，`index.esm.js:13266-13269`；率只在 `>= 1` 才除高度，`index.esm.js:1096-1103`，两个出厂值都 <1 ⇒ 不除）。把 `min`/`max`/`gap`/`from`/`to` 五个数都抄下来再判等式，**不要**只抄 from/to 然后宣布不符。
@@ -1635,6 +1645,11 @@ function cmpOracle(mainTs, series) {
 - [ ] **Step 5: Bar Replay 五步自查（未来函数闸）**
 
 进回放 → `后一根`×6 → `前一根`×1 → 退出。每步抄一次对比轴 `getRange()` 与 `result.map(r => r.cmp)` 的长度。判据：游标前进过程中**绝不出现游标右侧的根的价格**（长度跟着 `dataList` 前缀走、`cmp` 尾部不提前出现未来值），退出回放后 `getRange()` 回到进入前的读数（不重绘）。
+
+> **（2026-10-11 执行期把判据加强了一格，并登记一条取证手法）**
+> 1. 「尾部不提前出现未来值」按字面只断最后一格，未来价从中间泄露它抓不到。执行期改成**前缀不变量**读数 `mism` ＝ 回放态 `result` 与**进入回放前那趟全量** `result` 在 `[0, dl)` 上逐格不同的个数，每一步都抄 ⇒ 断的是「无论后面还挂着多少根，第 `i` 格都不动」，任何形式的泄露都非 0。十行全 0。
+> 2. **`evaluate_script` 客户端 15s 超时**，而隐藏标签页把 `setTimeout` 钳到 1s ⇒ 「一次调用里点 8 步」那种脚本会**客户端超时但页面仍在继续跑**（执行期第一次就这么丢了 5 步读数：盘面 `dl=255` 而累计变量从未被赋值）。做法＝每批 2 步、读数**增量**写进 `window` 上的累加器，最后一批再回读。
+> 3. 回放中的按钮不是 `aria-label`「回放」而是**文本**按钮 ⇒ 查它要走 `aria-label ?? textContent.trim()`；进入回放后那六个键是「快退 10 根／前一根／播放／后一根／快进 10 根／退出回放」。
 
 - [ ] **Step 6: 无可见表面时的降级形态**
 
