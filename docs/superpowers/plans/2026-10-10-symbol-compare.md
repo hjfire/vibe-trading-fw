@@ -568,7 +568,7 @@ export function getCompareSeries(key: string): readonly CompareBar[] {
   return seriesByKey.get(key) ?? [];
 }
 
-/** 整桶清空。**生产侧一处都不调**（页面若在卸载或取数 cleanup 里清它，就会把挂卸 effect 正在读的桶掏空——那条 cleanup 每次依赖变化和 StrictMode 双挂载都跑，得到的是一条永远不存在的线）；它的消费者只有**两份测试**的 `beforeEach`（本库的 `symbolCompareChart.test.ts` 与页面的 `ProChartCompare.test.tsx`，都不钉行号，那两个文件会漂）——模块 store 跨 `render` 存活，不清就是拿上一支交付的数据当本支取到的数据。 */
+/** 整桶清空。**生产侧一处都不调**（页面若在卸载或取数 cleanup 里清它，就会把挂卸 effect 正在读的桶掏空——那条 cleanup 每次依赖变化和 StrictMode 双挂载都跑，得到的是一条永远不存在的线）；调它的只有**那两份测试**（本库 `symbolCompareChart.test.ts`——`beforeEach` 与专门钉它的那一支——和页面 `ProChartCompare.test.tsx` 的 `beforeEach`，都不钉行号，那两个文件会漂）——模块 store 跨 `render` 存活，不清就是拿上一支交付的数据当本支取到的数据。 */
 export function clearCompareSeries(): void {
   seriesByKey.clear();
 }
@@ -1405,7 +1405,7 @@ const compareInflight = new Set<string>();
    * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
    * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
    * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
-   * 渲染侧加一枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
+   * 渲染侧加两枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();

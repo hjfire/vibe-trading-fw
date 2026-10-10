@@ -2099,7 +2099,7 @@ export function ProChart() {
    * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
    * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
    * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
-   * 渲染侧加一枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
+   * 渲染侧加两枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();

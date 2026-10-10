@@ -106,7 +106,7 @@ export function getCompareSeries(key: string): readonly CompareBar[] {
   return seriesByKey.get(key) ?? [];
 }
 
-/** 整桶清空。生产侧不调——它的消费者只有两处测试的 `beforeEach`：本库的 `symbolCompareChart.test.ts` 与页面的 `ProChartCompare.test.tsx`。模块 store 跨 `render` 存活，不清的话上一支交付进桶的序列会被下一支在页面自己还没取到数时读到。这一格是会话缓存的重置面。 */
+/** 整桶清空。生产侧不调——调它的只有那两份测试：本库 `symbolCompareChart.test.ts`（`beforeEach` 与专门钉它的那一支）和页面 `ProChartCompare.test.tsx` 的 `beforeEach`。模块 store 跨 `render` 存活，不清的话上一支交付进桶的序列会被下一支在页面自己还没取到数时读到。这一格是会话缓存的重置面。 */
 export function clearCompareSeries(): void {
   seriesByKey.clear();
 }
