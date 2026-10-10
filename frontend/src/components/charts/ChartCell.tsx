@@ -39,12 +39,12 @@ import { planPaneHeights, subPaneIdOf } from "@/lib/paneLayout";
  *
  * * the live tail. v10 has no `updateData` — `grep -c updateData dist/index.esm.js`
  *   is 0 — and the only supported push door is `DataLoader.subscribeBar`, which
- *   `StoreImp._processDataLoad` (dist 13613-13626) asks for after every `init`
- *   page lands. What comes back goes through `_addData`'s single-bar branch
- *   (13480-13502), so a live read can only ever *patch or append* the newest
- *   bar: older is dropped without a word. That is also why this is not a
- *   lookahead problem — the grid shows bars, not signals, and it never rewrites
- *   a bar the feed no longer reports.
+ *   `StoreImp._processDataLoad` (dist 13605) asks for after every `init` page
+ *   lands (arming site 13619-13626). What comes back goes through `_addData`'s
+ *   single-bar branch (13482-13499), so a live read can only ever *patch or
+ *   append* the newest bar: older is dropped without a word. That is also why
+ *   this is not a lookahead problem — the grid shows bars, not signals, and it
+ *   never rewrites a bar the feed no longer reports.
  * * the height its one strip costs the candles. A pane charges the flexible
  *   candle pane a flat `layoutOptions.pane.height` (100px, and `createIndicator`
  *   builds a missing pane from it at dist 15277-15281), which is how the single
@@ -66,7 +66,11 @@ export const LIVE_POLL_MS = 5_000;
  *  header can still print a change percentage without a second request. */
 const LIVE_TAIL = 2;
 
-/** Everything `_addData` compares when it decides a bar is the same bar. */
+/** The columns that make a tail read worth writing. `_addData` matches the tail by
+ *  timestamp alone (dist 13486, 13495), so this is the cell's own 「nothing moved」
+ *  test: a column the feed starts sending (`udf_routes.py:452-457` →
+ *  `marketApi.ts:177-184`) has to be added here too, or a bar that only changes
+ *  there is never written and the header never sees it. */
 function sameBar(a: KLineData, b: KLineData): boolean {
   return (
     a.timestamp === b.timestamp &&
@@ -191,9 +195,12 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
       strip.paneId
     ];
     if (want === undefined) return;
-    // Skip near-equal values: `setPaneOptions` relayouts, the relayout is what
-    // the library's own ResizeObserver reports, and without this guard the two
-    // ping-pong forever (same reason /pro-chart has it).
+    // Skip a height the pane already holds. `setPaneOptions` re-measures and
+    // relayouts on every write (dist 15425, 15459-15467), so re-issuing the same
+    // number costs a layout for nothing — an idempotence gate, not an oscillator
+    // guard: the library's ResizeObserver watches its own container (14689),
+    // whose client height a pane-height write does not move, and `_scheduleResize`
+    // bails whenever the cached bounding still matches (14637).
     if (Math.abs((pane.height ?? 0) - want) < 2) return;
     chart.setPaneOptions({ id: strip.paneId, height: want });
   };
@@ -336,8 +343,11 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
         const held = chart.getDataList();
         const lastHeld = held[held.length - 1];
         // Nothing moved: writing an identical bar would still replace it and
-        // re-run every mounted indicator's calculation (dist 13505-13512), which
-        // on a closed market is four charts recomputing for nothing, forever.
+        // re-run every mounted indicator's calculation (dist 13505-13506; with no
+        // indicator mounted the library lays out synchronously instead,
+        // 13508-13515), which on a closed market is four charts recomputing for
+        // nothing, forever. Neither branch re-measures pane heights, so a tail
+        // write can never undo the height budget above.
         if (lastHeld && sameBar(lastHeld, tail)) return;
         livePush(tail);
         syncHeader();
@@ -390,7 +400,7 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
       },
       /**
        * The live tail. `_processDataLoad` calls this right after an `init` page
-       * lands (dist 13613-13626), handing over the callback that writes into the
+       * lands (dist 13619-13626), handing over the callback that writes into the
        * store — so this is not a poll the cell may skip, it is the door the
        * library is already knocking on.
        *
@@ -419,10 +429,12 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
     return () => {
       mountedRef.current = false;
       alive = false;
-      // `dispose()` does *not* close the live channel — only `resetData` calls
-      // `unsubscribeBar` — so this is the only thing between a navigated-away
-      // grid and a timer writing into a destroyed chart for the rest of the
-      // session (dist 13641-13657, 15806-15815).
+      // `dispose()` does *not* close the live channel: `resetData` (dist
+      // 13652-13657) is the only caller of `_processDataUnsubscribe` (13643), and
+      // neither `ChartImp.destroy` (15793-15813) nor `StoreImp.destroy`
+      // (14590-14597) reaches it — so this is the only thing between a
+      // navigated-away grid and a timer writing into a destroyed chart for the
+      // rest of the session.
       stopLive();
       window.removeEventListener("resize", onResize);
       observer?.disconnect();
@@ -446,14 +458,14 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
   }, [subName]);
 
   // A fresh object each time, and that is load-bearing for the retry button:
-  // `ChartImp.setPeriod` / `setSymbol` compare by *reference* before reloading
-  // (dist 15614, 15619), so re-arming the same period still re-fetches.
+  // `ChartImp.setSymbol` / `setPeriod` compare by *reference* before reloading
+  // (dist 15084, 15093), so re-arming the same period still re-fetches.
   //
   // The same reference rule is why the period write is guarded here: a symbol
   // switch arrives at this effect with the period unchanged, and an unguarded
   // `setSymbol` + `setPeriod` pair reloads twice per cell — eight requests for a
   // grid of four, on feeds where minute bars are metered per symbol per week.
-  // `_processDataLoad` (dist 13607) needs *both* a symbol and a period to load
+  // `_processDataLoad` (dist 13608) needs *both* a symbol and a period to load
   // at all, so a fresh chart's first pass costs exactly one request anyway.
   useEffect(() => {
     const chart = chartRef.current;

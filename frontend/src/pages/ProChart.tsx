@@ -791,8 +791,10 @@ export function ProChart() {
     for (const pane of normal) {
       const want = plan.assignments[pane.id];
       if (want === undefined) continue;
-      // Skip near-equal values: `setPaneOptions` relayouts, the relayout is what
-      // the ResizeObserver reports, and without this guard the two ping-pong.
+      // A height the pane already holds is not worth writing: `setPaneOptions`
+      // re-measures and relayouts on every call (dist 15425, 15459-15467). Not an
+      // oscillator guard — the library's ResizeObserver watches its own container
+      // (14689), which a pane-height write does not resize.
       if (Math.abs((pane.height ?? 0) - want) < 2) continue;
       chart.setPaneOptions({ id: pane.id, height: want });
     }

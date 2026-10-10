@@ -38,10 +38,11 @@
  * - a stale session must not leave a minute cell on a symbol with no minute
  *   source, and the user has to be *told* the cell was moved;
  * - a live channel that outlives the period it was opened for. The library calls
- *   `subscribeBar` once per *init* landing (dist 13613-13626), so the symbol+period
- *   double write a repair performs opens two channels; whichever survives has to
- *   read the period the cell now intends, or a stale poll pushes yesterday's
- *   hourly tail into a chart that has moved to daily bars.
+ *   `subscribeBar` once per *init* landing (`_processDataLoad` dist 13605, arming at
+ *   13619-13626), so the symbol+period double write a repair performs opens two
+ *   channels; whichever survives has to read the period the cell now intends, or a
+ *   stale poll pushes yesterday's hourly tail into a chart that has moved to daily
+ *   bars.
  * - a sub-indicator strip left at the library's own default height. A pane costs
  *   the flexible candle pane a flat 100px (`ChartImp.createIndicator` builds the
  *   missing pane from `layoutOptions.pane`, dist 15277-15281), which is how the
@@ -307,10 +308,12 @@ function log(c: FakeChart, call: string, value: unknown): void {
   h.applyLog.push({ chart: c.id, call, value });
 }
 
-/** `StoreImp._addData`'s single-bar branch (dist 13480-13502), which is what the
+/** `StoreImp._addData`'s single-bar branch (dist 13482-13499), which is what the
  *  live channel writes through: newer than the tail appends, equal to it replaces
- *  the tail, older is dropped without a word. Any accepted write re-derives the
- *  range and re-runs every mounted indicator's calculation. */
+ *  the tail, older is dropped without a word. Every accepted write re-derives the
+ *  range (13502), then either re-runs the mounted indicators (13505-13506) or,
+ *  with none mounted, lays out synchronously (13509-13514) — never both, and
+ *  neither branch re-measures pane heights. */
 function applyUpdate(c: FakeChart, bar: KLineData): void {
   const last = c.list[c.list.length - 1];
   if (last && bar.timestamp < last.timestamp) return;
@@ -336,7 +339,7 @@ function resetData(c: FakeChart, swap: () => void): void {
 
 /** `StoreImp.resetData` (dist 13652) clears the in-flight flag and re-asks, so a
  *  period written right after a symbol still gets its load; paging, which comes
- *  from `_adjustVisibleRange`, respects `_loading` and waits (dist 13607). */
+ *  from `_adjustVisibleRange`, respects `_loading` and waits (dist 13608). */
 function startLoad(c: FakeChart, type: "init" | "forward" | "backward"): void {
   if (type !== "init" && c.loading) return;
   if (!c.loader || !c.symbol || !c.period) return;
@@ -1002,6 +1005,35 @@ describe("mounting the grid", () => {
     expect(h.charts).toHaveLength(CELL_COUNT);
     expect(chart("1D").list.length).toBeGreaterThan(0);
   });
+
+  it("survives a storage it cannot read from", async () => {
+    // Private-browsing Safari throws on `getItem` too, and the read is the first
+    // thing the page does — before a chart exists. What a throwing read may cost is
+    // the stored view, never the grid.
+    const empty = readSession();
+    // A row that *would* be read: the assertion below is only interesting while the
+    // stored shape differs from the fallback.
+    seed({ symbol: "EURUSD", intervals: ["1D", "60m", "15m", "5m"], subs: ["MACD", null, null, null] });
+    expect(readSession()).not.toEqual(empty);
+    const real = Storage.prototype.getItem;
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(
+      function (this: Storage, key: string) {
+        // Only our own key throws: language and theme detectors read the same
+        // prototype during the render, and a blanket throw would fail the mount for
+        // reasons that have nothing to do with this page.
+        if (key === SESSION_KEY) throw new Error("SecurityError");
+        return real.call(this, key);
+      },
+    );
+    try {
+      expect(readSession()).toEqual(empty);
+      await mount();
+      expect(h.charts).toHaveLength(CELL_COUNT);
+      expect(chart("1D").list.length).toBeGreaterThan(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("the crosshair", () => {
@@ -1432,8 +1464,11 @@ function moveLastBar(interval: IntervalKey, close: number, volume = 4_242): void
         );
 }
 
-/** Tell one cell's host how tall it is. jsdom answers 0 for every element, and
- *  the cell reads the host's own `clientHeight` for its height budget. */
+/** Tell one cell's chart how tall it is. jsdom answers 0 for every element, and
+ *  the cell budgets from `chart.getDom()`, which for this fake is the node the
+ *  chart built for itself (`getDom` with no paneId) — a different element from
+ *  the React host div, so a cell that read the host instead would still see 0
+ *  and take its early return rather than this number. */
 function hostHeight(c: FakeChart, px: number): void {
   Object.defineProperty(c.host, "clientHeight", { value: px, configurable: true });
 }
@@ -1463,7 +1498,7 @@ describe("the live tail", () => {
   it("opens one live channel per cell when its page lands", async () => {
     await mount();
     // Not optional behaviour the cell may skip: `_processDataLoad` asks for the
-    // channel after every `init` (dist 13613-13626), so a loader without
+    // channel after every `init` (dist 13619-13626), so a loader without
     // `subscribeBar` is a chart the library is already trying to update.
     for (const c of h.charts.map(asFake)) expect(c.liveSubs).toBe(1);
     // And opening the channel costs no request of its own: the init page that just
@@ -1529,7 +1564,7 @@ describe("the live tail", () => {
     expect(h.requests.length).toBe(asked + CELL_COUNT * 3);
     // ...and wrote nothing. Handing the store an identical bar would still replace
     // it and re-run every mounted indicator's calculation (`_addData`, dist
-    // 13505-13512) — on a closed market that is four charts recomputing for a bar
+    // 13505-13506) — on a closed market that is four charts recomputing for a bar
     // that says the same thing, forever.
     expect(daily.list).toBe(before);
   });
@@ -1540,8 +1575,8 @@ describe("the live tail", () => {
     await tick(0);
     const half = chart("30m");
     // Two `init` landings for this chart (its hourly page, then its half-hour one)
-    // and exactly one unsubscribe between them: `resetData` closes the channel
-    // before it swaps (`StoreImp.setPeriod`, dist 13652 → 13641).
+    // and exactly one unsubscribe between them: `StoreImp.setPeriod` (dist 13421)
+    // runs `resetData` (13652), whose first act is `_processDataUnsubscribe` (13643).
     expect(half.liveSubs).toBe(2);
     expect(half.liveUnsubs).toBe(1);
     const before = h.requests.length;
@@ -1550,6 +1585,14 @@ describe("the live tail", () => {
     // left running would push the previous period's tail into a list the store has
     // just reset, and nothing on screen would explain the extra bar.
     const since = h.requests.slice(before);
+    // Counted, not merely collected: `liveSubs - liveUnsubs` reads the fake's own
+    // counters and a Set flattens duplicates, so the only thing a leaked second
+    // timer leaves behind is a second tail request per tick. Measured: with *both*
+    // `stopLive()` calls deleted the tail count goes 8 → 10 and only these lines
+    // see it. Deleting one alone stays green — the other site still closes the
+    // timer, so the pair is a redundant guard, not two independently pinned ones.
+    expect(since.filter((r) => Number(r.count) === LIVE_TAIL)).toHaveLength(CELL_COUNT * 2);
+    expect(since.filter((r) => r.interval === "30m")).toHaveLength(2);
     expect(new Set(since.map((r) => r.interval))).toEqual(new Set(["1D", "30m", "15m", "5m"]));
     expect(since.filter((r) => r.interval === "60m")).toHaveLength(0);
     for (const c of h.charts.map(asFake)) expect(c.liveSubs - c.liveUnsubs).toBe(1);
@@ -1596,10 +1639,11 @@ describe("the live tail", () => {
     view.unmount();
     const before = h.requests.length;
     await tick(LIVE_MS * 3);
-    // `dispose()` never closes the channel — only `resetData` calls
-    // `unsubscribeBar` (dist 13641-13657) — so the cell's own cleanup is the only
-    // thing between a navigated-away grid and four timers writing into destroyed
-    // charts for the rest of the session.
+    // `dispose()` never closes the channel: `resetData` (dist 13652-13657) is the
+    // only caller of `_processDataUnsubscribe` (13643), and that is the only thing
+    // that reaches the loader's `unsubscribeBar` — so the cell's own cleanup is the
+    // only thing between a navigated-away grid and four timers writing into
+    // destroyed charts for the rest of the session.
     expect(h.requests).toHaveLength(before);
     for (const c of h.charts.map(asFake)) expect(c.disposed).toBe(true);
   });
@@ -1741,12 +1785,15 @@ describe("the per-cell indicator", () => {
     fireEvent(window, new Event("resize"));
     await settle();
     expect(daily.panes.find((p) => p.id === "sub:MACD")?.height).toBe(44);
-    // A second resize that changes nothing must not write the pane again:
-    // `setPaneOptions` relayouts, the relayout is what the library's own
-    // ResizeObserver reports, and without the near-equal guard the two ping-pong
-    // forever (the same guard `ProChart.applyPaneLayout` carries). `resizes` is the
-    // proof the handler ran this time too, so the unchanged count cannot be a
-    // resize that never reached the cell.
+    // A second resize that changes nothing must not write the pane again. This is
+    // an idempotence gate, not an oscillator guard: `setPaneOptions` re-measures and
+    // relayouts on every write (dist 15425, 15459-15467), so re-issuing a height the
+    // pane already holds costs a layout for nothing. The library's own
+    // ResizeObserver watches its container (14689), whose client height a pane-height
+    // write does not move, and `_scheduleResize` bails while the cached bounding
+    // still matches (14637) — so a resize here comes from the window, not from us.
+    // `resizes` is the proof the handler ran this time too, so the unchanged count
+    // cannot be a resize that never reached the cell.
     const writes = daily.paneOptionCalls.length;
     const reread = daily.resizes;
     fireEvent(window, new Event("resize"));
