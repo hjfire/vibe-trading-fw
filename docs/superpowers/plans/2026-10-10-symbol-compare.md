@@ -226,7 +226,7 @@ git commit -s -m "feat(compare): lib/symbolCompare 时间戳对齐——ffill-no
   - `SYMBOL_COMPARE_NAME = "SYMBOL_COMPARE"`、`SYMBOL_COMPARE_SHORT_NAME = "对比"`、`COMPARE_AXIS_ID = "pro-chart-compare-y"`、`COMPARE_FIGURE_KEY = "cmp"`、`COMPARE_FIGURE_TITLE = "对比收盘"`、`COMPARE_PREFS_KEY = "pro-chart.compare.v1"`、`COMPARE_BARS = 2000`
   - `compareActive(on: boolean, timeShare: boolean, ready: boolean): boolean`
   - `loadCompare(): string` / `saveCompare(symbol: string): void` / `compareKey(symbol: string, interval: string): string`
-  - `setCompareSeries(key: string, bars: readonly CompareBar[]): void` / `getCompareSeries(key: string): CompareBar[]` / `clearCompareSeries(): void` / `setActiveCompareKey(key: string): void`
+  - `setCompareSeries(key: string, bars: readonly CompareBar[]): void` / `getCompareSeries(key: string): readonly CompareBar[]` / `clearCompareSeries(): void` / `setActiveCompareKey(key: string): void`
   - `compareRows(mainTimestamps: readonly number[], series: readonly CompareBar[]): CompareRow[]`、`export interface`-等价的 `CompareRow`
   - `ensureCompareIndicator(): void`
 
@@ -400,6 +400,12 @@ describe("注册守卫与声明", () => {
     // （`index.d.ts:870`）。这一格是「别顺手在注册里写轴」的门。
     expect("yAxisId" in s).toBe(false);
     expect("paneId" in s).toBe(false);
+    // 这两格与上面两格不同：`IndicatorTemplate` 只 Omit 了 `result|paneId|yAxisId`
+    // （`index.d.ts:870`），`styles`（`:844`）与 `calcParams` **没被 Omit** ⇒ 在注册里写样式
+    // 或写参数能过 `tsc`。Global Constraints 那两条（不写任何样式键／`calc` 不走 `calcParams`）
+    // 只有在这里落针才是机器门，否则就只是注释。
+    expect("styles" in s).toBe(false);
+    expect("calcParams" in s).toBe(false);
     expect(typeof s.calc).toBe("function");
   });
 
@@ -473,9 +479,10 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
  *    而 manual 轴对 `_shouldUseCandleData()` 为真 ⇒ 一把刚建出来、还没挂指标的空尺会先把
  *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 切走对比会**漏一根轴**。
  * 2. **「不进主图价格轴」是结构保证而不是约定**：轴取数的唯一口径 `_getIndicatorsByYAxisIds()`
- *    按 `indicator.yAxisId ∈ {本轴 id} ∪ {默认轴 id}` 过滤（`index.esm.js:978`），我们的自定义
- *    id 不在里面 ⇒ 主图轴量程**不可能**被对比序列撑开。这就是不走 `draw` 自绘的全部理由——
- *    自绘会把这件事退化成"我们自己不去读那把尺"。
+ *    的判据集合以本轴 id 起步，**只有本轴是 manual 时**才并上默认轴 id（`index.esm.js:967-973`，
+ *    过滤那行在 `:978`）⇒ 非 manual 的轴只认自己的 id，我们那条自定义 id 不在主图轴的集合里，
+ *    主图轴量程**不可能**被对比序列撑开。这就是不走 `draw` 自绘的全部理由——自绘会把这件事
+ *    退化成"我们自己不去读那把尺"。
  * 3. **卸载即自动回收**：`ChartImp.removeIndicator` 在真删掉东西时调 `_removeOrphanYAxes()`
  *    （`index.esm.js:15327`），非 manual、无指标绑定的轴被删 ⇒ 本页不拥有轴的生命周期。
  *
@@ -489,7 +496,7 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
 export const SYMBOL_COMPARE_NAME = "SYMBOL_COMPARE";
 export const SYMBOL_COMPARE_SHORT_NAME = "对比";
 
-/** 自定义轴 id。**必须**是稳定字面量：它同时是孤儿回收判据与测试里"哪根是默认轴"的反证。 */
+/** 自定义轴 id。**必须**是稳定字面量：`_createOrUseIndicatorYAxis` 按 id 找轴复用（`index.esm.js:15241-15245`），换个 id 就是每次挂载多铸一根尺；值由测试逐字钉住，改名会被读出来。 */
 export const COMPARE_AXIS_ID = "pro-chart-compare-y";
 
 export const COMPARE_FIGURE_KEY = "cmp";
@@ -556,11 +563,12 @@ export function setCompareSeries(key: string, bars: readonly CompareBar[]): void
   seriesByKey.set(key, bars.slice());
 }
 
-/** 未知键交出 `[]`：`calc` 那一路要直接喂给纯函数，不接受 undefined。 */
-export function getCompareSeries(key: string): CompareBar[] {
+/** 未知键交出 `[]`：`calc` 那一路要直接喂给纯函数，不接受 undefined。交出去的是内部那个数组的**只读视图**——写入侧已经 `slice()` 复制过，读取侧不再复制，但也不许调用方改它。 */
+export function getCompareSeries(key: string): readonly CompareBar[] {
   return seriesByKey.get(key) ?? [];
 }
 
+/** 整桶清空。生产侧不调（见计划里 P-7 的裁定）；它的消费者是页面测试的 `beforeEach`——模块 store 跨 `render` 存活，不清就是拿上一支交付的数据当本支取到的数据。 */
 export function clearCompareSeries(): void {
   seriesByKey.clear();
 }
@@ -587,7 +595,9 @@ export function compareRows(
  * `precision: 2` 是**继承本页已有的那一条精度约定**（`ProChart.tsx` 写死
  * `pricePrecision: 2`，而 `_synchronizeIndicatorSeriesPrecision` 会把 `series === "price"`
  * 的指标精度覆写成它，`index.esm.js:14215-14239`），不是自造"按数据估小数位"的第二套规则
- * （spec §十二 R6）。低价标的被显示成 `0.00` 是本页出厂就有的代价（§十一·2）。
+ * （spec §十二 R6）。覆写整体包在 `if (isValid(this._symbol))` 里（`:14216`）⇒ 没设标的时
+ * 声明的 `precision: 2` 原样生效，这一格不是"等着被覆写的占位值"。
+ * 低价标的被显示成 `0.00` 是本页出厂就有的代价（§十一·2）。
  */
 let registered = false;
 
@@ -658,7 +668,7 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { COMPARE_PREFS_KEY } from "@/lib/symbolCompareChart";
+import { COMPARE_PREFS_KEY, clearCompareSeries, setActiveCompareKey } from "@/lib/symbolCompareChart";
 import { HEIKIN_ASHI_PREFS_KEY } from "@/lib/heikinAshiChart";
 import { VPVR_PREFS_KEY } from "@/lib/vpvrChart";
 import { ProChart } from "../ProChart";
@@ -940,6 +950,11 @@ beforeEach(() => {
     },
   ];
   localStorage.clear();
+  // 模块 store 跨 `render` 存活：上一支用例交付进桶的序列若不清，本支就可能在页面自己
+  // 还没取到数时读到它（P-7 裁的正是这条——`clearCompareSeries()` 的生产侧调用被否了，
+  // 它的消费者就是这里）。`setActiveCompareKey("")` 同理，`calc` 读的就是这一格。
+  clearCompareSeries();
+  setActiveCompareKey("");
   document.documentElement.classList.remove("dark");
 });
 ```
