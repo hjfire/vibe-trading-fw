@@ -1087,7 +1087,7 @@ describe("/pro-chart 多标的叠加对比", () => {
   });
 
   it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
-    // 这一支是第 2 轮的改判判据，也是它唯一的牙：若把关掉那一下写成
+    // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，也是它唯一的牙：若把关掉那一下写成
     // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
     // **不重新取数**（取数 effect 的依赖是 `[cmpSymbol, interval, timeShare]`，这一路一格没动），
     // 被清掉的 `source` 没有任何东西会把它写回来，于是这行小字在会话余下时间里再也不出现，
@@ -1197,8 +1197,9 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(button().getAttribute("aria-pressed")).toBe("false");
     // 失败只丢叠加层（§五）：主图的数据面与指标面一格没动。
     expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
-    // 关掉要把这一趟的说法一起收掉：输入框 `title` 的那句「原因：」没有 `cmpOn` 门，
-    // 不清 `cmpStatus` 就会在图上既没线、也再无在飞请求时继续报一个不存在的原因。
+    // 关掉要把这一趟的说法一起收掉：输入框 `title` 的错误那一支问的是 `cmpOn && error`。
+    // 而收的方式是**藏起渲染**而不是清零状态——清零会让同一标的再点开时（那一拍不重新取数）
+    // 连这句原话一起永久失去。
     fireEvent.click(button());
     await flush();
     expect(field().getAttribute("title")).not.toContain("原因：");
@@ -1398,7 +1399,7 @@ const compareInflight = new Set<string>();
    * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
    * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
-   * 关掉**不清 `cmpStatus`**（第 2 轮改判，理由在下面那两处渲染门上）：那三格里装的 `error` 与
+   * 关掉**不清 `cmpStatus`**（理由在下面那两处渲染门上）：那三格里装的 `error` 与
    * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
    * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
    * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是

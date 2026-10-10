@@ -576,8 +576,9 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(button().getAttribute("aria-pressed")).toBe("false");
     // 失败只丢叠加层（§五）：主图的数据面与指标面一格没动。
     expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
-    // 关掉要把这一趟的说法一起收掉：输入框 `title` 的那句「原因：」没有 `cmpOn` 门，
-    // 不清 `cmpStatus` 就会在图上既没线、也再无在飞请求时继续报一个不存在的原因。
+    // 关掉要把这一趟的说法一起收掉：输入框 `title` 的错误那一支问的是 `cmpOn && error`。
+    // 而收的方式是**藏起渲染**而不是清零状态——清零会让同一标的再点开时（那一拍不重新取数）
+    // 连这句原话一起永久失去。
     fireEvent.click(button());
     await flush();
     expect(field().getAttribute("title")).not.toContain("原因：");
