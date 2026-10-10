@@ -568,7 +568,7 @@ export function getCompareSeries(key: string): readonly CompareBar[] {
   return seriesByKey.get(key) ?? [];
 }
 
-/** 整桶清空。**生产侧不调**（页面若在卸载或取数 cleanup 里清它，就会把挂卸 effect 正在读的桶掏空——那条 cleanup 每次依赖变化和 StrictMode 双挂载都跑，得到的是一条永远不存在的线）；它唯一的消费者是页面测试的 `beforeEach`——模块 store 跨 `render` 存活，不清就是拿上一支交付的数据当本支取到的数据。 */
+/** 整桶清空。**生产侧一处都不调**（页面若在卸载或取数 cleanup 里清它，就会把挂卸 effect 正在读的桶掏空——那条 cleanup 每次依赖变化和 StrictMode 双挂载都跑，得到的是一条永远不存在的线）；它的消费者只有**两份测试**的 `beforeEach`（本库的 `symbolCompareChart.test.ts` 与页面的 `ProChartCompare.test.tsx`，都不钉行号，那两个文件会漂）——模块 store 跨 `render` 存活，不清就是拿上一支交付的数据当本支取到的数据。 */
 export function clearCompareSeries(): void {
   seriesByKey.clear();
 }
@@ -1086,6 +1086,28 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBeNull();
   });
 
+  it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
+    // 这一支是第 2 轮的改判判据，也是它唯一的牙：若把关掉那一下写成
+    // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
+    // **不重新取数**（取数 effect 的依赖是 `[cmpSymbol, interval, timeShare]`，这一路一格没动），
+    // 被清掉的 `source` 没有任何东西会把它写回来，于是这行小字在会话余下时间里再也不出现，
+    // 而对比线挂得好好的。渲染侧的 `cmpOn` 门得到的是同一句诚实话，且不丢信息。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(0);
+    expect(screen.queryByText(/对 fake-cmp/)).toBeNull();
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(1);
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+  });
+
   it("五支 title 逐字钉，且第 3 支排在 4/5 之前才读得到（§十·⑥ / §七 的判别顺序）", async () => {
     render(<ProChart />);
     await flush();
@@ -1376,9 +1398,13 @@ const compareInflight = new Set<string>();
    * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
    * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
-   * 关掉要清 `cmpStatus`：那三格里装着的是**这一趟取数**的说法——`error` 会在输入框的
-   * `title` 上不带 `cmpOn` 门地说「原因：……」，`source` 会让「来源：主 … · 对 …」那行小字
-   * 继续印一个图上已经不存在的序列。线没了，这些话就是说谎的；`loading` 顺带一起归零。
+   * 关掉**不清 `cmpStatus`**（第 2 轮改判，理由在下面那两处渲染门上）：那三格里装的 `error` 与
+   * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
+   * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
+   * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
+   * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
+   * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
+   * 渲染侧加一枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -1394,7 +1420,6 @@ const compareInflight = new Set<string>();
     cmpRef.current = next;
     setCmpOn(next);
     saveCompare(next ? cmpSymbol : "");
-    if (!next) setCmpStatus({ loading: false, error: null, source: "" });
   };
 ```
 
@@ -1417,7 +1442,10 @@ JSX 插在「量分布」那颗 `</button>` 之后、`{INTERVALS.map((i) => {` �
             spellCheck={false}
             autoComplete="off"
             title={
-              cmpStatus.error !== null
+              // 那句「原因」问的是**正在用的这一路**：`cmpOn` 为假时用户已经把对比关掉，
+              // 上一次取数的错误就不再是他要的答案（不清状态而在这里加门，理由见 `clickCompare`
+              // 的注释——清它会把「来源」那一格连同再点开时该回来的原话一起弄丢）。
+              cmpOn && cmpStatus.error !== null
                 ? `原因：${cmpStatus.error}`
                 : "叠到主图的第二个标的：走它自己那根右侧标尺，不进主图价格轴。输入完整代码后点右边的「对比」"
             }
@@ -1447,8 +1475,11 @@ JSX 插在「量分布」那颗 `</button>` 之后、`{INTERVALS.map((i) => {` �
             对比
           </button>
           {/* 复权口径不回传（spec §十二 R4：日线 `adjust` 是死参数、`caliber` 前端读不到），
-              所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。 */}
-          {cmpStatus.source !== "" && (
+              所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。
+              `cmpOn` 那一枚门与输入框 `title` 同一条理由：这行小字说的是「图上这一条对比线
+              的数据来自哪里」，线被关掉之后它说的是一句没有主人的话；而状态不清零，所以
+              再点开时它回到原处（`clickCompare` 的注释记着为什么在渲染侧加门、不在状态侧清）。 */}
+          {cmpOn && cmpStatus.source !== "" && (
             <span className="text-[10px] text-muted-foreground">
               来源：主 {status.source || "-"} · 对 {cmpStatus.source}
             </span>
@@ -1491,7 +1522,7 @@ cd frontend && npx vitest run src/lib/__tests__/symbolCompare.test.ts src/lib/__
 ```
 记下通过条数（当场读数，别引用本文档）。
 
-- [ ] **Step 2: 逐针毒化（八针，每针一条台账记录：改了什么 → 哪几条红 → 复原）**
+- [ ] **Step 2: 逐针毒化（每一针一条台账记录：改了什么 → 哪几条红 → 复原；针数以本表行数为准）**
 
 | # | 毒化 | 期望变红的那根针 |
 |---|---|---|
@@ -1505,6 +1536,10 @@ cd frontend && npx vitest run src/lib/__tests__/symbolCompare.test.ts src/lib/__
 | 8 | 挂卸 effect 依赖数组删掉 `cmpSeries` | 「数据到达前一次都不挂；到达那一轮必须挂上」（R10 的失效形状） |
 | 9 | 取数 effect 的 cleanup 只 `abort()`、不 `compareInflight.delete(key)` | 「StrictMode 双挂载：请求可能发两次，但数据必须到」（R13） |
 | 10 | `createYAxis` 在 `syncCompare` 里被调一次（手动 `chart.createYAxis?.({ id: COMPARE_AXIS_ID })`） | 「…且不调 createYAxis」＋轴表那一格 |
+| 11 | 把关掉那一下改成第 1 轮写过的那版修法：`if (!next) setCmpStatus({ loading: false, error: null, source: "" });`（渲染侧的 `cmpOn` 门留着不动） | 「关掉再开：来源小字跟着线一起回来」——这一根是第 2 轮改判唯一的牙，它必须能红，否则那支用例什么都没钉 |
+| 12 | 来源小字与输入框 `title` 的 `cmpOn` 门各删掉一次（两趟，各自复原） | 「连点两次回到原样」的关后那一格／「错误臂」尾部的 `not.toContain("原因：")` |
+| 13 | `disabled` 去掉 `&& cmpSymbol === ""`（回到只问未提交输入框那一版） | 「已挂上之后删空输入框：开关不会被自己锁死，第二次点击仍然关得掉线」 |
+| 14 | 页面在 `data.bars.map(…)` 之前先就地 `data.bars.sort((a, b) => a.timestamp - b.timestamp)`（第 1 轮 P0 的那次毒化，T4 要自己复现一次） | 「填标的再点一次」里透传那一格（降序种子＋点击前快照是它的两层牙） |
 
 若某一针**不红**，那不是测试没写好就是判据等价：先按本仓的三条成因（等价变异常因／候选集被交成空集／门自己吞了退出码）判因，登记 `HARNESS-BLIND` 并在报告里写清是哪一种，**不要**为了让它红去加一条无意义断言。
 
@@ -1525,7 +1560,7 @@ bash tools/ci_grep_gates.sh
 
 ```bash
 git status --short
-git commit -s -m "test(compare): 变异自证八针＋六道门全跑" -- <本片实际改过的 pathspec>
+git commit -s -m "test(compare): 变异自证全部针＋六道门全跑" -- <本片实际改过的 pathspec>
 ```
 `git status` 必须只剩那三个并发写手的脏文件（`frontend/public/usage-guide.md`、`frontend/src/lib/__tests__/chartDrawings.test.ts`、`frontend/src/lib/chartDrawings.ts`）。任何一片的还原残留都必须在提交前逐文件 `git diff -- <path>` 读干净。
 
