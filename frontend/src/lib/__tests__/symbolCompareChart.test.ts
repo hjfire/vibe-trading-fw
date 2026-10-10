@@ -163,6 +163,12 @@ describe("注册守卫与声明", () => {
     // （`index.d.ts:870`）。这一格是「别顺手在注册里写轴」的门。
     expect("yAxisId" in s).toBe(false);
     expect("paneId" in s).toBe(false);
+    // 这两格与上面两格不同：`IndicatorTemplate` 只 Omit 了 `result|paneId|yAxisId`
+    // （`index.d.ts:870`），`styles`（`:844`）与 `calcParams` **没被 Omit** ⇒ 在注册里写样式
+    // 或写参数能过 `tsc`。Global Constraints 那两条（不写任何样式键／`calc` 不走 `calcParams`）
+    // 只有在这里落针才是机器门，否则就只是注释。
+    expect("styles" in s).toBe(false);
+    expect("calcParams" in s).toBe(false);
     expect(typeof s.calc).toBe("function");
   });
 

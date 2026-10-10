@@ -17,9 +17,10 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
  *    而 manual 轴对 `_shouldUseCandleData()` 为真 ⇒ 一把刚建出来、还没挂指标的空尺会先把
  *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 切走对比会**漏一根轴**。
  * 2. **「不进主图价格轴」是结构保证而不是约定**：轴取数的唯一口径 `_getIndicatorsByYAxisIds()`
- *    按 `indicator.yAxisId ∈ {本轴 id} ∪ {默认轴 id}` 过滤（`index.esm.js:978`），我们的自定义
- *    id 不在里面 ⇒ 主图轴量程**不可能**被对比序列撑开。这就是不走 `draw` 自绘的全部理由——
- *    自绘会把这件事退化成"我们自己不去读那把尺"。
+ *    的判据集合以本轴 id 起步，**只有本轴是 manual 时**才并上默认轴 id（`index.esm.js:967-973`，
+ *    过滤那行在 `:978`）⇒ 非 manual 的轴只认自己的 id，我们那条自定义 id 不在主图轴的集合里，
+ *    主图轴量程**不可能**被对比序列撑开。这就是不走 `draw` 自绘的全部理由——自绘会把这件事
+ *    退化成"我们自己不去读那把尺"。
  * 3. **卸载即自动回收**：`ChartImp.removeIndicator` 在真删掉东西时调 `_removeOrphanYAxes()`
  *    （`index.esm.js:15327`），非 manual、无指标绑定的轴被删 ⇒ 本页不拥有轴的生命周期。
  *
@@ -33,7 +34,7 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
 export const SYMBOL_COMPARE_NAME = "SYMBOL_COMPARE";
 export const SYMBOL_COMPARE_SHORT_NAME = "对比";
 
-/** 自定义轴 id。**必须**是稳定字面量：它同时是孤儿回收判据与测试里"哪根是默认轴"的反证。 */
+/** 自定义轴 id。**必须**是稳定字面量：`_createOrUseIndicatorYAxis` 按 id 找轴复用（`index.esm.js:15241-15245`），换个 id 就是每次挂载多铸一根尺；值由测试逐字钉住，改名会被读出来。 */
 export const COMPARE_AXIS_ID = "pro-chart-compare-y";
 
 export const COMPARE_FIGURE_KEY = "cmp";
@@ -100,11 +101,12 @@ export function setCompareSeries(key: string, bars: readonly CompareBar[]): void
   seriesByKey.set(key, bars.slice());
 }
 
-/** 未知键交出 `[]`：`calc` 那一路要直接喂给纯函数，不接受 undefined。 */
-export function getCompareSeries(key: string): CompareBar[] {
+/** 未知键交出 `[]`：`calc` 那一路要直接喂给纯函数，不接受 undefined。交出去的是内部那个数组的**只读视图**——写入侧已经 `slice()` 复制过，读取侧不再复制，但也不许调用方改它。 */
+export function getCompareSeries(key: string): readonly CompareBar[] {
   return seriesByKey.get(key) ?? [];
 }
 
+/** 整桶清空。生产侧不调（P-7：它的消费者是页面测试的 `beforeEach`——模块 store 跨 `render` 存活）；这一格是会话缓存的重置面。 */
 export function clearCompareSeries(): void {
   seriesByKey.clear();
 }
@@ -132,6 +134,8 @@ export function compareRows(
  * `pricePrecision: 2`，而 `_synchronizeIndicatorSeriesPrecision` 会把 `series === "price"`
  * 的指标精度覆写成它，`index.esm.js:14215-14239`），不是自造"按数据估小数位"的第二套规则
  * （spec §十二 R6）。低价标的被显示成 `0.00` 是本页出厂就有的代价（§十一·2）。
+ * 覆写整体包在 `if (isValid(this._symbol))` 里（`:14216`）⇒ 没设标的时声明的 `precision: 2` 原样生效，
+ * 这一格不是"等着被覆写的占位值"。
  */
 let registered = false;
 
