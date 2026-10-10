@@ -462,6 +462,28 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBeNull();
   });
 
+  it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
+    // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，也是它唯一的牙：若把关掉那一下写成
+    // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
+    // **不重新取数**（取数 effect 的依赖是 `[cmpSymbol, interval, timeShare]`，这一路一格没动），
+    // 被清掉的 `source` 没有任何东西会把它写回来，于是这行小字在会话余下时间里再也不出现，
+    // 而对比线挂得好好的。渲染侧的 `cmpOn` 门得到的是同一句诚实话，且不丢信息。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(0);
+    expect(screen.queryByText(/对 fake-cmp/)).toBeNull();
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(1);
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+  });
+
   it("五支 title 逐字钉，且第 3 支排在 4/5 之前才读得到（§十·⑥ / §七 的判别顺序）", async () => {
     render(<ProChart />);
     await flush();

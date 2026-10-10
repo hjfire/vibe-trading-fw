@@ -2093,9 +2093,13 @@ export function ProChart() {
    * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
    * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
-   * 关掉要清 `cmpStatus`：那三格里装着的是**这一趟取数**的说法——`error` 会在输入框的
-   * `title` 上不带 `cmpOn` 门地说「原因：……」，`source` 会让「来源：主 … · 对 …」那行小字
-   * 继续印一个图上已经不存在的序列。线没了，这些话就是说谎的；`loading` 顺带一起归零。
+   * 关掉**不清 `cmpStatus`**（理由在下面那两处渲染门上）：那三格里装的 `error` 与
+   * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
+   * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
+   * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
+   * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
+   * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
+   * 渲染侧加一枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -2111,7 +2115,6 @@ export function ProChart() {
     cmpRef.current = next;
     setCmpOn(next);
     saveCompare(next ? cmpSymbol : "");
-    if (!next) setCmpStatus({ loading: false, error: null, source: "" });
   };
 
   /**
@@ -2559,7 +2562,10 @@ export function ProChart() {
             spellCheck={false}
             autoComplete="off"
             title={
-              cmpStatus.error !== null
+              // 那句「原因」问的是**正在用的这一路**：`cmpOn` 为假时用户已经把对比关掉，
+              // 上一次取数的错误就不再是他要的答案（不清状态而在这里加门，理由见 `clickCompare`
+              // 的注释——清它会把「来源」那一格连同再点开时该回来的原话一起弄丢）。
+              cmpOn && cmpStatus.error !== null
                 ? `原因：${cmpStatus.error}`
                 : "叠到主图的第二个标的：走它自己那根右侧标尺，不进主图价格轴。输入完整代码后点右边的「对比」"
             }
@@ -2589,8 +2595,11 @@ export function ProChart() {
             对比
           </button>
           {/* 复权口径不回传（spec §十二 R4：日线 `adjust` 是死参数、`caliber` 前端读不到），
-              所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。 */}
-          {cmpStatus.source !== "" && (
+              所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。
+              `cmpOn` 那一枚门与输入框 `title` 同一条理由：这行小字说的是「图上这一条对比线
+              的数据来自哪里」，线被关掉之后它说的是一句没有主人的话；而状态不清零，所以
+              再点开时它回到原处（`clickCompare` 的注释记着为什么在渲染侧加门、不在状态侧清）。 */}
+          {cmpOn && cmpStatus.source !== "" && (
             <span className="text-[10px] text-muted-foreground">
               来源：主 {status.source || "-"} · 对 {cmpStatus.source}
             </span>
