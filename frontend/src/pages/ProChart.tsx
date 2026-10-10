@@ -128,6 +128,19 @@ import {
   VPVR_NAME,
   vpvrActive,
 } from "@/lib/vpvrChart";
+import type { CompareBar } from "@/lib/symbolCompare";
+import {
+  COMPARE_AXIS_ID,
+  COMPARE_BARS,
+  SYMBOL_COMPARE_NAME,
+  compareActive,
+  compareKey,
+  ensureCompareIndicator,
+  loadCompare,
+  saveCompare,
+  setActiveCompareKey,
+  setCompareSeries,
+} from "@/lib/symbolCompareChart";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import WatchList from "@/components/charts/WatchList";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
@@ -302,7 +315,7 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   const type: CandleType = timeShare ? "area" : "candle_solid";
   // `heikinAshiActive` is the one predicate both channels read: the styles side
   // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
-  // T4, `:1378`) asks the same one — so the two cannot drift: an HA that is painted
+  // T4, `:1491`) asks the same one — so the two cannot drift: an HA that is painted
   // but not mounted would show nine invisible rectangles and nothing else, and the
   // reverse would show real candles under a button reading 已开.
   const haShown = heikinAshiActive(ha, timeShare);
@@ -464,6 +477,15 @@ function parkedPanesOf(
   return [...seen];
 }
 
+/**
+ * 对比取数的在飞键集合（spec §十二 R13）。StrictMode 双挂载去重照 `indicatorLang.ts` 里
+ * 那条低周期取数的形状（判键→加键→`finally` 删键），但那条是 calc 路径、**没有 effect
+ * cleanup**，照搬到 effect 里就漏一件事：cleanup 里 abort 的同一行必须把键也删掉，否则
+ * 第二次挂载看见键还在 ⇒ 跳过，而第一次的请求已被自己 abort 掉、永远不会交付。
+ * 代价（登记在 R13）：dev 下一次挂载会发两个请求，第二个完成、第一个被取消。
+ */
+const compareInflight = new Set<string>();
+
 export function ProChart() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Nullable<Chart>>(null);
@@ -544,7 +566,7 @@ export function ProChart() {
   // page behaves exactly as it did before this feature existed.
   const [magnet, setMagnet] = useState<MagnetMode>(() => loadMagnet());
   // The mirror the closures read. The symbol/interval swap lives inside the
-  // DataLoader closure built once per chart (`:1111`), so it can only ever see a
+  // DataLoader closure built once per chart (`:1185`), so it can only ever see a
   // ref — and `restoreDrawings` there has to stamp the same `mode` the toolbar
   // armed with, or a line comes back from storage with a different magnet
   // behaviour than the one the user is drawing with. Same reason as
@@ -569,6 +591,25 @@ export function ProChart() {
   // 第二次就会撤销第一次。
   const [vpOn, setVpOn] = useState(() => loadVpvr());
   const vpRef = useRef(vpOn);
+  // 对比（第⑥片）：`cmpOn` 不是布尔偏好而是「开关态」这一格，键里存的是**已应用的标的串**
+  // （spec §十二 R9：开关与标的存两处必然长出"键说开着、标的却是空"的第三种状态）。
+  // `cmpSymbol` 是会话内当前标的：关掉只删键、不清它（§四），同一趟浏览再点一次不用重敲。
+  // `cmpInput` 是输入框里**未提交**的原文——「填了」与「应用了」是两个状态，五支 title 的
+  // 第 2/3 支分的就是这一刀。
+  const [cmpSymbol, setCmpSymbol] = useState(() => loadCompare());
+  const [cmpInput, setCmpInput] = useState(() => loadCompare());
+  const [cmpOn, setCmpOn] = useState(() => loadCompare() !== "");
+  // ref 镜像的理由与 `haRef`/`vpRef` 完全相同：同一个 task 里连点两次都摊到同一份过期的
+  // 闭包快照上，第二次就会撤销第一次。
+  const cmpRef = useRef(cmpOn);
+  const [cmpStatus, setCmpStatus] = useState<{
+    loading: boolean;
+    error: string | null;
+    source: string;
+  }>({ loading: false, error: null, source: "" });
+  // 取回来的序列，连同它属于哪个 key —— `cmpSeries.key === cmpKey && bars.length > 0`
+  // 就是 §六 那枚谓词第三格 `ready` 的定义。state 身份本身还是挂卸 effect 的依赖（R10）。
+  const [cmpSeries, setCmpSeries] = useState<{ key: string; bars: CompareBar[] } | null>(null);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -591,7 +632,7 @@ export function ProChart() {
   // it up once the bank is done.
   const anchorNoteRef = useRef<{ bad?: boolean; text: string } | null>(null);
   // --- Bar Replay（本地定制 ㊺）-----------------------------------------------------------
-  // The DataLoader closure is built once per chart (`:1111`), so it can only read the ref;
+  // The DataLoader closure is built once per chart (`:1185`), so it can only read the ref;
   // `replay` is the mirror the toolbar renders. `syncReplayUi` is the only writer of the
   // mirror, and it derives everything from the ref — the two cannot drift, and a stale
   // closure can never pass an old cursor or `playing` flag forward (Task 4's loop depends
@@ -614,6 +655,11 @@ export function ProChart() {
   // button whose handler only `return`s. Emptiness is the only thing read off it (see the JSX):
   // it is not the number of bars on screen, because paging only ever adds to that.
   const [barCount, setBarCount] = useState(0);
+  // 键由页面派生（spec §四）：不从 store 里反查——反查就把"当前该用哪条序列"这个决定
+  // 同时放到两处。
+  const cmpKey = cmpSymbol === "" ? "" : compareKey(cmpSymbol, interval);
+  const cmpReady =
+    cmpSeries !== null && cmpSeries.key === cmpKey && cmpSeries.bars.length > 0;
   const [parked, setParked] = useState<StoredDrawing[]>([]);
   const replaceParked = (list: readonly StoredDrawing[]) => {
     parkedRef.current = list.slice();
@@ -986,7 +1032,7 @@ export function ProChart() {
   /**
    * Put the Heikin-Ashi overlay on the price pane, or take it off (第④片).
    *
-   * Same 先删后挂 shape as `syncPriceOverlay` for the same reason (`:954-964`):
+   * Same 先删后挂 shape as `syncPriceOverlay` for the same reason (`:1000-1010`):
    * `createIndicator(value, true)` always appends — `ChartImp.createIndicator` (dist 15270)
    * mints a fresh `create.id` before `StoreImp.addIndicator` (dist 14150) de-dups, and a
    * filter carrying an id matches on id alone (dist 14179) — so "is it already up?" cannot
@@ -1013,7 +1059,7 @@ export function ProChart() {
   /**
    * Put the volume-profile histogram on the price pane, or take it off (第⑤片).
    *
-   * Same 先删后挂 shape as `syncHeikinAshi` (`:999`, body `:999-1011`) for the same reason:
+   * Same 先删后挂 shape as `syncHeikinAshi` (`:1045`, body `:1045-1057`) for the same reason:
    * `createIndicator(value, true)` always appends (`ChartImp.createIndicator` mints a fresh
    * id before `StoreImp.addIndicator` de-dups, and a filter carrying an id matches on id
    * alone — dist 15270 ⇄ 14150), so "is it already up?" cannot be answered by the library
@@ -1040,6 +1086,34 @@ export function ProChart() {
     if (live.length === 0) {
       chart.createIndicator({ name: VPVR_NAME, paneId: MAIN_PANE_ID }, true);
     }
+  };
+
+  /**
+   * Put the compare line on the price pane with its own right-hand scale, or take it off
+   * (第⑥片). 先删后挂与 `syncVpvr` 同源，但**无条件**：那边的 `live.length === 0` 夹挡的是
+   * 「多出一行图例」，而这里重挂本身是 `calc` 重跑的唯一通道（spec §四 的宽触发面 / R10），
+   * 夹住它就等于把"数据后到"那一格判成永远不成立。
+   *
+   * 也不拥有轴的生命周期：`ChartImp.removeIndicator` 在真删掉东西时扫孤儿轴
+   * （`index.esm.js:15327` ⇄ 15217-15240），而 `createIndicator` 会把缺的那根建出来
+   * （`:15241-15249`，这条路径不设 manual）⇒ 一次删挂恰好是一次「拆了尺再铸一把新的」。
+   * `createYAxis` 一次都不调（它会把轴标成 manual，`index.esm.js:15483`）。
+   *
+   * `isStack` 为真与第⑤片同理由：真库 `addIndicator(create, isStack)` 在假值时先清整格
+   * 指标，那会吃掉 MA／HA／VPVR。
+   */
+  const syncCompare = (chart: Nullable<Chart>, active: boolean, key: string) => {
+    if (!chart) return;
+    chart.removeIndicator({ name: SYMBOL_COMPARE_NAME });
+    if (!active) return;
+    ensureCompareIndicator();
+    // 挂载前先把"当前该用哪条序列"记进 store；`calc` 只读这一格，不走 `calcParams`
+    // （走参数就撞上 `shouldUpdate` 里那条 JSON.stringify 比较，同一份状态存两处）。
+    setActiveCompareKey(key);
+    chart.createIndicator(
+      { name: SYMBOL_COMPARE_NAME, paneId: MAIN_PANE_ID, yAxisId: COMPARE_AXIS_ID },
+      true,
+    );
   };
 
   /**
@@ -1359,6 +1433,45 @@ export function ProChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 对比标的取数（spec §五）。三格依赖就够：**`cmpSeries` 绝不能再列进这里**——它由本条
+  // effect 自己写，列进依赖就是「交付→重跑→再交付」的无限循环。
+  useEffect(() => {
+    if (cmpSymbol === "" || timeShare) return;
+    const key = compareKey(cmpSymbol, interval);
+    if (compareInflight.has(key)) return;
+    compareInflight.add(key);
+    const controller = new AbortController();
+    setCmpStatus({ loading: true, error: null, source: "" });
+    // 独立一趟，绝不与主序列 `Promise.all`（§五）：失败只丢叠加层并把原因显示出来。
+    fetchKline({ symbol: cmpSymbol, interval, count: COMPARE_BARS, signal: controller.signal })
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        const bars = data.bars.map((b) => ({ timestamp: b.timestamp, close: b.close }));
+        // 先写 store，再换 state 身份：挂卸 effect 是在 commit 之后跑的，它一跑就要求
+        // `calc` 读得到这条序列。反过来的顺序读不出差别，但写在这里是因为它是唯一的因果方向。
+        setCompareSeries(key, bars);
+        setCmpSeries({ key, bars });
+        setCmpStatus({ loading: false, error: null, source: data.source });
+      })
+      .catch((e: unknown) => {
+        // 被自己 abort 掉的那一趟不是事实，不该印出来（StrictMode 的第二次挂载会 abort 第一次）。
+        if (controller.signal.aborted) return;
+        setCmpStatus({
+          loading: false,
+          error: e instanceof Error ? e.message : String(e),
+          source: "",
+        });
+      })
+      .finally(() => {
+        compareInflight.delete(key);
+      });
+    return () => {
+      // 两件事一起做（R13）：abort 掉在飞的这一趟，并把键腾出来让下一次挂载真发一次。
+      controller.abort();
+      compareInflight.delete(key);
+    };
+  }, [cmpSymbol, interval, timeShare]);
+
   // Theme switch → restyle in place. Also the only writer of the candle/line
   // choice, so `timeShare` is a dependency: leaving it out let a theme change
   // repaint a 分时 line as candles. `legend` joins that list for the same reason
@@ -1394,6 +1507,18 @@ export function ProChart() {
     // when the switch or the view actually moves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vpOn, timeShare]);
+
+  // 对比的挂载触发面比 HA／VPVR **宽一格**：`cmpSeries` 本身进依赖数组。第④⑤片挂的是同一个
+  // `dataList` 上的纯变换，本片有一半输入住在 store 里、而库不会因为 store 变了重跑 `calc`
+  // （只有 `dataList` 变化才全量重跑）⇒ 数据后到时不重挂，就得到一条永远不存在的线（R10）。
+  useEffect(() => {
+    syncCompare(chartRef.current, compareActive(cmpOn, timeShare, cmpReady), cmpKey);
+    // Not deps: `chartRef.current` is a ref the init effect owns (a chart object appearing is
+    // not a state change it can react to), and `syncCompare` is a new function object every
+    // render — listing either would re-run this 先删后挂 sweep on every render rather than only
+    // when the switch, the view, the applied symbol/interval, or the delivered series moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cmpOn, timeShare, cmpKey, cmpSeries]);
 
   // TradingView shares by URL, so `?s=` opens the workbench with the script
   // decoded into the editor (see `takeShareTask` for the double-mount catch).
@@ -1939,7 +2064,7 @@ export function ProChart() {
 
   /**
    * Flip 平均K线. Nothing else has to happen here: `haOn` is in the theme effect's
-   * dependency list (`:1373`, nine colours) *and* in the mount effect's (`:1385`,
+   * dependency list (`:1486`, nine colours) *and* in the mount effect's (`:1498`,
    * indicator), so the two channels both move from the same state change. Unlike
    * `toggleMagnet` there is no live object to re-apply — a magnet is a property of
    * drawings that already exist, an HA is a repaint.
@@ -1953,7 +2078,7 @@ export function ProChart() {
 
   /**
    * Flip the volume-profile switch. Same three writes as `toggleHeikinAshi`
-   * (`:1947`, body `:1947-1952`) and for the same reason: the ref breaks the stale-closure tie, the state
+   * (`:2072`, body `:2072-2077`) and for the same reason: the ref breaks the stale-closure tie, the state
    * drives the effect, the pref outlives the session. Nothing to re-apply — VPVR is a
    * repaint, not a property of objects that already exist.
    */
@@ -1962,6 +2087,27 @@ export function ProChart() {
     vpRef.current = next;
     setVpOn(next);
     saveVpvr(next);
+  };
+
+  /**
+   * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
+   * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
+   * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
+   */
+  const clickCompare = () => {
+    const typed = cmpInput.trim().toUpperCase();
+    if (typed !== "" && typed !== cmpSymbol) {
+      cmpRef.current = true;
+      setCmpSymbol(typed);
+      setCmpInput(typed);
+      setCmpOn(true);
+      saveCompare(typed);
+      return;
+    }
+    const next = !cmpRef.current;
+    cmpRef.current = next;
+    setCmpOn(next);
+    saveCompare(next ? cmpSymbol : "");
   };
 
   /**
@@ -2393,6 +2539,56 @@ export function ProChart() {
           >
             量分布
           </button>
+          {/* 对比（第⑥片）：一个输入框＋一个开关。三处表达式三种问法与前两颗按钮同形——
+              `disabled` 问三个原因（分时／空图／没填标的），`aria-pressed` 与 className 问
+              `compareActive` 这一枚谓词（未就绪时不亮，说的是"图上现在没有对比线"这件事实），
+              而 `title` 的五支按 §七 定稿的**顺序**问：分时 → 没有已应用标的 → 已开但数据
+              未就绪 → 已开 → 已关。第 3 支必须排在 4/5 **之前**，它排在后面就永远读不到，
+              而那一格正是本片唯一会把"进行中"说成"已完成"的形状。 */}
+          <input
+            value={cmpInput}
+            onChange={(event) => setCmpInput(event.target.value)}
+            placeholder="对比标的"
+            aria-label="对比标的"
+            spellCheck={false}
+            autoComplete="off"
+            title={
+              cmpStatus.error !== null
+                ? `原因：${cmpStatus.error}`
+                : "叠到主图的第二个标的：走它自己那根右侧标尺，不进主图价格轴。输入完整代码后点右边的「对比」"
+            }
+            className="h-7 w-28 rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+          />
+          <button
+            disabled={timeShare || barCount === 0 || cmpInput.trim() === ""}
+            aria-label="对比"
+            aria-pressed={compareActive(cmpOn, timeShare, cmpReady)}
+            title={
+              timeShare
+                ? "跨市场的分钟时刻不在同一把尺上，分时视图看不了对比，先切回蜡烛"
+                : cmpSymbol === ""
+                  ? "先在左边输入对比标的（如 600036.SH 或 BTC-USDT），点它才叠到主图"
+                  : cmpOn && (cmpStatus.loading || cmpStatus.error !== null || !cmpReady)
+                    ? "对比标的的数据还没到位，原因看输入框那行的提示"
+                    : cmpOn
+                      ? `对比已开：把可视区间同一把时间轴上的 ${cmpSymbol} 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）`
+                      : `对比已关：点开把 ${cmpSymbol} 的收盘叠到主图，走独立标尺、不改主图价格轴`
+            }
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+              compareActive(cmpOn, timeShare, cmpReady) && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            onClick={clickCompare}
+          >
+            对比
+          </button>
+          {/* 复权口径不回传（spec §十二 R4：日线 `adjust` 是死参数、`caliber` 前端读不到），
+              所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。 */}
+          {cmpStatus.source !== "" && (
+            <span className="text-[10px] text-muted-foreground">
+              来源：主 {status.source || "-"} · 对 {cmpStatus.source}
+            </span>
+          )}
           {INTERVALS.map((i) => {
             // Greyed out only where no source can answer at all. Whether OpenD
             // is up is not knowable from here, so HK/US stay enabled and the
