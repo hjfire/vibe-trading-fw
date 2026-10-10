@@ -138,8 +138,8 @@ vi.mock("klinecharts", () => ({
           // 缺省才回落到该 pane 的默认轴 id ⇒ 记的是**页面真传的那一格**。
           yAxisId: value.yAxisId ?? DEFAULT_AXIS_ID,
         });
-        // `_createOrUseIndicatorYAxis`（`index.esm.js:15241-15249`）：轴不存在就建出来，
-        // 且这条路径**不设 manual**。
+        // `_createOrUseIndicatorYAxis` 全体（`index.esm.js:15241-15252`）：轴不存在就建出来，
+        // 且这条路径**不设 manual**（`:15247-15248` 只把已存在的 manual 标记取消）。
         if (value.yAxisId && !h.axes.includes(value.yAxisId)) h.axes.push(value.yAxisId);
         return true;
       },
@@ -160,10 +160,11 @@ vi.mock("klinecharts", () => ({
       // §十·① 的结构钉：真库 `ChartImp.createYAxis` 会给轴打 manual（`index.esm.js:15483`），
       // 而 manual 轴把主图蜡烛撑进自己的量程（`:980-983`）且不被孤儿回收（`:15234`）。
       // 页面一次都不该调它——吞掉调用（`vi.fn()` 不带录制）就等于没这根钉。
-      // **替身只录调用、不摆轴，而这一格读不出东西不是偷懒**：库的指标挂载路径会把已存在轴上
-      // 的 manual 标记取消（`_createOrUseIndicatorYAxis`，`index.esm.js:15245-15248`），于是
-      // 「先 `createYAxis` 再 `createIndicator`」这种用法得到的轴表与压根不调它时逐字相同 ⇒
-      // 轴表那两格对这条用法没有牙，见证只有下面那格的调用计数。
+      // **替身只录调用、不摆轴，而这一格读不出东西不是偷懒**：两种先后都被库自己中和——
+      // `createYAxis` 在前时，指标挂载路径会把已存在轴上的 manual 标记取消
+      // （`_createOrUseIndicatorYAxis`，`index.esm.js:15247-15248`；`createIndicator` 在 `:15282`
+      // 调它、`:15283` 接着扫孤儿轴）；`createYAxis` 在后时，它遇已存在轴直接早退、根本不打
+      // manual（`:15479-15480`）⇒ 轴表那两格对这条用法没有牙，见证只有下面那格的调用计数。
       createYAxis: (yAxis: unknown) => {
         h.createdYAxis.push(yAxis);
         return "manual-axis";

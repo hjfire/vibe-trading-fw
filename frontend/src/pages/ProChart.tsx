@@ -1096,7 +1096,7 @@ export function ProChart() {
    *
    * 也不拥有轴的生命周期：`ChartImp.removeIndicator` 在真删掉东西时扫孤儿轴
    * （`index.esm.js:15327` ⇄ 15217-15240），而 `createIndicator` 会把缺的那根建出来
-   * （`:15241-15249`，这条路径不设 manual）⇒ 一次删挂恰好是一次「拆了尺再铸一把新的」。
+   * （`:15241-15252`，这条路径不设 manual）⇒ 一次删挂恰好是一次「拆了尺再铸一把新的」。
    * `createYAxis` 一次都不调（它会把轴标成 manual，`index.esm.js:15483`）。
    *
    * `isStack` 为真与第⑤片同理由：真库 `addIndicator(create, isStack)` 在假值时先清整格
