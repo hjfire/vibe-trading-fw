@@ -21,7 +21,7 @@
 - 不为不可达场景加校验（spec §三 末条、§四 第二格都按这条裁掉过分支，别再长回来）。
 - 替身只交实现**真被读的那几格**；替身必须建模副作用（`createIndicator` 影响指标表与轴表），否则计数针结构性不可红。
 - 判据按**条目名**引用（「§十·②b 重挂面」），不要在测试或注释里钉本计划的行号；基线数（测试条数、门计数）由执行席当场测，不引用本文档数字。
-- 提交一律 `git commit -s`（DCO）＋**显式 pathspec**；`docs/` 被 `.gitignore` 忽略但文件已跟踪 ⇒ 用 `git commit -m ... -- <path>` 形式（pathspec 提交），不要用 `git add`。
+- 提交一律 `git commit -s`（DCO）＋**显式 pathspec**，并且**永远先 `git add -- <同一批显式路径>` 再 commit**：`git commit -- <path>` 只对**已跟踪**文件生效，本片前三个任务交付的都是新建文件，不 `git add` 会得到 `pathspec ... did not match any file(s) known to git`。pathspec 要保留是因为裸 `git commit` 会吞掉并发写手 staged 的面。`docs/` 被 `.gitignore` 忽略 ⇒ 新档案要 `git add -f`，已跟踪的档案用 `git commit -m ... -- <path>`。
 - 树上另有三个并发写手的脏文件（`frontend/public/usage-guide.md`、`frontend/src/lib/__tests__/chartDrawings.test.ts`、`frontend/src/lib/chartDrawings.ts`）：**不碰、不 stash、不 commit**，一切提交带 pathspec。
 - 门禁：`cd frontend && npx tsc --noEmit -p tsconfig.json`、`npx vitest run`（全量）、`npx vite build` 三者 rc=0；`cd` 仓库根后 `python -X utf8 -m pytest tools/test_wiki_drift.py -q`；`bash tools/ci_grep_gates.sh`。两道本地恒红门（wiki 水位门、grep 门 b）**先证本片贡献归属再报告，不许调阈值、不许改档案让门变绿**。新写的一切件不复述门自己打印的那句 FAIL 文案。
 - 库坐标一律指 `frontend/node_modules/klinecharts/dist/index.esm.js`（UMD 恒 +5，不在一句话里混用两个坐标）。
@@ -199,7 +199,7 @@ export function alignCloseToTimestamps(
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd frontend && npx vitest run src/lib/__tests__/symbolCompare.test.ts`
-Expected: PASS，9 条（条数当场读，不预言）。
+Expected: PASS（条数当场读，不预言；本任务 Step 1 的代码块里是 8 支 `it`）。
 
 - [ ] **Step 5: 类型门**
 
@@ -208,6 +208,7 @@ Run: `cd frontend && npx tsc --noEmit -p tsconfig.json` → rc=0。
 - [ ] **Step 6: 提交**
 
 ```bash
+git add -- frontend/src/lib/symbolCompare.ts frontend/src/lib/__tests__/symbolCompare.test.ts
 git commit -s -m "feat(compare): lib/symbolCompare 时间戳对齐——ffill-not-bfill、坏值整根跳过、前缀不变量" -- frontend/src/lib/symbolCompare.ts frontend/src/lib/__tests__/symbolCompare.test.ts
 ```
 
