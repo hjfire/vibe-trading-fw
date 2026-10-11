@@ -1094,9 +1094,10 @@ describe("/pro-chart 多标的叠加对比", () => {
   it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
     // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，也是它唯一的牙：若把关掉那一下写成
     // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
-    // **不重新取数**（取数 effect 的依赖是 `[cmpSymbol, interval, timeShare]`，这一路一格没动），
-    // 被清掉的 `source` 没有任何东西会把它写回来，于是这行小字在会话余下时间里再也不出现，
-    // 而对比线挂得好好的。渲染侧的 `cmpOn` 门得到的是同一句诚实话，且不丢信息。
+    // **不重新取数**（重开那一下被守卫里 `cmpOn` 之后的 `cmpReady` 早退挡住：上一趟成功过，序列
+    // 本来就在 store 里，重取只会把已经在线上的东西再取一遍），于是被清掉的 `source`
+    // 没有任何东西会把它写回来，这行小字在会话余下时间里再也不出现，而对比线挂得好好的。
+    // 渲染侧的门得到的是同一句诚实话，且不丢信息。
     render(<ProChart />);
     await flush();
     typeCompare("600036.SH");
@@ -1346,7 +1347,7 @@ const compareInflight = new Set<string>();
       controller.abort();
       compareInflight.delete(key);
     };
-  }, [cmpSymbol, interval, timeShare]);
+  }, [cmpSymbol, interval, timeShare, cmpOn]);
 ```
 
 **⑤ `syncCompare` + 挂卸 effect**——`syncCompare` 紧跟 `syncVpvr` 之后：
@@ -1406,11 +1407,18 @@ const compareInflight = new Set<string>();
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
    * 关掉**不清 `cmpStatus`**（理由在下面那两处渲染门上）：那三格里装的 `error` 与
    * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
-   * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
-   * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
-   * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
-   * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
-   * 渲染侧加两枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
+   * 对比线时还把话说出口」这一对渲染表达式。就地清零要多付一个洞——同一标的再点开时
+   * **不重新取数**（重开那一轮被取数守卫里的 `cmpReady` 早退挡住：上一趟成功过，序列本来就在
+   * 模块 store 里，重取只会把已经在线上的东西再取一遍），于是「来源：主 … · 对 …」这行小字在
+   * 会话余下时间里再也不回来，而线明明挂得好好的。
+   * （这里原本还有第二条理由「关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来」，
+   * 它已经随把 `cmpOn` 列进取数依赖那一轮失效：关掉那一下会跑 cleanup 的 `controller.abort()`，
+   * 而那条 `.then` 第一格就问 `signal.aborted` ⇒ 写不回来。清零买到的只剩 ① 那个洞。）
+   * 渲染侧的门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处；而「开着的门」问的是
+   * `cmpShown`（线真画得出来吗），不是光 `cmpOn`。失败那一趟是另一回事，但它的范围是**同一把键**：
+   * 上一趟失败 ⇒ `cmpReady` 为假 ⇒ 原地重开真的重发，那句「原因」才有的下一步可走；而换过标的
+   * 或周期再回到上一把键时 `cmpReady` 为真 ⇒ 早退，那句「原因」就成了没有主人的旧话——旧话由
+   * `cmpView`（`cmpStatus.key` 对上 `cmpKey` 才读）收掉，而不是靠多取一趟把它冲掉。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -1542,7 +1550,7 @@ cd frontend && npx vitest run src/lib/__tests__/symbolCompare.test.ts src/lib/__
 | 8 | 挂卸 effect 依赖数组删掉 `cmpSeries` | 「数据到达前一次都不挂；到达那一轮必须挂上」（R10 的失效形状） |
 | 9 | 取数 effect 的 cleanup 只 `abort()`、不 `compareInflight.delete(key)` | 「StrictMode 双挂载：请求可能发两次，但数据必须到」（R13） |
 | 10 | `createYAxis` 在 `syncCompare` 里被调一次（手动 `chart.createYAxis?.({ id: COMPARE_AXIS_ID })`） | 「…且不调 createYAxis」的 `h.createdYAxis` 计数那一格。**轴表两格对这一针无牙**，且不是替身偷懒：轴**集合**两种写法都是 `[默认, 对比]`，差别只在 manual **标记**；而真库 `_createOrUseIndicatorYAxis` 的承重两句（`dist:15247-15248`：`if (pane.isManualYAxis(yAxisId)) pane.setManualYAxis(yAxisId, false)`）在指标挂载路径上把已存在轴的 manual 标记取消掉——`ChartImp.createIndicator` 在 `:15282` 调它、`:15283` 接着扫孤儿轴。这一针的注入点正在 `createIndicator` **之前**，所以连「漏一根轴不被孤儿回收」那个后果都在库语义里被中和了；调用点反过来也不翻转，因为 `createYAxis` 遇已存在轴直接早退、根本不写 manual（`:15479-15480`）。⇒ 这一格的合法见证只有调用计数（本任务开头给它的定位就是「判据是零调用」） |
-| 11 | 把关掉那一下改成第 1 轮写过的那版修法：`if (!next) setCmpStatus({ loading: false, error: null, source: "" });`（渲染侧的 `cmpOn` 门留着不动） | 「关掉再开：来源小字跟着线一起回来」——这一根是第 2 轮改判唯一的牙，它必须能红，否则那支用例什么都没钉 |
+| 11 | 把关掉那一下改成第 1 轮写过的那版修法：`if (!next) setCmpStatus({ loading: false, error: null, source: "" });`（渲染侧的 `cmpOn` 门留着不动） | 「关掉再开：来源小字跟着线一起回来」——这一根是第 2 轮改判唯一的牙，它必须能红，否则那支用例什么都没钉。**2026-10-11 第二轮改口**：`source` 搬进 `cmpSeries` 之后这一格的字面形状已表达不出伤害，直译「清 `cmpStatus`」实测 25 全绿（变异 q10）⇒ 这一根的牙移交 q9（状态侧清 `cmpSeries.source` ⇒ 红 2，本支与「健康态关掉再点开」一起红）与 q4（摘渲染侧那枚 `cmpOn` 门 ⇒ 红 1，本支红） |
 | 12 | 来源小字与输入框 `title` 的 `cmpOn` 门各删掉一次（两趟，各自复原） | 「连点两次回到原样」的关后那一格／「错误臂」尾部的 `not.toContain("原因：")` |
 | 13 | `disabled` 去掉 `&& cmpSymbol === ""`（回到只问未提交输入框那一版） | 「已挂上之后删空输入框：开关不会被自己锁死，第二次点击仍然关得掉线」 |
 | 14 | 页面在 `data.bars.map(…)` 之前先就地 `data.bars.sort((a, b) => a.timestamp - b.timestamp)`（即「页面若自己排一次序」这一形状，T4 要自己复现一次） | 「填标的再点一次」里透传那一格（降序种子＋点击前快照是它的两层牙） |
@@ -1751,3 +1759,10 @@ git commit -s -m "docs(archive): §7.21 第⑥片多标的叠加对比落档（�
 > 5. **两条 park 判词（不动代码，登记在册）**：①F-6（`compareInflight` 的 `.finally` 删键不认主人）——在 React 单实例 effect 模型下 `has()` 早退**结构性不可达**：每次重跑先跑自己的 cleanup、而 cleanup 必删同一个键，所以"删了别人的键"没有可达后果，换 `Map<string, AbortController>` 只会多出一根无牙针；②`cmpStatus.loading` 的惰性初值（`loadCompare() !== ""`）在 jsdom 里**读不到首帧**（`render()` 的 `act` 会把 passive effect 同步冲掉），变异复证 P7 交回 23 支全绿 ⇒ 登记为「无针面的初值修复」，靠判词不靠针。
 
 > 6. **计划里 P5／P6 两条裁定被修复轮推翻，P3 没有**：P6 那句「`barCount === 0` 不新增 title 分支（§七 是封闭五支）」与 P5「`no_data` 走第 3 支」合起来的后果，正是整支评审 F-3 判的那句假话——终态空结果被说成「数据还没到位」，而它指针的那行「原因」由输入框那枚 `error !== null` 门决定**不存在**。现阶梯七支（见上面第 4 条其二）：`no_data` 与「主图 0 根」两格都走「开着但画不出线」那一支，「在飞」与「失败」各占一支。§七 那句「封闭五支」随之作废，spec 侧已按 §七 追加子句第 3 条登记。**P3（依赖数组不含 `cmpSeries`）没有被推翻**：新加的 `cmpReady` 早退读的是**本次渲染闭包**里的派生值，`cmpSeries` 仍不在数组里——列进去就是 P3 说的请求风暴，而它正是第 4 条其三那格 `// eslint-disable-next-line` 的代价登记。
+> **（2026-10-11 第二轮 scoped 复核（seat-3）就地更正：计划三行依赖数组＋针表行 11 改口＋交付判据三条追加；上面各条按更正后的形态读，原文不覆盖）**
+> 1. **三行依赖数组**：Task 3 里三处 `[cmpSymbol, interval, timeShare]` 现按当前树写作 `[cmpSymbol, interval, timeShare, cmpOn]`——一处是 verbatim 代码行，与 `ProChart.tsx:1544` 逐字相同；另两处原本把「关→开不重取」归因于**依赖一格没动**，那是修复轮之前的机制，今天的真机制是守卫里 `cmpOn` 之后的 `cmpReady` 早退。机器判据：计划内三元式 **0** 处、四元式 **1** 处，与树上的 **1** 同值。spec 不动——§七 追加子句第 2 条当时已写明四元式，另两处三元式在「原门」的历史引语里。
+> 2. **`cmpStatus` 形状搬家（S3-2 的 Ruling）**：Task 3 代码块里 `useState<{loading; error; source}>` 与 `setCmpStatus({…, source: data.source})` 各处**以当前树为准**——`cmpStatus` 现为 `{key, loading, error}`（`ProChart.tsx:497`／`:624`），`source` 随交付住在 `cmpSeries`（`:632` 起，`{key, bars, source}`），渲染侧派生 `cmpView`（`:693`，键对上才读那一趟）与 `cmpSource`（`:696`，键对上才给那条串）。**seat-3 给的最小修法「只给 `cmpStatus` 加键」实测不够**：照它改完 focused 套件 `1 failed | 24 passed`，`getByText(/来源：主/)` 直接抛——A 成功后换 B、B 那趟失败把 `source` 写成空串，而 A 的线还挂得好好的，那行小字没有任何东西可读。等价证明＝变异 q8（把 `source` 从交付里摘掉）红 5。
+> 3. **交付判据追加三条**（`ProChartCompare.test.tsx` 由 23 支变 **25** 支）：**其一（S3-1）**DataLoader 失败路径补 `if (type === "init") setBarCount(0);`（`:1441`；库侧 `case "init"` 交 `[]` 就是 `_clearData()`，`index.esm.js:13455-13456`），判据＝新针「换周期那一趟 init 取数失败：库清空 dataList，开关与小字必须跟着落地」，harness 为此新增 `h.mainError` 主图旗（`h.cmpError` 是**全局**旗，造不出「同一次挂载里一趟成功、一趟失败」）；**其二（S3-2）**判据＝新针「A 成功 → B 失败 → 回到 A：陈旧那一趟的读数不许跨键说话」，其中 B 那一拍的 `queryByText(/来源：主/) === null` 是 `cmpSource` 键判据**唯一**的读数面；**其三（S3-6）**「关掉再开」那支补三句整行读数（开启基线在／关闭不在／再开在），使来源行外层那枚 `cmpOn` 门不再是无见证的那格（q4 ⇒ 红 1）。
+> 4. **措辞四处（S3-4／S3-5／S3-7／S3-8，全在注释面，一行行为代码未动）**：`cmpStatus` 初值那格如实记下例外——`timeShare` 来自 `sessionStorage` 而非偏好、与 `cmpOn`／`cmpSymbol` 不同源 ⇒ 「`cmpOn` 真 ＋ 分时态」那一格守卫直接早退、`loading` 会一路真到用户切回蜡烛，但那一屏读不到它（title 第 1 支排在所有 `cmpStatus` 分支之前），故形状不动、只把话说对；`symbolCompare.ts:28-29` 那句分页形状换成前置／尾追／单根三条通路各自的库坐标＋「这三条分支一条顺序校验都没有」；`clickCompare` 头注原 ② 号理由（在飞的请求被 `.then` 写回来）降级为括注——它已随 `cmpOn` 入依赖失效；`:1540` 那条 `eslint-disable` 注释从 `:1435` 改指 `syncCompare` 的挂卸 effect（`:1591`）并写明当初为什么指错。
+> 5. **上面第 5 条①的「理由」翻转，park 结论不动**：`compareInflight` 删键不认主人并非「在 React 单实例 effect 模型下结构性不可达」——开发态 StrictMode 双挂载会让同一 key 两次进入，第一次的 cleanup 删掉的是第二次刚种下的键 ⇒ **可达**，代价是一趟重复请求（不画错线、不写坏状态，生产构建不双挂载）。仍不换 `Map<string, AbortController>`，因为那只会多出一根读不到伤害的针；但登记的理由必须是这条。
+> 6. **上面第 4 条「其二」所引的 P5 读数在 23 支那棵树不可复现**（三种摘法当场各跑一遍＝3／5／23 全绿），本轮在当前树（25 支）复跑同一摘法才又回到 **4 红**——原数字对的是补针之后的树，分母换了没写明，属「读数归属」缺陷；同批复跑另作废一条（来源行外层 `cmpOn` 门原记「单独摘＝无针面」，S3-6 补针之后红 1）。**第二轮变异十趟**（q1…q10，同一基线 sha256 前 12 位 `2fa8fc229c71`，每趟复原校验 MATCH）：q1 红 1、q2 红 1、q3 红 1、q4 红 1、q5 红 4、q6 红 2、q7 红 1、q8 红 5、q9 红 2、**q10 25 全绿**——最后这趟是判据不是缺陷：它证明针表行 11 那格的字面修法在 `source` 搬家之后已表达不出伤害（见本计划针表行 11 的同日改口），那一根的牙移交 q9 与 q4。
