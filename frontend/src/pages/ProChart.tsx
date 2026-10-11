@@ -486,6 +486,19 @@ function parkedPanesOf(
  */
 const compareInflight = new Set<string>();
 
+/**
+ * 对比那一趟取数的**进行中读数**，连同它属于哪把键。
+ *
+ * `loading`／`error` 说的是「某一趟」的事实，而工具栏问的是「当前这把键的那一趟」——这一格不带键，
+ * 跨键的陈旧读数就会在一条正显示着的线上说「上一趟取数失败」（整支评审第三席的 S3-2：A 成功 →
+ * B 失败 → 打回 A，而取数守卫里那枚 `cmpReady` 早退恰好挡住了唯一能把它冲掉的重取）。渲染侧一律读
+ * `cmpView`，不在各扇门上重复问键。`source` 不在这儿——它是**那条序列**的属性，住在 `cmpSeries`。
+ */
+type CmpStatus = { key: string; loading: boolean; error: string | null };
+
+/** 键对不上时的读数：什么都没说（`loading` 假、`error` 空）。 */
+const IDLE_CMP_STATUS: CmpStatus = { key: "", loading: false, error: null };
+
 export function ProChart() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Nullable<Chart>>(null);
@@ -602,17 +615,30 @@ export function ProChart() {
   // ref 镜像的理由与 `haRef`/`vpRef` 完全相同：同一个 task 里连点两次都摊到同一份过期的
   // 闭包快照上，第二次就会撤销第一次。
   const cmpRef = useRef(cmpOn);
-  // `loading` 的初值跟着**恢复出来的开关**走，而不是恒假：`cmpOn` 由偏好恢复为真时，挂载那一轮
-  // 必然发得出取数（守卫只看 `cmpOn`/`cmpSymbol`/`timeShare`，三格那一刻都已就位）。留一格假的
+  // `loading` 的初值跟着**恢复出来的开关**走，而不是恒假：`cmpOn` 与 `cmpSymbol` 同源于
+  // `loadCompare()`（上面那三格），恢复成「开」必带一个非空标的，两格那一刻都已就位。留一格假的
   // "不在飞"在初值上，读得到的代价是 effect 跑起来之前那一帧里按钮那句说的是「结果为空」。
-  const [cmpStatus, setCmpStatus] = useState<{
-    loading: boolean;
-    error: string | null;
+  // 一个例外如实记着（第三席的 S3-4）：`timeShare` 来自**会话**（`sessionStorage`）而不是偏好，
+  // 与上面两格不同源 ⇒ 「`cmpOn` 真 ＋ 分时态」那一格守卫直接早退，这一格会一路真到用户切回蜡烛。
+  // 那一屏读不到它（title 第 1 支排在所有 `cmpStatus` 分支之前），所以形状不动、只把话说对。
+  const [cmpStatus, setCmpStatus] = useState<CmpStatus>(() => {
+    const restored = loadCompare();
+    return {
+      key: restored === "" ? "" : compareKey(restored, interval),
+      loading: restored !== "",
+      error: null,
+    };
+  });
+  // 取回来的序列，连同它属于哪个 key **和它是从哪个数据源取来的**——
+  // `cmpSeries.key === cmpKey && bars.length > 0` 就是 §六 那枚谓词第三格 `ready` 的定义，而
+  // `source` 住在这里（而不是 `cmpStatus`）是因为它是**这一条序列**的属性：B 那一趟失败会把
+  // `cmpStatus` 整格换成 B 的读数，而此刻屏上挂着的那条 A 线的来源并没有因此变成「没有来源」
+  // （整支评审第三席的 S3-2 第三条症状；判据＝「A 成功 → B 失败 → 回到 A」那支）。
+  const [cmpSeries, setCmpSeries] = useState<{
+    key: string;
+    bars: CompareBar[];
     source: string;
-  }>(() => ({ loading: loadCompare() !== "", error: null, source: "" }));
-  // 取回来的序列，连同它属于哪个 key —— `cmpSeries.key === cmpKey && bars.length > 0`
-  // 就是 §六 那枚谓词第三格 `ready` 的定义。state 身份本身还是挂卸 effect 的依赖（R10）。
-  const [cmpSeries, setCmpSeries] = useState<{ key: string; bars: CompareBar[] } | null>(null);
+  } | null>(null);
   // Overlay id the user clicked on the canvas: while one is picked, a style
   // click restyles that line too. The library reports it through
   // `onSelected`/`onDeselected` (dist 8687-8702); nothing else exposes it.
@@ -661,6 +687,14 @@ export function ProChart() {
   // 键由页面派生（spec §四）：不从 store 里反查——反查就把"当前该用哪条序列"这个决定
   // 同时放到两处。
   const cmpKey = cmpSymbol === "" ? "" : compareKey(cmpSymbol, interval);
+  // `cmpStatus` 装的是**某一趟**取数的读数，工具栏要的是**当前这把键**的那一趟 ⇒ 键对不上就当它没说
+  // 过话。三处读数（输入框那句「原因：」、title 的「上一趟失败」支、来源小字整行的门）统一问这一格，
+  // 不在各扇门上再抄一遍键——抄第四次就是第四处会漂移的地方。
+  const cmpView = cmpStatus.key === cmpKey ? cmpStatus : IDLE_CMP_STATUS;
+  // 来源小字那半句读的是**这条线**的来处（`cmpSeries`），不是「最后一趟」的来处：B 那一趟失败
+  // 之后屏上挂着的仍然是 A 的序列，那一趟写的 `source: ""` 不属于这条线（同上一条派生、同一个 S3-2）。
+  const cmpSource =
+    cmpSeries !== null && cmpSeries.key === cmpKey ? cmpSeries.source : "";
   const cmpReady =
     cmpSeries !== null && cmpSeries.key === cmpKey && cmpSeries.bars.length > 0;
   // 「图上此刻真有一条对比线吗」——三个显示面（`aria-pressed`／亮环／来源小字的那半句）读这一枚。
@@ -1288,8 +1322,9 @@ export function ProChart() {
           // spec §7's empty-chart entry condition, counted from the one answer that replaces the
           // list: a `forward`/`backward` page only ever *adds* bars, so its length is not how
           // many are on screen and writing it here would lower the count on every scroll. The
-          // error path below leaves it alone — a failed refresh keeps the previous answer on
-          // screen, so the button has to stay usable.
+          // error path below leaves a failed *page* alone, because those concatenate and the
+          // previous bars really are still on screen — but a failed `init` has to zero it, since
+          // `case 'init'` with `[]` is `_clearData()`; see the note there.
           if (type === "init") setBarCount(bars.length);
           if (line) fitSessionToWidth(chart, bars.length);
           setStatus({ loading: false, error: null, source: res.source });
@@ -1395,6 +1430,15 @@ export function ProChart() {
             answerReplay(type, r, callback);
           } else {
             callback([], false);
+            // …and the page's own count has to land with it. `case 'init'` with `[]` is
+            // `_clearData()`, so after this line there genuinely are no bars, while `barCount` still
+            // carried the previous answer — and the 对比 branch predicate (`cmpShown`) reads that
+            // count, which is how a blank chart came to be described as "对比已开" with a source
+            // line naming a line that cannot be drawn (整支评审第三席的 S3-1). Paging answers are
+            // NOT reset here: `forward`/`backward` concatenate, so the previous bars really are
+            // still on screen and the count is still the truth. Inside 回放 neither applies —
+            // `answerReplay` hands back the window, so the store does not go empty.
+            if (type === "init") setBarCount(0);
           }
           setStatus({ loading: false, error: e instanceof Error ? e.message : String(e), source: "" });
         }
@@ -1450,6 +1494,11 @@ export function ProChart() {
   // 入口（§七 的追加子句：用户照「原因：<errmsg>」把网关回来之后，页面上必须有一条不用换周期、
   // 不用切分时的重取路径），而健康态的重开一个字节都不动，所以「关掉不清 `cmpStatus`」那条改判
   // 仍然有东西在钉（计划行 11：清掉 `source` 之后没有任何一趟会把它写回来）。
+  // 上面那句「只在上一趟没成功过时才发」的范围是**同一把键**（整支评审第三席的 S3-2）：换标的／换
+  // 周期把 `cmpKey` 走开再走回来，而 `cmpSeries` 还认得回来的那把键 ⇒ 早退照样生效，失败留在
+  // `cmpStatus` 里的那句话就成了跨键的陈旧读数。修在**读数侧**（`cmpStatus.key` 对上 `cmpKey` 才
+  // 读，见 `cmpView`），不修在发不发侧：把早退改成「键回来就重取」会一并拆掉计划行 11 与「健康态
+  // 关掉再点开」那两支的判据，而重取回来的东西本来就在 store 里。
   // `cmpSeries` 绝不能在依赖里：它由本条 effect 自己写，列进依赖就是「交付→重跑→再交付」的死循环；
   // 上面那句 `cmpReady` 读的是**本次渲染**闭包里的它，效果只在"重开那一轮"，正是要它的那一格。
   useEffect(() => {
@@ -1458,7 +1507,7 @@ export function ProChart() {
     if (compareInflight.has(key) || cmpReady) return;
     compareInflight.add(key);
     const controller = new AbortController();
-    setCmpStatus({ loading: true, error: null, source: "" });
+    setCmpStatus({ key, loading: true, error: null });
     // 独立一趟，绝不与主序列 `Promise.all`（§五）：失败只丢叠加层并把原因显示出来。
     fetchKline({ symbol: cmpSymbol, interval, count: COMPARE_BARS, signal: controller.signal })
       .then((data) => {
@@ -1467,16 +1516,16 @@ export function ProChart() {
         // 先写 store，再换 state 身份：挂卸 effect 是在 commit 之后跑的，它一跑就要求
         // `calc` 读得到这条序列。反过来的顺序读不出差别，但写在这里是因为它是唯一的因果方向。
         setCompareSeries(key, bars);
-        setCmpSeries({ key, bars });
-        setCmpStatus({ loading: false, error: null, source: data.source });
+        setCmpSeries({ key, bars, source: data.source });
+        setCmpStatus({ key, loading: false, error: null });
       })
       .catch((e: unknown) => {
         // 被自己 abort 掉的那一趟不是事实，不该印出来（StrictMode 的第二次挂载会 abort 第一次）。
         if (controller.signal.aborted) return;
         setCmpStatus({
+          key,
           loading: false,
           error: e instanceof Error ? e.message : String(e),
-          source: "",
         });
       })
       .finally(() => {
@@ -1488,7 +1537,9 @@ export function ProChart() {
       compareInflight.delete(key);
     };
     // `cmpReady` 在本体里读、不在依赖里列：它是 `cmpSeries` 的派生，而 `cmpSeries` 由本条 effect
-    // 自己写（理由见上面那段）。与 `:1435` 那条挂载 effect 同一种写法。
+    // 自己写（理由见上面那段）。与 `syncCompare` 那条挂卸 effect 同一种写法——那条也在本体里读
+    // 派生值、靠同一枚 disable 兜住（原先这句指的是 `:1435`，那一行是图表卸载 cleanup 里的一行
+    // 英文注释，指针在修复轮的位移里指错了格）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cmpSymbol, interval, timeShare, cmpOn]);
 
@@ -2113,16 +2164,20 @@ export function ProChart() {
    * 应用输入框里的标的，和／或翻开关。一次点击做完两件事，是因为 §七 的第 2 支告诉用户
    * 「点它才叠到主图」——这一行没有第二个「加载」按钮。
    * 关掉只删键、不清 `cmpSymbol`（§四：会话内留着，再点一次不用重敲）。
-   * 关掉**不清 `cmpStatus`**（理由在下面那两处渲染门上）：那三格里装的 `error` 与
-   * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
-   * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
-   * **不重新取数**（重开那一轮被取数守卫里的 `cmpReady` 早退挡住：上一趟成功过，序列本来就在
-   * 模块 store 里，重取只会把已经在线上的东西再取一遍），于是「来源：主 … · 对 …」这行小字在
-   * 会话余下时间里再也不回来，而线明明挂得好好的；
-   * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
+   * 关掉**什么都不清**（理由在下面那两处渲染门上）：`cmpStatus` 那三格装的是**这一趟取数**的读数，
+   * `cmpSeries` 里那格 `source` 装的是**这条序列**的出处，取数发生过就还是事实；说谎的不是状态本身，
+   * 而是「线上没有对比线时还把话说出口」这一对渲染表达式。改往状态侧清要多付一个洞——同一标的再点开时
+   * **不重新取数**（重开那一轮被取数守卫里的 `cmpReady` 早退挡住：上一趟成功过，序列本来就在模块
+   * store 里，重取只会把已经在线上的东西再取一遍），被清掉的 `source` 没有任何东西会把它写回来，于是
+   * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的。
+   * （这里原本还有第二条理由「关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来」，
+   * 它已经随本轮把 `cmpOn` 列进取数依赖而失效：关掉那一下会跑 cleanup 的 `controller.abort()`，
+   * 而那条 `.then` 第一格就问 `signal.aborted` ⇒ 写不回来。清零买到的只剩 ① 那个洞。）
    * 渲染侧的门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处；而「开着的门」问的是
-   * `cmpShown`（线真画得出来吗），不是光 `cmpOn`。失败那一趟是另一回事：`cmpReady` 为假 ⇒ 重开
-   * 真的重发，那一句「原因」才有的下一步可走。
+   * `cmpShown`（线真画得出来吗），不是光 `cmpOn`。失败那一趟是另一回事，但它的范围是**同一把键**：
+   * 上一趟失败 ⇒ `cmpReady` 为假 ⇒ 原地重开真的重发，那句「原因」才有的下一步可走；而换过标的
+   * 或周期再回到上一把键时 `cmpReady` 为真 ⇒ 早退，那句「原因」就成了没有主人的旧话——旧话由
+   * `cmpView`（`cmpStatus.key` 对上 `cmpKey` 才读）收掉，而不是靠多取一趟把它冲掉。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -2590,9 +2645,10 @@ export function ProChart() {
             title={
               // 那句「原因」问的是**正在用的这一路**：`cmpOn` 为假时用户已经把对比关掉，
               // 上一次取数的错误就不再是他要的答案（不清状态而在这里加门，理由见 `clickCompare`
-              // 的注释——清它会把「来源」那一格连同再点开时该回来的原话一起弄丢）。
-              cmpOn && cmpStatus.error !== null
-                ? `原因：${cmpStatus.error}`
+              // 的注释——清它会把「来源」那一格连同再点开时该回来的原话一起弄丢）。另一半天然是
+              // 由 `cmpView` 给的：键对不上（换过标的／换过周期）那一趟的读数不算这一路的。
+              cmpOn && cmpView.error !== null
+                ? `原因：${cmpView.error}`
                 : "叠到主图的第二个标的：走它自己那根右侧标尺，不进主图价格轴。输入完整代码后点右边的「对比」"
             }
             className="h-7 w-28 rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
@@ -2606,9 +2662,9 @@ export function ProChart() {
                 ? "跨市场的分钟时刻不在同一把尺上，分时视图看不了对比，先切回蜡烛"
                 : cmpSymbol === ""
                   ? "先在左边输入对比标的（如 600036.SH 或 BTC-USDT），点它才叠到主图"
-                  : cmpOn && cmpStatus.loading
+                  : cmpOn && cmpView.loading
                     ? "对比标的正在取数：这一趟还没回来，图上此刻没有对比线"
-                    : cmpOn && cmpStatus.error !== null
+                    : cmpOn && cmpView.error !== null
                       ? "对比标的上一趟取数失败：原因看左边输入框那行的提示，把它关掉再点开就重取"
                       : cmpOn && !cmpShown
                         ? "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）"
@@ -2629,11 +2685,14 @@ export function ProChart() {
               外层 `cmpOn` 门与输入框 `title` 同一条理由：线关掉之后这行小字说的是没有主人的话，
               而状态不清零，所以再点开时原话回到原处。「· 对」那半句另问 `cmpShown`：
               它问的是「此刻线上有没有这条线」，未就绪（0 根却带着 `source`）、分时态、
-              主图 0 根三格里那条线都不存在，这时只说主图那半句。 */}
-          {cmpOn && cmpStatus.source !== "" && (
+              主图 0 根、换周期那一趟 `init` 失败四格里那条线都不存在，这时只说主图那半句。
+              外层问 `cmpOn`（关掉就整行不说没有主人的话）、内层问 `cmpShown`（此刻画得出线吗），
+              而那半句的内容问 `cmpSource`（这条**线**的来处），不问最后一趟取数的读数——B 那一趟
+              失败不该把正挂着的 A 的来源一起抹掉（整支评审第三席的 S3-2 第三条）。 */}
+          {cmpOn && cmpSource !== "" && (
             <span className="text-[10px] text-muted-foreground">
               来源：主 {status.source || "-"}
-              {cmpShown ? ` · 对 ${cmpStatus.source}` : ""}
+              {cmpShown ? ` · 对 ${cmpSource}` : ""}
             </span>
           )}
           {INTERVALS.map((i) => {

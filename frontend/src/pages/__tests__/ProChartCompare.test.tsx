@@ -55,6 +55,10 @@ const h = vi.hoisted(() => ({
   fetchCalls: [] as Array<Record<string, unknown>>,
   cmpBars: [] as Array<{ timestamp: number; close: number }>,
   cmpError: null as string | null,
+  // 主图那一趟的错误旗。`cmpError` 是一枚**全局**旗（每一趟都抛），所以它造不出「同一次挂载里
+  // 一趟成功、另一趟失败」的形状；这一格只让 `symbol === "600519.SH"` 那一路抛，专供
+  // 「换周期的 `init` 失败 ⇒ 库把 `dataList` 清空」那一格（seat-3 的 S3-1）。
+  mainError: null as string | null,
   // 对比那一趟的**手动闸门**：非 null 时 `fetchKline` 必须先等它 resolve 才交回数。
   // 「取数在飞」那一格在别处读不出来——替身交回的是立刻起跳的 promise，`await flush()` 一到就
   // 结清了，于是 `cmpStatus.loading` 为真的那一支永远只被「已落地」的那几支盖住（摘掉它不会有
@@ -230,6 +234,10 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
       h.fetchCalls.push(params);
       if (params.symbol === "600519.SH") {
         // 主图那一趟：`before` 为空才交全量，与第⑤片那份替身同形（分页交空数组）。
+        // 抛出去的那一路照的是页面上真实存在的一种结局：`getBars` 的 catch 交回 `callback([], false)`，
+        // 而库的 `case 'init'` 收到空数组就是 `_clearData()`（`index.esm.js:13454-13456`）⇒ 屏上的
+        // 根数落地了，页面 state 里那一格（`barCount`）若只跟成功路径写就会留下上一答的正数。
+        if (h.mainError !== null) throw new Error(h.mainError);
         return {
           bars: params.before == null ? h.list : [],
           source: "fake-main",
@@ -333,6 +341,7 @@ beforeEach(() => {
   h.createdYAxis = [];
   h.fetchCalls = [];
   h.cmpError = null;
+  h.mainError = null;
   h.cmpHold = null;
   // 对比序列**有内容**（替身失真第一种：不建模副作用之外，还有"把候选集交成空集"）：
   // ready 门读的 `bars.length > 0` 若靠默认空数组，未就绪那一支永远只由 key 不等撑起。
@@ -574,12 +583,79 @@ describe("/pro-chart 多标的叠加对比", () => {
     );
   });
 
+  it("换周期那一趟 init 取数失败：库清空 dataList，开关与小字必须跟着落地", async () => {
+    // seat-3 的 S3-1。`cmpShown` 的第二格读的是 `barCount`，而它原先**只在成功路径**里写
+    // （`ProChart.tsx` 的 `if (type === "init") setBarCount(bars.length)`）：换周期／换标的那一趟以
+    // `init` 起跑、以异常收尾时，页面的 catch 交回 `callback([], false)`，库的 `case 'init'` 收到空
+    // 数组就是 `_clearData()`（`index.esm.js:13454-13456`）⇒ 屏上一根不剩，state 里却留着上一答的
+    // 6 根 ⇒ 按钮 `aria-pressed="true"`、亮环、小字「· 对 X」、title 走「已开」那支，而那一刻一条线
+    // 都画不出来（`calc` 读到空 `dataList` 交 0 行）。与「主图 0 根」那支同族，区别在根数是**从 N
+    // 掉到 0** 的——那一支从起点就是 0，所以它挡不住这一格。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    // 前置：先把「开着且画得出线」读实，否则下面四句在任何一屏都绿（候选集交成空集那类假绿）。
+    expect(button().getAttribute("aria-pressed")).toBe("true");
+    h.mainError = "FutuOpenD 未应答";
+    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    await flush();
+    expect(button().getAttribute("aria-pressed")).toBe("false");
+    expect(button().getAttribute("title")).toBe(
+      "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）",
+    );
+    expect(screen.queryByText(/对 fake-cmp/)).toBeNull();
+    // 主图那半句跟着 `status.source` 一起落地（失败路径把 `source` 写成 ""，那是 §五 的本分）。
+    expect(screen.getByText(/来源：主/).textContent).toBe("来源：主 -");
+  });
+
+  it("A 成功 → B 失败 → 回到 A：陈旧那一趟的读数不许跨键说话", async () => {
+    // seat-3 的 S3-2（本轮新格子直接造出来的那一格）。`cmpStatus` 记的是**一趟**的读数，`cmpKey`／
+    // `cmpReady` 记的是**当前这把键**，而取数守卫里那句 `|| cmpReady` 早退恰好挡住了唯一能把陈旧
+    // 读数冲掉的通路（重取）。于是「打错一个代码、再打回正确的」这一句最自然的手势上三句话同时假：
+    // title 走「上一趟取数失败」那支（真话那支读不到）、那句「把它关掉再点开就重取」是一句可证明的
+    // 空转（关掉撞 `!cmpOn`、再点开撞 `cmpReady`，没有任何一趟会清掉 `error`）、失败把 `source` 写成
+    // "" ⇒ 一条**正在显示**的线，它的来源小字整行消失。
+    // 判据的前提是回到 A 那一趟**没有**重发（早退），所以这里先数请求条数——否则实现改成"回来就重取"
+    // 也能把这三句挣绿，而那正是计划行 11 与「健康态关掉再点开」两支反对的形状。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(button().getAttribute("title")).toContain("对比已开");
+    h.cmpError = "913011:未寻得该标的";
+    typeCompare("000001.SZ");
+    fireEvent.click(button());
+    await flush();
+    // B 那一趟：当前键就是 B，且真有一趟失败过 ⇒ 这一格说「上一趟取数失败」是真话。
+    expect(field().getAttribute("title")).toContain("原因：913011");
+    // 而那一行小字此刻**不说话**：当前这把键（B）没有任何交付过的序列，A 那一趟的来源串不属于它
+    // ——这是 `cmpSource` 里那枚键判据唯一的读数面（摘掉键判据，整行会带着 A 的来源重新出现）。
+    expect(screen.queryByText(/来源：主/)).toBeNull();
+    h.cmpError = null;
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH")).toHaveLength(1);
+    expect(cmpLive()).toHaveLength(1);
+    expect(button().getAttribute("title")).toBe(
+      "对比已开：把可视区间同一把时间轴上的 600036.SH 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）",
+    );
+    expect(field().getAttribute("title")).not.toContain("原因：");
+    expect(screen.getByText(/来源：主/).textContent).toContain("对 fake-cmp");
+  });
+
   it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
-    // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，也是它唯一的牙：若把关掉那一下写成
-    // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
-    // **不重新取数**（重开那一下被守卫里 `cmpOn` 之后的 `cmpReady` 早退挡住：上一趟成功过，
-    // 序列本来就在 store 里，重取只会把已经在线上的东西再取一遍），于是被清掉的 `source`
-    // 没有任何东西会把它写回来，这行小字在会话余下时间里再也不出现，而对比线挂得好好的。
+    // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，它有**两枚**可摘的牙：①把来源行外层那枚
+    // `cmpOn` 门摘掉 ⇒ 本支红（变异 q4）；②把关掉那一下改成「往状态侧清 `source`」⇒ 本支与
+    // 「健康态关掉再点开」那支一起红（变异 q9，红 2）。形状搬过家之后旧的那版反事实已表达不出伤害：
+    // 第 1 轮的修法 `setCmpStatus({ loading: false, error: null, source: "" })` 里根本没有 `source`
+    // 这一格了（它随 S3-2 搬进 `cmpSeries`），照直译清一遍 `cmpStatus` 是 25 全绿（变异 q10）——
+    // 别把行 11 那格当本形的见证。清掉的为什么补不回来：关→开**不重新取数**（重开那一轮被守卫里
+    // `cmpOn` 之后的 `cmpReady` 早退挡住：上一趟成功过，序列本来就在 store 里，重取只会把已经在
+    // 线上的东西再取一遍），于是那行小字在会话余下时间里再也不出现，而对比线挂得好好的。
     // 渲染侧的门得到的是同一句诚实话，且不丢信息。
     render(<ProChart />);
     await flush();
@@ -587,14 +663,20 @@ describe("/pro-chart 多标的叠加对比", () => {
     fireEvent.click(button());
     await flush();
     expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+    // 基线：整行在。下面关闭那一拍的 `toBeNull()` 若单独存在，读者会以为它测的是「· 对」那半句
+    // ——那是上一句的题。这两格一起把**外层那枚 `cmpOn` 门**钉住：seat-3 实测只摘它 ⇒ 23 全绿，
+    // 因为全套件没有任何一句判过这一整行的出现与消失（第四处显示面，零见证）。
+    expect(screen.queryByText(/来源：主/)).not.toBeNull();
     fireEvent.click(button());
     await flush();
     expect(cmpLive()).toHaveLength(0);
     expect(screen.queryByText(/对 fake-cmp/)).toBeNull();
+    expect(screen.queryByText(/来源：主/)).toBeNull();
     fireEvent.click(button());
     await flush();
     expect(cmpLive()).toHaveLength(1);
     expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+    expect(screen.queryByText(/来源：主/)).not.toBeNull();
   });
 
   it("取数在飞那一句说「还没回来」，落地之后换成「已开」那一句（支 3 → 支 6）", async () => {
