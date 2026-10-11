@@ -5,7 +5,130 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Maintenance — 2026-10-10
+
+- Slack and Discord gain localized connection forms and read-only credential
+  probes (#1764, #1777). Slack verifies both bot identity and Socket Mode app
+  access; Discord requires a bot identity. HTTP 408/429 report temporary errors.
+  Failed probes leave saved settings unchanged. Discord admission policies
+  refresh without reconnecting.
+- Recover sessions and attempts with invalid UTF-8 metadata, and skip malformed
+  message records while preserving readable neighbors and original files (#1775).
+  Redact environment-style credentials and URL userinfo (#1765); generic trade
+  journals retain quantities and prices instead of being misclassified as Futu
+  exports (#1766).
+- Memory links recognize two-character identifiers (#1771). FTS recall expands
+  past stale index rows until enough current memories are found or the index is
+  exhausted (#1772).
+- Pin portfolio research to an immutable snapshot (#1769): the agent accepts
+  `snapshot_id`, the CLI supports `portfolio show --snapshot-id ID`, REST accepts
+  the same identifier, and Web exports the displayed sanitized research snapshot
+  as JSON. Unavailable or revoked snapshots never fall back to newer data.
+  Technical indicators accept an optional ISO `end_date` and report provenance
+  plus a fingerprint of their exact input bars (#1768).
+- Exclude top-level process exit codes and elapsed times from observed financial
+  evidence (#1767). Register existing figure/identity checks without changing
+  their predicates (#1691); extract compaction, tuning, usage accounting and
+  terminal outcome policy from the agent loop (#1631, #1678, #1662, #1641).
+- Expand the options connector evidence checklist (#1770). Update compatible
+  Python/frontend dependencies and pinned CI actions (#1692, #1668, #1667,
+  #1666, #1665); align Vitest with its coverage plugin. Keep `uuid-utils` at
+  0.17.0 because the proposed 1.0.0 upgrade (#1670) conflicts with the current
+  LangChain constraint. Preserve mootdx's retirement from the public canary.
+  BaoStock's bounded connection wrapper accepts the new 0.9.4 API-key argument
+  while retaining public/VIP routing and compatibility with 0.9.3.
+
+### Maintenance — 2026-10-09
+
+- Channel edits to live-read settings apply without reconnecting, including a
+  full Web form that echoes unchanged connection values (#1737; #1734/#1736).
+  Web results distinguish refresh, reconnect, deferred application and degraded
+  reset in all nine languages. Reset reasons redact URL userinfo and old/new
+  secret values; a best-effort notice goes to the changed channel's last chat.
+  Signal refreshes its writable nested policies, not its computed allowlist.
+  Refresh changes only declared live fields and preserves connection state
+  resolved during login, including WeChat's authenticated server address.
+- Strip URL credentials even with malformed ports or multiple `@` characters
+  (#1742; #1741). Saving or testing an echoed configuration preserves the stored
+  URL credentials; explicit edits and clear flags remain effective (#1744; #1743).
+  Enable and connection-test failures also redact credentials, including raised
+  SDK exceptions, and leave saved configuration unchanged.
+- Recognize known slash-USD crypto pairs before forex in both correlation and
+  shared Agent/MCP market-data routing, while keeping precious metals on the
+  forex chain (#1740, #1748). Normalize
+  suffixed Hong Kong aliases for duplicate detection (#1746; #1745), and treat
+  unusable persisted cache metadata as a recoverable cache miss (#1747).
+  Five-digit display aliases share an identity with their four-digit spelling;
+  distinct currency counters stay separate. Missing cache index metadata is a
+  miss too, with valid entries still reused after repair.
+- Options drawdown includes the initial-cash high-water mark (#1750; #1749).
+  Pricing volatility receives the run's annualization factor; cross-market
+  pricing estimates each bar's frequency from elapsed return intervals known
+  at that time, including subdaily intervals. Extending a run cannot change
+  earlier option prices (#1753). Bootstrap and walk-forward validation use
+  only observed adjacent equity returns across missing data (#1754).
+  A walk-forward window without observed endpoints or any adjacent returns
+  reports an error instead of a fabricated zero score or an incomplete aggregate.
+- Cash-flow ingestion refuses ambiguous single-dot amounts unless the decimal
+  separator is supplied, while accepting unambiguous scientific notation in
+  cash-flow and entity-panel files (#1739). American waterfalls reject a bare `as_of`
+  date rather than silently ignoring it; per-deal dates remain supported (#1732).
+- Retire mootdx from the default A-share chain and public canary (#1730; #1729),
+  with explicit-source access retained. Old source-order overrides containing
+  the retired slot fall back to the current default with a warning.
+- Restore main CI through the configured environment accessor and corrected
+  correlation routing (#1740; #1751). Repair the outdated Alpha Zoo test double
+  while retaining production factor-metadata validation.
+
+### Maintenance — 2026-10-08
+
+- Optional AES-256 protection for Email PDF reports (#1709): Web, CLI
+  playbooks and Agent proposals persist only the boolean choice. Confirmations
+  show it, and creation or confirmation refuses an unconfigured password.
+  The private Email setting is translated in all nine UI languages.
+- KIS order and fill reads query KRX, SOR and NXT, deduplicate records and fail
+  incomplete venue reads (#1726). An explicitly expired token is refreshed
+  once, including HTTP 200 business errors and 401/403 replies; other business
+  errors remain failures.
+- Derived formulas parse the complete expression after a descriptive label
+  while retaining operand evidence and arithmetic validation (#1728).
+
+### Maintenance — 2026-10-07
+
+- Move volatile workspace state outside the system prompt (#1708, resolves
+  #1707); align local daily dates across markets (#1710) and distinguish bare
+  equity tickers from explicit crypto pairs (#1711).
+- A-share benchmarks follow the declared exchange suffix (#1712), and loader
+  suites share the live health checker’s OHLCV contract (#1725, resolves #1723),
+  including Binance and a catalog assertion for newly registered sources.
+- OU lag pairs retain gaps (#1713), walk-forward validation skips empty purged
+  training folds (#1714), undefined correlations remain missing (#1715), and
+  risk X-ray returns do not bridge missing observations (#1717).
+- CDS premium legs include the final stub (#1716); style exposure excludes
+  incomplete rows and reports unmatched weight (#1718); Heston rejects
+  nonfinite inputs and invalid integration bounds (#1719); options Sortino
+  uses the full return sample for downside deviation (#1727).
+- Session search respects a zero limit (#1720), and archive audit diagnostics
+  use the shared ledger walker to report malformed records (#1721).
+
 ### Added
+
+- **Editable scheduled delivery and rich Email reports** (#1649, #1680).
+  Choose a configured channel and destination, edit existing schedules, and
+  select plain text, sanitized HTML or a PDF attachment for Email across Web,
+  CLI playbooks and agent proposals. Confirmation surfaces show the format. Format edits
+  persist, active sends cannot be overwritten, and desktop PDF delivery uses
+  the packaged renderer when native libraries are unavailable, with embedded
+  CJK/Arabic fonts and tested multiline/table pagination. Email PDF delivery
+  also supports optional AES-256 password protection using an operator-managed
+  Email channel secret; scheduled jobs store only the boolean choice.
+- **Structured backtest summaries and paged artifact reads** (#1646, #1647,
+  resolves #1644 and #1645). Complete scalar metrics, structured metrics and
+  validation accompany endpoint-preserving equity previews and OHLCV paths.
+  `read_run_artifact` streams manifest-listed CSV pages within the actual
+  tool-result limit, with resumable offsets and bounded metadata. Grounding
+  accepts only shown rows of unchanged engine tables, preserving run identity
+  and excluding model-written files and escaped symlinks.
 
 - **Grounding validation records fired declared checks** (#1661, with the
   registry substrate from #1628, thanks @he-yufeng). Validation artifacts name
@@ -38,6 +161,27 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   records now come from the `src.agent.tool_results` logger.
 
 ### Fixed
+
+- **Channel settings and delivery** (#1681, #1508). Unchanged nullable form
+  values no longer block saving or testing. Email authentication requires a
+  configured receiving authserv-id and sender-domain alignment; comments and
+  duplicate headers cannot pass as authenticated results. The guided setup
+  exposes the trust setting in all nine interface languages.
+- **Research continuity and output access** (#1682, #1688, #1679, #1676,
+  #1639). Memory snippets retain real spacing and match markers, goal evidence
+  preserves exact tool-call provenance, export refusals explain allowed-root
+  configuration, macro results report both observation and delivery limits,
+  and skill-file deletion follows resolved auxiliary-directory boundaries.
+- **Risk and portfolio mathematics** (#1659, #1658, #1657, #1656, #1653).
+  Attribution rejects non-finite inputs, VaR transitions preserve missing
+  observations, implied volatility meets its price tolerance, monthly risk
+  requests obtain sufficient default history, and turnover prices signed
+  reversals plus cash liquidation and reentry.
+- **Local data, updates and broker restrictions** (#1651, #1655, #1581,
+  #1585). Local ranges include the entire end day, CLI updates retain the VCS
+  installation source, SDK position-pricing fixes retain contributor ancestry,
+  and unsupported Robinhood option orders remain gated even when remotely
+  annotated read-only. Options execution remains unimplemented (#1435).
 
 - **Strategy-file writes no longer crash on missing model provenance fields**
   (#1673, closes #1672, thanks @tomaszkubiak-courses). Each writing turn records

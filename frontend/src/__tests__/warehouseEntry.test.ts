@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const router = readFileSync(resolve(__dirname, "../router.tsx"), "utf-8");
-const layout = readFileSync(resolve(__dirname, "../components/layout/Layout.tsx"), "utf-8");
+const navigation = readFileSync(resolve(__dirname, "../components/layout/navigation.ts"), "utf-8");
 const viteConfig = readFileSync(resolve(__dirname, "../../vite.config.ts"), "utf-8");
 
 describe("the /warehouse page is reachable", () => {
@@ -23,10 +23,10 @@ describe("the /warehouse page is reachable", () => {
   });
 
   it("is in the sidebar, and the sidebar is where a user looks", () => {
-    expect(layout).toContain('to: "/warehouse"');
-    // The label must be readable without a locale key landing first, or the nav
-    // entry renders as the literal key string in every language.
-    expect(layout).toMatch(/layout\.warehouse.*defaultValue/);
+    // The nav table moved out of Layout.tsx into navigation.ts, which is the
+    // single list SidebarNavigation and PageHelp both render from.
+    expect(navigation).toContain('id: "warehouse"');
+    expect(navigation).toContain('to: "/warehouse"');
   });
 
   it("does not shadow an API prefix, so it needs no dev-proxy entry", () => {

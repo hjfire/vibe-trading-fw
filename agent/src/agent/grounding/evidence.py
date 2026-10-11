@@ -29,6 +29,12 @@ _TIMESTAMP_FIELDS = ("trade_date", "date", "datetime", "timestamp", "time", "ind
 
 _MAX_GENERIC_EVIDENCE = 2_000
 
+#: Top-level fields of a code-running tool's envelope (backtest, bash, ...). They
+#: describe the process, not the market, so they never become observed evidence.
+_ENVELOPE_FIELDS = frozenset(
+    {"exit_code", "returncode", "elapsed_seconds", "duration_seconds"}
+)
+
 # Only these CSV columns count; Volume, Adj Close etc. are ignored so the
 # contradiction check gains no values it would be willing to accept.
 _CSV_PRICE_COLUMNS = {
@@ -798,7 +804,11 @@ class _EvidenceMixin:
         room = _MAX_GENERIC_EVIDENCE
         for name in _BACKTEST_SUMMARY_FILES:
             path = directory / name
-            if not path.is_file() or self._is_model_written(path):
+            if (
+                not path.is_file()
+                or not path.resolve().is_relative_to(directory.resolve())
+                or self._is_model_written(path)
+            ):
                 continue
             if name not in _MANIFEST_EXEMPT and manifest.get(name) != _file_sha256(path):
                 continue
@@ -827,7 +837,11 @@ class _EvidenceMixin:
         tables = directory / "artifacts"
         if tables.is_dir():
             for path in sorted(tables.glob("*.csv")):
-                if self._is_model_written(path) or f"artifacts/{path.name}" in _BACKTEST_SUMMARY_FILES:
+                if (
+                    not path.resolve().is_relative_to(directory.resolve())
+                    or self._is_model_written(path)
+                    or f"artifacts/{path.name}" in _BACKTEST_SUMMARY_FILES
+                ):
                     continue
                 digest = _file_sha256(path)
                 if digest is not None:
@@ -857,7 +871,9 @@ class _EvidenceMixin:
         except OSError:
             return True
 
-    def _ingest_engine_table(self, payload: dict[str, Any], call_id: str) -> None:
+    def _ingest_engine_table(
+        self, payload: dict[str, Any], call_id: str, *, tool_name: str = "read_file"
+    ) -> None:
         """Record the rows of a backtest table the model just read back.
 
         Only a table a completed backtest wrote counts, and only while it is
@@ -867,31 +883,48 @@ class _EvidenceMixin:
         chance. Price columns are left out, as in a summary file.
 
         Args:
-            payload: The ``read_file`` result.
-            call_id: The ``read_file`` call.
+            payload: The file or structured artifact reader's result.
+            call_id: The reader's call.
+            tool_name: The reader that showed these rows to the model.
         """
-        raw, content = payload.get("path"), payload.get("content")
-        if not isinstance(raw, str) or not isinstance(content, str):
+        raw = payload.get("path")
+        if not isinstance(raw, str):
             return
         try:
             path = Path(raw).resolve()
         except OSError:
             return
         known = self._engine_tables.get(str(path))
-        if known is None or _file_sha256(path) != known[0]:
+        if known is None or self._is_model_written(path) or _file_sha256(path) != known[0]:
             return
         scope = known[1]
-        truncated = "\n... (truncated)"
-        if content.endswith(truncated):
-            content = content[: -len(truncated)]
-            content = content[: content.rfind("\n") + 1]
-        try:
-            rows = list(csv.reader(content.splitlines()))
-        except csv.Error:
-            return
-        if len(rows) < 2:
-            return
-        header = [cell.strip() for cell in rows[0]]
+        if tool_name == "read_run_artifact":
+            columns, records = payload.get("columns"), payload.get("rows")
+            if (
+                not isinstance(columns, list)
+                or not all(isinstance(cell, str) for cell in columns)
+                or not isinstance(records, list)
+                or not all(isinstance(row, list) and len(row) == len(columns) for row in records)
+            ):
+                return
+            header = [cell.strip() for cell in columns]
+            data_rows = [["" if cell is None else str(cell) for cell in row] for row in records]
+        else:
+            content = payload.get("content")
+            if not isinstance(content, str):
+                return
+            truncated = "\n... (truncated)"
+            if content.endswith(truncated):
+                content = content[: -len(truncated)]
+                content = content[: content.rfind("\n") + 1]
+            try:
+                rows = list(csv.reader(content.splitlines()))
+            except csv.Error:
+                return
+            if len(rows) < 2:
+                return
+            header = [cell.strip() for cell in rows[0]]
+            data_rows = rows[1:]
         folded = [cell.casefold() for cell in header]
         date_index = next(
             (index for index, name in enumerate(folded) if name in _CSV_DATE_COLUMNS), None
@@ -901,7 +934,7 @@ class _EvidenceMixin:
         )
         artifact = _relative_posix(path, self.run_dir.resolve())
         room = _MAX_GENERIC_EVIDENCE
-        for row in rows[1:]:
+        for row in data_rows:
             timestamp = (
                 row[date_index].strip()
                 if date_index is not None and date_index < len(row)
@@ -926,7 +959,7 @@ class _EvidenceMixin:
                 self._evidence.append(
                     EvidenceRecord(
                         call_id=call_id,
-                        tool="read_file",
+                        tool=tool_name,
                         symbol=None,
                         source="backtest",
                         timestamp=timestamp,
@@ -1129,6 +1162,8 @@ class _EvidenceMixin:
                 )
                 for key, item in value.items():
                     if str(key).casefold() in timestamp_fields:
+                        continue
+                    if not path and str(key).casefold() in _ENVELOPE_FIELDS:
                         continue
                     visit(
                         item,
