@@ -602,11 +602,14 @@ export function ProChart() {
   // ref 镜像的理由与 `haRef`/`vpRef` 完全相同：同一个 task 里连点两次都摊到同一份过期的
   // 闭包快照上，第二次就会撤销第一次。
   const cmpRef = useRef(cmpOn);
+  // `loading` 的初值跟着**恢复出来的开关**走，而不是恒假：`cmpOn` 由偏好恢复为真时，挂载那一轮
+  // 必然发得出取数（守卫只看 `cmpOn`/`cmpSymbol`/`timeShare`，三格那一刻都已就位）。留一格假的
+  // "不在飞"在初值上，读得到的代价是 effect 跑起来之前那一帧里按钮那句说的是「结果为空」。
   const [cmpStatus, setCmpStatus] = useState<{
     loading: boolean;
     error: string | null;
     source: string;
-  }>({ loading: false, error: null, source: "" });
+  }>(() => ({ loading: loadCompare() !== "", error: null, source: "" }));
   // 取回来的序列，连同它属于哪个 key —— `cmpSeries.key === cmpKey && bars.length > 0`
   // 就是 §六 那枚谓词第三格 `ready` 的定义。state 身份本身还是挂卸 effect 的依赖（R10）。
   const [cmpSeries, setCmpSeries] = useState<{ key: string; bars: CompareBar[] } | null>(null);
@@ -660,6 +663,12 @@ export function ProChart() {
   const cmpKey = cmpSymbol === "" ? "" : compareKey(cmpSymbol, interval);
   const cmpReady =
     cmpSeries !== null && cmpSeries.key === cmpKey && cmpSeries.bars.length > 0;
+  // 「图上此刻真有一条对比线吗」——三个显示面（`aria-pressed`／亮环／来源小字的那半句）读这一枚。
+  // 它比 `compareActive` 多一格 `barCount > 0`：`cmpReady` 量的是「store 里这条序列非空」，而
+  // `calc` 对空 `dataList` 交 0 行 ⇒ 主图一根蜡烛都没有时，线**必然**不存在，开关却会亮着说"开着"
+  // ——同一颗按钮还正好被 `disabled` 禁着，于是那一屏既谎报状态又没有关掉它的入口（整支评审 F-2）。
+  // 只加在显示面、不加进挂卸 effect 的依赖：那条序列在主图来数之后本来就该画出来，生命周期不动。
+  const cmpShown = compareActive(cmpOn, timeShare, cmpReady) && barCount > 0;
   const [parked, setParked] = useState<StoredDrawing[]>([]);
   const replaceParked = (list: readonly StoredDrawing[]) => {
     parkedRef.current = list.slice();
@@ -1435,12 +1444,18 @@ export function ProChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 对比标的取数（spec §五）。三格依赖就够：**`cmpSeries` 绝不能再列进这里**——它由本条
-  // effect 自己写，列进依赖就是「交付→重跑→再交付」的无限循环。
+  // 对比标的取数（spec §五）。依赖里 `cmpOn` 在列、守卫里也读它，两格合起来才是那一句话：
+  // **关掉那一下不发**（`!cmpOn` 早退，线都没了还取数是把 `loading` 拨回真的空跑），
+  // **重开那一下只在上一趟没成功过时才发**（`cmpReady` 早退）——后者就是同一标的唯一的原地重试
+  // 入口（§七 的追加子句：用户照「原因：<errmsg>」把网关回来之后，页面上必须有一条不用换周期、
+  // 不用切分时的重取路径），而健康态的重开一个字节都不动，所以「关掉不清 `cmpStatus`」那条改判
+  // 仍然有东西在钉（计划行 11：清掉 `source` 之后没有任何一趟会把它写回来）。
+  // `cmpSeries` 绝不能在依赖里：它由本条 effect 自己写，列进依赖就是「交付→重跑→再交付」的死循环；
+  // 上面那句 `cmpReady` 读的是**本次渲染**闭包里的它，效果只在"重开那一轮"，正是要它的那一格。
   useEffect(() => {
-    if (cmpSymbol === "" || timeShare) return;
+    if (!cmpOn || cmpSymbol === "" || timeShare) return;
     const key = compareKey(cmpSymbol, interval);
-    if (compareInflight.has(key)) return;
+    if (compareInflight.has(key) || cmpReady) return;
     compareInflight.add(key);
     const controller = new AbortController();
     setCmpStatus({ loading: true, error: null, source: "" });
@@ -1472,7 +1487,10 @@ export function ProChart() {
       controller.abort();
       compareInflight.delete(key);
     };
-  }, [cmpSymbol, interval, timeShare]);
+    // `cmpReady` 在本体里读、不在依赖里列：它是 `cmpSeries` 的派生，而 `cmpSeries` 由本条 effect
+    // 自己写（理由见上面那段）。与 `:1435` 那条挂载 effect 同一种写法。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cmpSymbol, interval, timeShare, cmpOn]);
 
   // Theme switch → restyle in place. Also the only writer of the candle/line
   // choice, so `timeShare` is a dependency: leaving it out let a theme change
@@ -2098,10 +2116,13 @@ export function ProChart() {
    * 关掉**不清 `cmpStatus`**（理由在下面那两处渲染门上）：那三格里装的 `error` 与
    * `source` 是**这一趟取数**的事实，取数发生过就还是事实；说谎的不是状态本身，而是「线上没有
    * 对比线时还把话说出口」这一对渲染表达式。就地清零会得到两个新洞——①同一标的再点开时
-   * **不再取数**（effect 的依赖是 `[cmpSymbol, interval, timeShare]`，关→开一格没动），于是
-   * 「来源：主 … · 对 …」这行小字在会话余下时间里再也不回来，而线明明挂得好好的；
+   * **不重新取数**（重开那一轮被取数守卫里的 `cmpReady` 早退挡住：上一趟成功过，序列本来就在
+   * 模块 store 里，重取只会把已经在线上的东西再取一遍），于是「来源：主 … · 对 …」这行小字在
+   * 会话余下时间里再也不回来，而线明明挂得好好的；
    * ②关的那一下若正好撞上在飞的请求，`.then` 随后又把 `source` 写回来，谎照旧。
-   * 渲染侧加两枚 `cmpOn` 门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处。
+   * 渲染侧的门把这两格一起挡掉：关掉时什么都不说，再点开时原话回到原处；而「开着的门」问的是
+   * `cmpShown`（线真画得出来吗），不是光 `cmpOn`。失败那一趟是另一回事：`cmpReady` 为假 ⇒ 重开
+   * 真的重发，那一句「原因」才有的下一步可走。
    */
   const clickCompare = () => {
     const typed = cmpInput.trim().toUpperCase();
@@ -2552,10 +2573,13 @@ export function ProChart() {
               `disabled` 问三个原因（分时／空图／**既没填也没有已应用**——只问"输入框是空的"会让
               开关在锁上之后自己锁死：线已挂上、`aria-pressed` 已是 `true`，此时全选删空输入框
               就再也点不灭了，而第二次点击是「关掉」的唯一入口），`aria-pressed` 与 className 问
-              `compareActive` 这一枚谓词（未就绪时不亮，说的是"图上现在没有对比线"这件事实），
-              而 `title` 的五支按 §七 定稿的**顺序**问：分时 → 没有已应用标的 → 已开但数据
-              未就绪 → 已开 → 已关。第 3 支必须排在 4/5 **之前**，它排在后面就永远读不到，
-              而那一格正是本片唯一会把"进行中"说成"已完成"的形状。 */}
+              `cmpShown`（＝`compareActive` 再加一格"主图有没有根"，说的才是"图上现在没有对比线"
+              这件事实——少了那一格，主图取数失败时开关会亮着说"开着"，而它自己正被 `disabled` 禁着），
+              而 `title` 的七支按 §七 定稿的**顺序**问：分时 → 没有已应用标的 → 这一趟在飞 →
+              上一趟失败 → 开着但画不出线 → 已开 → 已关。前三支「未落定／落定但没线」必须排在
+              「已开」**之前**，排在后面就永远读不到；而「在飞」与「失败」与「画不出线」三者谁也不能
+              合并成原先那一句「还没到位」——那一句在终态里既说错时态（没有请求在飞），又把用户指到
+              一行此刻没有原因可看的提示上。 */}
           <input
             value={cmpInput}
             onChange={(event) => setCmpInput(event.target.value)}
@@ -2576,21 +2600,25 @@ export function ProChart() {
           <button
             disabled={timeShare || barCount === 0 || (cmpInput.trim() === "" && cmpSymbol === "")}
             aria-label="对比"
-            aria-pressed={compareActive(cmpOn, timeShare, cmpReady)}
+            aria-pressed={cmpShown}
             title={
               timeShare
                 ? "跨市场的分钟时刻不在同一把尺上，分时视图看不了对比，先切回蜡烛"
                 : cmpSymbol === ""
                   ? "先在左边输入对比标的（如 600036.SH 或 BTC-USDT），点它才叠到主图"
-                  : cmpOn && (cmpStatus.loading || cmpStatus.error !== null || !cmpReady)
-                    ? "对比标的的数据还没到位，原因看输入框那行的提示"
-                    : cmpOn
-                      ? `对比已开：把可视区间同一把时间轴上的 ${cmpSymbol} 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）`
-                      : `对比已关：点开把 ${cmpSymbol} 的收盘叠到主图，走独立标尺、不改主图价格轴`
+                  : cmpOn && cmpStatus.loading
+                    ? "对比标的正在取数：这一趟还没回来，图上此刻没有对比线"
+                    : cmpOn && cmpStatus.error !== null
+                      ? "对比标的上一趟取数失败：原因看左边输入框那行的提示，把它关掉再点开就重取"
+                      : cmpOn && !cmpShown
+                        ? "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）"
+                        : cmpOn
+                          ? `对比已开：把可视区间同一把时间轴上的 ${cmpSymbol} 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）`
+                          : `对比已关：点开把 ${cmpSymbol} 的收盘叠到主图，走独立标尺、不改主图价格轴`
             }
             className={cn(
               "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
-              compareActive(cmpOn, timeShare, cmpReady) && "bg-muted font-medium ring-1 ring-primary",
+              cmpShown && "bg-muted font-medium ring-1 ring-primary",
             )}
             onClick={clickCompare}
           >
@@ -2598,12 +2626,14 @@ export function ProChart() {
           </button>
           {/* 复权口径不回传（spec §十二 R4：日线 `adjust` 是死参数、`caliber` 前端读不到），
               所以这里只给两个真的回传了的 `source` 串——不给「可比/不可比」的假结论。
-              `cmpOn` 那一枚门与输入框 `title` 同一条理由：这行小字说的是「图上这一条对比线
-              的数据来自哪里」，线被关掉之后它说的是一句没有主人的话；而状态不清零，所以
-              再点开时它回到原处（`clickCompare` 的注释记着为什么在渲染侧加门、不在状态侧清）。 */}
+              外层 `cmpOn` 门与输入框 `title` 同一条理由：线关掉之后这行小字说的是没有主人的话，
+              而状态不清零，所以再点开时原话回到原处。「· 对」那半句另问 `cmpShown`：
+              它问的是「此刻线上有没有这条线」，未就绪（0 根却带着 `source`）、分时态、
+              主图 0 根三格里那条线都不存在，这时只说主图那半句。 */}
           {cmpOn && cmpStatus.source !== "" && (
             <span className="text-[10px] text-muted-foreground">
-              来源：主 {status.source || "-"} · 对 {cmpStatus.source}
+              来源：主 {status.source || "-"}
+              {cmpShown ? ` · 对 ${cmpStatus.source}` : ""}
             </span>
           )}
           {INTERVALS.map((i) => {

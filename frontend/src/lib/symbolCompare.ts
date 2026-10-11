@@ -20,7 +20,13 @@ export interface CompareBar {
 }
 
 /**
- * 两个入参都按时间戳升序（主图 `dataList` 天然升序；对比序列来自同一条 loader 通路）。
+ * 两个入参都按时间戳升序——**这是前置条件，不是本地可校验的不变量**（游标只右移，乱序输入
+ * 不会报错，只会静默交出错的价）。担保人在后端那一侧，且只有一处：
+ * `agent/src/api/market_routes.py:177` 的 `frame = frame.sort_index()`（`_bars_from_frame`
+ * 内部，`:242`／`:279`／`:336`／`:465`／`:591` 五条取数通路都从它出门，`udf_routes.py:532`
+ * 也直调 `_kline_sync`，所以两侧序列走的是同一个担保人）；周／月线那侧
+ * `_merge_to_calendar` 在 `:505` 又按 `timestamp` 显式排一次。主图那一半是库自己的
+ * `dataList`：分页 `forward` 交更早的一页、`backward` 更新尾根，两侧各自有序。
  *
  * `cursor` 单调右移 ⇒ O(n + m)，且**逐根独立**：第 `i` 项只读 `mainTimestamps[i]`
  * 与 `usable`，不读别的输出项。前缀不变量（§十·②）就是这条独立性的读数形态。

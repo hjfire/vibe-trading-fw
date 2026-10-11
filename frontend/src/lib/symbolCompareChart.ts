@@ -15,7 +15,9 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
  *
  * 1. **绝不 `createYAxis`**：`ChartImp.createYAxis` 会把轴标成 manual（`index.esm.js:15483`），
  *    而 manual 轴对 `_shouldUseCandleData()` 为真 ⇒ 一把刚建出来、还没挂指标的空尺会先把
- *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 切走对比会**漏一根轴**。
+ *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 漏一根轴只在「那个 id
+ *    始终没被任何指标接管」时才落地：接管那一路会把已存在轴上的 manual 摘掉（`:15247-15248`），
+ *    而 `createYAxis` 撞见已存在的 id 直接早退、根本不补打标（`:15479-15480`）。
  * 2. **「不进主图价格轴」是结构保证而不是约定**：轴取数的唯一口径 `_getIndicatorsByYAxisIds()`
  *    的判据集合以本轴 id 起步，**只有本轴是 manual 时**才并上默认轴 id（`index.esm.js:967-973`，
  *    过滤那行在 `:978`）⇒ 非 manual 的轴只认自己的 id，我们那条自定义 id 不在主图轴的集合里，

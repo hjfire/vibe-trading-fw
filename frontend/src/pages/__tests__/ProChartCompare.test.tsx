@@ -55,6 +55,11 @@ const h = vi.hoisted(() => ({
   fetchCalls: [] as Array<Record<string, unknown>>,
   cmpBars: [] as Array<{ timestamp: number; close: number }>,
   cmpError: null as string | null,
+  // 对比那一趟的**手动闸门**：非 null 时 `fetchKline` 必须先等它 resolve 才交回数。
+  // 「取数在飞」那一格在别处读不出来——替身交回的是立刻起跳的 promise，`await flush()` 一到就
+  // 结清了，于是 `cmpStatus.loading` 为真的那一支永远只被「已落地」的那几支盖住（摘掉它不会有
+  // 任何东西变红）。同步读 DOM 能撞进那一格，但代价是一支带 `act(...)` 警告的用例。
+  cmpHold: null as Promise<void> | null,
 }));
 
 function ask(): void {
@@ -232,6 +237,8 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
           interval: "1D",
         };
       }
+      // 闸门在错误之前：错误那一支自己不带在飞态的题（它要的是"结清之后"的形状）。
+      if (h.cmpHold !== null) await h.cmpHold;
       if (h.cmpError !== null) throw new Error(h.cmpError);
       return {
         // `.slice()` 不是礼貌性复制：交回**同一个数组对象**会让「页面不重排」那根针假绿——
@@ -326,6 +333,7 @@ beforeEach(() => {
   h.createdYAxis = [];
   h.fetchCalls = [];
   h.cmpError = null;
+  h.cmpHold = null;
   // 对比序列**有内容**（替身失真第一种：不建模副作用之外，还有"把候选集交成空集"）：
   // ready 门读的 `bars.length > 0` 若靠默认空数组，未就绪那一支永远只由 key 不等撑起。
   // 主图 seed 6 根（D0..D5），这里给 D1/D3 ⇒ 对齐后 [null,10,10,12,12,12]，非 null 有 5 格。
@@ -426,6 +434,26 @@ describe("/pro-chart 多标的叠加对比", () => {
     // 「calc 读 activeKey 那一条序列」那根针上（同一条 §十·②b，两个判据面）。
   });
 
+  it("对比交回 0 根却带着 source：小字只许说主图那半句", async () => {
+    // `marketApi.ts:260`/`:265` 的形状：`s:"ok"` 时 `columnsToBars` 交空数组、`source` 照抄后端那格
+    // ⇒ `cmpStatus.source` 非空而 `cmpReady` 为假（`ProChart.tsx:661-662` 问的是 `bars.length > 0`）。
+    // 那一屏按钮说的是「数据还没到位」，正下方若还在讲「对 fake-cmp」，两句话互相打脸。
+    h.cmpBars = [];
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(cmpLive()).toHaveLength(0);
+    expect(screen.getByText(/来源：主/).textContent).not.toContain("对 fake-cmp");
+    // 「还没到位」是**进行中**的说法，而这一格取数早就结清了（`loading` 假、`error` 空），
+    // 后半句还把用户指到输入框那一行——那一行走的是 `error !== null` 的门，那里没有原因可看
+    // （整支评审 F-3）。终态空结果有它自己那一支。
+    expect(button().getAttribute("title")).toBe(
+      "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）",
+    );
+  });
+
   it("连点两次回到原样：指标卸掉、轴恰好回到 1 根、键被删而会话内的标的还在（§十·③）", async () => {
     render(<ProChart />);
     await flush();
@@ -467,12 +495,92 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(localStorage.getItem(COMPARE_PREFS_KEY)).toBeNull();
   });
 
+  it("关掉那一下：一条请求都不许多发", async () => {
+    // 依赖数组里有 `cmpOn`（同一标的原地重试的唯一入口），守卫里就必须同样读它：只加依赖不加
+    // 守卫的话，「关掉」那一次重跑会穿过 `cmpSymbol`/`timeShare` 两格（会话内不清，见 §四）。
+    // **但这一支挡不住摘掉 `!cmpOn`**：健康态里 `cmpReady` 为真，重跑先撞它的早退（变异复证 P1
+    // 摘掉守卫，22 支全绿）。这一支钉的是「关掉之后线没了、数也没多」这件事本身，`!cmpOn` 那一格
+    // 的见证在下面那支失败态里。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH")).toHaveLength(1);
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH")).toHaveLength(1);
+    expect(cmpLive()).toHaveLength(0);
+  });
+
+  it("取数失败之后关掉：一条都不许多发（`!cmpOn` 那一格唯一的见证）", async () => {
+    // 只有**失败那一趟**把 `cmpReady` 打成假，穿过守卫的才只剩 `!cmpOn`：那一格被摘掉时，关掉的
+    // 那一下会真的补发一趟——用户已经把线关了，页面还在为他看不见的那条线取数，并把
+    // `cmpStatus.loading` 拨回真（整支评审 F-10 说的正是这一格）。
+    h.cmpError = "FutuOpenD 未应答";
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    const before = h.fetchCalls.filter((c) => c.symbol === "600036.SH").length;
+    expect(before).toBe(1);
+    h.cmpError = null; // 网关回来了，但这一支不重取，只看关掉那一下发不发
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH")).toHaveLength(before);
+    expect(cmpLive()).toHaveLength(0);
+  });
+
+  it("健康态关掉再点开：不许重发，小字靠留在会话里的那一趟回来", async () => {
+    // 这一支是「关掉不清 `cmpStatus`」那条改判的**前提**，不是它的重复：重开那一下依赖真的变了
+    // （`cmpOn`），所以必须靠 `cmpReady` 早退把它挡住——挡住之后线照样立刻有（序列本来就在模块
+    // store 里），而那行小字靠的是**没有被动过**的 `cmpStatus.source`。要是这里放行去重取，
+    // 「关→开不重新取数」这句话连同下面那支的牙一起就没了（整支评审 F-9）。
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    fireEvent.click(button());
+    await flush();
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH")).toHaveLength(1);
+    expect(cmpLive()).toHaveLength(1);
+    expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
+  });
+
+  it("主图 0 根而对比已取到数：开关不许说开着，小字也不许说「对」", async () => {
+    // `cmpReady` 量的是「store 里这条序列非空」，可画不可画还要看主图有没有根：`calc` 对空
+    // `dataList` 交 0 行 ⇒ 线必然不存在（`marketApi` 那侧对比取数照样成功）。这一格原来三句
+    // 谎同时成立——`aria-pressed="true"`、亮环、小字印「对 fake-cmp」——而**这颗按钮就是关掉
+    // 对比的唯一 actor，此刻还被 `barCount === 0` 禁着**（整支评审 F-2）。
+    // 偏好恢复而不是现场点按钮：现场点会被 `disabled` 吞掉，`cmpOn` 全程为假就测不到这一格。
+    localStorage.setItem(COMPARE_PREFS_KEY, "600036.SH");
+    h.list = [];
+    render(<ProChart />);
+    await flush();
+    await flush();
+    // 这一格**不**断挂载面：挂卸问的是 `compareActive`，`barCount` 不在它的谓词里，指标照旧挂着；
+    // 而「线上没有线」这件事由数据保证——`calc` 对空 `dataList` 交 0 行，一条都不画。把
+    // `cmpLive()` 钉成 0 会把「读数为假时必须不挂」钉成契约，而那是两条独立的事，将来谁想
+    // 顺手让挂载也看 `barCount`，都会被这根没有用户价值的针挡回去。
+    expect(button().getAttribute("aria-pressed")).toBe("false");
+    const row = screen.getByText(/来源：主/);
+    expect(row.textContent).not.toContain("对 fake-cmp");
+    expect(button().getAttribute("title")).toBe(
+      "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）",
+    );
+  });
+
   it("关掉再开：来源小字跟着线一起回来（门加在渲染侧，不加在状态侧）", async () => {
     // 这一支钉的是「门加在渲染侧，不加在状态侧」这个形状，也是它唯一的牙：若把关掉那一下写成
     // `setCmpStatus({ loading: false, error: null, source: "" })`，最后一格就红——关→开
-    // **不重新取数**（取数 effect 的依赖是 `[cmpSymbol, interval, timeShare]`，这一路一格没动），
-    // 被清掉的 `source` 没有任何东西会把它写回来，于是这行小字在会话余下时间里再也不出现，
-    // 而对比线挂得好好的。渲染侧的 `cmpOn` 门得到的是同一句诚实话，且不丢信息。
+    // **不重新取数**（重开那一下被守卫里 `cmpOn` 之后的 `cmpReady` 早退挡住：上一趟成功过，
+    // 序列本来就在 store 里，重取只会把已经在线上的东西再取一遍），于是被清掉的 `source`
+    // 没有任何东西会把它写回来，这行小字在会话余下时间里再也不出现，而对比线挂得好好的。
+    // 渲染侧的门得到的是同一句诚实话，且不丢信息。
     render(<ProChart />);
     await flush();
     typeCompare("600036.SH");
@@ -489,7 +597,32 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(screen.queryByText(/对 fake-cmp/)).not.toBeNull();
   });
 
-  it("五支 title 逐字钉，且第 3 支排在 4/5 之前才读得到（§十·⑥ / §七 的判别顺序）", async () => {
+  it("取数在飞那一句说「还没回来」，落地之后换成「已开」那一句（支 3 → 支 6）", async () => {
+    // 原形状里「在飞」与「结果为空」共用一支，两格都说"还没到位"——分成两支之后每一支都要有
+    // 东西钉着，否则摘掉 `loading` 那一格没有任何东西变红。闸门是这里唯一的取证手段：替身交回
+    // 的 promise 一到 `await flush()` 就结清，不按住它就只能读到结清之后的那一支。
+    let release!: () => void;
+    h.cmpHold = new Promise<void>((r) => {
+      release = r;
+    });
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(button().getAttribute("title")).toBe(
+      "对比标的正在取数：这一趟还没回来，图上此刻没有对比线",
+    );
+    expect(cmpLive()).toHaveLength(0);
+    release();
+    await flush();
+    expect(button().getAttribute("title")).toBe(
+      "对比已开：把可视区间同一把时间轴上的 600036.SH 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）",
+    );
+    expect(cmpLive()).toHaveLength(1);
+  });
+
+  it("七支 title 逐字钉，且「画不出线」那几支排在「已开」之前才读得到（§十·⑥ / §七 的判别顺序）", async () => {
     render(<ProChart />);
     await flush();
     // 支 2：没有已应用标的。
@@ -499,19 +632,21 @@ describe("/pro-chart 多标的叠加对比", () => {
     typeCompare("600036.SH");
     fireEvent.click(button());
     await flush();
-    // 支 4：已开（cmpSymbol 就是刚应用的串）。
+    // 支 6：已开（cmpSymbol 就是刚应用的串）。
     expect(button().getAttribute("title")).toBe(
       "对比已开：把可视区间同一把时间轴上的 600036.SH 收盘画成折线，用它自己那根右侧标尺，不进主图价格轴（再点切回）",
     );
-    // 支 3：已开但数据未就绪。制造它要**换一次周期**——`cmpSymbol` 与 `interval` 都没变的
-    // 那一轮根本不会重取，`cmpSeries` 仍是上一轮的旧身份，ready 还是真。换周期令键变、
-    // 重取、交回空数组 ⇒ 这一格才是「开关亮着而 ready 为假」。
-    // 这一支排在 4/5 之前才读得到（§七 明写顺序是设计的一部分）：写成 `cmpOn ? 已开 : …`
-    // 在前、未就绪在后，这条针就永远绿——而那正是"把进行中说成已完成"的形状。
+    // 支 5：开着的、取数也结清了，但画不出线。制造它要**换一次周期**——`cmpSymbol` 与 `interval`
+    // 都没变的那一轮被 `cmpReady` 早退挡掉了（那是「关→开不重取」的同一条判据），换周期令键变、
+    // 重取、交回空数组 ⇒ 这一格才是「开关不亮而 cmpOn 为真」。
+    // 顺序是设计的一部分（§七）：把这一支挪到「已开」之后，这条针就永远绿——而那一格说的是
+    // "把进行中说成已完成"的那句「画成折线」，图上此刻根本没有折线。
     h.cmpBars = [];
     fireEvent.click(screen.getByRole("button", { name: "周线" }));
     await flush();
-    expect(button().getAttribute("title")).toBe("对比标的的数据还没到位，原因看输入框那行的提示");
+    expect(button().getAttribute("title")).toBe(
+      "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）",
+    );
     // 支 5：已关。`cmpSymbol` 会话内还在，所以这句话里带得出那个标的。
     h.cmpBars = [
       { timestamp: D(1), close: 10 },
@@ -529,6 +664,16 @@ describe("/pro-chart 多标的叠加对比", () => {
       "跨市场的分钟时刻不在同一把尺上，分时视图看不了对比，先切回蜡烛",
     );
     expect(button().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("输入框非错误态的默认 title 逐字钉", async () => {
+    // §七 只规定了错误那一支要带「原因：」，§十·⑥ 只逐字钉了按钮那五支——输入框的另一支
+    // 一直没有针，改坏它不会有任何东西变红。
+    render(<ProChart />);
+    await flush();
+    expect(field().getAttribute("title")).toBe(
+      "叠到主图的第二个标的：走它自己那根右侧标尺，不进主图价格轴。输入完整代码后点右边的「对比」",
+    );
   });
 
   it("分时态不取数、不挂；回 K 线自己挂回来且键还在原地", async () => {
@@ -551,6 +696,22 @@ describe("/pro-chart 多标的叠加对比", () => {
     expect(cmpLive()).toHaveLength(1);
     expect(haLive()).toHaveLength(1);
     expect(vpLive()).toHaveLength(1);
+  });
+
+  it("分时态：线不画，小字里「对 X」那半句跟着一起收掉", async () => {
+    localStorage.setItem(COMPARE_PREFS_KEY, "600036.SH");
+    render(<ProChart />);
+    await flush();
+    await flush();
+    expect(screen.getByText(/来源：主/).textContent).toContain("对 fake-cmp");
+    fireEvent.click(screen.getByRole("button", { name: "分时" }));
+    await flush();
+    // `compareActive` 第一格之外，`timeShare` 本身就让它为假 ⇒ 这一屏没有对比线，
+    // 而那一行小字的外层门只问 `cmpOn`——所以要说实话的是「· 对 X」那半句，不是整行。
+    expect(cmpLive()).toHaveLength(0);
+    const row = screen.getByText(/来源：主/);
+    expect(row.textContent).not.toContain("对 fake-cmp");
+    expect(row.textContent).toContain("主 fake-main");
   });
 
   it("StrictMode 双挂载：请求可能发两次，但数据必须到（R13）", async () => {
@@ -578,14 +739,44 @@ describe("/pro-chart 多标的叠加对比", () => {
     await flush();
     expect(cmpLive()).toHaveLength(0);
     expect(field().getAttribute("title")).toContain("原因：FutuOpenD 未应答");
+    // 按钮那句问的是「上一趟失败」这一格，不是笼统的「还没到位」：那一格里根本没有请求在飞
+    // （`:finally` 已经结清），而它原先的后半句把用户指到输入框那一行——那一行此刻确实有原因，
+    // 但只有失败这一支指过去才算指对了地方（整支评审 F-3）。
+    expect(button().getAttribute("title")).toBe(
+      "对比标的上一趟取数失败：原因看左边输入框那行的提示，把它关掉再点开就重取",
+    );
     expect(button().getAttribute("aria-pressed")).toBe("false");
     // 失败只丢叠加层（§五）：主图的数据面与指标面一格没动。
     expect(h.indicators.some((i) => i.name === "MA")).toBe(true);
     // 关掉要把这一趟的说法一起收掉：输入框 `title` 的错误那一支问的是 `cmpOn && error`。
-    // 而收的方式是**藏起渲染**而不是清零状态——清零会让同一标的再点开时（那一拍不重新取数）
-    // 连这句原话一起永久失去。
+    // 而收的方式是**藏起渲染**而不是清零状态——清零会把这句原话连同再点开时该回来的东西一起弄丢。
     fireEvent.click(button());
     await flush();
+    expect(field().getAttribute("title")).not.toContain("原因：");
+  });
+
+  it("同标的取数失败之后关掉再点开：必须重新发一趟", async () => {
+    // 那句「原因：<errmsg 原文>」是给用户的行动依据（spec §五：区分"重启 OpenD"与网络故障）。
+    // 原形状里 `cmpOn` 不在取数依赖里，重启网关之后页面上**不存在**同标的原地重试——只能换周期
+    // 或换标的，而两者都会改可视区间与已挂指标，代价比"再点一次"大得多。现在 `cmpOn` 在依赖里，
+    // 而上一趟失败过 ⇒ `cmpReady` 为假 ⇒ 早退不成立 ⇒ 真的重发。摘掉依赖里那一格 `cmpOn`，
+    // 下面那句 `toBeGreaterThan` 立刻红（这一支是它唯一的牙）。
+    h.cmpError = "FutuOpenD 未应答";
+    render(<ProChart />);
+    await flush();
+    typeCompare("600036.SH");
+    fireEvent.click(button());
+    await flush();
+    expect(field().getAttribute("title")).toContain("原因：FutuOpenD 未应答");
+    const before = h.fetchCalls.filter((c) => c.symbol === "600036.SH").length;
+    expect(before).toBe(1);
+    h.cmpError = null; // 用户照那句话把网关回来了
+    fireEvent.click(button());
+    await flush();
+    fireEvent.click(button());
+    await flush();
+    expect(h.fetchCalls.filter((c) => c.symbol === "600036.SH").length).toBeGreaterThan(before);
+    expect(cmpLive()).toHaveLength(1);
     expect(field().getAttribute("title")).not.toContain("原因：");
   });
 
