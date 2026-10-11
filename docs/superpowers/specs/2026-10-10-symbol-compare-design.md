@@ -2,6 +2,8 @@
 
 **分支** `feat/symbol-compare`（基座 `990c237d`）｜**日期** 2026-10-10｜**形态** 单人主控 + 真实浏览器活体取证
 
+> **（2026-10-11 追加）行号口径**：本文档里所有 `ProChart.tsx` 的坐标是**写作时点**（基座 `990c237d`）的读数。执行期同一位置已整体 +2（`35de2619` 在 `:791` 那个 hunk 加了 2 行注释），修复轮之后又位移过 ⇒ 引用一律按**当前树**重读，别把本文档的行号当现值。§十一·2 那句 `pricePrecision: 1319` 就是这种漂移的一例（当前树 `:1395`）。
+
 ---
 
 ## 一、这片要解决什么，以及盘面证据
@@ -93,7 +95,7 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 
 - **分时态必须卸下载入**：分时是单日的**分钟**线，而分钟时间戳跨市场不可比——`agent/src/api/market_routes.py:132-149` 的 `_MINUTE_WALL_CLOCK_ZONE` 只有 SH／SZ／HK／US 四个表项，分时那条 `session=latest` 分支遇到无表项后缀直接抛 `ValueError`（`agent/src/api/market_routes.py:669-676`，注释写明「有分钟通路、无钟点表项」才走到这里），加密根本没有表项。日线侧可比是因为两边都是「交易日标签的 naive 午夜」（`agent/src/api/market_routes.py:186-199` + `agent/src/api/udf_routes.py:41-43`）。⇒ 复用第⑤片那对 `xxxActive(on, timeShare)` 纯谓词的形状，新增 `compareActive(on, timeShare, ready)`。
 - **与 HA／VPVR 共存**：三者都是蜡烛 pane 的指标，量程各归各（`index.esm.js:978` 的集合过滤保证互不串）。回归面要能证明"再加一个对比"不动主图默认轴量程（§十·④）。
-- **Bar Replay**：回放游标是库层面的 `dataList` 截断，`calc` 只看到前缀 ⇒ 天然不重绘；但**不许**在回放中触发对比取数（回放态输入框仍可改，取数走正常路径）。五步自查见 §十·⑤。
+- **Bar Replay**：回放游标是库层面的 `dataList` 截断，`calc` 只看到前缀 ⇒ 天然不重绘；但**不许**在回放中触发对比取数（回放态输入框仍可改，取数走正常路径）。五步自查见 §十·⑤。**（2026-10-11 更正，整支评审 F-7）**这句自相矛盾，而**括注才是事实**：取数 effect 的守卫与依赖都不含回放态（当前树守卫逐字 `if (!cmpOn || cmpSymbol === "" || timeShare) return;`、依赖逐字 `[cmpSymbol, interval, timeShare, cmpOn]`），回放侧也没有反向遮挡（`ReplayBar` 与工具栏第二行互不闸门）。裁定：**行为不改**，因为回放中即使取到数，`calc` 读到的也是截断后的前缀、而 `alignCloseToTimestamps` 逐根独立（游标只吃 `<= ts` 的根）⇒ 不越游标、不重绘。这一句此后按「本片不给回放加特判」读。
 
 ## 七、UI 与文案（硬编码中文，不新增 locale 键）
 
@@ -109,6 +111,12 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 
 输入框 `title`：失败时是 `原因：<errmsg 原文>`（errmsg 由后端自己给，见 §五），否则是那句定稿说明。**这一支问 `cmpOn && error`**（2026-10-10 执行期第 2 轮补）：把对比关掉之后，上一次取数的错误不再是用户要的答案，而那一行小字与这格提示都不该再说没有主人的话。同一轮据此把「只在有值时出现的数据源小字」的条件写成 `cmpOn && source !== ""`，并**不**在关掉时清零 `cmpStatus`——关→开不重新取数（取数 effect 只认 `[cmpSymbol, interval, timeShare]`），清零会让那行小字在会话余下时间里不再回来。诚实话的形状是「藏起渲染」，不是「销毁状态」。
 
+> **（2026-10-11 评审修复轮追加，四处按现场形状改；上面两段是执行期第 2 轮的原始裁定，保留不覆盖）**
+> 1. 那半句「· 对 <cmp>」的门**从 `compareActive(cmpOn, timeShare, cmpReady)` 再收紧一格**成 `cmpShown`＝`compareActive(...) && barCount > 0`，而按钮的 `aria-pressed`／亮环 `className` 同一枚谓词（三处显示面一次收口，整支评审 F-1＋F-2）。上面那句「关→开不重新取数（取数 effect 只认 `[cmpSymbol, interval, timeShare]`）」在第 2 条之后不再成立。原门在三格**可达态**下会宣称一条图上没有的线：①分时态（`compareActive` 因 `timeShare` 为假 ⇒ 没有对比线，小字照印）；②对比侧 `s:"ok"` 交回 **0 根却带着 `source`**（`frontend/src/lib/marketApi.ts:260` 的 `columnsToBars` 可以交空数组、`:265` 无条件照抄后端串，`agent/src/api/udf_routes.py:589` 也无条件带 `source`）⇒ `cmpReady` 因 `bars.length > 0` 落假，同一屏按钮 title 正走「数据还没到位」那一支 ⇒ 两句话互相打脸；③主图 0 根而对比已取到数（`cmpReady` 只问 store 里那条序列非空，而 `calc` 对空 `dataList` 交 0 行）⇒ 开关亮着说「开着」，而那颗按钮正是关掉对比的唯一 actor、此刻还被 `barCount === 0` 禁着。**这③格在起草与执行期都没登记**，是整支评审读出来的。判据：`ProChartCompare.test.tsx` 的「对比交回 0 根却带着 source」「分时态：线不画，小字里「对 X」那半句跟着一起收掉」「主图 0 根而对比已取到数」三支。
+> 2. **取数 effect 的依赖数组现在是 `[cmpSymbol, interval, timeShare, cmpOn]`；守卫同时读 `!cmpOn`，并在 `compareInflight.has(key)` 之后并一格 `cmpReady` 早退。**把 `cmpOn` 列进来是**同一标的重试的唯一入口**：原形状下取数失败后重开开关不会重发（`clickCompare` 只翻 `cmpOn`／写偏好，不动那三格），而输入框那句「原因：<errmsg 原文>」恰恰被 §五 当成用户的行动依据（区分「重启 OpenD」与网络故障）⇒ 用户照那句话重启之后，页面上不存在同标的重试。单独加依赖会换来 F-10（关掉那一下也补发一趟，为一个已经不存在的东西取数、还把 `loading` 拨回真），所以三格必须同改。**「重开要立刻有线」不受影响**：`cmpSeries` 那份 state 与会话级 store 跨开关存活，`cmpReady` 为真时重开**一个字节都不动**（挂卸 effect 在 `cmpOn` 翻真的那一轮就挂上，序列本来就在 store 里），所以 §七 第 1 条「关掉不清 `cmpStatus`」那条改判仍有东西在钉；`cmpReady` 为假（上一趟失败过）时才真的重发。判据三支：「取数失败之后关掉：一条都不许多发」「健康态关掉再点开：不许重发…」「同标的取数失败之后关掉再点开：必须重新发一趟」。
+> 3. 按钮 `title` 的阶梯由**五支变七支**（整支评审 F-3）：原先第三支那句「数据还没到位，原因看输入框那行的提示」把三个不同的状态折成一句，而在「取数成功、结果为空」那一格里它既说错时态（没有请求在飞）又把用户指向一行由 `error !== null` 决定**不存在**的原因。现阶梯：分时 → 没有已应用标的 → **这一趟在飞** → **上一趟失败** → **开着但画不出线** → 已开 → 已关；「未落定／落定但没线」三支必须排在「已开」**之前**（这条排位理由原文不变）。上一段 §七 里那句「`aria-pressed` 与 className 走 `compareActive`…「`title` 的第 4/5 支问的是裸 `cmpOn`」按第 1 条与这一条读：显示面统一 `cmpShown`。判据：「七支 title 逐字钉…」＋「取数在飞那一句说「还没回来」，落地之后换成「已开」那一句」＋「错误臂」；`h.cmpBars = []` 那一支的期望串**同步改判**（它原本把 F-3 那句假话钉成了期望值）。另：输入框 `title` 的**非错误态那一支**（定稿说明句）此前没有任何针——§十·⑥ 只逐字钉了按钮那五支。已补一支 `toBe`。**（指针方向就地更正：本节初稿写「上一段」，被指的那句其实在本追加块**下面**那段，以「五支的判别顺序是设计的一部分」开头。）**
+> 4. §十二 R11 的口径登记一处缺失：`compareRows`／`alignCloseToTimestamps` 都**不校验输入有序**，而「升序」这件事库面没有支撑（`_addData` 对 `forward`/`backward` 是裸拼接），真担保人在后端两处（`market_routes.py:177` `frame.sort_index()` 与 `_merge_to_calendar:505`）。`frontend/src/lib/symbolCompare.ts` 的契约注释已按那两个坐标改口（整支评审 F-5）；机器保证被有意留在文档层——§三 明确拒绝在纯件里加校验。
+
 五支的**判别顺序**是设计的一部分，不是实现细节：分时 → 没有已应用标的 → **已开但数据未就绪**（`cmpOn && (loading || error || !ready)`）→ 已开 → 已关。第 3 支必须排在 4/5 **之前**——它排在后面就永远读不到，因为「已开但没数据」这一格里 `cmpOn` 已经为真；那正是本片唯一会把"进行中"说成"已完成"的形状。`aria-pressed` 与 className 走 `compareActive(cmpOn, timeShare, cmpReady)` 这**一枚**谓词（未就绪时按钮不亮，说的是"图上现在没有对比线"这件事实），而 `title` 的第 4/5 支问的是裸 `cmpOn`（偏好态），与第④⑤片那两颗按钮「三处表达式三种问法」的分工同形。
 
 ## 八、不做的事（范围钉）
@@ -121,7 +129,7 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 
 ## 十、验收判据
 
-- **① jsdom 声明面**：`createIndicator` 被调时 `paneId === "candle_pane"`、`yAxisId === COMPARE_AXIS_ID`、`series === "price"`、`figures` 恰一条且带 `title`；`createYAxis` **零调用**（这条正是"不建 manual 轴"的结构钉）。注册对象那一侧另钉一格 `figures[0].type === "line"` **逐字** `toBe`——判的是 `registerIndicator` 收到的那份字面量（形状照第⑤片 `vpvrChart.test.ts` 钉 `precision` 的那格）：§二·8 说省略 `type` 会得到一条**静默不画**的线，而这种失效在 jsdom 与活体像素上都读不出来，只能钉声明。
+- **① jsdom 声明面**：`createIndicator` 被调时 `paneId === "candle_pane"`、`yAxisId === COMPARE_AXIS_ID`、`series === "price"`、`figures` 恰一条且带 `title`；`createYAxis` **零调用**（这条正是"不建 manual 轴"的结构钉）。注册对象那一侧另钉一格 `figures[0].type === "line"` **逐字** `toBe`——判的是 `registerIndicator` 收到的那份字面量（形状照第⑤片 `vpvrChart.test.ts` 钉 `precision` 的那格）：§二·8 说省略 `type` 会得到一条**静默不画**的线，而这种失效在 jsdom 与活体像素上都读不出来，只能钉声明。**（2026-10-11 措辞更正）**本条把 `series` 列进「`createIndicator` 被调时」的观察项是不精确的：`series: "price"` 只存在于**注册对象**上（钉在 `symbolCompareChart.test.ts`），`createIndicator` 的调用面钉的是 name／paneId／yAxisId／isStack（钉在 `ProChartCompare.test.tsx`）——两半各有各的针，实质覆盖不缺，缺的是这句话的口径。
 - **② 纯函数面**：手算向量 + 前缀不变量 + 三根下毒针（`<=`、拒绝 bfill、坏值跳过——坏值按 §三 的判据是「非有限**或**非正」，所以针要同时喂 `0`／负数／`NaN`，只喂 `NaN` 的那支挡不住 R11 说的那半个）。
 - **②b 重挂面**（§四 那条宽触发面的判据）：点亮开关、数据还没到手 ⇒ `compareActive` 为假、**一次都不挂**（§六 那枚谓词的第三个入参就是 ready，未就绪不挂是它的定义）；再把序列喂进 store 并让承载它的那格 state 变身份 ⇒ 这一次**必须**挂上，且挂载之后 `calc` 对同一份 `dataList` 交出的行里**有非 null 值**。**按 §十 起草时的原句这里写的是「先挂上一次、再 remove＋create 一次」——两处都改：ready 门使第一次不成立，而判据的牙没丢**：依赖数组只写 `cmpOn`/`timeShare`/key 的实现，在数据到达那一轮根本不会重跑，于是开关亮着而线永远不存在——正是 R10 的失效形状，这条针照样抓得住它。
 - **③ 卸载面**：切走对比后 `chart.getIndicators()` 不含 `SYMBOL_COMPARE`，且 `getYAxes({paneId:'candle_pane'})` 回到**恰 1 根**轴（这条同时覆盖 §二·4 的孤儿回收与"没有漏轴"）。
@@ -132,8 +140,8 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 ## 十一、遗留（登记为限制，不是待修）
 
 1. 只支持一个对比标的；`N>1` 时右侧列宽与 `index.esm.js:14890-14901` 的列序语义本片未读。
-2. 低价标的（如 0.00x 的币）刻度与图例读数会被本页既有的 `pricePrecision: 2`（`frontend/src/pages/ProChart.tsx:1319`）压成 `0.00`——这是**本页出厂**就有的精度约定，本片继承而未新增第二套规则。
-3. 对比序列的最后一根若是正在形成的当日 bar，**不会**实时刷新（无推送通道），线上会停一次；主图那侧有 `subscribeBar`，这是不对称的已知代价。
+2. 低价标的（如 0.00x 的币）刻度与图例读数会被本页既有的 `pricePrecision: 2`（`frontend/src/pages/ProChart.tsx:1319`）压成 `0.00`——这是**本页出厂**就有的精度约定，本片继承而未新增第二套规则。**（2026-10-11 坐标口径，整支评审 F-8）**那个号按**基座 `990c237d`** 树读（`git show 990c237d:… | grep -n pricePrecision` 交回 `1319` 与 `1714`）；当前树是 `:1395`／`:1841`。§一 那批取证号（`:471`→现 `:493`、`:2935`→现 `:3149`）同理，都是动手前的读数。
+3. 对比序列的最后一根若是正在形成的当日 bar，**不会**实时刷新（无推送通道），线上会停一次；主图那侧有 `subscribeBar`，这是不对称的已知代价。**（2026-10-11 修复轮补）**开关「关一下再点开」在**上一趟没成功过**时才会重发一趟（见 §七 那条追加子句第 2 条：`cmpReady` 为真时重开不重取）⇒ 健康态下这一格滞后照旧，只有失败恢复路径会被刷新；它仍**不是**推送通道，不对称照旧，而七支 title 里没有一句披露它。
 4. 两标的的日线复权口径可能不同尺（加法扣息 vs 乘法，`agent/backtest/loaders/registry.py:386-391`），UI 只能给出两个 `source` 字符串，无法证明可比性。
 5. 取数深度上限 2000 根且不回传截断标记（`agent/src/api/udf_routes.py:473-474`）⇒ 主图滚得比 2000 根更早时，对比线左端从某根开始，其余为 `null`。
 6. 「百分比归一轴」（TV 把整条轴切成 Percentage 的那种对比）没做，它是**第二条通道**：要么改轴的 `createRange`/`createTicks` 钩子（`index.esm.js:1066-1082`、`index.d.ts:658-659`），要么自绘标尺——都需要重读一遍轴内部，本片刻意不碰。
@@ -145,7 +153,7 @@ alignCloseToTimestamps(mainTimestamps: readonly number[], compare: readonly {tim
 - **R3 分时禁用** —— 理由：分钟时间戳跨市场不可比（`agent/src/api/market_routes.py:132-149`、`agent/src/api/market_routes.py:669-676`）—— 错了代价：叠出一条错位且无法解释的线。
 - **R4 不给对比标的单独选复权档，只显示 `source`** —— 理由：日线 `adjust` 是死参数（`agent/src/api/market_routes.py:654`、`agent/src/api/market_routes.py:661`）且 caliber 不回传 —— 错了代价：印出不可比的两条尺还自称可比（造假精度）。
 - **R5 失败要报、空不算失败** —— 理由：那条 errmsg 是用户排障的唯一线索（`marketApi.ts:253-257`），而 `no_data`→`bars: []` 是正常形状（`marketApi.ts:260`）—— 错了代价：静默吞掉一条能定位的错误。
-- **R6 精度继承 `series:"price"` 不估小数位** —— 理由：本页已有唯一精度约定 `frontend/src/pages/ProChart.tsx:1319`，`index.esm.js:14221` 那条同步通道是库给的 —— 错了代价：多出一套没人维护的精度规则。
+- **R6 精度继承 `series:"price"` 不估小数位** —— 理由：本页已有唯一精度约定 `frontend/src/pages/ProChart.tsx:1319`（**2026-10-11 补**：同 F-8，按基座 `990c237d` 树读，当前树 `:1395`），`index.esm.js:14221` 那条同步通道是库给的 —— 错了代价：多出一套没人维护的精度规则。
 - **R7 对齐必须算在 `calc` 里** —— 理由：`index.esm.js:13501-13506`/`index.esm.js:14145` 每次加分页都全量重跑、`extendData` 不触发重算（`index.esm.js:3167-3168`、`index.esm.js:3181`）—— 错了代价：滚到边界加载后线整体错位，且只有活体能发现。
 - **R8 缺口交给库的 `null` 语义，不自绘、不桥接** —— 理由：`index.esm.js:8095`+`index.esm.js:8137` 让 `null` 成为双向缺口，`index.esm.js:8174-8175` 保证缺口不被跨过，`index.esm.js:8114-8131` 那套 `baseValue` 只属于 `bar`/`rect` 所以不会掉到基线 —— 错了代价：若哪天改成"用前值桥接"或走 `draw` 自绘，「主图有 bar 而对比没有」会被画成一条不该存在的连线，而这条线在活体上和真数据无法区分。
 - **R9 一个偏好键，值即已应用标的，缺键即关** —— 理由：这页「关」的语义就是没有对比标的，把开关与标的存两处必然出现"键说开着、标的却是空"的第三种状态 —— 错了代价：reload 后读出一个既无标的又亮着的开关，而 §七 的五支 title 没有一支描述那种形状。会话内 `cmpSymbol` 不清，代价只是"关掉再开要重敲"这一条，已写在 §四。

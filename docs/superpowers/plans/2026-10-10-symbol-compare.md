@@ -6,7 +6,7 @@
 
 **Architecture:** 三件套——`lib/symbolCompare.ts`（纯对齐，ffill-not-bfill，缺口交 `null`）、`lib/symbolCompareChart.ts`（库绑定面：注册 `SYMBOL_COMPARE` 指标 + 偏好读写 + 会话级 store）、`pages/ProChart.tsx`（取数 effect、`syncCompare` 挂卸、工具栏输入框＋开关）。通道是 `createIndicator({paneId, yAxisId}, true)` 的公开多轴通道：库自己把那根轴建出来（非 manual），删指标顺手回收它。
 
-**Tech Stack:** React 18 + TypeScript + klinecharts@10.0.3（未打补丁）+ Vitest/jsdom + Tailwind 类名字符串。
+**Tech Stack:** React 19（`frontend/package.json` 实读 `^19.2.8`）+ TypeScript + klinecharts@10.0.3（未打补丁）+ Vitest/jsdom + Tailwind 类名字符串。
 
 **Spec:** `docs/superpowers/specs/2026-10-10-symbol-compare-design.md` —— 本计划从它论证；任何冲突按「spec 是权威、计划是它的论证」裁定，并在计划里就地登记。
 
@@ -38,7 +38,7 @@
 | `frontend/src/lib/__tests__/symbolCompareChart.test.ts` | 新建 | §十·① 声明面（含 `figures[0].type` 逐字钉）＋谓词真值表＋偏好＋store |
 | `frontend/src/pages/ProChart.tsx` | 修改 | 取数 effect、`syncCompare`、挂卸 effect、`clickCompare`、工具栏输入框＋按钮＋来源小字（spec §五/§六/§七） |
 | `frontend/src/pages/__tests__/ProChartCompare.test.tsx` | 新建 | §十·②b 重挂面、③ 卸载面、⑥ 文案面＋共挂/分时/空图/StrictMode 回归 |
-| `repowiki/项目档案.md` | 修改（T6） | §7.20 落档（CRLF ⇒ bytes 层追加） |
+| `项目档案.md`（**仓根**，不在 `repowiki/`） | 修改（T6） | §7.21 落档（CRLF ⇒ bytes 层追加） |
 
 任务切分依据：T1/T2 各自是可独立评审的纯件（无页面耦合），T3 是唯一碰页面的件（三处接线互相依赖、拆开会留下半成品），T4 是「证明 T1–T3 的针真有牙＋全量门禁」的验收件，T5 是只有活体能答的判据，T6 是档案与记忆。
 
@@ -477,7 +477,7 @@ import { alignCloseToTimestamps, type CompareBar } from "./symbolCompare";
  *
  * 1. **绝不 `createYAxis`**：`ChartImp.createYAxis` 会把轴标成 manual（`index.esm.js:15483`），
  *    而 manual 轴对 `_shouldUseCandleData()` 为真 ⇒ 一把刚建出来、还没挂指标的空尺会先把
- *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 切走对比会**漏一根轴**。
+ *    主图蜡烛撑进自己的量程；孤儿回收又正好跳过 manual（`index.esm.js:15234`）⇒ 漏一根轴只在「那个 id 始终没被任何指标接管」时才落地：接管那一路会把已存在轴上的 manual 摘掉（`:15247-15248`），而 `createYAxis` 撞见已存在的 id 直接早退、根本不补打标（`:15479-15480`）。
  * 2. **「不进主图价格轴」是结构保证而不是约定**：轴取数的唯一口径 `_getIndicatorsByYAxisIds()`
  *    的判据集合以本轴 id 起步，**只有本轴是 manual 时**才并上默认轴 id（`index.esm.js:967-973`，
  *    过滤那行在 `:978`）⇒ 非 manual 的轴只认自己的 id，我们那条自定义 id 不在主图轴的集合里，
@@ -1661,16 +1661,16 @@ function cmpOracle(mainTs, series) {
 
 ---
 
-### Task 6: 落档 §7.20 + 记忆 + 整支评审
+### Task 6: 落档 §7.21 + 记忆 + 整支评审
 
 **Files:**
-- Modify: `repowiki/项目档案.md`（追加 §7.20 一节）
+- Modify: `项目档案.md`（**仓根**）（追加 §7.21 一节）
 - Modify（记忆，仓库外）: `C:\Users\fire\.qoder-cn\projects\e--Vibe-Trading-main-Vibe-Trading-main\memory\ops-delivered-features-and-comparisons.md` ＋ 新的库约束条目
 - 无代码改动
 
-- [ ] **Step 1: 追加档案 §7.20**
+- [ ] **Step 1: 追加档案 §7.21**
 
-`repowiki/项目档案.md` 的工作树是 **CRLF**（本仓地籍：只有 `repowiki/` 钉了 LF 的 blob），所以按「bytes 层追加」配方做：读 bytes、在尾部追加用 `\r\n` 连接、写回。追加内容照 §7.18／§7.19 那一节的形状：一片一节，含「通道裁定」「库坐标证据（指 `dist/index.esm.js`）」「判据落点（哪个测试文件答 §十 的哪条）」「活体读数（当场数值，含未判清单）」「遗留」。
+`项目档案.md`（仓根）的工作树是 **CRLF**（本仓地籍：只有 `repowiki/` 钉了 LF 的 blob），所以按「bytes 层追加」配方做：读 bytes、在尾部追加用 `\r\n` 连接、写回。追加内容照 §7.18／§7.19 那一节的形状：一片一节，含「通道裁定」「库坐标证据（指 `dist/index.esm.js`）」「判据落点（哪个测试文件答 §十 的哪条）」「活体读数（当场数值，含未判清单）」「遗留」。
 
 两条硬纪律：
 - **不写自指读数**（不写「本文件 N 行」「本节 M 笔」）；**不在档案里加总本片笔数**。
@@ -1688,7 +1688,7 @@ bash tools/ci_grep_gates.sh
 - [ ] **Step 3: 提交档案**
 
 ```bash
-git commit -s -m "docs(archive): §7.20 第⑥片多标的叠加对比落档（含通道翻案与活体读数坐标）" -- repowiki/项目档案.md
+git commit -s -m "docs(archive): §7.21 第⑥片多标的叠加对比落档（含通道翻案与活体读数坐标）" -- 项目档案.md
 ```
 
 - [ ] **Step 4: 记忆更新**
@@ -1738,3 +1738,16 @@ git commit -s -m "docs(archive): §7.20 第⑥片多标的叠加对比落档（�
 - **P6 `barCount === 0` 不新增 title 分支** —— 理由同 P5（§七 是封闭五支）。形状：空图时按钮 `disabled`，title 说"已开/已关"。缺口登记进 T6 的遗留。
 - **P7 替身里轴表建/拆是库规则的六行镜像，不是常量** —— 理由：把 `getYAxes` 交成常量空集或常量单元素，§十·③ 那根"漏一根轴"的针就结构性不可红（本仓登记的假绿第一种）。注释必须写明「判的是声明与调用面，不是库」。
 - **P8 不加 `getSize` 到 jsdom 替身** —— 理由：页面代码一格都不读它；宽度判据属于 T5 活体。替身只交真被读的那几格。
+
+> **（2026-10-11 评审修复轮就地更正，计划面八处＋交付判据四条追加；上面各条按更正后的形态读，原文不覆盖）**
+> 1. **档案路径与节号**：本计划的 File Structure 表、Task 6 的 Files／Step 1／Step 3 一共四处写的 `repowiki/项目档案.md` **不是仓内路径**——档案真身在**仓库根** `项目档案.md`（`git -c core.quotepath=false ls-files -- repowiki/项目档案.md` 返回 0 行，`-- 项目档案.md` 返回 1 行）。`Step 3` 那条 `git commit … -- repowiki/项目档案.md` 是可照抄的命令，照抄会得到 pathspec 未命中，故一并改。节号 §7.20 → **§7.21**：§7.20 已被外片 `/multi-chart` 占用（档案 `:1890`）。
+> 2. **`Tech Stack` 的 React 大版本**：原写 React 18，实装 `frontend/package.json` = `^19.2.8`（同一支档案 §7.20 那节还按 `@types/react@19` 论证类型槽）。
+> 3. **Task 2 那块 verbatim 注释里的「切走对比会漏一根轴」**：无限定形式，已被本支自己的库实读推翻（`_createOrUseIndicatorYAxis` `index.esm.js:15247-15248` 摘 manual、`createIndicator` 在 `:15282` 调它、`:15283` 紧接扫孤儿轴；反向 `createYAxis` 遇已存在轴 `:15479-15480` 早退不写 manual）。`dad9794d` 当时只改了 spec §二·4 与 Task 5 的针表，**没有回溯这块逐字代码**，交付出来的 `frontend/src/lib/symbolCompareChart.ts` 注释同一句也一起跟着错了——两处同批改齐。
+> 4. **交付判据追加四条**（都带整支评审的条目号，`ProChartCompare.test.tsx` 由 18 支变 **23** 支）：
+>    - **其一（F-1＋F-2）**：显示面三处（按钮 `aria-pressed`／亮环 `className`／来源小字「· 对 <cmp>」那半句）统一问新谓词 `cmpShown`＝`compareActive(cmpOn, timeShare, cmpReady) && barCount > 0`。原门只问 `cmpOn`／`compareActive`，在三格**可达态**下宣称一条图上没有的线：①分时态；②对比侧 `s:"ok"` 交回 **0 根却带着 `source`**（`marketApi.ts:260`/`:265`、`udf_routes.py:589`）；③主图 0 根而对比已取到数（`cmpReady` 量的是「store 里这条序列非空」，而 `calc` 对空 `dataList` 交 0 行）。**裁定：`barCount > 0` 只并进显示面，不并进 `cmpReady`、不进挂卸 effect 的依赖**——线"存不存在"由数据保证（0 行必不画），生命周期不动就不引入「分页时反复先删后挂」这条新抖动；代价是那一格指标仍挂着（多一根空尺），不是错误读数。判据：「对比交回 0 根却带着 source」「分时态：线不画，小字里「对 X」那半句跟着一起收掉」「主图 0 根而对比已取到数」三支。
+>    - **其二（F-3）**：按钮 `title` 原先那句「数据还没到位，原因看输入框那行的提示」在终态里说错时态（没有请求在飞）又把用户指向一行由 `error !== null` 门决定**不存在**的原因 ⇒ 第三支一分为三，阶梯由五支变**七支**：在飞 → 上一趟失败 → 开着但画不出线，三者都排在「已开」之前。旧针 `h.cmpBars = []` 那一支的期望串**同步改判**（它原本把那句假话钉成了期望值）。判据：「七支 title 逐字钉…」＋「取数在飞那一句…（支 3 → 支 6）」＋「错误臂」三支。
+>    - **其三（F-9／F-10／parked ③）**：取数 effect 的依赖数组加 `cmpOn`，**并且**守卫读 `!cmpOn`，**并且**在 `compareInflight.has(key)` 之后并一格 `cmpReady` 早退。三格合起来才同时给出三件事：关掉那一下不发（F-10）、健康态重开不重发（计划行 11 的牙保住，「关掉不清 `cmpStatus`」那条改判仍有见证）、失败后重开**真重发**（同一标的唯一原地重试入口，把 parked ③ 从限制收口成特性）。判据：「取数失败之后关掉：一条都不许多发」（`!cmpOn` 唯一见证——健康态那一支挡不住摘掉它，`cmpReady` 先早退）＋「健康态关掉再点开：不许重发…」（`cmpReady` 唯一见证）＋「同标的取数失败之后关掉再点开：必须重新发一趟」。
+>    - **其四（F-4／F-5／F-7／F-8，全是措辞面）**：`symbolCompareChart.ts` 那句注释按上面第 3 条改口；`symbolCompare.ts:23` 的「主图 `dataList` 天然升序」换成真担保人坐标（`market_routes.py:177` `frame = frame.sort_index()`——`_bars_from_frame` 之内，`:242`／`:279`／`:336`／`:465`／`:591` 五条通路都过它；周月线那侧 `_merge_to_calendar:505` 再排一次；库面 `_addData` 是裸拼接、一条顺序校验都没有）；spec §六 那句「**不许**在回放中触发对比取数」按现场形状改口（代码从未给回放加特判）；spec §十一·2 与 §十二 R6 两处现在时坐标补「按基座 `990c237d` 树读」。
+> 5. **两条 park 判词（不动代码，登记在册）**：①F-6（`compareInflight` 的 `.finally` 删键不认主人）——在 React 单实例 effect 模型下 `has()` 早退**结构性不可达**：每次重跑先跑自己的 cleanup、而 cleanup 必删同一个键，所以"删了别人的键"没有可达后果，换 `Map<string, AbortController>` 只会多出一根无牙针；②`cmpStatus.loading` 的惰性初值（`loadCompare() !== ""`）在 jsdom 里**读不到首帧**（`render()` 的 `act` 会把 passive effect 同步冲掉），变异复证 P7 交回 23 支全绿 ⇒ 登记为「无针面的初值修复」，靠判词不靠针。
+
+> 6. **计划里 P5／P6 两条裁定被修复轮推翻，P3 没有**：P6 那句「`barCount === 0` 不新增 title 分支（§七 是封闭五支）」与 P5「`no_data` 走第 3 支」合起来的后果，正是整支评审 F-3 判的那句假话——终态空结果被说成「数据还没到位」，而它指针的那行「原因」由输入框那枚 `error !== null` 门决定**不存在**。现阶梯七支（见上面第 4 条其二）：`no_data` 与「主图 0 根」两格都走「开着但画不出线」那一支，「在飞」与「失败」各占一支。§七 那句「封闭五支」随之作废，spec 侧已按 §七 追加子句第 3 条登记。**P3（依赖数组不含 `cmpSeries`）没有被推翻**：新加的 `cmpReady` 早退读的是**本次渲染闭包**里的派生值，`cmpSeries` 仍不在数组里——列进去就是 P3 说的请求风暴，而它正是第 4 条其三那格 `// eslint-disable-next-line` 的代价登记。
