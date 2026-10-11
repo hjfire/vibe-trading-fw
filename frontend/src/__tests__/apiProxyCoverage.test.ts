@@ -45,11 +45,13 @@ function looksLikeApiPath(path: string): boolean {
   return segments.every((segment) => /^[\w.-]+$/.test(segment) && !segment.includes(".."));
 }
 
-/** Every path literal in an argument position of `fetch` / `request` / `call`. */
+/** Every path literal in an argument position of `fetch` / `call` / `*Request`. */
 function apiPathsIn(source: string): string[] {
   const code = stripComments(source).replace(/\$\{BASE\}/g, "");
   const found: string[] = [];
-  for (const match of code.matchAll(/\b(?:fetch|request|call)(?:<[^<>()]*>)?\s*\(\s*([^,\n]{0,160})/g)) {
+  // `*Request` and not just `request`: upstream's `performRequest` helper would
+  // otherwise drop its call sites from this scanner without any signal.
+  for (const match of code.matchAll(/\b(?:fetch|call|\w*[Rr]equest)(?:<[^<>()]*>)?\s*\(\s*([^,\n]{0,160})/g)) {
     const literal = match[1].match(/^(["'`])(\/[^"'`\s]*)/);
     if (!literal) continue;
     const head = staticHead(literal[2]);

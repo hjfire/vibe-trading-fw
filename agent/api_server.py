@@ -114,13 +114,14 @@ from src.api.state import (  # noqa: F401, E402
 console = Console()
 logger = logging.getLogger(__name__)
 
-from src.api.channels_routes import (  # noqa: E402
+from src.api.channels_routes import (  # noqa: F401, E402
     _start_channel_runtime,
     _stop_channel_runtime,
 )
-from src.api.scheduled_routes import (  # noqa: E402
+from src.api.scheduled_routes import (  # noqa: F401, E402
     _start_scheduled_research_executor,
     _stop_scheduled_research_executor,
+    _stop_scheduled_research_on_shutdown,
 )
 from src.api.alerts_routes import _start_alert_poller, _stop_alert_poller  # noqa: E402
 
@@ -144,15 +145,6 @@ async def _run_startup_preflight() -> None:
     _start_alert_poller()
 
 
-async def _stop_scheduled_research_on_shutdown() -> None:
-    """Stop the background executors; the alert loop goes first so it cannot queue a send."""
-    await _stop_alert_poller()
-    try:
-        await _stop_channel_runtime()
-    finally:
-        await _stop_scheduled_research_executor()
-
-
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Run API startup and guaranteed reverse-order shutdown."""
@@ -160,6 +152,9 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
         await _run_startup_preflight()
         yield
     finally:
+        # The alert loop goes first so it cannot queue a send after the drivers
+        # stop; the rest is the shared shutdown moved to scheduled_routes.
+        await _stop_alert_poller()
         await _stop_scheduled_research_on_shutdown()
 
 
@@ -293,6 +288,7 @@ from src.api.live_routes import (  # noqa: F401, E402
     _live_broker_adapter,
     _build_live_runner,
     _drive_runner,
+    _stop_live_runners,
     _connector_verify_cache,
     _check_connector_status,
 )

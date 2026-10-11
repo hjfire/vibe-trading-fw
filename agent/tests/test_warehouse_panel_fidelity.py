@@ -288,9 +288,17 @@ def test_bench_runners_pass_the_source_through(warehouse, monkeypatch) -> None:
     class _Stop(Exception):
         pass
 
+    class _Alpha:
+        meta: dict[str, object] = {}
+
     class _Registry:
         def list(self, zoo: str | None = None) -> list[str]:  # noqa: ARG002
             return ["gtja191_1"]
+
+        # The runners' pre-load data gate reads declared columns through
+        # ``get``; a price-only stub declares none.
+        def get(self, alpha_id: str) -> _Alpha:  # noqa: ARG002
+            return _Alpha()
 
     period = "2020-01-02/2020-01-07"
     seen: list[tuple[str, str, str | None]] = []

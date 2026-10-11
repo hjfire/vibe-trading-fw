@@ -93,6 +93,7 @@ def compare_alphas(
     sort: str = "ir",
     registry: Registry | None = None,
     on_progress: ProgressCb | None = None,
+    on_stage: Callable[[str], None] | None = None,
     data_source: str | None = None,
 ) -> dict[str, Any]:
     """Bench a hand-picked set of alphas head-to-head and rank them.
@@ -150,6 +151,7 @@ def compare_alphas(
 
     total = sum(len(v) for v in by_zoo.values())
     rows: list[dict[str, Any]] = []
+    universe_meta: dict[str, Any] = {}
     base = 0
     for zoo, zids in sorted(by_zoo.items()):
         # Passed only when set, so a ``run_bench`` double with a fixed signature
@@ -163,9 +165,11 @@ def compare_alphas(
             only=zids,
             registry=reg,
             on_progress=_zoo_progress_cb(on_progress, base, total),
+            on_stage=on_stage,
             **source_kwargs,
         )
         if sub.get("status") == "ok":
+            universe_meta = sub.get("meta") or universe_meta
             for raw in sub.get("rows", []) or []:
                 row = dict(raw)
                 row.setdefault("zoo", zoo)
@@ -213,6 +217,7 @@ def compare_alphas(
         "n_compared": len(ranking),
         "n_skipped": len(skipped),
         "winner": ranking[0]["id"],
+        "meta": universe_meta,
         "ranking": ranking,
         "skipped": skipped,
     }

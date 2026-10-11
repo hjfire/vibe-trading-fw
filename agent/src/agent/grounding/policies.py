@@ -21,6 +21,7 @@ from src.agent.grounding.identity import (
     _scan_symbols,
 )
 from src.agent.grounding import identity_checks  # noqa: F401  (registers declared checks)
+from src.agent.grounding import figures_checks  # noqa: F401  (registers declared checks)
 from src.agent.grounding.registry import GROUNDING_CHECKS
 from src.agent.grounding.evidence import (
     EvidenceRecord,
@@ -114,11 +115,16 @@ class ValidationResult:
 
     ``released_text`` is the draft without its declaration block, which is a
     contract with the gate and never reaches the user.
+
+    ``passed_figures`` names the measured figures the gate checked and let
+    through, as written, so the correction prompt can tell the model what to
+    keep, not only what to fix.
     """
 
     valid: bool
     issues: list[dict[str, Any]] = field(default_factory=list)
     released_text: str = ""
+    passed_figures: tuple[str, ...] = ()
 
 
 def _close(value: float, target: float) -> bool:
@@ -406,12 +412,12 @@ def _formula_in_note(note: str) -> tuple[float, list[float], ast.Expression] | N
         parts = [piece for part in parts for piece in part.split(separator)]
     # A formula followed by its explanation ("(a − b) / b，自高点回撤"). A bare
     # "," is not split: it groups thousands inside a formula.
-    for separator in ("，", "；", "：", "; ", ", "):
+    for separator in ("，", "；", "：", ":", "; ", ", "):
         parts = [piece for part in parts for piece in part.split(separator)]
     candidates.extend(part for part in parts if part.strip())
     # Only once the note as written fails: its words removed, whole and in parts.
     unlabelled = _without_labels(note)
-    for separator in ("≈", "≒", "＝", "=", "→", "->", "，", "；", "：", "; ", ", "):
+    for separator in ("≈", "≒", "＝", "=", "→", "->", "，", "；", "：", ":", "; ", ", "):
         unlabelled = " \n ".join(unlabelled.split(separator))
     candidates.extend(part for part in unlabelled.split(" \n ") if part.strip())
     for candidate in candidates:
@@ -427,31 +433,7 @@ class _PolicyMixin:
     def _validate_identity(self, content: str) -> list[dict[str, Any]]:
         """Validate aggregate state and listed/private contradictions."""
         issues: list[dict[str, Any]] = []
-        status = self.identity_status
-        # Only a run that named an instrument can get its identity wrong: the
-        # trigger phrase matches the user message, so "什么是市盈率估值法？" would
-        # otherwise fail every draft. ``ambiguous`` is absent on purpose: a
-        # shortlist is an answer and consumers stay blocked in ``authorize_tool_call``.
-        if (
-            self._identity_required
-            and self._identities
-            and status in {"unresolved", "conflicting", "invalidated"}
-        ):
-            issues.append(
-                {
-                    "code": "identity_not_locked",
-                    "status": status,
-                    "value": None,
-                    "role": None,
-                    "span": None,
-                    "symbol": None,
-                    "reason": "identity_not_locked",
-                    "message": (
-                        f"Instrument identity is {status}; a final market conclusion "
-                        "requires locked identity."
-                    ),
-                }
-            )
+        issues.extend(GROUNDING_CHECKS.run("identity-not-locked", self, content))
         issues.extend(GROUNDING_CHECKS.run("listed-identity-relabelled-private", self, content))
         return issues
 
@@ -472,23 +454,7 @@ class _PolicyMixin:
             One issue per figure that its role does not survive, plus one per
             malformed declaration line and the provenance findings.
         """
-        issues: list[dict[str, Any]] = [
-            {
-                "code": "figures_block_malformed",
-                "line": line_no,
-                "claim": raw,
-                "value": None,
-                "role": None,
-                "span": None,
-                "symbol": None,
-                "reason": "unparseable_declaration",
-                "message": (
-                    f"figures block line {line_no} could not be read as "
-                    "`value | role | note | ref`: " + raw
-                ),
-            }
-            for line_no, raw in block.malformed
-        ]
+        issues: list[dict[str, Any]] = GROUNDING_CHECKS.run("figures-block-malformed", self, content)
         records = self._comparable_price_records()
         # Symbol resolution is broader than price comparison. A session may hold
         # quotes for the primary listing and only non-price evidence for another
@@ -1229,6 +1195,53 @@ class _PolicyMixin:
             return _is_price_kind(record)
         return True
 
+    def _unknown_call_field_ref_candidates(
+        self, ref: str, symbol: str | None, figure: Figure
+    ) -> list[str]:
+        """Exact ``call_id::path`` refs for a ``scope::field`` whose scope names nothing.
+
+        A model that writes an alias (``p1::field``) instead of the call id it
+        was given names no call, tool or run of this session, so the ref selects
+        no evidence. This only lists where the field really lives, so the next
+        draft can copy an exact ref; it grants nothing, and the figure stays
+        rejected until it is re-declared with one of them. Refs whose value the
+        figure matches come first; at most :data:`_MAX_CALL_REF_CANDIDATES` are
+        returned. Candidates keep the same symbol and kind restrictions as a
+        real field ref, so the correction cannot recommend an unusable ref.
+        """
+        key = (ref or "").strip()
+        if "::" not in key:
+            return []
+        scope, field = (part.strip() for part in key.split("::", 1))
+        if not scope or not field or self._names_session_source(scope):
+            return []
+        records, entries = self._field_sources(field, symbol)
+        found: dict[str, list[float]] = {}
+        money = bool(figure.currency and not figure.percent)
+        for record in records:
+            if record.call_id and record.field and self._kind_fits(record, figure):
+                label = self._ref_source(record.call_id, record.field, record.scope)[1]
+                found.setdefault(label, []).append(float(record.value))
+        for entry in entries if not (money or figure.column) else ():
+            if entry.get("call_id") and entry.get("field"):
+                label = self._ref_source(str(entry["call_id"]), str(entry["field"]), None)[1]
+                found.setdefault(label, []).append(float(entry["value"]))
+        compatible = {
+            label
+            for label, values in found.items()
+            if self._matches_evidence(figure, values, [] if money else values)
+        }
+        ranked = sorted(found, key=lambda label: (label not in compatible, label))
+        return ranked[:_MAX_CALL_REF_CANDIDATES]
+
+    def _names_session_source(self, name: str) -> bool:
+        """Whether ``name`` is a call id, tool name or backtest run of this session."""
+        return (
+            any(name in (record.call_id, record.tool) for record in self._evidence)
+            or any(name in (entry.get("call_id"), entry.get("tool")) for entry in self._analysis_metrics)
+            or bool(self._artifact_scope(name))
+        )
+
     def _tail_risk_ref_required(
         self,
         figure: Figure,
@@ -1530,6 +1543,23 @@ class _PolicyMixin:
                             source_tool_call_ids=[declaration.ref],
                             ambiguous_sources=call_field_candidates,
                             field_ref_candidates=call_field_candidates,
+                        )
+                    ]
+                unknown_scope_candidates = self._unknown_call_field_ref_candidates(
+                    declaration.ref, symbol, figure
+                )
+                if unknown_scope_candidates:
+                    return [
+                        self._figure_issue(
+                            "numeric_claim_conflict",
+                            figure,
+                            "observed",
+                            symbol,
+                            "unknown_call_id",
+                            f"is declared observed from {declaration.ref}, whose left side "
+                            "is not a call id, tool or run of this session",
+                            source_tool_call_ids=[declaration.ref],
+                            field_ref_candidates=unknown_scope_candidates,
                         )
                     ]
             values = [float(record.value) for record in scoped_records] + metric_values
@@ -1963,66 +1993,6 @@ class _PolicyMixin:
                 )
             ]
         return []
-
-    def _validate_unsourced_symbols(
-        self,
-        content: str,
-        figures: Sequence[Figure],
-        block: FiguresBlock,
-    ) -> list[dict[str, Any]]:
-        """Reject figures attached to an instrument no tool in this run handled.
-
-        Naming a symbol is fine, but a line pairing an unhandled canonical symbol
-        with a measured figure has no origin other than model memory (#886/#887).
-        A figure declared ``cited`` is exempt, since a citation is an origin.
-        """
-        issues: list[dict[str, Any]] = []
-        reported: set[str] = set()
-        for index, (line, offset) in enumerate(_lines_with_offsets(content)):
-            unknown = sorted(
-                symbol
-                for symbol in _scan_symbols(line)
-                - self._session_symbols
-                - reported
-                if symbol.rsplit(".", 1)[0] not in self._session_symbol_roots
-            )
-            if not unknown:
-                continue
-            carried = [
-                figure
-                for figure in figures
-                if figure.line == index and figure.shape == "measured"
-            ]
-            if not carried:
-                continue
-            if all(
-                (
-                    block.match(figure.value, figure.percent, figure.digits)
-                    or _NO_DECLARATION
-                ).role
-                == "cited"
-                for figure in carried
-            ):
-                continue
-            for symbol in unknown:
-                reported.add(symbol)
-                issues.append(
-                    {
-                        "code": "unsourced_symbol_figures",
-                        "symbol": symbol,
-                        "value": None,
-                        "role": None,
-                        "reason": "symbol_never_handled",
-                        "claim": line.strip()[:200],
-                        "span": [offset, offset + len(line)],
-                        "message": (
-                            f"No tool call in this session passed in or returned {symbol}, "
-                            "yet the answer attaches figures to it. Retrieve it, or report "
-                            "it as not retrieved."
-                        ),
-                    }
-                )
-        return issues
 
     @staticmethod
     def _symbol_for_claim(
