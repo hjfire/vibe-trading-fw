@@ -78,6 +78,54 @@ export function isBuiltinSubIndicator(name: string): boolean {
   return BUILTIN_SUB_NAMES.includes(name);
 }
 
+/**
+ * The /multi-chart cell pick, encoded.
+ *
+ * A cell's strip is either a built-in name the library can mount directly, or one
+ * of the workbench's saved formulas — and a formula has no library name until
+ * `indicatorLang` registers it as `UCI_<id>`. Storing that registered name would
+ * work, but it is derived state: it changes if the id changes, and it says
+ * nothing about *why* the value is not in `BUILTIN_SUB_NAMES`. So the encoded form
+ * names the namespace it belongs to, and `normalizeCellSub` is the single door
+ * back out of it.
+ */
+export const SCRIPT_SUB_PREFIX = "script:";
+
+export function scriptSubValue(id: string): string {
+  return `${SCRIPT_SUB_PREFIX}${id}`;
+}
+
+/** The id half of an encoded script pick. No validity check — that is the caller's. */
+export function scriptSubId(value: string): string {
+  return value.slice(SCRIPT_SUB_PREFIX.length);
+}
+
+/** An encoded pick that actually carries an id; `script:` alone names nothing. */
+export function isScriptSub(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith(SCRIPT_SUB_PREFIX) &&
+    scriptSubId(value).trim() !== ""
+  );
+}
+
+/**
+ * A stored cell pick, or `null` when the shelf cannot mount it.
+ *
+ * `scriptIds` is the list of formulas that exist *now*: a stored reference to one
+ * the user has since deleted has to fall back to 「无」 rather than reach
+ * `createIndicator` with a name nobody registered, which costs a `console.warn`
+ * and no pane — a picker chip claiming a strip over a blank area under the bars.
+ *
+ * The whole remainder after the prefix is the id, deliberately not the first
+ * colon-delimited field: an id containing a colon would otherwise resolve to a
+ * different formula than the one that was stored.
+ */
+export function normalizeCellSub(value: unknown, scriptIds: readonly string[]): string | null {
+  if (isScriptSub(value)) return scriptIds.includes(scriptSubId(value)) ? value : null;
+  return typeof value === "string" && isBuiltinSubIndicator(value) ? value : null;
+}
+
 /** 成交量 in the picker, 成交量 everywhere else that names a pane. */
 const LABELS: Record<string, string> = Object.fromEntries(
   BUILTIN_SUB_INDICATORS.map((i) => [i.name, i.label]),

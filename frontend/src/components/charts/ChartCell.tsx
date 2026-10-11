@@ -19,6 +19,12 @@ import { CANDLE_COLORS } from "@/lib/chartPalette";
 import { chartLocale, ensurePeriodUnitLabels } from "@/lib/klineLocale";
 import { MAIN_PANE_ID } from "@/lib/chartDrawings";
 import { planPaneHeights, subPaneIdOf } from "@/lib/paneLayout";
+import {
+  applyUserIndicator,
+  indicatorName,
+  removeUserIndicator,
+  type ApplySpec,
+} from "@/lib/indicatorLang";
 
 /**
  * One candlestick chart on one period — a cell of the /multi-chart grid.
@@ -82,15 +88,32 @@ function sameBar(a: KLineData, b: KLineData): boolean {
   );
 }
 
+/** What the page asked this cell to draw: one of the built-in sub indicators, or
+ *  one of the workbench's saved formulas. A script is carried as the spec
+ *  `applyUserIndicator` takes, because that is the same object /pro-chart hands
+ *  it — one mount implementation, two pages. */
+export type CellSub =
+  | { kind: "builtin"; name: string }
+  | { kind: "script"; script: ApplySpec };
+
+/** What a strip *is*, as far as the cell's bookkeeping cares: the two kinds get
+ *  separate keys so a built-in and a script can never look like the same request. */
+function subKeyOf(sub: CellSub | null | undefined): string {
+  if (!sub) return "";
+  return sub.kind === "builtin" ? `b:${sub.name}` : `s:${sub.script.id}`;
+}
+
 export interface ChartCellProps {
   symbol: string;
   interval: IntervalKey;
   dark: boolean;
-  /** The sub-indicator strip this cell shows, or `null` for none (local custom
-   *  ㉛'s shape, narrowed to one pane per cell — the grid is four charts tall, so
-   *  a pane *set* here would spend height the candles need). Chosen by the page,
-   *  which owns what persists; applied here, which owns the chart. */
-  subName?: string | null;
+  /** The strip this cell shows, or `null` for none (local custom ㉛'s shape,
+   *  narrowed to one pane per cell — the grid is four charts tall, so a pane
+   *  *set* here would spend height the candles need). Chosen by the page, which
+   *  owns what persists and what the shelf offers; applied here, which owns the
+   *  chart. A script the shelf saved onto the candles (`kind: "overlay"`, or a
+   *  Pine `overlay=true` header) is stacked on the bars and costs no strip. */
+  sub?: CellSub | null;
   /** Hands the live chart to the page's sync bus; `null` when the cell unmounts. */
   onChart?: (chart: Nullable<Chart>) => void;
   /** Rendered at the right of the cell's header — the page puts its pickers
@@ -147,7 +170,7 @@ function cellStyles(dark: boolean) {
   };
 }
 
-export function ChartCell({ symbol, interval, dark, subName, onChart, headerRight }: ChartCellProps) {
+export function ChartCell({ symbol, interval, dark, sub, onChart, headerRight }: ChartCellProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Nullable<Chart>>(null);
   const mountedRef = useRef(true);
@@ -155,23 +178,38 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
   const symbolRef = useRef(symbol);
   const intervalRef = useRef(interval);
   const onChartRef = useRef(onChart);
+  /** The page's current pick, kept fresh for the one reader that cannot take it as
+   *  an argument: `syncHeader` lives inside the mount effect's `[]` closure. */
+  const subPropRef = useRef<CellSub | null | undefined>(sub);
   /** The one strip this cell owns, and the chart it was built on. The chart is
    *  part of the identity rather than a detail: React's StrictMode double mount
    *  hands the cell a brand-new chart whose panes are back at the library's
    *  defaults, and a ref keyed on the indicator name alone would still remember
-   *  the strip as applied. */
-  const subRef = useRef<{ chart: Chart; name: string; paneId: string } | null>(null);
+   *  the strip as applied. `scriptId` is what says how to take it *off* again —
+   *  see `syncStrip`. */
+  const subRef = useRef<{ chart: Chart; key: string; paneId: string; scriptId: string | null } | null>(
+    null,
+  );
   const [status, setStatus] = useState<CellStatus>({
     loading: true,
     error: null,
     source: null,
   });
   const [last, setLast] = useState<{ close: number; changePct: number } | null>(null);
+  /** Why the last script the page asked for is not on the chart, or `null` when
+   *  nothing is wrong. A formula that computes no numbers mounts *nothing*
+   *  (`applyUserIndicator` returns the reason instead of an empty pane), so
+   *  without this the cell would just look like a picker that does nothing. */
+  const [subError, setSubError] = useState<string | null>(null);
 
   darkRef.current = dark;
   symbolRef.current = symbol;
   intervalRef.current = interval;
   onChartRef.current = onChart;
+  // The mount effect's `[]` deps freeze everything it reads, so the bars-arrival
+  // retry below has to reach the page's current pick through a ref that every
+  // render refreshes.
+  subPropRef.current = sub;
 
   /**
    * Give the strip the height the budget says, and no more (local custom ⑭).
@@ -214,21 +252,56 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
    * once its last indicator leaves (dist 15328-15347), which is what keeps the
    * candle chart from paying for an empty 100px strip.
    *
-   * Only `sub:` panes are ever touched, so the cell cannot reach the main-pane
-   * MA it mounts itself (or, on /pro-chart, anything else sharing a chart).
+   * Built-ins are removed by pane address, scripts by indicator name. That is not
+   * two styles for the sake of it: a script the store puts on the candles (saved
+   * as `kind: "overlay"`, or a Pine script whose own `overlay=true` header wins —
+   * `applyPineIndicator`) has no `sub:` pane at all, so removing the address it
+   * never took would leave it drawing on the bars under a picker that says 无.
+   * `removeUserIndicator` goes by name, which reaches both landing sites, and it
+   * also clears the script's Pine decorations, which a pane-address removal would
+   * strand. Neither removal can reach the main-pane MA: the only names this
+   * function removes are a `sub:` pane's own indicator and `UCI_`-prefixed
+   * scripts.
    */
-  const syncStrip = (chart: Chart, name: string | null | undefined) => {
-    const paneId = name ? subPaneIdOf(name) : null;
+  const syncStrip = (chart: Chart, sub: CellSub | null | undefined) => {
+    const key = subKeyOf(sub);
     const current = subRef.current?.chart === chart ? subRef.current : null;
-    if (current?.paneId === paneId) {
+    if (current?.key === key) {
       // Same strip: re-fit rather than re-create. Re-creating would stack a
       // second copy of the indicator on the pane it is already on.
       applyStripLayout(chart);
       return;
     }
-    if (current) chart.removeIndicator({ paneId: current.paneId });
-    subRef.current = paneId !== null && name ? { chart, name, paneId } : null;
-    if (paneId !== null && name) chart.createIndicator({ name, paneId });
+    // A user formula is trial-computed against `chart.getDataList()` and refused
+    // when that trial yields no numbers, so asking for one before this chart's first
+    // page lands would report a failure the user did not cause — every restored
+    // session asks before the data arrives. The bars are read *off the chart the
+    // strip is being put on*, not from a per-cell flag: React's development double
+    // mount leaves the cell holding the survivor's chart while the discarded one's
+    // page still lands, and a flag that page flips authorizes a formula against an
+    // empty chart that then never gets retried (its own arrival is an identical
+    // write). `syncHeader` runs this again when the bars really do show up. A
+    // built-in needs no such wait: the library re-runs its `calc` on its own when
+    // the store fills.
+    if (sub?.kind === "script" && chart.getDataList().length === 0) return;
+    if (current) {
+      if (current.scriptId !== null) removeUserIndicator(chart, current.scriptId);
+      else chart.removeIndicator({ paneId: current.paneId });
+    }
+
+    let strip: { paneId: string; scriptId: string | null } | null = null;
+    let error: string | null = null;
+    if (sub?.kind === "builtin") {
+      const paneId = subPaneIdOf(sub.name);
+      chart.createIndicator({ name: sub.name, paneId });
+      strip = { paneId, scriptId: null };
+    } else if (sub) {
+      const failed = applyUserIndicator(chart, sub.script);
+      if (failed) error = failed;
+      else strip = { paneId: subPaneIdOf(indicatorName(sub.script.id)), scriptId: sub.script.id };
+    }
+    subRef.current = strip === null ? null : { chart, key, ...strip };
+    setSubError(error);
     applyStripLayout(chart);
   };
 
@@ -310,7 +383,8 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
     };
 
     const syncHeader = () => {
-      const tail = chart.getDataList().slice(-2);
+      const data = chart.getDataList();
+      const tail = data.slice(-2);
       setLast(
         tail.length === 2
           ? {
@@ -323,6 +397,16 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
             }
           : null,
       );
+      // The bars a deferred script was waiting for. Asking again is the only way
+      // that script can arrive: the pick has not changed since the attempt, so no
+      // dependency of the strip effect moves, and an effect that already ran cannot
+      // re-run on the strength of data appearing.
+      //
+      // Gated on *this effect instance's* liveness rather than `mountedRef`, for the
+      // same reason `subscribeBar` is: the discarded chart of React's double mount
+      // reaches here, and mounting a strip on a disposed chart would hand `subRef` an
+      // address the surviving chart does not have.
+      if (alive) syncStrip(chart, subPropRef.current);
     };
 
     const pollLive = async () => {
@@ -452,10 +536,16 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
   // chart. Runs after the mount effect above, so a restored session's strip lands
   // on a chart that already has its main-pane MA — which is the order the tests
   // read the indicator list in.
+  //
+  // Only the *pick* is a dependency. A script the page asked for before this
+  // chart's first page landed defers itself inside `syncStrip`, and the bars'
+  // arrival is handled by `syncHeader` — not by a second state flag here, which
+  // cannot tell whose bars it was told about.
+  const subKey = subKeyOf(sub);
   useEffect(() => {
     const chart = chartRef.current;
-    if (chart) syncStrip(chart, subName);
-  }, [subName]);
+    if (chart) syncStrip(chart, sub);
+  }, [subKey]);
 
   // A fresh object each time, and that is load-bearing for the retry button:
   // `ChartImp.setSymbol` / `setPeriod` compare by *reference* before reloading
@@ -503,6 +593,14 @@ export function ChartCell({ symbol, interval, dark, subName, onChart, headerRigh
         <span className="ml-auto truncate text-black/45 dark:text-white/40">
           {status.error ? "取数失败" : (status.source ?? "")}
         </span>
+        {subError !== null && (
+          <span
+            className="max-w-[45%] shrink truncate text-amber-600 dark:text-amber-500"
+            title={subError}
+          >
+            {subError}
+          </span>
+        )}
         {headerRight}
       </div>
 

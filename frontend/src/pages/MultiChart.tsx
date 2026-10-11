@@ -5,8 +5,16 @@ import { useThemeDark } from "@/lib/theme-store";
 import { INTERVALS, type IntervalKey } from "@/lib/marketApi";
 import { intervalAllowed, repairInterval } from "@/lib/chartView";
 import { MAIN_PANE_ID } from "@/lib/chartDrawings";
-import { BUILTIN_SUB_INDICATORS, isBuiltinSubIndicator } from "@/lib/subIndicators";
-import { ChartCell } from "@/components/charts/ChartCell";
+import {
+  BUILTIN_SUB_INDICATORS,
+  isScriptSub,
+  normalizeCellSub,
+  scriptSubId,
+  scriptSubValue,
+} from "@/lib/subIndicators";
+import { loadUserIndicators, type UserIndicator } from "@/lib/indicatorStore";
+import type { ApplySpec } from "@/lib/indicatorLang";
+import { ChartCell, type CellSub } from "@/components/charts/ChartCell";
 import SymbolCombobox from "@/components/common/SymbolCombobox";
 import {
   barEndOf,
@@ -108,20 +116,21 @@ export function readSession(): MultiChartSession {
       (_, i) => (isIntervalKey(list[i]) ? list[i] : DEFAULT_INTERVALS[i]),
     );
     const subList = Array.isArray(subs) ? subs : [];
+    // Read the workbench shelf once for the whole grid, rather than once per cell.
+    const scriptIds = loadUserIndicators().map((s) => s.id);
     return {
       symbol: nextSymbol,
       intervals: asked.map((iv) => repairInterval(nextSymbol, iv)),
       sync: sync !== false,
       blocked: blockedAny(nextSymbol, asked),
       // Position-matched to `intervals`, and name-checked against the shelf the
-      // picker offers: `MA` is a price-series indicator that belongs to the main
-      // pane, and honouring a stored one would mount a second moving average on a
-      // strip of its own next to the bars it is already drawn over. Anything the
-      // shelf does not offer goes the same way.
-      subs: Array.from({ length: CELL_COUNT }, (_, i) => {
-        const name = subList[i];
-        return typeof name === "string" && isBuiltinSubIndicator(name) ? name : null;
-      }),
+      // picker offers — the built-ins *and* the workbench's saved formulas, since
+      // a stored `script:<id>` whose script has since been deleted names nothing
+      // that can be mounted. `MA` is a price-series indicator that belongs to the
+      // main pane, and honouring a stored one would mount a second moving average
+      // on a strip of its own next to the bars it is already drawn over. Anything
+      // else the shelf does not offer goes the same way.
+      subs: Array.from({ length: CELL_COUNT }, (_, i) => normalizeCellSub(subList[i], scriptIds)),
     };
   } catch {
     return fallback;
@@ -139,9 +148,36 @@ export function intervalsForSymbol(
   );
 }
 
+/** One shelf row as the mount request the cell hands to `applyUserIndicator` —
+ *  the same five fields /pro-chart builds for its own workbench scripts. */
+function specOf(script: UserIndicator): ApplySpec {
+  return {
+    id: script.id,
+    label: script.label,
+    code: script.code,
+    params: script.params,
+    kind: script.kind,
+  };
+}
+
+/** The cell's stored code, resolved against the shelf. `script:<id>` names a
+ *  workbench formula; an id the shelf does not have is no strip, because there
+ *  is nothing that could be mounted under it. */
+function cellSubOf(value: string | null, scripts: readonly UserIndicator[]): CellSub | null {
+  if (value === null) return null;
+  if (!isScriptSub(value)) return { kind: "builtin", name: value };
+  const hit = scripts.find((s) => s.id === scriptSubId(value));
+  return hit ? { kind: "script", script: specOf(hit) } : null;
+}
+
 export function MultiChart() {
   const dark = useThemeDark();
   const initial = useMemo(readSession, []);
+  /** The workbench's saved formulas: the same shelf /pro-chart's 副图指标 picker
+   *  offers, so a script written on either page is callable on both. Read once
+   *  per visit — nothing here writes it, and `readSession` takes its ids from the
+   *  same store, so the two can only disagree across a remount. */
+  const scripts = useMemo(loadUserIndicators, []);
   const [symbol, setSymbol] = useState(initial.symbol);
   const [draft, setDraft] = useState(initial.symbol);
   const [intervals, setIntervals] = useState<IntervalKey[]>(initial.intervals);
@@ -383,7 +419,7 @@ export function MultiChart() {
             symbol={symbol}
             interval={interval}
             dark={dark}
-            subName={subs[i]}
+            sub={cellSubOf(subs[i], scripts)}
             onChart={chartSlots.current[i]}
             headerRight={
               <>
@@ -392,18 +428,30 @@ export function MultiChart() {
                   onChange={(e) => setCellSub(i, e.target.value)}
                   className="shrink-0 rounded border border-black/15 bg-transparent px-1 py-0.5 text-[11px] dark:border-white/20"
                   aria-label={`第 ${i + 1} 格指标`}
-                  title="该图下方的副图指标"
+                  title="该格的副图指标；标「（主图）」者画在蜡烛上"
                 >
                   {/* The shelf is /pro-chart's, narrowed to one pick: the same
-                      built-in list, the same `sub:` pane address, and the same
-                      refusal of price-series indicators like `MA`, which belong
-                      on the bars rather than on a strip beside them. */}
+                      built-in list, the same `sub:` pane address, the same
+                      refusal of price-series indicators like `MA` (which belong
+                      on the bars rather than on a strip beside them), and the
+                      same workbench scripts — the parity the single-chart page
+                      already had and this one did not. */}
                   <option value="">无</option>
                   {BUILTIN_SUB_INDICATORS.map((o) => (
                     <option key={o.name} value={o.name} title={o.hint}>
                       {o.label}
                     </option>
                   ))}
+                  {scripts.length > 0 && (
+                    <optgroup label="自定义脚本">
+                      {scripts.map((s) => (
+                        <option key={s.id} value={scriptSubValue(s.id)} title={s.label}>
+                          {s.label}
+                          {s.kind === "overlay" ? "（主图）" : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 <select
                   value={interval}

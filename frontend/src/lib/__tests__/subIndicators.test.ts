@@ -25,9 +25,13 @@ import {
   DEFAULT_SUB_SETS,
   MAX_SUB_PANES,
   isBuiltinSubIndicator,
+  isScriptSub,
   loadSubPaneSets,
+  normalizeCellSub,
   normalizeSubList,
   saveSubPaneSets,
+  scriptSubId,
+  scriptSubValue,
   subIndicatorLabel,
   subNamesForView,
   subPaneIdFor,
@@ -230,5 +234,62 @@ describe("withDefaults", () => {
     // A fresh copy, so a later mutation cannot reach back into the shared default.
     next.timeShare.push("MACD");
     expect(withDefaults(next, "timeShare").timeShare).toEqual(["VOL"]);
+  });
+});
+
+/**
+ * One cell's pick in /multi-chart, which is the only place a stored sub reference
+ * can name something that is not in the built-in catalogue: the grid's shelf is
+ * 内置 19 个 *plus* the workbench's saved formulas, and a formula has no name the
+ * library knows — it is registered under `UCI_<id>` by `indicatorLang`, and even
+ * that is not what belongs in storage, because the id is what survives the user
+ * renaming the label.
+ *
+ * So the pick is encoded (`script:<id>`) and decoded here, against the ids that
+ * exist right now. The failure this guards is the silent one: `readSession` hands
+ * its answer straight to `createIndicator`, and an unregistered name costs a
+ * `console.warn` and no pane — a cell would show a strip in its picker and
+ * nothing under the candles, which is indistinguishable from "the feature is
+ * broken" from the outside.
+ */
+describe("cell sub encoding", () => {
+  it("round-trips a script id through the encoded form", () => {
+    const v = scriptSubValue("i1");
+    expect(isScriptSub(v)).toBe(true);
+    expect(scriptSubId(v)).toBe("i1");
+    expect(normalizeCellSub(v, ["i1"])).toBe(v);
+  });
+
+  it("keeps a built-in name and never mistakes it for a script", () => {
+    expect(normalizeCellSub("MACD", ["i1"])).toBe("MACD");
+    expect(isScriptSub("MACD")).toBe(false);
+  });
+
+  it("keeps the two namespaces from overlapping, so a script id cannot forge a built-in", () => {
+    // `script:VOL` must never read as the built-in VOL, and a built-in name must
+    // never read as a script — otherwise a stored value could pick a pane without
+    // the check that the other namespace needs.
+    expect(isBuiltinSubIndicator(scriptSubValue("VOL"))).toBe(false);
+    expect(isScriptSub("VOL")).toBe(false);
+    expect(normalizeCellSub(scriptSubValue("VOL"), [])).toBeNull();
+  });
+
+  it("drops a script the user has since deleted", () => {
+    expect(normalizeCellSub("script:i1", ["i2", "i3"])).toBeNull();
+  });
+
+  it("drops an empty or malformed script reference", () => {
+    for (const bad of ["script:", "script:  ", "script", ":", "script:i1:i2"]) {
+      expect(`${bad} => ${String(normalizeCellSub(bad, ["i1", "i2"]))}`).toBe(`${bad} => null`);
+    }
+  });
+
+  it("drops what the grid's shelf cannot mount", () => {
+    // `MA` is a price-series indicator: honouring a stored one would mount a
+    // second moving average on a strip of its own beside the bars it already
+    // covers. Same for garbage that is not a string at all.
+    for (const bad of ["MA", "BOLL", "", "nope", 42, null, undefined, {}, ["VOL"]]) {
+      expect(normalizeCellSub(bad, ["i1"])).toBeNull();
+    }
   });
 });

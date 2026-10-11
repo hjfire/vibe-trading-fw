@@ -49,6 +49,7 @@
  *   single-chart page once ended up with a 29px candle chart in a 360px host.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataLoader, KLineData, Period, SymbolInfo } from "klinecharts";
 
@@ -167,9 +168,12 @@ const h = vi.hoisted(() => ({
   liveRelease: null as (() => void) | null,
   /** Same park, for the *page* read: holds a cell's first page in flight across an
    *  unmount, which is how a test reaches the case the library really leaves the
-   *  cell in — `subscribeBar` arriving after the chart it was meant for is gone. */
+   *  cell in — `subscribeBar` arriving after the chart it was meant for is gone.
+   *  A queue rather than one slot, because StrictMode parks *two* reads for the
+   *  same period (the discarded chart's and the survivor's), and releasing them
+   *  together hides the ordering the page has to survive. */
   pageGate: null as string | null,
-  pageRelease: null as (() => void) | null,
+  pageReleases: [] as Array<() => void>,
 }));
 
 /** The fake's state plus the few methods the tests drive it with. The page's own
@@ -740,7 +744,7 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
       }
       if (interval === h.pageGate) {
         await new Promise<void>((resolve) => {
-          h.pageRelease = () => resolve();
+          h.pageReleases.push(() => resolve());
         });
       }
       const page = backendPage(
@@ -771,6 +775,25 @@ function chart(interval: IntervalKey): FakeChart {
   );
   if (!found) throw new Error(`no chart holds ${interval}`);
   return asFake(found);
+}
+
+/** The cell showing `interval` that still exists. StrictMode's double mount hands
+ *  every cell a *second* chart and disposes the first, and the two carry the same
+ *  period, so `chart()` above — which returns the first match — reports the
+ *  discarded one. A test that reads what the user ends up seeing has to name the
+ *  survivor. */
+function liveChart(interval: IntervalKey): FakeChart {
+  const want = intervalToPeriod(interval);
+  const kept = h.charts.filter(
+    (c) =>
+      !asFake(c).disposed &&
+      asFake(c).period?.type === want.type &&
+      asFake(c).period?.span === want.span,
+  );
+  if (kept.length !== 1) {
+    throw new Error(`expected one live chart holding ${interval}, got ${kept.length}`);
+  }
+  return asFake(kept[0]);
 }
 
 /** One macrotask turn, so the `getBars` promise chains below it all run.
@@ -848,7 +871,7 @@ beforeEach(() => {
   h.liveGate = null;
   h.liveRelease = null;
   h.pageGate = null;
-  h.pageRelease = null;
+  h.pageReleases = [];
 });
 
 describe("the stored view", () => {
@@ -1659,10 +1682,11 @@ describe("the live tail", () => {
     // arrives, which is after the cleanup, so the cleanup's own `stopLive()` had
     // nothing to clear and the arming site outlived the chart it was armed for.
     await settle();
-    expect(h.pageRelease).not.toBeNull();
+    expect(h.pageReleases).toHaveLength(1);
     view.unmount();
     expect(chart("1D").disposed).toBe(true);
-    h.pageRelease!();
+    h.pageReleases[0]();
+    h.pageReleases = [];
     h.pageGate = null;
     await settle();
     await tick(LIVE_MS * 3);
@@ -1859,5 +1883,275 @@ describe("the per-cell indicator", () => {
     expect(readSession().subs).toEqual([null, null, null, null]);
     localStorage.removeItem(SESSION_KEY);
     expect(readSession().subs).toHaveLength(CELL_COUNT);
+  });
+});
+
+/** The workbench's saved formulas (local custom ⑩), which live under this key.
+ *  The grid reads the same shelf /pro-chart does, so a script written on one page
+ *  is callable on the other — the parity the request is about. */
+const SCRIPT_KEY = "pro-chart.userIndicators.v2";
+
+/** One shelf row. The default is a *vector* formula (`looksLikePine` answers
+ *  false, so `applyUserIndicator` takes the interpreter rather than the Pine
+ *  compiler) whose output is a genuine series of numbers for the fixture bars. */
+function script(id: string, over: Partial<Record<string, unknown>> = {}) {
+  return {
+    id,
+    label: `脚本 ${id}`,
+    kind: "pane",
+    params: [5],
+    code: "return { M: ma(close, P[0]) }",
+    enabled: true,
+    ...over,
+  };
+}
+
+function seedScripts(items: unknown[]): void {
+  localStorage.setItem(SCRIPT_KEY, JSON.stringify(items));
+}
+
+describe("the per-cell script", () => {
+  function indicatorOf(cell: number): HTMLSelectElement {
+    return screen.getByLabelText(`第 ${cell} 格指标`) as HTMLSelectElement;
+  }
+
+  it("offers the shelf's scripts in every cell, beside the built-ins", async () => {
+    seedScripts([script("s1"), script("s2", { kind: "overlay", label: "重叠线" })]);
+    await mount();
+    for (let cell = 1; cell <= CELL_COUNT; cell++) {
+      expect(Array.from(indicatorOf(cell).options).map((o) => o.value)).toEqual([
+        "",
+        ...BUILTIN_SUB_NAMES,
+        "script:s1",
+        "script:s2",
+      ]);
+    }
+    // A script drawn on the candles rather than under them says so, the same way
+    // /pro-chart's picker does — otherwise 「该图下方的副图指标」 lies about half
+    // the list.
+    expect(indicatorOf(1).textContent).toContain("重叠线（主图）");
+  });
+
+  it("mounts a script on its own strip, at the height the budget says", async () => {
+    seedScripts([script("s1")]);
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(1), { target: { value: "script:s1" } });
+    await settle();
+    // The name is the workbench's own (`UCI_` + id), and the pane address is
+    // derived from it, so a script strip is the same kind of strip a built-in
+    // one is: replaceable, and drawing-anchored.
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "UCI_s1", paneId: "sub:UCI_s1" },
+    ]);
+    expect(daily.paneOptionCalls).toEqual([{ id: "sub:UCI_s1", height: 120 }]);
+    expect(daily.panes.find((p) => p.id === "sub:UCI_s1")?.height).toBe(120);
+  });
+
+  it("puts a 主图 script on the candles and takes it off by name", async () => {
+    seedScripts([script("s2", { kind: "overlay" })]);
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(1), { target: { value: "script:s2" } });
+    await settle();
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "UCI_s2", paneId: "candle_pane" },
+    ]);
+    // Stacked on the candles means no strip to fit: the height budget charges the
+    // cell nothing for a pane it does not have.
+    expect(daily.paneOptionCalls).toEqual([]);
+    fireEvent.change(indicatorOf(1), { target: { value: "" } });
+    await settle();
+    // Removed by *name*. The cell's own bookkeeping names the strip it would have
+    // used (`sub:UCI_s2`), and `removeIndicator({paneId})` on that id matches
+    // nothing here — the script is on `candle_pane`, so it would sit on the
+    // candles forever, recomputing on every live tick under a picker that says 无.
+    expect(daily.indicators).toEqual([{ name: "MA", paneId: "candle_pane" }]);
+  });
+
+  it("replaces a script with a built-in instead of stacking them", async () => {
+    seedScripts([script("s1")]);
+    await mount();
+    const daily = chart("1D");
+    fireEvent.change(indicatorOf(1), { target: { value: "script:s1" } });
+    await settle();
+    expect(daily.indicators.map((i) => i.name)).toEqual(["MA", "UCI_s1"]);
+    fireEvent.change(indicatorOf(1), { target: { value: "KDJ" } });
+    await settle();
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "KDJ", paneId: "sub:KDJ" },
+    ]);
+    expect(daily.panes.map((p) => p.id)).toEqual(["candle_pane", "x_axis_pane", "sub:KDJ"]);
+  });
+
+  it("refuses a script the bars cannot feed, and says why", async () => {
+    seedScripts([script("bad", { code: "return { Z: na() }" })]);
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(1), { target: { value: "script:bad" } });
+    await settle();
+    expect(daily.indicators).toEqual([{ name: "MA", paneId: "candle_pane" }]);
+    expect(daily.panes.map((p) => p.id)).toEqual(["candle_pane", "x_axis_pane"]);
+    expect(screen.getByText(/没有产生任何数值/)).toBeDefined();
+    // The cell still owns its chart: the next pick lands normally.
+    fireEvent.change(indicatorOf(1), { target: { value: "MACD" } });
+    await settle();
+    expect(daily.indicators).toEqual([
+      { name: "MA", paneId: "candle_pane" },
+      { name: "MACD", paneId: "sub:MACD" },
+    ]);
+    expect(screen.queryByText(/没有产生任何数值/)).toBeNull();
+  });
+
+  /** Wait until `expected` first pages sit parked inside the mock. The request is
+   *  already in the mock by the time `settle()` returns, so the loop is a presence
+   *  check on the harness rather than a wait on the page. */
+  async function waitForGate(expected = 1): Promise<void> {
+    for (let round = 0; round < 40 && h.pageReleases.length < expected; round++) {
+      await act(async () => {
+        await flush();
+      });
+    }
+    expect(h.pageReleases.length).toBeGreaterThanOrEqual(expected);
+  }
+
+  /** Let every parked page land at once — one turn for all of them. */
+  async function releasePageGate(): Promise<void> {
+    await waitForGate();
+    act(() => {
+      for (const release of h.pageReleases.splice(0)) release();
+    });
+    h.pageGate = null;
+    await settle();
+  }
+
+  /** Let exactly one parked page land, oldest first. */
+  async function releaseOnePage(): Promise<void> {
+    await waitForGate();
+    act(() => {
+      h.pageReleases.shift()?.();
+    });
+    await settle();
+  }
+
+  it("puts a stored script on the chart the double mount left behind", async () => {
+    // StrictMode's development double mount is not a second render of the same
+    // chart: the mount effect runs, cleans up — which disposes chart A — and runs
+    // again, so the cell ends up on chart B while A's first page is still in
+    // flight. A *per-cell* 「bars have arrived」 flag is set by whichever page lands
+    // first, A's, and that re-triggers the strip effect on a B that is still empty.
+    // Read in the browser 2026-10-11: the restored script strip reported
+    // 「公式在现有数据上没有产生任何数值」 and never appeared, because B's own page
+    // arriving was an *identical* write and React skipped the effect. The two
+    // releases below are what makes that reachable from here: in a browser they are
+    // two HTTP responses, and they do not land in the same turn.
+    h.pageGate = "1D";
+    seedScripts([script("s1")]);
+    seed({ symbol: "600519.SH", sync: false, subs: ["script:s1", null, null, null] });
+    render(<StrictMode><MultiChart /></StrictMode>);
+    await settle();
+    // Two parked reads for the one daily cell — the harness has to model the
+    // survivor *and* the chart React threw away, or this test proves nothing.
+    await waitForGate(2);
+    await releaseOnePage();
+    expect(liveChart("1D").list).toHaveLength(0);
+    await releaseOnePage();
+    h.pageGate = null;
+    await settle();
+    const kept = liveChart("1D");
+    expect(kept.indicators.map((i) => i.name)).toEqual(["MA", "UCI_s1"]);
+    expect(screen.queryByText(/没有产生任何数值/)).toBeNull();
+    // And the strip went on *one* chart. The retry has to know which mount effect
+    // instance its chart belongs to, or the discarded one's page mounts a strip on a
+    // chart nothing can remove it from — the same shape as the live-channel leak this
+    // suite already pins, one call site over.
+    const want = intervalToPeriod("1D");
+    const daily = h.charts
+      .map(asFake)
+      .filter(
+        (c) => c.disposed && c.period?.type === want.type && c.period.span === want.span,
+      );
+    expect(daily).toHaveLength(1);
+    expect(daily[0].indicators.map((i) => i.name)).toEqual(["MA"]);
+  });
+
+  it("mounts a built-in on a chart whose first page has not landed", async () => {
+    // The library owns a built-in's calculation: `createIndicator` mounts the
+    // strip and the store re-runs its `calc` when the bars arrive, so an empty
+    // chart simply means an empty strip for now.
+    h.pageGate = "60m";
+    await mount();
+    const gated = chart("60m");
+    hostHeight(gated, 400);
+    fireEvent.change(indicatorOf(2), { target: { value: "MACD" } });
+    await settle();
+    expect(gated.indicators.map((i) => i.name)).toEqual(["MA", "MACD"]);
+    expect(gated.paneOptionCalls).toEqual([{ id: "sub:MACD", height: 120 }]);
+    await releasePageGate();
+    // The bars arriving re-runs the cell's strip effect with the *same* pick, and
+    // that must re-fit rather than rebuild. A rebuild goes through
+    // `removeIndicator` (which destroys the pane) and `createIndicator` (which
+    // builds it again at the 100px default), so the tell is the second
+    // height write — the strip flashing back to its default size on every page
+    // that lands, which is what the same-key early return exists to prevent.
+    expect(gated.paneOptionCalls).toEqual([{ id: "sub:MACD", height: 120 }]);
+    expect(gated.indicators.filter((i) => i.name === "MACD")).toHaveLength(1);
+  });
+
+  it("does not call a formula against bars the cell does not have yet", async () => {
+    // A user formula is the other shape: `applyUserIndicator` trial-computes
+    // against `chart.getDataList()` at mount time and *refuses* the mount when
+    // that trial yields no numbers (`applyVectorIndicator`'s 「公式在现有数据上…」
+    // guard). Without a bars gate, a restored session's script strip therefore
+    // reports a failure the user did not cause — the page's first render always
+    // asks for the strip before its first page lands.
+    h.pageGate = "60m";
+    seedScripts([script("s1")]);
+    await mount();
+    const daily = chart("1D");
+    hostHeight(daily, 400);
+    fireEvent.change(indicatorOf(2), { target: { value: "script:s1" } });
+    await settle();
+    expect(chart("60m").indicators.map((i) => i.name)).toEqual(["MA"]);
+    expect(screen.queryByText(/没有产生任何数值/)).toBeNull();
+    await releasePageGate();
+    // The bars landed, so the same request the cell already made now goes through.
+    expect(chart("60m").indicators.map((i) => i.name)).toEqual(["MA", "UCI_s1"]);
+    expect(daily.paneOptionCalls).toEqual([]);
+  });
+
+  it("persists a script pick and puts it back on the next visit", async () => {
+    seedScripts([script("s1")]);
+    const view = render(<MultiChart />);
+    await settle();
+    fireEvent.change(indicatorOf(2), { target: { value: "script:s1" } });
+    await settle();
+    expect(JSON.parse(String(localStorage.getItem(SESSION_KEY))).subs).toEqual([
+      null,
+      "script:s1",
+      null,
+      null,
+    ]);
+    view.unmount();
+    h.charts = [];
+    await mount();
+    expect(chart("60m").indicators.map((i) => i.name)).toEqual(["MA", "UCI_s1"]);
+    expect(indicatorOf(2).value).toBe("script:s1");
+  });
+
+  it("keeps a stored script only while the shelf still has it", () => {
+    seedScripts([script("s1")]);
+    // A script deleted in the workbench must not leave a cell claiming a strip
+    // nothing can mount: the reference goes, the honest built-in stays.
+    seed({ symbol: "600519.SH", subs: ["script:s1", "script:gone", "VOL"] });
+    expect(readSession().subs).toEqual(["script:s1", null, "VOL", null]);
+    seedScripts([]);
+    expect(readSession().subs).toEqual([null, null, "VOL", null]);
   });
 });
