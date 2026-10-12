@@ -19,9 +19,12 @@ from pathlib import Path
 import pytest
 
 from forensics_audit import (  # type: ignore[import-untyped]
+    ENTRY_ID,
     L0_PURPOSES,
     L0_REQUIRED_KEYS,
+    MIN_VERDICT_LEN,
     SPEC_HEADER,
+    VERDICT_TYPES,
     _audit_l0,
     _audit_spec,
     _meta_keys,
@@ -322,3 +325,132 @@ def test_audit_forensics_picks_up_spec_violations(tmp_path):
     _mk(root, "spec/drawings.md", SPEC_TABLE.replace("| DOM |", "| 视觉 |"))
     problems = audit_forensics(root, tmp_path)
     assert any("spec/drawings.md" in x and "判据类型" in x for x in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# 评审修复 I1（_resolve_l0）：`L0 依据` 必须指向存在的 **l0** 文件。
+# 原实现 `forensics_root / ref` 认树下任何一份文件，还把 basename 当成引用的
+# L0 文件名返回——`spec/drawings.md`（规格自引）当场全绿。
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("basis", ["spec/drawings.md", "gap-matrix.md"])
+def test_basis_must_point_at_an_l0_file_not_at_any_existing_file(tmp_path, basis):
+    """存在的非 l0 文件（自引／矩阵）不是证据：必须报，且不得进 `cited`。"""
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("l0/probe-skeleton.md", basis))
+    if basis == "gap-matrix.md":
+        _mk(root, "gap-matrix.md", "# 差距矩阵\n\n随手写的散文，没有表。\n")
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any(f"L0 依据 {basis!r} 指向的文件不存在" in x for x in problems), problems
+    assert cited == set(), problems
+
+
+def test_basis_reaching_out_of_the_forensics_root_is_reported(tmp_path):
+    """`../outside.md` 落在 docs/ 里、取证根之外：同样不是 L0 证据。"""
+    path, root = _with_spec(
+        tmp_path, SPEC_TABLE.replace("l0/probe-skeleton.md", "../outside.md"))
+    _mk(tmp_path / "docs", "outside.md", "在 forensics 根之外\n")
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("L0 依据 '../outside.md'" in x for x in problems), problems
+    assert cited == set(), problems
+
+
+@pytest.mark.parametrize("basis", ["l0/probe-skeleton.md", "probe-skeleton.md"])
+def test_the_two_accepted_l0_spellings_still_count(tmp_path, basis):
+    """`l0/x.md` 与裸 `x.md` 两种写法都要继续认（修严不能修没）。"""
+    path, root = _with_spec(
+        tmp_path, SPEC_TABLE.replace("| DOM | l0/probe-skeleton.md |", f"| DOM | {basis} |"))
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == [], problems
+    assert cited == {"probe-skeleton.md"}
+
+
+# ---------------------------------------------------------------------------
+# 评审修复 I2（_table 的分隔行判定）：`set(s) <= set("|-: ")` 连 `|  |  |  |  |  |`
+# 也算分隔行，全空的数据行被静默丢掉——行行全空的表反而零违规。分隔行必含 `-`。
+# ---------------------------------------------------------------------------
+
+def test_all_blank_row_is_reported_not_dropped(tmp_path):
+    """空行是写坏了的数据行，不是 `|---|` 分隔行：必须落到空单元格的判据上。"""
+    blank = "|  |  |  |  |  |"
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace(SPEC_ROW, blank))
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert ids == [""], problems  # 行进了表，没被解析丢掉
+    assert any("条目号 '' 不符合" in x for x in problems), problems
+    assert any("判据短于 12 个字符" in x for x in problems), problems
+    assert any("判据类型 '' 不在" in x for x in problems), problems
+    assert any("L0 依据是空的" in x for x in problems), problems
+    assert cited == set(), problems
+
+
+def test_blank_row_beside_a_good_row_is_still_reported(tmp_path):
+    """五列全空的行混在好行里也一样报，别让它当免费的一行蒙过去。"""
+    path, root = _with_spec(tmp_path, SPEC_TABLE + "|  |  |  |  |  |\n")
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert ids == ["TV-DW-01", ""], problems
+    assert any("条目号 '' 不符合" in x for x in problems), problems
+    assert cited == {"probe-skeleton.md"}, problems
+
+
+# ---------------------------------------------------------------------------
+# 评审修复 I3（_table 的 `seen` 闩锁）：表头一旦出现过，`seen` 就永远是真，
+# 文件里后面每张 `|` 表都被当成规格行 ⇒ 幻影违规。表 = 逐字表头开头的那一段
+# **连续** `|` 行；第一条非 `|` 行（散文／标题／空行）关掉窗口。
+# 选定的行为：同一文件里第二张「同逐字表头」的规格表照样解析（表头重开窗口），
+# 但两张表的条目号合并成**文件作用域**查重——与消息文案「在 {rel} 里」一致。
+# ---------------------------------------------------------------------------
+
+NOTES_TABLE = (
+    "| 面 | 条目数 | 判据 | 状态 | 说明 |\n"
+    "|---|---|---|---|---|\n"
+    "| DW | 1 | 只是统计数字 | 完成 | 这张表跟规格条目无关 |\n"
+)
+
+
+def test_a_second_unrelated_table_below_the_spec_table_is_not_spec_content(tmp_path):
+    """规格表＋散文＋一张不相干的五列表：后面的表不是条目，不得产出违规。"""
+    path, root = _with_spec(tmp_path, SPEC_TABLE + "\n## 备注\n\n一段散文，不属于任何表。\n\n" + NOTES_TABLE)
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == [], problems
+    assert cited == {"probe-skeleton.md"}
+    assert ids == ["TV-DW-01"]
+
+
+def test_prose_between_the_header_rows_and_a_later_table_closes_the_window(tmp_path):
+    """行和行之间夹散文也一样关窗口：只有连续的 `|` 行算这张表的行。"""
+    text = (
+        f"{SPEC_HEADER}\n|---|---|---|---|---|\n{SPEC_ROW}\n\n先写点说明文字。\n\n" + NOTES_TABLE
+    )
+    path, root = _with_spec(tmp_path, text)
+    problems, _cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == [], problems
+    assert ids == ["TV-DW-01"]
+
+
+def test_second_spec_shaped_table_is_parsed_and_dups_stay_file_scoped(tmp_path):
+    """逐字表头重开第二张规格表 ⇒ 行合并、条目号按文件查重（选定行为的钉子）。"""
+    text = (
+        SPEC_TABLE + "\n## 第二批条目\n\n"
+        f"{SPEC_HEADER}\n|---|---|---|---|---|\n{SPEC_ROW}\n"
+    )
+    path, root = _with_spec(tmp_path, text)
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert ids == ["TV-DW-01", "TV-DW-01"], problems
+    assert any("条目号 TV-DW-01 在 spec/drawings.md 里出现 2 次" in x for x in problems), problems
+    assert cited == {"probe-skeleton.md"}, problems
+
+
+# ---------------------------------------------------------------------------
+# 评审修复 I4：L1 的四个契约常量逐字钉住，跟 Task 1 的
+# `test_required_key_names_are_exactly_the_six` 同一个套路。
+# `SPEC_TABLE = f"...{SPEC_HEADER}..."` 是拿常量插出来的，夹具会跟着实现一起漂：
+# 把表头改成 `|条目号|规格句|判据|判据类型|L0 依据|`（去空格）实测 51 条全绿。
+# 另外三个常量今天只会「顺带红」——`test_entry_id_shape`／`test_verdict_type_domain`／
+# `test_verdict_shorter_than_12_chars…` 断言的是拿同一批常量拼出来的消息子串，
+# 常量一改子串跟着改，红不红取决于夹具而不是契约。逐字钉住才是契约级的针。
+# ---------------------------------------------------------------------------
+
+def test_l1_contract_constants_are_verbatim():
+    assert SPEC_HEADER == "| 条目号 | 规格句 | 判据 | 判据类型 | L0 依据 |"
+    assert ENTRY_ID.pattern == r"TV-[A-Z][A-Z0-9]*-\d{2}"
+    assert VERDICT_TYPES == ("DOM", "状态", "像素")
+    assert MIN_VERDICT_LEN == 12

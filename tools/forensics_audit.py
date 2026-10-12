@@ -123,18 +123,34 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
 
 
 def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
-    """(header_seen, five-column data rows, raw text of rows with the wrong width)."""
+    """(header_seen, five-column data rows, raw text of rows with the wrong width).
+
+    一张表 = 以逐字 ``header`` 开头的那一段**连续** ``|`` 行：第一条非 ``|`` 行
+    （散文、标题、空行）就关掉行窗口，所以同一文件后面不相干的管道表不会被当成
+    这张表的条目（否则真实 L1 文档里的备注／统计表会造出幻影违规）。
+    ``header_seen`` 是整个文件范围的——出现过一次逐字表头就算这文件有表。
+    作用域约定：第二张同表头的规格表照样解析（表头重开窗口），但返回的 ``rows``
+    把每张规格表的行合并到一个文件里，``_audit_spec`` 的条目号查重因此是**文件**
+    作用域，与它的消息文案「在 {rel} 里出现 N 次」一致。
+    分隔行必须含 ``-``：`|  |  |  |  |  |` 这种全空数据行不是 `|---|---|`，
+    它要落到「空单元格」的判据上，不能被静默丢掉。
+    """
     seen = False
+    window_open = False  # 表头之后、第一条非 `|` 行之前：这一段才是这张表的行
     rows: list[list[str]] = []
     bad: list[str] = []
     for line in _outside_fences(text):
         s = line.strip()
         if s == header:
             seen = True
+            window_open = True
             continue
-        if not seen or not s.startswith("|"):
+        if not s.startswith("|"):
+            window_open = False
             continue
-        if set(s) <= set("|-: "):  # the |---|---| separator row
+        if not window_open:
+            continue
+        if "-" in s and set(s) <= set("|-: "):  # the |---|---| separator row
             continue
         cells = [c.strip() for c in s.strip("|").split("|")]
         if len(cells) == 5:
@@ -145,10 +161,22 @@ def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
 
 
 def _resolve_l0(forensics_root: Path, ref: str) -> str | None:
-    """Accept ``l0/x.md`` or a bare ``x.md``; return the resolved file name or None."""
+    """Accept ``l0/x.md`` or a bare ``x.md``; return the resolved file name or None.
+
+    判据说的是「L0 依据 必须指向存在的 **l0** 文件」，所以落点必须在
+    ``forensics_root/l0/`` 里：``spec/drawings.md``（规格自引）、``gap-matrix.md``
+    这类同树里的非 l0 文件，以及 ``../x.md``／绝对路径这种越出取证根的写法，
+    一律返回 None。两种被接受的写法都保留，多份依据（``、``／`,` 分隔）也保留。
+    调用方对「找不到」与「找到了但不在 l0/」都报同一条 指向的文件不存在。
+    """
+    l0_dir = (forensics_root / "l0").resolve()
     name = ref.rsplit("/", 1)[-1]
     for cand in (forensics_root / "l0" / name, forensics_root / ref):
-        if cand.is_file():
+        try:
+            hit = cand.resolve()
+        except OSError:  # 符号环之类的坏路径：当作没找到
+            continue
+        if hit.is_file() and l0_dir in hit.parents:
             return name
     return None
 
