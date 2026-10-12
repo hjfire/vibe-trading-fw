@@ -223,12 +223,18 @@ L0 观察  → L1 规格  → L2 差距  → L3 分片实现  → L4 验收
 | 级 | 输入 | 动作 | 工件 | 完成判据 |
 |---|---|---|---|---|
 | **L0 观察** | 目标页面＋CDP 端口 | 一条 REA 命令一个面（§5 工单） | 命令原文＋stdout 的 Evidence 关键块（含 `evidence_id`、`sha256`、观察时间、浏览器版本） | 该面的证据**非空且完整度达标**（`completeness.status` 可读；`parse_failures` 有值就要解释） |
-| **L1 规格** | L0 证据 | 把证据翻成条目：`TV-<面>-<序>` | `docs/forensics/tv-<面>-spec.md` 的条目表 | **每条条目自带一个可执行判据**（DOM 断言／状态断言／像素断言三选一）。写不出判据的条目不算条目 |
+| **L1 规格** | L0 证据 | 把证据翻成条目：`TV-<面>-<序>` | `docs/forensics/spec/<面>.md` 的条目表 | **每条条目自带一个可执行判据**（DOM 断言／状态断言／像素断言三选一）。写不出判据的条目不算条目 |
 | **L2 差距** | L1 规格＋§6 现状基线 | 三态对账：`已有`／`部分`／`缺`（＋`不可复刻`） | 差距矩阵（一条规格一行，带本仓 `file:line` 或「未找到＋搜过的 needle」 | 每个 `已有` 都要能指到代码坐标；每个 `未找到` 的 needle 要能复跑 |
 | **L3 分片** | L2 里挑一条/一簇 | 走本仓六片式：spec → plan → TDD → 门禁 → 活体 → 档案 | 一片一个可验收表面 | 六道门全绿＋活体读数＋变异自证（摘掉机制必须有针变红） |
 | **L4 验收** | 一片的产物 | 门禁＋活体＋未来函数自查＋证据回溯检查 | 档案一节（`项目档案.md`，一轮一节） | 「规格条目 X ⇒ 实现 Y ⇒ 判据 Z 已通过」三段可指认 |
 
 **纪律的一条红线**：L1 的规格条目**不许**写成「TV 有一个工具栏」这种描述。要写成「工具栏里有 13 类画线工具，其中斐波那契需要两点确定垂直范围、拖动中点可整体平移，属性面板可改线宽与透明度」这种**可拿测试打的**句子。
+
+> **2026-10-13 更正（工件落位）**：本节表格里 L1 的工件原先写作 `docs/forensics/tv-<面>-spec.md`（平铺），P1 那节原先写作 `tv-drawings-spec.md`。
+> 现统一为**按层分目录**：`docs/forensics/l0/<面>.md`／`docs/forensics/spec/<面>.md`／`docs/forensics/gap-matrix.md`，模板放 `docs/forensics/_templates/`。
+> 为什么改：校验器 `tools/forensics_audit.py` 要按目录区分三层工件（平铺时 `gap-matrix.md` 会被 `tv-*-spec.md` 的 glob 误纳，
+> 而「按精确文件名豁免样例件 `_example.md`」这条规则也需要一个确定的所在目录）；分片计划 P0/P1 的文件布局表与已落地的判据都按分目录写。
+> 这一改动不动漏斗的语义，只动路径。判据仍以「每条规格自带一个可执行判据」为准。
 
 ## 5. 取证工单（playbook：15 个观察面 × 命令 × 期望字段）
 
@@ -297,7 +303,7 @@ npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222   # 取 targ
 - **停止条件**：若 A1/A2 出现 §2.4 那类环境拒绝，就地记为「需环境修复」，不往下堆。
 
 ### P1　TV 观察批次 A：画线＋图表交互（1–2 轮）
-- 工单 A1–A6。产出 `docs/forensics/tv-drawings-spec.md`、`tv-chart-interaction-spec.md`。
+- 工单 A1–A6。产出 `docs/forensics/spec/drawings.md`、`docs/forensics/spec/chart-interaction.md`（以及它们各自引用的 `docs/forensics/l0/tv-*.md`）。
 - 判据：规格条目 ≥20 且每条带判据；每条 L0 有 `evidence_id`。
 - 风险：工具条是懒加载／虚拟 DOM，未点开就不在可达文本里 ⇒ 用 A4 的事件面交叉确认，不靠「看到就算」。
 
