@@ -57,6 +57,16 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _command_hygiene(rel: str, cmd: str) -> list[str]:
+    """命令卫生：Global Constraint 5 是无条件的，不可取证的记录同样要限住自己的输出。"""
+    v: list[str] = []
+    if cmd and "rea-agents" not in cmd:
+        v.append(f"{rel}: 命令里没有 rea-agents，这不是一条 REA 取证记录")
+    if cmd and "--filter-output" not in cmd and "--token-limit" not in cmd:
+        v.append(f"{rel}: 命令既没有 --filter-output 也没有 --token-limit（证据体积会吃掉内存）")
+    return v
+
+
 def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | None]:
     """One L0 record -> (violations, declared 用途 or None)."""
     v: list[str] = []
@@ -64,10 +74,12 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
     keys = _meta_keys(text)
 
     if "不可取证" in keys.get("状态", ""):
-        if not keys.get("命令"):
+        cmd = keys.get("命令", "")
+        if not cmd:
             v.append(f"{rel}: 不可取证的记录也要写清 命令：（到底试过哪一条）")
         if not keys.get("原因"):
             v.append(f"{rel}: 标记为不可取证但没有 原因：")
+        v += _command_hygiene(rel, cmd)
         return v, None
 
     for key in L0_REQUIRED_KEYS:
@@ -83,10 +95,7 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
         v.append(f"{rel}: evidence_id 不是 ev_<64 位十六进制>：{ev!r}")
 
     cmd = keys.get("命令", "")
-    if cmd and "rea-agents" not in cmd:
-        v.append(f"{rel}: 命令里没有 rea-agents，这不是一条 REA 取证记录")
-    if cmd and "--filter-output" not in cmd and "--token-limit" not in cmd:
-        v.append(f"{rel}: 命令既没有 --filter-output 也没有 --token-limit（证据体积会吃掉内存）")
+    v += _command_hygiene(rel, cmd)
 
     completeness = keys.get("完整性", "")
     if "parse_failures" in text and "parse_failures" not in completeness:

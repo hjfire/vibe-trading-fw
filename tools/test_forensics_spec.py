@@ -66,7 +66,7 @@ def _l0(tmp_path: Path, text: str = L0_BODY, name: str = "probe-skeleton.md") ->
     root = _forensics(tmp_path)
     path = root / "l0" / name
     path.write_text(text, encoding="utf-8", newline="\n")
-    return path, root
+    return path, tmp_path
 
 
 def _drop_key(text: str, key: str) -> str:
@@ -158,6 +158,43 @@ def test_unusable_capture_without_reason_fails(tmp_path):
     path, repo = _l0(tmp_path, text, name="tv-drawings.md")
     problems, _purpose = _audit_l0(path, "l0/tv-drawings.md", repo)
     assert any("没有 原因：" in x for x in problems), problems
+
+
+def test_unusable_capture_command_must_still_cap_output(tmp_path):
+    """不可取证豁免的是六把键，不是命令卫生：Global Constraint 5 无条件生效。"""
+    text = (
+        "# L0：画线工具目录\n\n"
+        "- 命令：npx -y rea-agents@latest inspect-web-page http://127.0.0.1:9222 TID\n"
+        "- 状态：不可取证\n"
+        "- 原因：headless 下工具条容器是空节点，页面对象自报反自动化拦截\n"
+    )
+    path, repo = _l0(tmp_path, text, name="tv-drawings.md")
+    problems, purpose = _audit_l0(path, "l0/tv-drawings.md", repo)
+    assert any("--filter-output" in x and "--token-limit" in x for x in problems), problems
+    assert purpose is None
+
+
+def test_harness_purpose_must_carry_the_current_probe_checksum(tmp_path):
+    """反编造针的两个方向都要打到：校验和对 ⇒ 干净，校验和错 ⇒ 必须红。
+
+    针要生效，_l0() 交回来的必须是真仓库根，否则 app.js 永远「不存在」。
+    """
+    _forensics(tmp_path)  # 先把 tmp_path 这棵假仓库（含 tools/rea_probe_site/app.js）建出来
+
+    def body(digest: str) -> str:
+        return L0_BODY + "- 用途：harness\n- 探针 app.js sha256：" + digest + "\n"
+
+    app = tmp_path / "tools" / "rea_probe_site" / "app.js"
+    want = hashlib.sha256(app.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+    path, repo = _l0(tmp_path, body(want))
+    problems, purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
+    assert problems == [], problems
+    assert purpose == "harness"
+
+    path.write_text(body("0" * 64), encoding="utf-8", newline="\n")
+    problems, _purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
+    assert any("sha256" in x for x in problems), problems
 
 
 def test_keys_inside_fenced_blocks_are_not_metadata(tmp_path):
