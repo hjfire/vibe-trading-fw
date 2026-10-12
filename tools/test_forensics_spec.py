@@ -21,7 +21,9 @@ import pytest
 from forensics_audit import (  # type: ignore[import-untyped]
     L0_PURPOSES,
     L0_REQUIRED_KEYS,
+    SPEC_HEADER,
     _audit_l0,
+    _audit_spec,
     _meta_keys,
     _outside_fences,
     audit_forensics,
@@ -224,3 +226,99 @@ def test_empty_l0_dir_is_not_a_passing_tree(tmp_path):
     (root / "l0" / "probe-skeleton.md").unlink()
     problems = audit_forensics(root, tmp_path)
     assert any("l0/ 下没有任何证据文件" in x for x in problems), problems
+
+
+SPEC_ROW = (
+    "| TV-DW-01 | 工具栏是一组横向并列的画线按钮，斐波那契需两点确定垂直范围 | "
+    "inspect-web-page 的可达文本里 id=toolbar 容器下能数出 13 个按钮 | DOM | l0/probe-skeleton.md |"
+)
+SPEC_TABLE = f"""# 规格：画线面
+
+{SPEC_HEADER}
+|---|---|---|---|---|
+{SPEC_ROW}
+"""
+
+
+def _with_spec(tmp_path: Path, text: str = SPEC_TABLE) -> tuple[Path, Path]:
+    """(spec/drawings.md, the docs/forensics root that holds it)."""
+    root = _forensics(tmp_path)
+    return _mk(root, "spec/drawings.md", text), root
+
+
+def test_valid_spec_table_is_clean(tmp_path):
+    path, root = _with_spec(tmp_path)
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == []
+    assert cited == {"probe-skeleton.md"}
+    assert ids == ["TV-DW-01"]
+
+
+def test_spec_header_must_be_verbatim(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace(SPEC_HEADER, "| 编号 | 句子 | 判据 | 类型 | 依据 |"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("表头不是逐字的" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("bad_id", ["TV-DW-1", "tv-DW-01", "TV-dw-01", "TV-DW-001", "DW-01", ""])
+def test_entry_id_shape(tmp_path, bad_id):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("| TV-DW-01 |", f"| {bad_id} |"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any(f"条目号 {bad_id!r} 不符合" in x for x in problems), problems
+
+
+def test_verdict_shorter_than_12_chars_is_not_a_verdict(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace(
+        "inspect-web-page 的可达文本里 id=toolbar 容器下能数出 13 个按钮", "数一下"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("判据短于 12 个字符" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("bad_type", ["视觉", "pixel", "", "DOM 或 状态"])
+def test_verdict_type_domain(tmp_path, bad_type):
+    # 单元格不能含 `|`：那会改行列数，红的是「列数不是 5」而不是判据类型域。
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("| DOM |", f"| {bad_type} |"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("判据类型" in x and "不在 DOM/状态/像素 之内" in x for x in problems), problems
+
+
+def test_basis_must_point_at_an_existing_l0(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("l0/probe-skeleton.md", "l0/never-captured.md"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("L0 依据 'l0/never-captured.md' 指向的文件不存在" in x for x in problems), problems
+
+
+def test_basis_accepts_bare_name_and_multiple_refs(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace(
+        "| DOM | l0/probe-skeleton.md |", "| DOM | probe-skeleton.md、l0/probe-skeleton.md |"))
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == []
+    assert cited == {"probe-skeleton.md"}
+
+
+def test_empty_basis_is_named(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("| DOM | l0/probe-skeleton.md |", "| DOM |  |"))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("L0 依据是空的" in x for x in problems), problems
+
+
+def test_duplicate_entry_id_in_one_table(tmp_path):
+    path, root = _with_spec(tmp_path, SPEC_TABLE + SPEC_ROW + "\n")
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("条目号 TV-DW-01 在 spec/drawings.md 里出现 2 次" in x for x in problems), problems
+
+
+def test_row_with_wrong_column_count_is_not_dropped_silently(tmp_path):
+    """少一列的行如果直接被解析丢掉，表就「空着也全绿」——必须报出来。"""
+    broken = SPEC_ROW.rsplit("|", 2)[0] + "|"  # 砍掉最后一列
+    assert broken.count("|") == 5
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace(SPEC_ROW, broken))
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("列数不是 5" in x for x in problems), problems
+
+
+def test_audit_forensics_picks_up_spec_violations(tmp_path):
+    root = _forensics(tmp_path)
+    _mk(root, "spec/drawings.md", SPEC_TABLE.replace("| DOM |", "| 视觉 |"))
+    problems = audit_forensics(root, tmp_path)
+    assert any("spec/drawings.md" in x and "判据类型" in x for x in problems), problems

@@ -30,6 +30,11 @@ EVIDENCE_ID = re.compile(r"ev_[0-9a-f]{64}")
 KEY_LINE = re.compile(r"^- ([^：\n]{1,24})：(.*)$")
 PROBE_APP_JS = "tools/rea_probe_site/app.js"
 
+SPEC_HEADER = "| 条目号 | 规格句 | 判据 | 判据类型 | L0 依据 |"
+ENTRY_ID = re.compile(r"TV-[A-Z][A-Z0-9]*-\d{2}")
+VERDICT_TYPES: tuple[str, ...] = ("DOM", "状态", "像素")
+MIN_VERDICT_LEN = 12
+
 
 def _outside_fences(text: str) -> list[str]:
     """Lines that are not inside a ``` fence — evidence excerpts are fenced."""
@@ -117,6 +122,70 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
     return v, (purpose or None)
 
 
+def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
+    """(header_seen, five-column data rows, raw text of rows with the wrong width)."""
+    seen = False
+    rows: list[list[str]] = []
+    bad: list[str] = []
+    for line in _outside_fences(text):
+        s = line.strip()
+        if s == header:
+            seen = True
+            continue
+        if not seen or not s.startswith("|"):
+            continue
+        if set(s) <= set("|-: "):  # the |---|---| separator row
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) == 5:
+            rows.append(cells)
+        else:
+            bad.append(s)
+    return seen, rows, bad
+
+
+def _resolve_l0(forensics_root: Path, ref: str) -> str | None:
+    """Accept ``l0/x.md`` or a bare ``x.md``; return the resolved file name or None."""
+    name = ref.rsplit("/", 1)[-1]
+    for cand in (forensics_root / "l0" / name, forensics_root / ref):
+        if cand.is_file():
+            return name
+    return None
+
+
+def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], set[str], list[str]]:
+    v: list[str] = []
+    text = _read(path)
+    seen, rows, bad = _table(text, SPEC_HEADER)
+    if not seen:
+        return [f"{rel}: 表头不是逐字的 {SPEC_HEADER}，文件里没有规格表"], set(), []
+    if bad:
+        v.append(f"{rel}: 有 {len(bad)} 行的列数不是 5（表行必须正好五列）：{bad[0]!r}")
+    cited: set[str] = set()
+    ids: list[str] = []
+    for eid, _sentence, verdict, vtype, basis in rows:
+        tag = f"{rel} 条目 {eid or '(空)'}"
+        if not ENTRY_ID.fullmatch(eid):
+            v.append(f"{tag}: 条目号 {eid!r} 不符合 TV-<大写字母…>-<两位数字>")
+        ids.append(eid)
+        if len(verdict) < MIN_VERDICT_LEN:
+            v.append(f"{tag}: 判据短于 {MIN_VERDICT_LEN} 个字符，打不了（写不出判据不算条目）")
+        if vtype not in VERDICT_TYPES:
+            v.append(f"{tag}: 判据类型 {vtype!r} 不在 {'/'.join(VERDICT_TYPES)} 之内")
+        refs = [r.strip() for r in re.split(r"[、,]", basis) if r.strip()]
+        if not refs:
+            v.append(f"{tag}: L0 依据是空的")
+        for ref in refs:
+            resolved = _resolve_l0(forensics_root, ref)
+            if resolved is None:
+                v.append(f"{tag}: L0 依据 {ref!r} 指向的文件不存在")
+            else:
+                cited.add(resolved)
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        v.append(f"{rel}: 条目号 {dup} 在 {rel} 里出现 {ids.count(dup)} 次")
+    return v, cited, ids
+
+
 def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     """Every violation in the funnel artefacts. Empty list == the contract holds."""
     if not forensics_root.is_dir():
@@ -131,6 +200,13 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
         v.append("docs/forensics/l0/ 下没有任何证据文件（骨架不等于取证）")
     for p in l0_files:
         problems, _purpose = _audit_l0(p, f"l0/{p.name}", repo_root)
+        v += problems
+
+    spec_dir = forensics_root / "spec"
+    for p in sorted(
+        q for q in (spec_dir.glob("*.md") if spec_dir.is_dir() else []) if q.name not in SPEC_EXEMPT
+    ):
+        problems, _cited, _ids = _audit_spec(p, f"spec/{p.name}", forensics_root)
         v += problems
     return v
 
