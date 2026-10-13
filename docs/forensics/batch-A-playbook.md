@@ -25,10 +25,19 @@ REA 只能挂到**启动时就带了调试端口**的浏览器上；已经在跑
 python -m http.server 8077 --bind 127.0.0.1 --directory tools/rea_probe_site   # 仅 P0 探针页用
 "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new \
   --remote-debugging-port=9222 --user-data-dir="$TEMP/rea-cdp-profile" \
+  --proxy-server="http://127.0.0.1:<当次读到的系统代理端口>" \
   --disable-extensions --disable-sync --no-first-run --no-default-browser-check \
   "https://www.tradingview.com/chart/?symbol=NASDAQ%3AAAPL"
 npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222            # 取 target_id
 ```
+
+**这一行的 `--proxy-server` 是 2026-10-13 晚现读补的，不是可选装饰。** 当时实测：`curl` 直连
+`https://www.tradingview.com/chart/` 是 `http_code=000` ＋ `Recv failure: Connection was reset`（TLS 阶段被 RST），
+注册表 `ProxyEnable=0x1`／`ProxyServer=127.0.0.1:7897`，带 `--proxy http://127.0.0.1:7897` 重发＝**200**；
+而备忘里那个老端口 10808 当时已经拒连。⇒ **每次跑之前先 `reg query` 现读那两个键，把读到的端口传进 Edge，
+不要把端口当常量抄**。`npx` 这一侧不吃代理也能解析 6.4.0（走的是国内镜像缓存），别把两件事混起来查。
+若现读到的结果是「`ProxyEnable=0` 而直连又被 RST」⇒ 按 §6 判**环境未就绪**、如实停手，
+**不去翻别的端口、不想办法绕**（这就是「不伪装、不规避」的落点）。
 
 收尾**只按 `netstat -ano` 取到的那两个 Windows PID** `taskkill`，然后删 `$TEMP/rea-cdp-profile`。
 **绝不按镜像名杀 `msedge.exe`**——机器上同时开着人工使用的真实 Edge 窗口。
@@ -267,7 +276,9 @@ A14 快捷键同理：`press` 在纪律上只用于 `Escape`，所以「键盘�
 - 出现空白页／空 `targets`／请求被拒／429／验证码 ⇒ **就地停手**，把该面标为不可取证，
   不想办法绕（spec §10 对策原话）。交互面还多一条：**同一趟里 `status: failed` 之后别补动作重跑**，
   先把那一趟的失败留档记成证据。
-- 跑之前先探一次连通性；网络异常按既有诊断顺序：代理端口拒连时**先不带 `--proxy` 重发**，再判网络全灭。
+- 跑之前先探一次连通性（`curl` 裸跑一次＋带 `--proxy <现读到的系统代理端口>` 再跑一次，两次读数都记下来）。
+  本机诊断顺序照旧：**代理端口拒连时先不带 `--proxy` 重发，再判网络全灭**；2026-10-13 晚新增的相反腿是
+  「直连被 RST 而带代理＝200」⇒ 那一次的真答案是给 Edge 带 `--proxy-server`（见 §0），不是判网络全灭。
 - 一次一面，一面一趟一份 L0（所以 A16 与 A1 分趟，见 §1）；`--filter-output` 或 `--token-limit` 必带（校验器会查这条）。
 - 只用 stdout，摘录进仓库；**不落地任何第三方脚本、源码文本、HTML 正文或图像本体**（§2 那三条红线）。
 - 节奏：先只跑 A1 一趟验证可达与可挂（这趟就按 §0 带上 `--allowed-origins`），若被挡就回来报告；
