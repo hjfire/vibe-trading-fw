@@ -1,6 +1,6 @@
 # L0：探针页元素事件面（面 A4）
 
-- 命令：npx -y rea-agents@latest inspect-web-event-listeners http://127.0.0.1:9222 437D7000A067F60AC4103AE26B62F9A4 #probe-chart --token-limit 1500
+- 命令：npx -y rea-agents@latest inspect-web-event-listeners http://127.0.0.1:9222 437D7000A067F60AC4103AE26B62F9A4 "#probe-chart" --token-limit 1500
 - evidence_id：ev_d9cdbd192fffe709aaff5f54178427b2d849f760f6fc1dac08592a52a7537b15
 - 浏览器：Edg/155.0.4283.45（protocol_version 1.3，js_version 15.5.9.4，同一趟 list-browser-targets 的读数）
 - 目标 URL：http://127.0.0.1:8077/
@@ -70,6 +70,7 @@ evidence_id: ev_d9cdbd192fffe709aaff5f54178427b2d849f760f6fc1dac08592a52a7537b15
 ## 读数含义
 
 - `listeners[1]` 只有**一条**，`type: pointerdown`，且 `use_capture: false`、`passive: false`、`once: false`。这就是工单 A4 要回答的问题形状：这块画布接的是 pointerdown，不是 click，也没有 pointerup／pointermove——app.js 里确实只 `addEventListener` 了一次。
+- `#` 出现在词首时 Git-Bash 把它当注释起始，`#probe-chart` 及其后所有实参都不进命令；这一面唯一的目的就是那个 selector，所以裸写的命令抄下去会得到一份「什么都没指定」的输出。**这一趟真跑的时候 selector 是带引号的**（留档 stdout 的 `parameters.selector` 就是 `#probe-chart`），本条只是把记录里的可粘贴性修对，不改任何读数。
 - `location` 给的是 `script_id: "3"`／`url: http://127.0.0.1:8077/app.js`／`line_number: 4`／`column_number: 43`／`function_name: null`／`source_association: script_id`，`execution: unknown`。**`line_number` 是 0-based**：4 对应工作树 app.js 的第 5 行 `canvas.addEventListener("pointerdown", (event) => this.pick(event));`。这一条与 A2 的 `location.line: 23`（1-based）口径不同，写判据时不能混用。
 - `column_number: 43` 是 CDP 给的列，本记录不解释它指向哪个字符（工作树里那一行的 `"pointerdown"` 字面量起点按 0-based 数是 28，对不上 ⇒ CDP 的列口径不是「字面量起始」，具体是什么没验，别拿去当判据）。
 - `sources[1]` 两条指纹 `producer_hash` 与 `source.sha256` 都等于 `62ea3b37…e52f`，`utf8_bytes: 697`／`utf16_units: 697` ⇒ 监听器回调所在脚本就是这棵树里的探针脚本；`source.state: captured` 说明这一面把源码文本一并带回来了（A1 那面是 `included: false`，因为它没选 source capture）。

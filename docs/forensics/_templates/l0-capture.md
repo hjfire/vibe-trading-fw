@@ -5,9 +5,14 @@
 所以这里的尖括号占位符是安全的。落到 docs/forensics/l0/ 的那一份**必须**把尖括号整个换掉：
 校验器对六个必填键的「值」直接判 `<`／`>` —— 留着占位符就是红。
 用途：harness 的记录还必须在正文任意位置带上探针 app.js 的现算校验和，见下面那行。
+两条实测坑（照抄就会踩，README §4 有全文）：
+--filter-output 只要没点名 evidence_id，顶层那把主键就会被一起滤掉；--token-limit 小了会
+静默截掉你正是为它才跑这一趟的那个键（先不限流跑一次，确认目标键在、有多大，再定收口口径）。
+inspect-web-event-listeners 还会**默认**内联回调脚本的源码正文，对第三方站点必须把过滤键
+止步于 normalized_result.listeners（详见 docs/forensics/batch-A-playbook.md §3②）。
 -->
 
-- 命令：npx -y rea-agents@latest 〈单趟 CDP 命令名〉 http://127.0.0.1:9222 〈list-browser-targets 给的真实 target_id〉 〈该面其余实参〉 --filter-output 〈键路径〉
+- 命令：npx -y rea-agents@latest 〈单趟 CDP 命令名〉 http://127.0.0.1:9222 〈list-browser-targets 给的真实 target_id〉 〈该面其余实参〉 --filter-output evidence_id,〈键路径〉
 - evidence_id：〈从这次 stdout 里逐字抄的 ev_…64 位十六进制〉
 - 浏览器：〈同一趟 list-browser-targets 报的 browser.product／protocol_version／js_version，照抄〉
 - 目标 URL：〈targets[] 里那个 target_id 对应的 url，照抄〉

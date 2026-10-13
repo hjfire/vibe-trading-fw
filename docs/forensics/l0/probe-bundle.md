@@ -47,7 +47,7 @@ normalized_result:
 
 - `observations` 下本趟实际出现的键名，逐个照抄：`chunks`（其内 `nodes[1]{script_key,url,artifact_sha256,bytes}` 与 `edges`）、`routes`、`endpoints`、`webmcp_declarations`、`source_maps`（其内 `status`/`requested`/`processed`/`items`）。completeness 块本面出现的是 `status`、`parsed_scripts`、`parse_failures`、`visited_ast_nodes` 四把键。
 - **端点面非空**：`endpoints[1]` 一条，`value: /data.json`、`mechanism: "call:fetch"`、`location` 三把键 `script_key`／`line: 23`／`column: 23`。这条就是 app.js 第 23 行 `const response = await fetch("/data.json");`——`line` 与工作树的 1-based 行号一致，`column` 是 0-based（23 正好是标识符 `fetch` 的起始列）。
-- **路由面为空**：`routes: []`。解释：探针页没有任何路由机制——没有 history.pushState／replaceState、没有 hash 变更、只有一个 URL、`frames[1]` 只有一帧，所以路由观察器数不出条目。这是「目标确实没有这个面」，不是命令失败（同一次调用在同一次里就把端点面数出来了）。
+- **路由面为空**：`routes: []`。解释只取本面与仓内的依据：`tools/rea_probe_site/index.html` 只有一个静态页面、`app.js` 里没有任何路由机制（无 `history.pushState`／`replaceState`、无 hash 变更、只有一个 URL），所以路由观察器数不出条目。本面 stdout 里**没有** `frames` 这个键——一帧那件事是 A1（`inspect-web-page`）那一面的读数，见 `probe-skeleton.md`，不在这里引。这是「目标确实没有这个面」，不是命令失败（同一次调用在同一次里就把端点面数出来了）。
 - `chunks.edges: []` 同理：app.js 是单个 ES module，不 import 任何东西，所以模块图是一条节点、零条边。
 - `webmcp_declarations: []`、`source_maps.status: not_requested`：这一面没请求 source map，也没声明页内工具。
 - `nodes[1]` 那一条里 `artifact_sha256` = `62ea3b37…e52f`，`bytes=697`，与本记录的探针校验和／工作树 LF 归一字节数逐一相符 ⇒ 被分析的脚本就是这棵树里的那份，没有第二份拷贝。
