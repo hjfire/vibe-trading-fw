@@ -1916,3 +1916,8 @@ P1 产物就绪即报告。下一步（P2 对称取证／P3 排优先级／P4 �
 - 两条操作性新事实：**不存在的 `role`／`name` 会把整趟挂住**（>2 分钟零产出后中止，留档停在 0 字节）
   ⇒ miss 探针别和真动作同趟；**非法入参不挂**（schema 校验跑在连浏览器之前，`cdp_endpoint` 指向死端口也秒回
   `invalid_request`）⇒ 逼词表这类探针不需要起现场。`wait_for_timeout` 的时长字段叫 `duration_ms`（不是 `timeout_ms`）。
+- **Task 8 自己那段的 Step 2 三条命令是旧的，不要照抄**（本更正不重排任务正文，以免与已生成的简报脱节）：
+  ① 三条都没带 `--allowed-origins`；② `--filter-output normalized_result` 会把顶层 `evidence_id` 一起滤掉
+  （playbook §3①），主键必须与摘录同趟；③ A4 那条写的 `--token-limit 400` 正是 §3 点名的陷阱
+  （探针页实测它把 `    - type:` 切在半截，`pointerdown` 拿不到）。
+  以 playbook §1 那张表的命令为准；Task 8 的 Step 1／3／4／5／6 仍然有效。

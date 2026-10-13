@@ -5,7 +5,10 @@ spec §9 第 4 条要求「第一次实抓前先报打算抓哪几面」；2026-
 （跑哪几面／拿不到的面／只读纪律／`--include-*` 旗标取舍），本文件就是那份点头的落地口径。
 **改动批次内容（加面、换面、换旗标）要重新问一次**，沿用它不等于授权扩大它。
 
-**2026-10-13 晚的第二次点头**（本文件下面标「② 」的两处改动就是它的落地，除此之外批次内容没变）：
+**2026-10-13 晚的第二次点头**，它落在这些地方：§1 表里六行带「② 」前缀的新面（A3／A5／A7／A8／A9／A15）、
+§1 末尾关于 `click` 定位的那句、§2 末尾的 `at_end` 取舍、§4 的「场景完整性两层」与 `limitations` 两条、
+§5 整节的三档改写、§6 的闸门措辞、§7 的产物清单。**§3 与 §5 里小节内编号用的 ①②③ 不是这个前缀**，
+别把它们读成批次内容变更；除此之外批次内容没变。
 - 扩面：«全扩：A3＋A5＋A7＋A8（推荐）» ⇒ 四个交互复捕面进入批次 A（§1、§5①）。
 - 动作纪律：«允许：只做打开类动作（推荐）»，其约束原文是「只点自己触发的 UI，不登录／不保存／不交易，
   见 429 或验证码立刻停手并记不可取证」⇒ §6 的闸门从「GET only」改成这一句。
@@ -91,9 +94,16 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 - **`--include-storage-keys`（help 原文 *without values*）／`--include-storage-fingerprints`＝开。**
   键名与「内容派生哈希」是证据，不是内容本身；这一面正是 P3 对账画线持久化最想要的。
 
-本机预检实测（2026-10-13，自家探针页）：四条结构旗标＋无障碍文本都打开后，
-`completeness.policy_filtered_sections` 从 6 项收缩到 **2 项**（`console_text,script_sources`），
-也就是上面这套取舍的效果就是「只留禁开／不开的那两面被策略挡住」。
+本机预检实测（2026-10-13，自家探针页，留档 `%TEMP%\rea-t7\a1-flags-on.txt:23`）：
+把六段里能开的四段结构旗标＋无障碍文本**全开**（只留 `--include-console-text`／`--include-script-sources`
+不动），`completeness.policy_filtered_sections` 从 6 项收缩到 **2 项**（`console_text,script_sources`）。
+
+**这一趟是「旗标↔段落」的对照实验，不是批次 A 任何一面的预期读数。** §1 的 A1 只开三把（无障碍文本＋
+两个 shape），A16 只开两把 storage——所以它们各自那趟的项数**必然大于 2**，那是口径不同，不是缺陷。
+判据：段落全表是那六项（逐字 `accessibility,console_text,json_body_shapes,script_sources,storage_keys,websocket_shapes`，
+见 `docs/forensics/l0/probe-skeleton.md:42` 的 `policy_filtered_sections[6]`），当次列表＝全表减去
+这一趟开掉的旗标所对应的段落；`--include-storage-fingerprints` 到底让哪一段消失**还没验过**，
+所以 A16 那趟以当次 stdout 为准照抄，别预填项数。
 
 **② 交互复捕的 `at_end` 取舍**（`capture.at_end` 的值域是现读逼出来的 6 个：
 `screenshot,dom,accessibility,url,history,storage`）：
@@ -103,7 +113,7 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 - **`screenshot`＝开，但 L0 里只准落三键**：`sha256`＋`bytes`＋`media_type`。
   实测形状 `screenshot{state: captured, value: {sha256, bytes: 9727, media_type: image/png, data_base64: …}}`
   ——`data_base64` 是**图像本体**，一个字都不许进仓库（裁定 1 的表达层那条）。
-- **`dom`＝允许跑，正文一个字不进仓**。实测留档里 `dom.value.text` 就是**整段页面 HTML 正文**
+- **`dom`＝允许跑，正文一个字不进仓**。实测留档（`%TEMP%\rea-t8-capdom.txt`）里 `dom.value.text` 就是**整段页面 HTML 正文**
   （探针页那趟 `bytes: 475`，逐字含 `<!DOCTYPE html>` 与我们自己写的按钮文案）。自家页面无害，
   对 `tradingview.com` 跑同一条命令带回来的就是对方的标记正文。⇒ L0 里 `dom` 最多落
   `state`＋`sha256`＋`bytes`，**不许**落 `text`。
@@ -182,8 +192,11 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 ESTALE 那条链**接不上**这张门。探针页实测（`%TEMP%\rea-t8-click.txt`，6,596 字节）：
 `evidence_id ev_497acbd544027225a276811991e53b64a137cda560f206a7de51d6a10687572a`，`rc=0`，
 三步（`goto_start`／`s1 click #probe-chart`／`s2 wait_for_timeout`）**全部** `status: completed`、`error: null`。
-同趟 `at_end: ["url","dom","accessibility"]` 之后逐步工件 `state: captured`、`accessibility.bytes: 136`，
-逐字给出 `- button "Trend line"` 这一族 `role`＋`name`。
+**点击之后还能同趟读出可达文本**这件事是**另一趟**证明的（`%TEMP%\rea-t8-capdom.txt`，`:43` 是
+`at_end[3]: url,dom,accessibility`，`:124/:130` 两步工件 `state: captured`，`accessibility.bytes: 136`
+逐字给出 `- button "Trend line"` 这一族 `role`＋`name`；同一留档 `:127` 的 `dom.bytes: 475` 就是 §2
+那条红线说的那段 HTML 正文）。`rea-t8-click.txt` 那一趟 `at_end` 只有 `url`，它的 `dom`／`accessibility`
+全是 `state: not_requested`——**别把两趟混成一条证据链**。
 
 命令骨架（内联 JSON；`<…>` 是每面要替换的地方）：
 
@@ -270,6 +283,9 @@ A14 快捷键同理：`press` 在纪律上只用于 `Escape`，所以「键盘�
 ③ `tv-a12-pine-editor.md`、`tv-a13-alert-dialog.md`（`状态：不可取证`）。
 加 `docs/forensics/spec/` 下的条目表与 `docs/forensics/gap-matrix.md` 的行。
 
-这些记录的 `用途：` 填 `规格`（它们要被供应商页面的规格条目引用；填 `harness` 或 `基线`
-才是 P0 那三份探针记录的用途）。② 那四个交互面的条目**必须**引它们自己的记录（一趟一个 `evidence_id`），
-不许引 A1 那份凑数。
+**用途这一格分两步填**：新落成的 TV 记录先写 `用途：基线`——孤证规则（`tools/forensics_audit.py` 里
+「没被任何规格条目引用、又没标 `harness`／`基线`」就报）只豁免那两种用途，而批次 A 落成时
+`docs/forensics/spec/` 里还没有引用它们的条目，直接写 `规格` 会把门判红。
+T9 把它们逐条引用进条目表之后，再把 `用途：` 改成 `规格`——这一改是被引用逼出来的，不是放宽规则。
+（`harness`／`基线` 里的 `harness` 是 P0 那三份探针记录的用途，批次 A 不用它。）
+② 那四个交互面的条目**必须**引它们自己的记录（一趟一个 `evidence_id`），不许引 A1 那份凑数。
