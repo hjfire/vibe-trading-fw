@@ -147,8 +147,10 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
   ——`data_base64` 是**图像本体**，一个字都不许进仓库（裁定 1 的表达层那条）。
   **这条红线的管辖范围是「像素本体」，不是「整份 stdout」**：同一趟里的结构键——`browser`／`target`／
   `viewport`（我方窗口几何）／`captured_at`／`completeness`／`limitations`——是工具自己的读数，
-  照样逐字转录并带留档行号。形状基准＝`docs/forensics/l0/tv-a9-axis-scale.md`（39 行留档里只把
-  第 21 行 `data_base64` 与第 7 行 `user_agent` 两行排除在转录之外，其余全在，且每段都给了可 `grep -n` 反查的行号）。
+  照样逐字转录并带留档行号。形状基准＝`docs/forensics/l0/tv-a9-axis-scale.md`（39 行留档只略过三段——
+  第 7 行 `user_agent`（我方浏览器的 UA 串，与像素无关）、第 21 行 `data_base64`（图像本体）、
+  第 31-37 行那七条 `dropped_events` 计数（保留第 30 行键名与第 38 行 `total: 0`），其余逐字在栏，
+  每段都给了可 `grep -n` 反查的行号）。
   别把「只落三键」读成「一份像素记录只准有三行」——那样 `--token-limit` 有没有切到载荷、
   视口是谁的几何这类口径就没处可写了。
 - **`dom`＝允许跑，正文一个字不进仓**。实测留档（`%TEMP%\rea-t8-capdom.txt`）里 `dom.value.text` 就是**整段页面 HTML 正文**
