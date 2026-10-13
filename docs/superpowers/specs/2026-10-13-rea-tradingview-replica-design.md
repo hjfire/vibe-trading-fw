@@ -159,17 +159,35 @@ detail: "Directory entry changed before open: a.js"
 - `capture-browser-scenario` 的入参 `inputJson` 帮助原文是 **"Inline browser scenario JSON or JSON file path"** ⇒ 可以**只给内联 JSON**，不碰文件通道；
   `browser.mode: connect` 只需 `cdp_endpoint`＋`target_id`（**不需要 `executable_path`**，那才是会 ESTALE 的 `launch` 模式）。
   于是「交互 → 复捕」在一趟里就成立：`evidence_id ev_497acbd544027225a276811991e53b64a137cda560f206a7de51d6a10687572a`，
-  `rc=0`，`steps[1]{step_id: s1, action: click, status: completed, error: null}`，
+  `rc=0`，留档 `steps[3]` 的三步（`goto_start`／`s1 click #probe-chart`／`s2 wait_for_timeout`）**全部** `status: completed`、`error: null`
+  （**2026-10-13 晚订正**：本行原先写成 `steps[1]{step_id: s1, …}`——TOON 的 `[n]` 是**条数**不是下标，而那一步的 `completed`
+  一度是从另一份留档 `rea-t7/scenario-run2.txt` 的第 0 步 `goto_start` 误读过来的。同一动作在命中 3 个元素的
+  `#toolbar button` 上其实是 `status: failed`＋`strict mode violation`，紧随的 `s2` 变 `cancelled`；
+  「管道可用」与「一次点击成功落地」是两件事，支撑后者的只有换成单元素 selector 的这一次），
   `browser{mode: connect, process_ownership: external, cleanup: disconnected-external, product: Chromium, version: 155.0.4283.45}`。
-- `capture.at_end` 是**枚举数组**（值如 `["url","dom","accessibility","screenshot"]`），点完直接拿到改后的可达树：
-  `accessibility.value.text` 逐字给出 `- button "Trend line"` 这一族 `role`＋`name`（`bytes: 136`），
+- `capture.at_end` 是**枚举数组**，值域现读为 6 个：`screenshot,dom,accessibility,url,history,storage`
+  （写本节初稿时只列了当次用到的 4 个，那是样本不是值域——2026-10-13 晚用非法值逼出 `expected[6]` 才补齐）。
+  点完直接拿到改后的可达树：`accessibility.value.text` 逐字给出 `- button "Trend line"` 这一族 `role`＋`name`（`bytes: 136`），
   与 §5 里 A1 需要 `--include-accessibility-text` 才有的读数面同形 ⇒ **A3／A5／A7／A8 这类「未点开就不在可达文本里」的面从此有判据级证据**，
   §7 P1 那条「懒加载／虚拟 DOM」风险降级为「先跑一步 click，再读同趟工件」。
+- 同法逼出的另外三张词表（都是 `code: invalid_request`／`details.issues[]` 里的 `expected[n]`，且 schema 校验跑在连浏览器**之前**，
+  所以这类探针不需要起现场）：`action` 9 值 `goto,click,fill,press,select_option,check,uncheck,wait_for,wait_for_timeout`
+  （**没有右键** ⇒ A6 仍然没有驱动手段）；`locator.kind` 3 值 `test_id,role,css`；`kind: role` 下 `role` 14 值
+  `button,checkbox,combobox,dialog,link,listbox,menuitem,option,radio,slider,spinbutton,switch,tab,textbox`。
+  ⇒ `role`＋`name` 定位是**合规上更好**的那一把：它不需要把对方的 class 命名抄进 L0，而它给的正是判据要引用的语义。
 - 像素面同样可用：`at_end: ["screenshot"]` ⇒ `value{sha256, bytes, media_type: image/png, data_base64}`。
   **硬红线**：`data_base64` 绝不准进仓库（它是图像资产本体，撞裁定 1 的表达层那条），L0 里像素证据只落 `sha256`＋`bytes`＋`media_type`。
-- 两条限制，别当成万能：① `--filter-output` 的**下标键路径不生效**（`normalized_result.steps[1].artifacts.screenshot` 返 `steps: []` 且 `rc=0` ⇒ 静默空，只能整份落盘再本地切）；
+- **同样要红线的是 `dom`**（本条与上一条同批补上）：实测 `dom.value.text` 就是**整段页面 HTML 正文**
+  （探针页那趟 `bytes: 475`，逐字含 `<!DOCTYPE html>` 与页面里的每个标签）。自家页面无害，
+  对 `tradingview.com` 跑同一条命令带回来的就是**对方的标记正文**——裁定 1 第 1 条点名的正是「表达层／CSS／标记」。
+  ⇒ 交互复捕默认只取 `accessibility`（与 A1 那把旗标同形）；`dom` 允许跑，但 L0 里最多落 `state`＋`sha256`＋`bytes`。
+- 四条限制，别当成万能：① `--filter-output` 的**下标键路径不生效**（`normalized_result.steps[1].artifacts.screenshot` 返 `steps: []` 且 `rc=0` ⇒ 静默空，只能整份落盘再本地切；帮助自己的示例写的是 `a[0,3]` 那种形状，**未验证**）；
   ② 该 provider 自己的 `limitations` 里有「CDP attachment cannot recover pre-attach events」，所以**attach 之前**发生的事件仍然取不到，
-  「没报」不等于「没有」（§2.4 的原意在这一条上依然成立）。
+  「没报」不等于「没有」（§2.4 的原意在这一条上依然成立）；
+  ③ Playwright **strict mode**：selector 命中多个元素时该步 `status: failed` 并逐字枚举候选，紧随的步骤变 `cancelled`
+  （留档 `rea-t7/scenario-run2.txt`，7,025 字节，顶层 `missing_sections[3]: action,events,url`）⇒ 一趟只放一个打开动作、定位必须收到单元素；
+  ④ **不存在的 `role`／`name` 不快速失败，而是把整趟挂住**（实测两分钟零产出后中止，留档停在 0 字节）
+  ⇒ 别把「探个名字在不在」的 miss 探针和真动作放同一趟。
 - 需要**登录**才能看到的面（指标模板云同步、多布局保存等）与一切吃磁盘路径的命令（`export-web-scripts`／`inspect-evidence-bundle`／`compare-web-captures`）
   **不受本次实测影响**，仍是不可用。
 

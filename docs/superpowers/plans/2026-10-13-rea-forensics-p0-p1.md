@@ -1877,3 +1877,42 @@ P1 产物就绪即报告。下一步（P2 对称取证／P3 排优先级／P4 �
 - **范围重定＝先停先问**：扩面改的是批次内容，而本计划 Task 7 的停等条款（＋计划 Global Constraints 第 11 条）
   要求「改动批次内容要重新问一次」。所以 **Task 8 在用户答复扩面问题之前不派发**；
   这份更正只写清「怎么改」，不等于授权「改」。
+
+---
+
+## 执行期更正三（2026-10-13 晚，Task 6 评审收口之后）：三项答复到手，playbook 已重写，Task 8 解锁
+
+**上一份更正里那条「在用户答复之前不派发」现在生效完了——答复已到手，三个选项逐字如下：**
+
+1. 批次 A 扩面：«全扩：A3＋A5＋A7＋A8（推荐）»
+2. 对 `tradingview.com` 派发交互动作：«允许：只做打开类动作（推荐）»
+   （选项自带的约束原文：只点自己触发的 UI，不登录／不保存／不交易，见 429 或验证码立刻停手并记不可取证）
+3. 像素面：«纳入，但只落 sha256＋bytes＋media_type（推荐）»
+
+**落地面＝`docs/forensics/batch-A-playbook.md` 已按这三条重写**（前言记点头、§1 补 A3／A5／A7／A8／A9／A15 六行、
+§2 补 `at_end` 取舍与 `dom` 红线、§3 补下标过滤、§4 补空面前置检查与场景完整性两层、
+§5 从「明说跑不了」改成三档、§6 闸门从 GET only 改成打开类动作、§7 补产物名）。
+**Task 8 的命令口径以重写后的 playbook 为准**，不再以本计划 Task 7 的旧面表为准——旧面表里那批「明说跑不了」已被否证。
+
+本份更正要补的是上一份里几处**读数级**的错与缺（现读取证，出处同时写进 spec §2.4.1 与 playbook §5①）：
+
+- `capture.at_end` 的值域是 **6** 个（`screenshot,dom,accessibility,url,history,storage`），
+  上一份写成 4 个是把「当次用到的样本」当成了值域。`action` 词表 9 值里**没有右键**
+  ⇒ 上一份那句「A6 要先确认 `right_click` 这个 action 名」现在有了答案：**这个词不存在**，
+  A6 记「未验证」（不是「不可取证」），也不许用左键硬凑一个「等价于右键」的读数；A14 快捷键同批不跑。
+- **`dom.value.text` 是整段页面 HTML 正文**（实测 `bytes: 475`，逐字含 `<!DOCTYPE html>`）——
+  上一份只红线了 `data_base64`，漏了这一条。对第三方站点它同样撞裁定 1 第 1 条（表达层／标记），
+  ⇒ 交互复捕默认取 `accessibility`，`dom` 允许跑但 L0 最多落 `state`＋`sha256`＋`bytes`。
+- 场景记录的**完整性有两层**且不同值：顶层 `completeness.status: incomplete`／`missing_sections[1]: events`／
+  `equality_eligible: false`，逐步工件那层才是 `complete`。Task 8 写 `完整性：` 时抄顶层并解释 `events` 缺席的原因，
+  否则会被读成「页面上没有事件」。
+- 四个单趟 CDP 命令都有 `--allowed-origins <array>`（帮助写 *Optional*），而工具自己的 limitations 自陈
+  「没有 allowed source URL 的脚本与控制台事件会被排除」⇒ A2 那面**空**的第一个嫌疑是 origin 写法而不是「对方没有」，
+  已按裸值写进 playbook 每条单趟命令；仓内 `docs/forensics/l0/probe-bundle.md` 那条「未验证的猜测」由 Task 8 判定收口。
+- 上一份那句「一步 `click` 在探针页上 `status: completed`」的**出处搞错了，已重新取证**：原先引的那份留档
+  （`rea-t7/scenario-run2.txt`）里 click 实际是 `status: failed`＋strict mode violation，`completed` 属于第 0 步 `goto_start`。
+  换成单元素 selector 的那趟（`rea-t8-click.txt`，`steps[3]` 三步全部 `completed`／`error: null`）才是支撑。
+  ⇒ 「管道可用」与「一次点击落地」要分开说，Task 8 引用交互面时只准引后者。
+- 两条操作性新事实：**不存在的 `role`／`name` 会把整趟挂住**（>2 分钟零产出后中止，留档停在 0 字节）
+  ⇒ miss 探针别和真动作同趟；**非法入参不挂**（schema 校验跑在连浏览器之前，`cdp_endpoint` 指向死端口也秒回
+  `invalid_request`）⇒ 逼词表这类探针不需要起现场。`wait_for_timeout` 的时长字段叫 `duration_ms`（不是 `timeout_ms`）。
