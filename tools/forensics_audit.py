@@ -123,7 +123,7 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
 
 
 def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
-    """(header_seen, five-column data rows, raw text of rows with the wrong width).
+    """(header_seen, five-column data rows, raw text of `|` rows not audited as entries).
 
     一张表 = 以逐字 ``header`` 开头的那一段**连续** ``|`` 行：第一条非 ``|`` 行
     （散文、标题、空行）就关掉行窗口，所以同一文件后面不相干的管道表不会被当成
@@ -134,6 +134,14 @@ def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
     作用域，与它的消息文案「在 {rel} 里出现 N 次」一致。
     分隔行必须含 ``-``：`|  |  |  |  |  |` 这种全空数据行不是 `|---|---|`，
     它要落到「空单元格」的判据上，不能被静默丢掉。
+    窗口之外的行也有条件地上报（修复轮 2 R1，别把「连续性」读成「可以静默丢」）：
+    表头**之后**、窗口之外的 ``|`` 行，如果首格整段匹配 ``ENTRY_ID``，就是「掉出
+    窗口的疑似规格行」，原文进 ``bad``——``header`` 与行之间夹一个空行的规格文档
+    于是报违规，而不是零条目零违规地过审。门禁只在首格像条目号：散文里的普通
+    Markdown 表（首格是「面」／「DW」）继续不进任何列表，表头**之前**的行也不进
+    （defer 的 rows-above-header，本轮不顺手修）。因此 ``bad`` 有两种成因，调用方
+    必须按列数分派消息（见 ``_audit_spec``）：不是 5 列的报「列数不是 5」，正好
+    5 列的那一种是窗口问题，拿「列数不是 5」说它就是在撒谎。
     """
     seen = False
     window_open = False  # 表头之后、第一条非 `|` 行之前：这一段才是这张表的行
@@ -149,6 +157,8 @@ def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
             window_open = False
             continue
         if not window_open:
+            if seen and ENTRY_ID.fullmatch(s.strip("|").split("|")[0].strip()):
+                bad.append(s)  # 表头之后掉出窗口的疑似规格行：进 bad，不消失
             continue
         if "-" in s and set(s) <= set("|-: "):  # the |---|---| separator row
             continue
@@ -163,18 +173,25 @@ def _table(text: str, header: str) -> tuple[bool, list[list[str]], list[str]]:
 def _resolve_l0(forensics_root: Path, ref: str) -> str | None:
     """Accept ``l0/x.md`` or a bare ``x.md``; return the resolved file name or None.
 
-    判据说的是「L0 依据 必须指向存在的 **l0** 文件」，所以落点必须在
-    ``forensics_root/l0/`` 里：``spec/drawings.md``（规格自引）、``gap-matrix.md``
-    这类同树里的非 l0 文件，以及 ``../x.md``／绝对路径这种越出取证根的写法，
-    一律返回 None。两种被接受的写法都保留，多份依据（``、``／`,` 分隔）也保留。
-    调用方对「找不到」与「找到了但不在 l0/」都报同一条 指向的文件不存在。
+    判据说的是「L0 依据 必须指向存在的 **l0** 文件」，所以唯一的规则是**落点**：
+    解析后仍在 ``forensics_root/l0/`` 里的文件才算命中，其余都是 None，调用方报
+    「指向的文件不存在」（``spec/drawings.md`` 规格自引、``gap-matrix.md`` 这类
+    同树非 l0 文件、``../outside.md`` 这种 l0/ 下没有同名文件的写法）。
+    「写法」本身不作限制：两个候选里裸名那一个先把 ``ref`` 折成末段（basename），
+    所以带目录的引用只要末段在 l0/ 里存在就命中——实测
+    ``C:/elsewhere/probe-skeleton.md``／``/elsewhere/probe-skeleton.md``／
+    ``../probe-skeleton.md`` 都返回 ``probe-skeleton.md``，因为落点是
+    ``forensics_root/l0/probe-skeleton.md``。证据于是仍然真实存在，只是引用方写得
+    绕；要改成「只接受两种写法」得连本 slice 后续任务引用的解析语义一起改，
+    本轮不动行为（见 report §9.3）。两种被接受的写法与多份依据（``、``／`,` 分隔）
+    都继续生效。
     """
     l0_dir = (forensics_root / "l0").resolve()
     name = ref.rsplit("/", 1)[-1]
     for cand in (forensics_root / "l0" / name, forensics_root / ref):
         try:
             hit = cand.resolve()
-        except OSError:  # 符号环之类的坏路径：当作没找到
+        except (OSError, ValueError):  # 坏路径（符号环／NUL 字节）：当作没找到，不许崩
             continue
         if hit.is_file() and l0_dir in hit.parents:
             return name
@@ -187,8 +204,17 @@ def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], 
     seen, rows, bad = _table(text, SPEC_HEADER)
     if not seen:
         return [f"{rel}: 表头不是逐字的 {SPEC_HEADER}，文件里没有规格表"], set(), []
-    if bad:
-        v.append(f"{rel}: 有 {len(bad)} 行的列数不是 5（表行必须正好五列）：{bad[0]!r}")
+    # `bad` 的两种成因（_table 的 docstring）按列数分派，免得拿「列数不是 5」
+    # 去描述一行正好五列、只是掉出窗口的疑似规格行。
+    narrow = [s for s in bad if len(s.strip("|").split("|")) != 5]
+    outside = [s for s in bad if len(s.strip("|").split("|")) == 5]
+    if narrow:
+        v.append(f"{rel}: 有 {len(narrow)} 行的列数不是 5（表行必须正好五列）：{narrow[0]!r}")
+    if outside:
+        v.append(
+            f"{rel}: 有 {len(outside)} 行落在规格表窗口之外（表头与它之间隔了非 `|` 行），"
+            f"这些行没有被当成条目审计：{outside[0]!r}"
+        )
     cited: set[str] = set()
     ids: list[str] = []
     for eid, _sentence, verdict, vtype, basis in rows:

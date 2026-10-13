@@ -29,6 +29,8 @@ from forensics_audit import (  # type: ignore[import-untyped]
     _audit_spec,
     _meta_keys,
     _outside_fences,
+    _resolve_l0,
+    _table,
     audit_forensics,
 )
 
@@ -454,3 +456,122 @@ def test_l1_contract_constants_are_verbatim():
     assert ENTRY_ID.pattern == r"TV-[A-Z][A-Z0-9]*-\d{2}"
     assert VERDICT_TYPES == ("DOM", "状态", "像素")
     assert MIN_VERDICT_LEN == 12
+
+
+# ---------------------------------------------------------------------------
+# 修复轮 2 · R1（`_table` 的窗口连续性造出的新静默丢弃）：round 1 关掉行窗口以后，
+# 窗口之外的 `|` 行被直接 `continue`——既不进 ``rows`` 也不进 ``bad``，实测
+#   表头 + 空行 + 分隔行 + 一条合法行 ⇒ _table = (True, [], [])
+#                               _audit_spec = ([], set(), [])
+# 零条目、零违规、空 `cited` 的假绿，违反本 Task 的「列数不对的行不许被静默丢掉」，
+# 而且空 `cited`/`ids` 会把 Task 3 的跨层规则喂成假红。
+# 选定规则（写在 `_table` 的 docstring 里）：表头**之后**、窗口之外的 `|` 行，只有
+# 首格整段匹配 ``ENTRY_ID`` 的那一种算「掉出窗口的疑似规格行」，原文进 ``bad``；
+# 散文里的普通 Markdown 表（首格是「面」／「DW」）一概不碰，表头之前的行也不碰
+# （defer 的 rows-above-header）。``_audit_spec`` 再按列数把 ``bad`` 分派成两条
+# 消息：列数确实不是 5 的照旧报「列数不是 5」，正好五列的报「落在窗口之外」。
+# ---------------------------------------------------------------------------
+
+def test_blank_line_between_header_and_rows_is_not_a_green_document(tmp_path):
+    """(a) 表头与行之间夹了空行：文档不得审计为绿，违规要点名这个文件。"""
+    text = f"{SPEC_HEADER}\n\n|---|---|---|---|---|\n{SPEC_ROW}\n"
+    path, root = _with_spec(tmp_path, text)
+    problems, cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert problems, "零条目零违规地过审就是本轮要关的假绿"
+    assert any("spec/drawings.md" in x and "窗口之外" in x for x in problems), problems
+    # 选定的 plumbing：窗口外的疑似行不进 rows（不重复计数条目号），只进 bad。
+    assert ids == [] and cited == set(), problems
+    _seen, rows, bad = _table(text, SPEC_HEADER)
+    assert rows == [], rows
+    assert bad == [SPEC_ROW], bad
+
+
+def test_orphaned_entry_shaped_row_outside_the_window_is_reported(tmp_path):
+    """(b) 掉出窗口的四列行：与紧挨着表的同一条行同样报「列数不是 5」，不许消失。"""
+    broken = "| TV-DW-02 | 短句 | 短 | DOM |"
+    text = f"{SPEC_HEADER}\n|---|---|---|---|---|\n{SPEC_ROW}\n\n{broken}\n"
+    path, root = _with_spec(tmp_path, text)
+    problems, _c, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert ids == ["TV-DW-01"], problems
+    assert any(
+        "spec/drawings.md" in x and "列数不是 5" in x and broken in x for x in problems
+    ), problems
+
+
+def test_window_orphan_report_is_gated_on_the_entry_id_shape(tmp_path):
+    """首格不像条目号的窗口外表（I3 的备注／统计表）继续零违规——门禁不许扩到散文表。"""
+    text = SPEC_TABLE + "\n## 备注\n\n" + NOTES_TABLE.replace(
+        "| DW | 1 | 只是统计数字 | 完成 | 这张表跟规格条目无关 |",
+        "| TV-DW-99 | 条目数 | 判据 | 状态 | 说明 |")
+    path, root = _with_spec(tmp_path, text)
+    problems, _cited, ids = _audit_spec(path, "spec/drawings.md", root)
+    assert ids == ["TV-DW-01"], problems
+    assert any("窗口之外" in x and "TV-DW-99" in x for x in problems), problems
+    plain = SPEC_TABLE + "\n## 备注\n\n" + NOTES_TABLE
+    path2, root2 = _with_spec(tmp_path, plain)
+    assert _audit_spec(path2, "spec/other.md", root2) == ([], {"probe-skeleton.md"}, ["TV-DW-01"])
+
+
+def test_rows_above_the_header_stay_out_of_this_round(tmp_path):
+    """R1 只覆盖「表头之后」的窗口外行；表头之前的行是 defer 的 rows-above-header，
+    本轮不顺手修。这根针钉住边界（修前修后都绿），不是认可那种写法。"""
+    path, root = _with_spec(
+        tmp_path, f"{SPEC_ROW}\n\n{SPEC_HEADER}\n|---|---|---|---|---|\n")
+    problems, _c, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == [], problems
+
+
+# ---------------------------------------------------------------------------
+# 修复轮 2 · R2（`_resolve_l0` 把审计器打崩）：`except OSError` 接不住
+# `Path.resolve()` 对含 NUL 字节的路径抛的 `ValueError: stat: embedded null
+# character in path`（实测），而 `_read` 的 errors="replace" 会把那种字节原样
+# 读进来——一格坏依据于是让 `main` 吐回溯而不是列违规，正好把本模块存在的理由
+# （「树存在但畸形 ⇒ 报违规」）反写成「崩」。坏路径当作没找到，落到既有的
+# 「指向的文件不存在」上。
+# ---------------------------------------------------------------------------
+
+def test_nul_byte_in_basis_is_a_violation_not_a_traceback(tmp_path):
+    """一格 NUL 字节要红，但只能红在违规上：`_resolve_l0`／`_audit_spec` 都不许抛。"""
+    path, root = _with_spec(
+        tmp_path, SPEC_TABLE.replace("l0/probe-skeleton.md", "probe\x00skeleton.md"))
+    assert _resolve_l0(root, "probe\x00skeleton.md") is None  # 修前：这里抛 ValueError
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any(
+        "spec/drawings.md" in x and "L0 依据" in x and "指向的文件不存在" in x for x in problems
+    ), problems
+    assert cited == set(), problems
+    assert any("指向的文件不存在" in x for x in audit_forensics(root, tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# 修复轮 2 · R3（`_resolve_l0` 的 docstring 过强）：round 1 的文本写
+# 「``../x.md``／绝对路径这种越出取证根的写法，一律返回 None」，实测三条都不成立
+# ——裸名候选先把 ``ref`` 折成末段，所以带目录的写法只要末段在 l0/ 里存在就命中：
+#   _resolve_l0(root, 'C:/elsewhere/probe-skeleton.md') -> 'probe-skeleton.md'
+#   _resolve_l0(root, '/elsewhere/probe-skeleton.md')   -> 'probe-skeleton.md'
+#   _resolve_l0(root, '../probe-skeleton.md')           -> 'probe-skeleton.md'
+# 落点仍在 ``forensics_root/l0/`` 之内 ⇒ I1 的信条没破、没有假绿，但那句话是错的。
+# 本轮只改文字不改行为：下面的行为针把现状钉住（本 slice 的后续任务引用这套解析
+# 语义，修前修后都绿），文本针保证那句过强的话不被写回去。
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("basis", [
+    "C:/elsewhere/probe-skeleton.md",
+    "/elsewhere/probe-skeleton.md",
+    "../probe-skeleton.md",
+])
+def test_a_ref_whose_basename_exists_in_l0_is_accepted(tmp_path, basis):
+    """真实规则：只看落点在不在 ``l0/`` 里——带目录的写法被裸名候选折成末段。"""
+    path, root = _with_spec(tmp_path, SPEC_TABLE.replace("l0/probe-skeleton.md", basis))
+    assert _resolve_l0(root, basis) == "probe-skeleton.md"
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert problems == [], problems
+    assert cited == {"probe-skeleton.md"}
+
+
+def test_resolve_l0_docstring_states_the_real_rule():
+    """文本针：docstring 描述必须与实测一致——过强的「一律返回 None」不许留着。"""
+    doc = _resolve_l0.__doc__ or ""
+    assert "forensics_root/l0/" in doc  # 唯一的判据是落点
+    assert "一律返回 None" not in doc, doc
+    assert "末段" in doc or "basename" in doc, doc  # 要解释带目录的写法为何命中
