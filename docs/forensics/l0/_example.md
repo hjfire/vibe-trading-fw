@@ -152,6 +152,6 @@ normalized_result:
   本趟里 REA 自己算出的 `scripts.items[1].cdp_hash` 与它同值，`length: 697` 等于 app.js 的 LF 归一字节数，`resource_reconciliation.status: exact` ⇒ 页面跑的就是这棵树里那份脚本。样例文件按精确文件名豁免审计（`L0_EXEMPT`），所以这一行不是校验器要求的，是本记录自己给的互证。
 - `network.requests: []`、`console.events: []` 与两处 `prior_activity_available: false` 是 **attach 时机**造成的，不是页面没发请求：`limitations[4]` 第 1 条原文「Observation starts when REA attaches; prior network and console activity is unavailable.」。app.js 里那句 `fetch("/data.json")` 由另一面（`l0/probe-bundle.md`）的静态分析数出来，不在本面的证据范围内。
 - 这一面**撑得住**：工具栏是「一组并列的可点击按钮」（同一 `parent_id`、三枚 `role: button`、`focusable,true`），以及三类画线工具各自的功能名。这一面**撑不住**：按钮的视觉样式／图标／配色（表达层，硬线 1 不碰）、容器在 DOM 里叫什么 id（属性值不在这一面）、以及任何交互之后的状态（本趟没有点按、没有派发事件）。
-- 本记录**不写** `用途：` 那一行：`用途` 的合法值只有 harness／规格／基线，而样例文件按精确文件名豁免审计，不进差距矩阵、也不冒充任何第三方观察结论；它的形状改由 `tools/test_forensics_spec.py` 的 `test_live_example_files_use_the_contract_shape` 单独钉（把本文件交给校验器自己的 `_audit_l0`，六把必填键按围栏感知的 `_meta_keys` 逐把查——把「`- 命令：`」写进下面的摘录块里不算数，那条路是修复轮 1 的 F3 摘掉的）。
+- 本记录**不写** `用途：` 那一行：`用途` 的合法值只有 harness／规格／基线，而样例文件按精确文件名豁免审计，不进差距矩阵、也不冒充任何第三方观察结论；它的形状改由 `tools/test_forensics_spec.py` 的 `test_live_example_files_use_the_contract_shape` 单独钉（把本文件交给校验器自己的 `_audit_l0`，六把必填键按围栏感知的 `_meta_keys` 逐把查——把「`- 命令：`」写进**上面**那段摘录围栏里不算数（摘录在「## 摘录」那一节，本条在它之后），那条路是修复轮 1 的 F3 摘掉的）。
 
 本记录支撑 spec/_example.md 的那条条目（`TV-EX-01`）：它是 2026-10-13 18:14（+08:00）**重新起的一趟**本地取证跑出来的，`evidence_id` 与摘录同一趟，不是把上一趟（`l0/probe-skeleton.md`，同一页不同旗标）的读数换个文件名。
