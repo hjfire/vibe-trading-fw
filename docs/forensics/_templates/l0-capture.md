@@ -8,8 +8,10 @@
 两条实测坑（照抄就会踩，README §4 有全文）：
 --filter-output 只要没点名 evidence_id，顶层那把主键就会被一起滤掉；--token-limit 小了会
 静默截掉你正是为它才跑这一趟的那个键（先不限流跑一次，确认目标键在、有多大，再定收口口径）。
-inspect-web-event-listeners 还会**默认**内联回调脚本的源码正文，对第三方站点必须把过滤键
-止步于 normalized_result.listeners（详见 docs/forensics/batch-A-playbook.md §3②）。
+inspect-web-event-listeners 还会**默认**内联回调脚本的源码正文，对第三方站点必须把过滤键止步于
+normalized_result.selected_node,normalized_result.listeners——少了 selected_node 就分不清
+「selector 没命中」与「命中但零监听器」，而这两种读数的含义正好相反。
+（详见 docs/forensics/batch-A-playbook.md §3②）
 -->
 
 - 命令：npx -y rea-agents@latest 〈单趟 CDP 命令名〉 http://127.0.0.1:9222 〈list-browser-targets 给的真实 target_id〉 〈该面其余实参〉 --filter-output evidence_id,〈键路径〉
