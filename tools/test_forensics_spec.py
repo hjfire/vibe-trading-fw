@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -1120,3 +1121,35 @@ def test_mixed_case_s3_host_is_still_counted_outside_the_widget_file(tmp_path):
     _src(tmp_path, "frontend/src/lib/sneaky.ts", 'const s = "https://S3.TradingView.com/x.js";\n')
     problems = audit_tv_host_allowlist(tmp_path)
     assert any("s3.tradingview 只允许出现在" in x and "lib/sneaky.ts" in x for x in problems), problems
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LIVE_FORENSICS = REPO_ROOT / "docs" / "forensics"
+live_forensics = pytest.mark.skipif(
+    not LIVE_FORENSICS.is_dir(),
+    reason="docs/forensics/ 还没建（Task 5 之前这是真状态）——大声 skip，不是通过",
+)
+
+
+@live_forensics
+def test_live_forensics_tree_is_clean():
+    assert audit_forensics(LIVE_FORENSICS, REPO_ROOT) == []
+
+
+@live_forensics
+def test_live_forensics_tree_is_not_vacuous():
+    """全绿也可能什么都没测：一棵只有一张空表的树和一棵没捕过的树都返回 []。"""
+    captured = [p for p in (LIVE_FORENSICS / "l0").glob("*.md") if p.name != "_example.md"]
+    assert len(captured) >= 3, captured
+
+
+@live_forensics
+def test_live_example_files_use_the_contract_shape():
+    """_example.md 被审计豁免，所以它的表头／条目号／六把键形状只能在这里单独钉。"""
+    spec = (LIVE_FORENSICS / "spec" / "_example.md").read_text(encoding="utf-8")
+    assert SPEC_HEADER in spec
+    ids = re.findall(r"^\| (TV-[A-Z][A-Z0-9]*-\d{2}) \|", spec, flags=re.M)
+    assert len(ids) == 1, ids
+    l0 = (LIVE_FORENSICS / "l0" / "_example.md").read_text(encoding="utf-8")
+    for key in L0_REQUIRED_KEYS:
+        assert f"- {key}：" in l0, key
