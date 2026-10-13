@@ -1816,3 +1816,41 @@ P1 产物就绪即报告。下一步（P2 对称取证／P3 排优先级／P4 �
 **3. 类型一致性**：`audit_forensics(forensics_root, repo_root) -> list[str]` 与 `audit_tv_host_allowlist(repo_root) -> list[str]` 在 T1/T4 定义，T2/T3/T5/T6/T10 使用一致；`_audit_l0` 的 `(v, purpose)` 二元组在 T3 被 `purposes` 字典消费，签名未变；`_table` 自 T2 起就是 `(seen, rows, bad)` 三元组，T3 的 `_audit_matrix` 同签名；表头三串与 `L0_REQUIRED_KEYS` 在实现、测试、模板、README 四处文字逐字一致。
 
 **4. 三处刻意设计（不是疏漏）**：① T8 让 `用途：规格` 的 L0 在被引用前就报红——捕了就得翻；② `_example.md` 按**精确文件名**豁免（不是 `_*` 通配），且其形状由 T6 的测试钉住，避免「拿豁免目录藏证据」；③ T3 的 `_tree` 夹具必须造出被引用的 `frontend/src/lib/chartDrawings.ts`，否则矩阵针会因为文件不存在而红，掩盖真正的判据。
+
+---
+
+## 执行期更正（2026-10-13，Task 5 跑通之后）
+
+下面是计划正文里被实测推翻或补强的句子。**按面名与任务名指认，不钉行号**（行号会漂）；
+计划本体按「带日期追加子句」的既有纪律原地保留，不回头改写。
+
+1. **`--filter-output normalized_result` 会把顶层 `evidence_id` 一起滤掉。**
+   本计划所有「跑 A1 然后逐字抄 `evidence_id`」的指令都因此跑不通：那一趟的 stdout 第一行直接是
+   `normalized_result:`，全文 0 次出现 `evidence_id`（判据：留档的 `inspect-web-page.txt` 与
+   `inspect-web-page-with-evidence-id.txt` 一对比，12,695 字节 0 命中 vs 12,776 字节 1 命中）。
+   可用形态是把主键一起点名：`--filter-output evidence_id,normalized_result`。
+   「Task 5：取证骨架落地＋本地探针闭环」的三条命令、「Task 7：P1 批次清单」里 A1 那一行的命令、
+   以及「统一前置」里给样板命令的那几处，一律照此替换。
+2. **`--token-limit` 小了会静默截掉你要读的那个键，不报错。**
+   `inspect-web-event-listeners` 整份约 1,477 tokens：`--token-limit 400` 截出来的那份
+   （1,234 字节）里 `pointerdown` **0 命中**，而不限流的那份（5,361 字节）2 命中。
+   ⇒ 计划里凡是写 `--token-limit 400` 去拿「该元素挂了哪几类原生监听器」的地方，都要改成
+   先不限流跑一次、确认要读的键在，再决定收口口径；`--token-limit` 只当**体积**闸门用。
+3. **REA 的字段名与 completeness 形状逐面不同，不能一个值套三份记录。**
+   `list-browser-targets` 给的是 **`target_id`**（不是 `targetId`）。`completeness`：A1＝`policy_filtered`
+   ＋`policy_filtered_sections[]`（无解析失败计数键）、A2＝`complete`＋`parse_failures: 0`、A4＝**整块不存在**。
+   「Task 5」里那份骨架模板写的 `completeness.status=parsed` 是设计轮读数，落档时必须按当次 stdout 写。
+4. **A1 的读数面不含属性值——只有属性名。**
+   `dom` 段每个节点给 `attribute_names`（如 `[3]: id,width,height`），全份 stdout 里
+   **搜不到 `toolbar` 这个词**（那是探针页 `<div id="toolbar">` 的值）。按钮文案默认也不可得：
+   `accessibility.text_capture.status: not_approved`、`retained_bytes: 0`、18 个可达名称被策略扣掉；
+   带 `--include-accessibility-text` 才翻成 `included`（`retained_bytes: 130`）并真带出
+   `role: button` ＋ `name: Trend line／Fibonacci／Brush` ＋ `parent_id`。
+   ⇒ 任何 A1 类判据只能按 **`role`／`name`／`parent_id`** 指认元素，不能按 `id=…` 或 CSS 选择器指认
+   （选择器只在 A4 作为**入参**存在，那是「我告诉它看哪」，不是「我观察到了什么」）。
+   「Task 6：P0 收口——一条能被测试打的规格条目＋活树测试」的样例条目、「Task 9：L1 规格条目表」的全部判据，
+   都按这条口径写。
+5. **`taskkill` 只认 Windows PID。** 计划里 Step 4 那种 `taskkill //PID "$EDGE_PID"` 用 `$!` 取号在本机不成立
+   （Git-Bash 的 PID 不是 Windows 的），实测结果是 `python.exe`／`msedge.exe` 各留一个进程占着 8077/9222，
+   临时 profile 目录 `rm -rf` 一路 `Device or resource busy`。取号一律走 `netstat -ano`，
+   再用 `tasklist //FI "PID eq <号>"` 只读核对身份，然后才杀。**依旧绝不按镜像名杀 `msedge.exe`。**
