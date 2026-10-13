@@ -76,10 +76,14 @@ evidence_id: ev_96e65a0561f3da4489dbf03f41db8d56e7c73624c4dbaaf3fb8a0df25b022a70
 - 本面与 A1 各有一把自己的 `evidence_id`（A1＝`ev_c9e4190b…bbf46`，本面＝`ev_96e65a05…b022a70`），这是 §1 末尾「A16 必须与 A1 分趟」那条的落地：两份记录不是同一主键的两块摘录。
 - **2026-10-13 22:20 更正：本记录的 `evidence_id` 原先写作 `ev_8e37f921…af8e5`，那把键在任何一份留档里都不存在**——`grep -rl 'ev_8e37f921' %TEMP%\rea-t10\` 数出 0 份命中，而 `sed -n '1p' a16.txt` ＝ `ev_96e65a0561f3da4489dbf03f41db8d56e7c73624c4dbaaf3fb8a0df25b022a70`。本记录的全部行号（41180／41181／41184／41185／41218／41219／41220）与指纹值都在 `a16.txt` 上逐行验过、原样成立，所以错的是那把键，不是摘录：它挂成了另一趟（没留档、或留档已被覆盖）的读数。键与摘录首行现已改成 `a16.txt` 第一行的值，改完这条记录才满足它自己第 7 行承诺的「留档＝正式趟」。**教训形状：`evidence_id` 必须由 `sed -n '1p' <留档>` 当场取，不能从终端回显里抄。**
 - **2026-10-14 更正（摘录转录保真）：第 44 行的 `local_storage_keys[20]` 原先只抄了 18 项——漏三项、重一项。**
-  现读复算（仓内）：`sed -n '44p' docs/forensics/l0/tv-a16-storage.md | awk '{sub(/^ *local_storage_keys\[20\]: */,""); print NF}' FS=','`＝**20**；
-  `sed -n '44p' docs/forensics/l0/tv-a16-storage.md | tr ',' '\n' | grep -c 'tvlocalstorage.available'`＝**1**（原先＝2）。
+  现读复算（仓内；2026-10-14 终席把下面三条从「本文件第 44 行」这种**行号型判据**换成**内容锚**——
+  任何一次落在 44 行之上的编辑都会静默作废行号型判据，本文件自己就被这类作废咬过一次；「第 44 行」
+  只在最后一行当历史注记留着，不再是判据）：
+  `awk -F',' '/^    local_storage_keys\[20\]:/ {sub(/^    local_storage_keys\[20\]: */, ""); print NF}' docs/forensics/l0/tv-a16-storage.md`＝**20**（本席 2026-10-14 现跑）；
+  `awk '/^    local_storage_keys\[20\]:/' docs/forensics/l0/tv-a16-storage.md | tr ',' '\n' | grep -c 'tvlocalstorage.available'`＝**1**（原先＝2；本席现跑）；
+  要行号就现取：`grep -n '^    local_storage_keys\[20\]:' docs/forensics/l0/tv-a16-storage.md | cut -d: -f1`（本席现读＝44，与历史上那条 `sed -n '44p'` 同指一行，仅作历史注记）。
   留档侧同一条管道打在 `%TEMP%\rea-t10\a16.txt` 第 41180 行上＝20，两边现已**逐字等串**：
-  `diff <(sed -n '41180p' "$TEMP/rea-t10/a16.txt") <(sed -n '44p' docs/forensics/l0/tv-a16-storage.md)` 无输出。
+  `diff <(sed -n '41180p' "$TEMP/rea-t10/a16.txt") <(awk '/^    local_storage_keys\[20\]:/' docs/forensics/l0/tv-a16-storage.md)` 无输出（本席 2026-10-14 现跑 rc＝0）。
   被漏掉的三项逐字（留档第 12／13／14 位）：`tradingview.RightToolbarProducts.storeVersion`／`featuretoggle_seed`／`snowplowOutQueue_tv_cf_post2`；
   原先仓内第 12 位是 `tvlocalstorage.available` 的**第二次**出现（该串本已在第 4 位）。
   ⇒ 上面「本趟枚举到的 20 个 localStorage 键名里**没有**画线集合的键」这句全称话，在修平之前是说在一份 18 项清单上的；
