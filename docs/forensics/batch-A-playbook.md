@@ -40,8 +40,12 @@ npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222            #
 **不去翻别的端口、不想办法绕**（这就是「不伪装、不规避」的落点）。
 
 （2026-10-13 夜，批次 A 第二趟现场复测：裸连那一腿仍然是 `http_code=000`，但 `curl` 的失败文本换了一形——
-当次读到的是**退出码 28 连接超时**，没有 `Recv failure: Connection was reset` 那句（席位一报告 §8 第 6 条，
-留档 `%TEMP%\rea-t10b\` 的预检件）。两形的判决一样：**带代理那一腿＝200 ⇒ 真答案是给 Edge 带 `--proxy-server`**，
+当次读到的是**退出码 28 连接超时**，没有 `Recv failure: Connection was reset` 那句（**仓内可反查**：
+`docs/forensics/l0/tv-a9-axis-scale.md` 的 `- 观察条件：` 那一行就写着「`curl` 退出码 28 连接失败」；
+同一现场的预检原始件留档在 `%TEMP%\rea-t10b\precheck.txt`，属仓外、随清理消失。
+↑ 这里原先标的是「席位一报告 §8 第 6 条」，那是**错坐标**——那一行讲的是「不能写像素差 x%」，
+而报告住在 `.superpowers/` 那种 git 忽略的 scratch 里，本来就不该当仓内坐标引；2026-10-13 深夜
+独立评审复核（N4）时换成上面这两条，旧那句作废）。两形的判决一样：**带代理那一腿＝200 ⇒ 真答案是给 Edge 带 `--proxy-server`**，
 不是判网络全灭。⇒ 往上那句「又被 RST」当**其中一形**读，别把它当唯一形状去比对；预检要记的是
 「裸连的 `http_code` 与退出码」这两件事，不是某个固定错误串。）
 
@@ -91,8 +95,8 @@ reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v
 | ② A5 周期与分辨率菜单 | 同上，`click` 落在周期切换那处 | 周期档位全集（可达文本里的 `name` 清单）；对账本仓 8 档 | 同上 |
 | ② A7 指标对话框＋样式页 | 同上，`click` 落在指标搜索那处（**只打开，不填、不提交**） | 对话框有哪几页／每页有哪些字段名（`role`＋`name`） | 同上 |
 | ② A8 图例／数据窗口 | 同上，`click` 落在图例展开那处，`at_end: ["url","accessibility"]` | 图例每行显示哪几个字段、顺序如何 | 同上 |
-| ② A9 刻度与轴（像素） | `capture-web-screenshot http://127.0.0.1:9222 <tid> --allowed-origins https://www.tradingview.com --filter-output evidence_id,normalized_result` | **只**落 `sha256`＋`bytes`＋`media_type`（§2 的像素红线） | 无 `--include-*` |
-| ② A15 像素基线 | 同 A9，另起一趟作为后续对比的基线 id | 同上三键；「像不像」这一版只能读到「字节变了没变」，见 §5③ | 同上 |
+| ② A9 刻度与轴（像素） | `capture-web-screenshot http://127.0.0.1:9222 <tid> --allowed-origins https://www.tradingview.com --filter-output evidence_id,normalized_result` | **像素本体**只落 `sha256`＋`bytes`＋`media_type`（§2 的像素红线；同趟的结构键照常转录，形状基准 `l0/tv-a9-axis-scale.md`） | 无 `--include-*` |
+| ② A15 像素基线 | 同 A9，另起一趟作为后续对比的基线 id | 同上（像素本体那三键）；「像不像」这一版只能读到「字节变了没变」，见 §5③ | 同上 |
 
 A16 与 A3／A5／A7／A8／A9／A15 都不在计划里，是本批次按用户点头新增／扩充的面。
 **A16 为什么必须与 A1 分趟**：两份 L0 若共用一个 `evidence_id`，「一面一记录」的 1:1 关系就只剩摘录切块在维持，
@@ -138,9 +142,15 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 
 - **`accessibility`＝开**。与 A1 那把旗标同形的读数面，只摘 `role`＋`name`。
 - **`url`＝开**。`before_url`／`after_url` 本身就是「点完有没有换页／换路由」的读数（含 `query_parameter_names`）。
-- **`screenshot`＝开，但 L0 里只准落三键**：`sha256`＋`bytes`＋`media_type`。
+- **`screenshot`＝开，但 L0 里像素本体只准落三键**：`sha256`＋`bytes`＋`media_type`。
   实测形状 `screenshot{state: captured, value: {sha256, bytes: 9727, media_type: image/png, data_base64: …}}`
   ——`data_base64` 是**图像本体**，一个字都不许进仓库（裁定 1 的表达层那条）。
+  **这条红线的管辖范围是「像素本体」，不是「整份 stdout」**：同一趟里的结构键——`browser`／`target`／
+  `viewport`（我方窗口几何）／`captured_at`／`completeness`／`limitations`——是工具自己的读数，
+  照样逐字转录并带留档行号。形状基准＝`docs/forensics/l0/tv-a9-axis-scale.md`（39 行留档里只把
+  第 21 行 `data_base64` 与第 7 行 `user_agent` 两行排除在转录之外，其余全在，且每段都给了可 `grep -n` 反查的行号）。
+  别把「只落三键」读成「一份像素记录只准有三行」——那样 `--token-limit` 有没有切到载荷、
+  视口是谁的几何这类口径就没处可写了。
 - **`dom`＝允许跑，正文一个字不进仓**。实测留档（`%TEMP%\rea-t8-capdom.txt`）里 `dom.value.text` 就是**整段页面 HTML 正文**
   （探针页那趟 `bytes: 475`，逐字含 `<!DOCTYPE html>` 与我们自己写的按钮文案）。自家页面无害，
   对 `tradingview.com` 跑同一条命令带回来的就是对方的标记正文。⇒ L0 里 `dom` 最多落
@@ -171,12 +181,20 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 `命令：` 逐字抄正式那一趟（含 `--token-limit`，校验器 `_command_hygiene` 要看到它）。
 切出来的每一行都要能在留档里 `grep -n` 到行号，写进记录。
 
-（**2026-10-13 深夜现读：`--token-count` 那一趟会真实执行场景**，它不是零副作用的预检。
-`capture-browser-scenario` 带 `--token-count` 跑 A8 时，页面里那枚开关按钮被**真点了一次**，而且这个态经当次
-profile 目录持久化**跨趟存续**，直接改变了随后正式趟读到的现场（四面 count 读数 5,707／6,166／4,546／3,153
-都带这次副作用）。⇒ 上面「先 `--token-count` 量大小，再跑正式一趟」这句只对**不产生页内副作用**的面成立
-（A1／A2／A4／A9／A15 那类单次读取的面照旧）。对 §5① 这种带 `click` 的场景面，**count 趟＝一次真实点按**：
-要么把它的读数与副作用一起记进留档，要么把易被开关的面放到**最后**跑。两趟的 `evidence_id` 不同，
+（**2026-10-13 深夜现读：`--token-count` 那一趟不是零副作用的预检。**
+证据是现场态漂移：A8 那一面跑完 count 趟之后，第一趟正式跑读到的是侧栏面板**关闭**态，而场景里只有一个
+`click` 的打开动作（`docs/forensics/l0/tv-a8-legend.md`「读数含义」记了这第二趟方向相反的真实读数，
+另存件 `%TEMP%\rea-t10c\a8-firsttrip-closed.txt`）。⇒ **强推断：count 趟把那枚开关按钮真点了一次**，
+且这个态经当次 profile 目录持久化**跨趟存续**，改变了正式趟读到的现场。
+**为什么说推断而不是读数**：本批四面的 count 趟各自只留了 token 数（`<面>-count.txt` 各 5 字节＝
+5,707／6,166／4,546／3,153），**stdout 没留档**，所以看不到 count 趟自己的 `steps[].status`／`elapsed_ms`
+⇒「它执行了 click」这条**没有直接读数**，只有 A8 那一面被漂移反证；A3／A5／A7 三面的 count 趟
+有没有点着，本批无法判定（它们的 170 行树里带侧栏残留，见那三份记录的披露）。
+⇒ **下一批跑带 `click` 的场景面时，把 count 趟的 stdout 也 `tee` 进 `<面>-count.txt`**，让这条从推断升级为读数。
+
+⇒ 上面「先 `--token-count` 量大小，再跑正式一趟」这句只对**不产生页内副作用**的面成立
+（A1／A2／A4／A9／A15 那类单次读取的面照旧）。对 §5① 这种带 `click` 的场景面，**count 趟按「可能真点了一次」对待**：
+要么把它的读数与副作用一起留档，要么把易被开关的面放到**最后**跑。两趟的 `evidence_id` 不同，
 `命令：` 与主键只能取自正式那一趟（§7）。）
 
 `--token-limit` 只当**体积闸门**用，别当「反正能截出我要的东西」：探针页 A4 整份约 1,477 tokens，

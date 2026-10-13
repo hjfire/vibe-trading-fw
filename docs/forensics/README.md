@@ -68,7 +68,8 @@ python -X utf8 -m pytest tools/test_forensics_spec.py -q    # 校验器自己的
 把 `tools/test_forensics_spec.py` 加进 `.github/workflows/repowiki-freshness.yml` 属工作流变更，是需用户点头项）。
 所以「绿了」只代表有人在本机跑过，不代表流水线替你守着。
 
-红了就改**记录**，不许改校验器——校验器是被 120 条测试钉住的契约，为通过而放宽它等于把纪律摘掉。
+红了就改**记录**，不许改校验器——校验器是被上面那一整套测试钉住的契约（套数由你当场重跑，别抄文档里的数），
+为通过而放宽它等于把纪律摘掉。
 
 ## 4. 怎么起一趟取证
 
