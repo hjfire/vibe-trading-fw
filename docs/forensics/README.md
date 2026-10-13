@@ -61,6 +61,9 @@ python -X utf8 -m pytest tools/test_forensics_spec.py -q    # 校验器自己的
 
 两条都要显式给路径：`tools/test_*.py` 不在 `pyproject.toml` 的 `testpaths` 里，裸 `pytest` 收不到它。
 
+（2026-10-13 夜复跑＝`127 passed`。上面那个 120 是当天早先的读数，**保留不改写**——套测试条数在随每片增长漂，
+任何引用它的地方都要当场重跑，别抄文档里的数。）
+
 **CI 状态**：这个校验器与它的测试**当前只在本地显式跑，不在 CI**（实现计划 Global Constraints 第 10 条：
 把 `tools/test_forensics_spec.py` 加进 `.github/workflows/repowiki-freshness.yml` 属工作流变更，是需用户点头项）。
 所以「绿了」只代表有人在本机跑过，不代表流水线替你守着。
@@ -79,7 +82,7 @@ npx -y rea-agents@latest doctor                       # 记下 node detail
 npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222   # 取 targetId
 ```
 
-四条实测坑（外加本目录 l0/ 三份记录跑出来的第五条）：
+实测坑（下面按编号列，条数随每批的实测增长——**别在任何地方引用它的总数**，要引用就去数本节实际的条目）：
 
 1. **URL 只能当 Edge 的命令行参数交出去**。不许用 CDP 的 `PUT /json/new?url=` 开标签——Edge 155 会回一个
    target id 但页面停在 `about:blank`（设计轮实测）。

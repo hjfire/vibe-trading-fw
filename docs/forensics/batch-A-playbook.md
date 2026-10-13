@@ -39,6 +39,12 @@ npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222            #
 若现读到的结果是「`ProxyEnable=0` 而直连又被 RST」⇒ 按 §6 判**环境未就绪**、如实停手，
 **不去翻别的端口、不想办法绕**（这就是「不伪装、不规避」的落点）。
 
+（2026-10-13 夜，批次 A 第二趟现场复测：裸连那一腿仍然是 `http_code=000`，但 `curl` 的失败文本换了一形——
+当次读到的是**退出码 28 连接超时**，没有 `Recv failure: Connection was reset` 那句（席位一报告 §8 第 6 条，
+留档 `%TEMP%\rea-t10b\` 的预检件）。两形的判决一样：**带代理那一腿＝200 ⇒ 真答案是给 Edge 带 `--proxy-server`**，
+不是判网络全灭。⇒ 往上那句「又被 RST」当**其中一形**读，别把它当唯一形状去比对；预检要记的是
+「裸连的 `http_code` 与退出码」这两件事，不是某个固定错误串。）
+
 收尾**只按 `netstat -ano` 取到的那两个 Windows PID** `taskkill`，然后删 `$TEMP/rea-cdp-profile`。
 **绝不按镜像名杀 `msedge.exe`**——机器上同时开着人工使用的真实 Edge 窗口。
 
