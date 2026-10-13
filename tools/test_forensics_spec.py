@@ -39,6 +39,10 @@ from forensics_audit import (  # type: ignore[import-untyped]
 )
 
 EVID = "ev_" + "ab" * 32  # ev_ + 64 个十六进制字符
+# 校验和的期望值从这里算，不从 app.js 的读路径算（修复轮 F3）：`want =
+# sha256(app.read_bytes()…)` 拿被验证的那条表达式当基准，实现漂了针跟着漂，
+# 于是两根校验和针都在追踪实现而不是拒绝实现。夹具写的就是这串字节。
+PROBE_APP_JS_LF = b"export const x = 1\n"
 
 L0_BODY = f"""# L0：探针页面骨架
 
@@ -68,7 +72,7 @@ def _forensics(tmp_path: Path) -> Path:
     _mk(root, "l0/probe-skeleton.md", L0_BODY)
     app_dir = tmp_path / "tools" / "rea_probe_site"
     app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / "app.js").write_text("export const x = 1\n", encoding="utf-8", newline="\n")
+    (app_dir / "app.js").write_bytes(PROBE_APP_JS_LF)
     return root
 
 
@@ -189,14 +193,15 @@ def test_harness_purpose_must_carry_the_current_probe_checksum(tmp_path):
     """反编造针的两个方向都要打到：校验和对 ⇒ 干净，校验和错 ⇒ 必须红。
 
     针要生效，_l0() 交回来的必须是真仓库根，否则 app.js 永远「不存在」。
+    期望值取自夹具的字面字节（F3）：读 app.js 再哈希的话，这条针就成了
+    「实现怎么算我就怎么断言」，改实现改针都不红。
     """
     _forensics(tmp_path)  # 先把 tmp_path 这棵假仓库（含 tools/rea_probe_site/app.js）建出来
 
     def body(digest: str) -> str:
         return L0_BODY + "- 用途：harness\n- 探针 app.js sha256：" + digest + "\n"
 
-    app = tmp_path / "tools" / "rea_probe_site" / "app.js"
-    want = hashlib.sha256(app.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
 
     path, repo = _l0(tmp_path, body(want))
     problems, purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
@@ -708,13 +713,21 @@ def test_uncited_l0_without_purpose_is_named(tmp_path):
 
 
 def test_harness_purpose_exempts_an_uncited_l0(tmp_path):
-    """孤证规则给 用途：harness 让路（校验和那两个方向由 Task 1 的
-    test_harness_purpose_must_carry_the_current_probe_checksum 钉，这里不重复）。
+    """孤证规则给 用途：harness 让路；第三段是 CRLF 腿（F3 恢复被删掉的那一段）。
+
+    校验和的两个方向由 Task 1 的 test_harness_purpose_must_carry_the_current_probe_
+    checksum 钉，这里不重复。本机 core.autocrlf=true 且仓库根没有 .gitattributes
+    （实测），checkout 出来的 app.js 就是 CRLF —— 行尾不是证据的一部分，摘掉
+    _audit_l0 的 replace(b"\\r\\n", b"\\n") 这根针要红。
     """
     root = _tree(tmp_path)
     app = tmp_path / "tools" / "rea_probe_site" / "app.js"
-    want = hashlib.sha256(app.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
     _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    assert audit_forensics(root, tmp_path) == []
+
+    app.write_bytes(PROBE_APP_JS_LF.replace(b"\n", b"\r\n"))  # 同一个文件按 CRLF 落盘
+    assert app.read_bytes().count(b"\r") == 1, app.read_bytes()  # 前提：磁盘上真的是 CRLF
     assert audit_forensics(root, tmp_path) == []
 
 
@@ -780,6 +793,10 @@ def test_matrix_is_audited_even_when_no_spec_id_was_parsed(tmp_path):
         matrix=MATRIX_TABLE.replace("| 已有 |", "| 有 |", 1),
     )
     problems = audit_forensics(root, tmp_path)
+    # 前提也要钉（修复轮 M9）：这条针的红靠「规格侧一个条目号都没解析出来」，
+    # 那个状态本身得有个断言看着，否则夹具一漂它就变成了「两边都绿」的空针。
+    assert any("spec/drawings.md" in x and "窗口之外" in x for x in problems), problems
+    assert not any("规格条目 TV-DW-01 在矩阵里出现" in x for x in problems), problems
     assert any("状态 '有' 不在 已有/部分/缺/不可复刻 之内" in x for x in problems), problems
 
 
@@ -797,3 +814,93 @@ def test_spec_purpose_does_not_exempt_an_uncited_l0(tmp_path):
     _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：规格\n")
     problems = audit_forensics(root, tmp_path)
     assert any("loose.md: 没有被任何规格条目引用" in x for x in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# 修复轮 1 的针（评审 F1／F2／F4／F5／M8）。F1 那两根钉的是**已有**行为没被任何针
+# 看着（摘掉 `部分`／把那一枝 widen 成 `status != "缺"` 都 94/94 绿），所以它们到达
+# 时是绿的，靠变异自证证明会咬；F2／F4／F5／M8 那五组钉的是**当下错**的行为，到达即红。
+# 措辞判据：违规要说清哪儿不对（仓外／指着取证文档自己／行号越界），不许一句「不存在」糊过去。
+# ---------------------------------------------------------------------------
+
+def test_partial_status_needs_a_coordinate_too(tmp_path):
+    """F1：`部分` 也是本仓的声称，坐标格空着必须是违规——今天没有任何针写过 `部分` 的行。"""
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace(
+            f"| 已有 | {COORD_FILE}:2 |", "| 部分 | 抄了一半，说不清在哪 |")),
+        tmp_path)
+    assert any("状态 部分 要给本仓坐标 file:line" in x for x in problems), problems
+
+
+def test_irreproducible_status_needs_no_coordinate(tmp_path):
+    """F1：`不可复刻` 是设计里的第四态（spec §4：三态＋不可复刻），坐标格空着要过审；
+    那一枝被 widen 成 ``status != "缺"`` 就会把它判成缺坐标 ⇒ 这根针红。"""
+    root = _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"| 已有 | {COORD_FILE}:2 |", "| 不可复刻 |  |"))
+    assert audit_forensics(root, tmp_path) == []
+
+
+@pytest.mark.parametrize("kind", ["relative", "unc"])
+def test_coordinate_must_point_inside_the_repo(tmp_path, kind):
+    """F2：「本仓坐标」的落点必须在仓库根之内。`repo_root / f` 能把 `../x`／UNC 指到
+    仓外（实测 ``../OUTSIDE_target.txt:3`` 整棵树零违规），仓外的一份文件冒充本仓实现。
+    """
+    outside = "rea-forensics-outside-target.txt"  # 落在 tmp_path 之外（pytest 的上一级临时目录）
+    _mk(tmp_path.parent, outside, "a\nb\nc\n")
+    coord = f"../{outside}:3" if kind == "relative" else "//server/share/x.txt:1"
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"| {COORD_FILE}:2 |", f"| {coord} |")), tmp_path)
+    assert any("仓库根之外" in x for x in problems), problems
+    # 落点检查在存在性检查之前：仓外那份文件不会被读，也就不许说它「不存在」。
+    assert not any("坐标" in x and "文件不存在" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("cell", ["docs/forensics/gap-matrix.md:1", "docs/forensics/l0/probe-skeleton.md:1"])
+def test_coordinate_cannot_certify_a_funnel_document(tmp_path, cell):
+    """F2：漏斗产物不能自证——矩阵给自己发「已有」（或指着 L0 记录）都不是本仓实现。"""
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"| {COORD_FILE}:2 |", f"| {cell} |")), tmp_path)
+    assert any("取证漏斗自己的文档" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("ln", ["0", "00", "0000"])
+def test_coordinate_line_number_starts_at_one(tmp_path, ln):
+    """F2：行号域是 1..行数。今天只挡「大于行数」，`:0`／`:0000` 是任何文件里都不存在的
+    一行，照样过审（实测零违规）。
+    """
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"{COORD_FILE}:2", f"{COORD_FILE}:{ln}")), tmp_path)
+    assert any(f"行号 {ln} 不在 1..3 之内" in x for x in problems), problems  # chartDrawings.ts 是 3 行
+
+
+def test_absurd_line_number_is_a_violation_not_a_traceback(tmp_path):
+    """F5：4301 位的行号让 `int(ln)` 抛 ValueError（Python 3.11 的 4300 位上限），回溯穿出
+    `audit_forensics`／`main()`，前面已经收集到的违规一条也不打印。
+    """
+    root = _tree(
+        tmp_path, matrix=MATRIX_TABLE.replace("chartDrawings.ts:2", "chartDrawings.ts:" + "9" * 4301))
+    _mk(root, "l0/extra.md", L0_BODY)  # 一条本已收集到的违规：修前它跟回溯一起丢
+    problems = audit_forensics(root, tmp_path)
+    short = [x[:100] for x in problems]  # 行号本身四千多位，失败输出里截断它
+    assert any("行号" in x and f"超出 {COORD_FILE} 的实际 3 行" in x for x in problems), short
+    assert any("extra.md: 没有被任何规格条目引用" in x for x in problems), short
+    assert not any(len(x) > 500 for x in problems), [len(x) for x in problems]  # 消息别把四千位数字整个印出来
+
+
+def test_a_format_failure_in_one_spec_file_silences_the_orphan_rule(tmp_path):
+    """F4：孤证那道门只挡了「一个条目号都没解析出来」那半边。两份规格文件里坏一份时
+    `spec_ids` 仍非空，于是 l0/extra.md 照样被 blame（实测「窗口之外」与「没有被任何
+    规格条目引用」同出）——规格层的格式失败一律不许下引用结论。
+    """
+    root = _tree(tmp_path)  # spec/drawings.md 是合法的，所以 spec_ids 非空
+    _mk(root, "spec/extra.md", f"{SPEC_HEADER}\n\n|---|---|---|---|---|\n{SPEC_ROW}\n")
+    _mk(root, "l0/extra.md", L0_BODY)
+    problems = audit_forensics(root, tmp_path)
+    assert any("spec/extra.md" in x and "窗口之外" in x for x in problems), problems
+    assert not any("l0/extra.md: 没有被任何规格条目引用" in x for x in problems), problems
+
+
+def test_phantom_row_with_an_empty_entry_id_says_empty(tmp_path):
+    """M8：空首格落到凭空条目那条消息上是两个空格（「矩阵里的  在任何规格文件里…」）。"""
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE + "|  |  |  |  |  |\n"), tmp_path)
+    assert any("矩阵里的 (空) 在任何规格文件里都不存在" in x for x in problems), problems
+    assert not any("矩阵里的  " in x for x in problems), problems

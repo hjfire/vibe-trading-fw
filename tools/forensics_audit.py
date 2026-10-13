@@ -246,7 +246,11 @@ def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], 
 
 
 def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str]) -> list[str]:
-    """One L2 gap matrix -> violations, cross-checked against the spec layer's entry ids."""
+    """One L2 gap matrix -> violations, cross-checked against the spec layer's entry ids.
+
+    ``spec_ids`` 只读它的键集合（条目号）；值那半份「条目号→首个出现它的 spec 文件」是给
+    ``audit_forensics`` 的跨文件查重用的，本函数不碰。
+    """
     v: list[str] = []
     seen, rows, bad = _table(_read(path), MATRIX_HEADER)
     if not seen:
@@ -263,6 +267,8 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
             f"这些行没有被当成矩阵行审计：{outside[0]!r}"
         )
     counts: dict[str, int] = {}
+    root_dir = repo_root.resolve()  # 「本仓坐标」的落点域：仓库根之内
+    funnel = path.parent.resolve()  # 矩阵住在漏斗根 ⇒ path.parent 就是 docs/forensics/
     for eid, status, coord, prio, note in rows:
         tag = f"{rel} 条目 {eid or '(空)'}"
         if not ENTRY_ID.fullmatch(eid):
@@ -280,13 +286,36 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
                 v.append(f"{tag}: 状态 {status} 要给本仓坐标 file:line，实际是 {coord!r}")
                 continue
             f, _, ln = coord.rpartition(":")
-            target = repo_root / f
-            if not target.is_file():
+            try:
+                hit = (repo_root / f).resolve()
+            except (OSError, ValueError):  # 坏路径（符号环／NUL 字节）：出违规，不许回溯（同 _resolve_l0）
+                v.append(f"{tag}: 坐标 {coord} 的路径解析不了")
+                continue
+            if root_dir not in hit.parents:
+                # `repo_root / f` 会把 `../x`／UNC／盘符绝对路径整个挪到仓外，那份文件不是本仓的。
+                v.append(f"{tag}: 坐标 {coord} 解析到 {hit}，在仓库根之外，不是本仓的文件")
+                continue
+            if funnel in hit.parents:
+                # 漏斗产物不能自证：矩阵给 `docs/forensics/**` 里的自己或 L0 记录发「已有」，
+                # 是把「我写了这句话」当成「本仓有这段实现」。
+                v.append(f"{tag}: 坐标 {coord} 指的是取证漏斗自己的文档（docs/forensics/**），不能自证")
+                continue
+            if not hit.is_file():
                 v.append(f"{tag}: 坐标 {coord} 的文件不存在")
-            else:
-                n = len(_read(target).splitlines())
-                if int(ln) > n:
-                    v.append(f"{tag}: 坐标 {coord} 的行号 {ln} 超出 {f} 的实际 {n} 行")
+                continue
+            try:
+                n = len(_read(hit).splitlines())
+            except (OSError, ValueError):  # 存在但读不动（权限／坏字节）：同样是违规（本机造不出这种文件，无针）
+                v.append(f"{tag}: 坐标 {coord} 的文件读不出来")
+                continue
+            digits = ln.lstrip("0") or "0"  # 先比位数再 int()：4301 位的数字串会让 int() 抛 ValueError，
+            # 回溯穿出 audit_forensics／main()，前面 collected 的违规一条也不打印（同 :199 那条规则）。
+            if digits == "0":
+                v.append(f"{tag}: 坐标 {coord} 的行号 {ln} 不在 1..{n} 之内（行号从 1 开始）")
+            elif len(digits) > len(str(n)):  # 位数就已经超过，不必转成整数，也别把四千位数字印进消息
+                v.append(f"{tag}: 坐标 {f} 的行号写了 {len(digits)} 位数字，超出 {f} 的实际 {n} 行")
+            elif int(digits) > n:
+                v.append(f"{tag}: 坐标 {coord} 的行号 {ln} 超出 {f} 的实际 {n} 行")
         elif status == "缺":
             # 「缺」留下的必须是能复跑的搜索记录，不是一句「没有」。
             if not coord.startswith("未找到："):
@@ -299,7 +328,7 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
             v.append(f"{rel}: 规格条目 {eid} 在矩阵里出现 {k} 次（要求恰好 1 次）")
     for eid in sorted(counts):
         if eid not in spec_ids:
-            v.append(f"{rel}: 矩阵里的 {eid} 在任何规格文件里都不存在（凭空条目）")
+            v.append(f"{rel}: 矩阵里的 {eid or '(空)'} 在任何规格文件里都不存在（凭空条目）")
     return v
 
 
@@ -323,6 +352,7 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
 
     cited: set[str] = set()
     spec_ids: dict[str, str] = {}
+    spec_format_failure = False  # 规格层有没有格式失败（列数／窗口）——它决定这一轮能不能下引用结论
     spec_dir = forensics_root / "spec"
     for p in sorted(
         q for q in (spec_dir.glob("*.md") if spec_dir.is_dir() else []) if q.name not in SPEC_EXEMPT
@@ -331,15 +361,20 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
         problems, refs, ids = _audit_spec(p, rel, forensics_root)
         v += problems
         cited |= refs
+        # 「列数不是 5」／「窗口之外」是 `_audit_spec` 里 `bad` 那两条消息的签名（只有文件级
+        # 消息带它们，行级消息一律是 `{rel} 条目 …` 前缀）。按消息子串判而不改返回值形状。
+        if any("列数不是 5" in x or "窗口之外" in x for x in problems):
+            spec_format_failure = True
         # 条目号是三层咬合的主键：两份表各写一遍就能冒充两条规格，所以后一份要报。
         for i in ids:
             first = spec_ids.setdefault(i, rel)
             if first != rel:
                 v.append(f"{rel}: 条目号 {i} 已在 {first} 里出现过")
 
-    # 孤证规则只在规格侧真解析出条目号时才开口：表写坏了 ⇒ `cited` 是空的，那时候
-    # 说「没人引用这份证据」是在拿规格的格式失败 blame 证据文件（规格侧的违规自己会说话）。
-    if spec_ids:
+    # 孤证规则只在规格侧真解析出条目号、且整层没有格式失败时才开口：表写坏了 ⇒ `cited` 是
+    # 残缺的，那时候说「没人引用这份证据」是在拿规格的格式失败 blame 证据文件。
+    # 取舍：一处格式失败 ⇒ 这一轮别处没被引用的证据也不再上报，但树已经红了，不会漏过。
+    if spec_ids and not spec_format_failure:
         for name in sorted(purposes):
             if name not in cited and purposes[name] not in ("harness", "基线"):
                 v.append(f"l0/{name}: 没有被任何规格条目引用，也没标 用途：harness 或 用途：基线")
