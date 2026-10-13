@@ -17,7 +17,14 @@
   「仓内没有静态凭据」这件事本身，它自己也已经按这条口径落成了 `部分`。
 - `已有`／`部分` 的第三列只有一个 `路径:行号`，由校验器验「在仓库根之内、不在 docs/forensics 之下、文件存在、
   行号不越界」；「那一行指的是不是那回事」它判不了，所以每一条本席都 `sed -n '<行号>p'` 亲眼开过，
-  读数逐字贴在 `.superpowers/sdd/2026-10-13-rea-forensics-p0-p1/task-10-report.md`。
+  读数逐字贴在 `.superpowers/sdd/2026-10-13-rea-forensics-p0-p1/task-10-report.md`。（2026-10-14 终席按最终评审席 C
+  的 N-5 补一句编号口径：第三列的行号**一律是 1-based 的仓内文件行**，与上面 `sed -n` 数出来的那一把尺同源，**不是**
+  CDP 回声里的 `line_number`——后者是 0-based，读数逐字见 `docs/forensics/l0/probe-events.md:74`（本席 2026-10-14
+  现读那一行：它记 `line_number: 4` 对应工作树 app.js 的**第 5 行**，并自陈「这一条与 A2 的 `location.line: 23`
+  （1-based）口径不同，写判据时不能混用」）。本矩阵 `tools/rea_probe_site/app.js:5` 那一格（TV-CI-08）取的正是那个
+  **第 5 行**，本席现读 `sed -n '5p' tools/rea_probe_site/app.js` 逐字 `canvas.addEventListener("pointerdown", (event) => this.pick(event));`，
+  与该记录转录的那一行相符 ⇒ 已经是 1-based 形；谁要是把 CDP 的 `4` 抄进第三列，那一格会指到上一行，而校验器只验
+  落点域与「行号在 1..n 之内」，判不出这种差一错位，所以口径只能写在这里。）
 - `缺` 的第三列以 `未找到：` 开头，后面是给下一席复制粘贴就能复跑的 needle；每条本席当场跑过、当场 0 命中。
 - 优先级列本片全写 `-`：排期属 P3，本片不替它决定。
 - 判不准／证据不够的宁可降级成 `部分` 或 `缺`，并把降级理由写进说明列——这些行在报告里另立一节。
