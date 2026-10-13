@@ -1,6 +1,12 @@
 # L0：自家页「画线清单」入口按钮的开关态（TV-CI-07 的执行半）
 
 - 命令：npx -y rea-agents@latest capture-browser-scenario '{"browser":{"mode":"connect","cdp_endpoint":"http://127.0.0.1:9222","target_id":"24A40B21CF0B1F687F8501A7033793E9"},"start_url":{"url":"http://localhost:5899/pro-chart"},"actions":[{"step_id":"s1","action":"click","locator":{"kind":"role","role":"button","name":"画线清单"}}],"storage":{"cookies":[],"local_storage":[],"session_storage":[]},"secrets":[],"capture":{"after_each_step":[],"at_end":["url","accessibility"],"events":[],"network":{"request_body":false,"response_body":false,"header_values":false}}}' --filter-output evidence_id,normalized_result --token-limit 150000
+- 命令（诊断趟，2026-10-14 终席追加）：上面那条 `命令：` 是 run1／run2 那两趟**逐字相同**的命令（本记录的主键就是它）；下面这一段是同日第三趟＝**同一趟内连点同一枚按钮两次＋`capture.after_each_step:["accessibility"]`** 的诊断趟。它的逐字命令行现在被 L1 的 TV-CI-07 判据格引用为「自家页侧的验收命令」（`docs/forensics/spec/chart-interaction.md:24`，那一格只把 `target_id` 换成当趟由 `list-browser-targets` 现读的 `<tid>` 占位，其余逐字不动），两处互为凭据：那一格指回本记录取实测读数，本记录指回那一格取判据形状。主键 `ev_c21cfd73a0eff996a0665cb0e45f793cac14019ce191743c052b6e09a1017fa4`＝本席 `sed -n '1p' ci07-diag.out` 的现读值；本席现量的留档尺寸＝`ci07-diag.cmd` 730 字节／`ci07-diag.out` 18,646 字节（154 行），与上面「留档」那条记的 18,646 字节同值。命令形制与 run1／run2 的差别只有三处：`actions` 从一步变两步（两步 locator 逐字相同）、`capture.after_each_step` 由空数组变 `["accessibility"]`、`capture.at_end` 由 `["url","accessibility"]` 变 `["url"]`；**没有** `--allowed-origins`（那把旗标在场景命令上被拒，见下面第四枚摘录）。逐字：
+
+    ```text
+    npx -y rea-agents@latest capture-browser-scenario '{"browser":{"mode":"connect","cdp_endpoint":"http://127.0.0.1:9222","target_id":"24A40B21CF0B1F687F8501A7033793E9"},"start_url":{"url":"http://localhost:5899/pro-chart"},"actions":[{"step_id":"s1","action":"click","locator":{"kind":"role","role":"button","name":"画线清单"}},{"step_id":"s2","action":"click","locator":{"kind":"role","role":"button","name":"画线清单"}}],"storage":{"cookies":[],"local_storage":[],"session_storage":[]},"secrets":[],"capture":{"after_each_step":["accessibility"],"at_end":["url"],"events":[],"network":{"request_body":false,"response_body":false,"header_values":false}}}' --filter-output evidence_id,normalized_result --token-limit 150000
+    ```
+
 - evidence_id：ev_99229678637217cd1e8e29b9c3d610a91c90e860c79e9e6a35fde9e1799fa3d3
 - 浏览器：Chromium 155.0.4283.45（当趟 stdout 第 3-8 行 browser 块逐字：mode connect／process_ownership external／cleanup disconnected-external／product Chromium／version 155.0.4283.45）；宿主与现场与 `self-dw07-pixel-equality.md` 同一趟浏览器（本机 Edge --headless=new，CDP 9222，target_id 24A40B21CF0B1F687F8501A7033793E9，全程未重启）。口径差别要记着：场景命令的 browser 块给的是 `product: Chromium` ＋ 独立的 `version`，而单趟 CDP 命令给的是 `product: Edg/155.0.4283.45`，两种形读数同属 Edge 155.0.4283.45，别当成两个浏览器
 - 目标 URL：http://localhost:5899/pro-chart（**自家 dev server，不是 tradingview.com**；第 10 行 `scenario.start_origin` 回声 http://localhost:5899，第 23-32 行 step 0 的 before_url 与 after_url 同值 ⇒ 开头那次导航没换页；第 64-68 行 click 步的 after_url 仍是同一串 ⇒ 这一次点击没换路由）
@@ -37,18 +43,18 @@ evidence_id: ev_99229678637217cd1e8e29b9c3d610a91c90e860c79e9e6a35fde9e1799fa3d3
       error: null
 ```
 
-第二枚：那枚按钮在两趟里的逐字形态（各趟 accessibility 单行串里的片段，`grep -F` 可命中同一行）：
+第二枚：那枚按钮在两趟里的逐字形态（各趟 accessibility 单行串里的片段，`grep -F` 可命中同一行）。围栏里两行**都是逐字片段、没有前缀**：第一行＝run1 stdout 第 81 行里的片段，第二行＝run2 stdout 第 81 行里的片段（两行逐字相同，这个「相同」本身就是本面「跨两趟同相」的读数）。形状更正（2026-10-14 终席）：这两行原先写成 `run1 第 81 行： - button \"画线清单\" [pressed]: 清单 · 1` 那种「中文标签＋空格＋片段」的**同一行**形状，后来者按整行 `grep -F` 会得 0 命中、把有源的摘录误判成无源；标签已移到围栏上方，围栏内容与移走之前逐字相同。
 
 ```text
-run1 第 81 行： - button \"画线清单\" [pressed]: 清单 · 1
-run2 第 81 行： - button \"画线清单\" [pressed]: 清单 · 1
+ - button \"画线清单\" [pressed]: 清单 · 1
+ - button \"画线清单\" [pressed]: 清单 · 1
 ```
 
-第三枚：诊断趟（同一条命令里连点两次、树收到 `after_each_step:["accessibility"]`，主键 `ev_c21cfd73a0eff996a0665cb0e45f793cac14019ce191743c052b6e09a1017fa4`）里那两次点击之后的同一枚按钮：
+第三枚：诊断趟（同一条命令里连点两次、树收到 `after_each_step:["accessibility"]`，主键 `ev_c21cfd73a0eff996a0665cb0e45f793cac14019ce191743c052b6e09a1017fa4`，逐字命令行见上面「命令（诊断趟）」那段）里那两次点击之后的同一枚按钮。围栏里两行同样**只有逐字片段**：第一行＝`step_id: s1` 那棵树（该 `step_id` 在 stdout 第 60 行，片段落在第 85 行）、第二行＝`step_id: s2` 那棵树（`step_id` 第 100 行）；`step_id: scenario_start` 在第 20 行。同一形状的前缀问题与移法同上枚，不重复一遍。
 
 ```text
-step_id: s1 之后： - button \"画线清单\" [pressed]: 清单 · 1
-step_id: s2 之后： - button \"画线清单\": 清单 · 1
+ - button \"画线清单\" [pressed]: 清单 · 1
+ - button \"画线清单\": 清单 · 1
 ```
 
 第四枚：按 L1 规格原文那条命令照跑的两条失败趟（stdout 全文）：
