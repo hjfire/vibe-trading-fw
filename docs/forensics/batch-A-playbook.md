@@ -141,6 +141,11 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 `screenshot,dom,accessibility,url,history,storage`）：
 
 - **`accessibility`＝开**。与 A1 那把旗标同形的读数面，只摘 `role`＋`name`。
+  - **转录行数的计法（2026-10-14 追加，起因是本批 a3／a5 两份记录里「23 行」与「40 行」两种口径混过）**：
+    记录里写「共 N 行」一律指**围栏自身的行数**（含 `- treegrid:`／`- dialog "…":` 那种容器行），
+    因为「40 行上限」量的就是落进仓的文本行数。要另给「条目行数」必须两个数同写并各配一条复算命令
+    （一条按围栏数行、一条按 `- row ` 数条目行；两条逐字的 `awk` 管道已经写在那两份记录里，
+    形状基准 `docs/forensics/l0/tv-a3-draw-menu.md`「本面行数与增行数的复算」与 `tv-a5-intervals.md` 第二段引言）。
 - **`url`＝开**。`before_url`／`after_url` 本身就是「点完有没有换页／换路由」的读数（含 `query_parameter_names`）。
 - **`screenshot`＝开，但 L0 里像素本体只准落三键**：`sha256`＋`bytes`＋`media_type`。
   实测形状 `screenshot{state: captured, value: {sha256, bytes: 9727, media_type: image/png, data_base64: …}}`

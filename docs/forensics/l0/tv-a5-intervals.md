@@ -12,7 +12,7 @@
 
 ## 摘录（逐字，未改写）
 
-第一段是当趟 stdout 的骨架切片；第二段是 at_end accessibility 读数里与 A5 有关的条目——留档里整棵树是第 170 行的**单行**转义串（项间字面 `\n`、引号字面 `\"`），下面按可读形转录（名字本体逐字未改，`grep -F 名字本体 a5.txt` 命中第 170 行），共 40 行、正好在 40 行上限内；行内动作按钮（Add to favorites）与瞬时报价／时刻正文一律不转录。
+第一段是当趟 stdout 的骨架切片；第二段是 at_end accessibility 读数里与 A5 有关的条目——留档里整棵树是第 170 行的**单行**转义串（项间字面 `\n`、引号字面 `\"`），下面按可读形转录（名字本体逐字未改，`grep -F 名字本体 a5.txt` 命中第 170 行），**这块围栏实测 40 行＝容器行 `- treegrid:` 1 行＋档位条目行 39 行**（复算，2026-10-14 本机现跑：`cd "E:/Vibe-Trading-main/Vibe-Trading-main" && awk '/^```text$/{c++; f=1; next} /^```$/{f=0} f&&c==2' docs/forensics/l0/tv-a5-intervals.md | wc -l`＝`40`，同一条管道把尾段换成 `grep -c 'row '`＝`39`；「40」是围栏自身的行数、按它计正好触 40 行上限，「39」是条目行数、按它计还有 1 行余量）；行内动作按钮（Add to favorites）与瞬时报价／时刻正文一律不转录。
 
 ```text
 evidence_id: ev_b9a6851ee5882a8b46efe0a6b36bd92d9e9d6bf454c42b70d30baa7ee3ea36ca
