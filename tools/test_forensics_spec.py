@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from forensics_audit import (  # type: ignore[import-untyped]
     MATRIX_PRIORITIES,
     MATRIX_STATUSES,
     MIN_VERDICT_LEN,
+    PROBE_APP_JS,
     S3_HOST_FILE,
     SPEC_HEADER,
     TV_HOST_ALLOWLIST,
@@ -382,6 +382,48 @@ def test_the_two_accepted_l0_spellings_still_count(tmp_path, basis):
     problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
     assert problems == [], problems
     assert cited == {"probe-skeleton.md"}
+
+
+# ---------------------------------------------------------------------------
+# 修复轮 1 · F1（评审 I5）：样例豁免件不能当**真实条目**的 L0 依据。
+# `_resolve_l0` 只认落点，而 `l0/_example.md` 确实是 l0/ 下一个真文件，所以改之前
+# 一条真实 TV 条目把依据写成 `_example.md`（那份记录是**本地探针页**的 A1，跟
+# tradingview.com 没有任何关系）照样判合法；又因为 `audit_forensics` 早在走查时把
+# `_example.md` 从 l0／spec 两个名单里滤掉，孤证规则根本看不见它——这个洞是**静默**的。
+# 规则只加这一条，语义要留白给样例自己：`spec/_example.md`（在 `SPEC_EXEMPT` 内）
+# 引 `_example.md` 仍然合法。三根针各自的可红方向：真文件指豁免件⇒红、样例自己指⇒绿、
+# 真实记录指⇒绿（第三根证明针不是「只要引用就红」）。
+# ---------------------------------------------------------------------------
+
+def _with_sample_basis(tmp_path: Path, spec_name: str = "drawings.md") -> tuple[Path, Path]:
+    """规格条目把依据写成豁免件 `_example.md`，且那份 l0 样例记录在这棵树上真实存在。"""
+    root = _forensics(tmp_path)
+    _mk(root, "l0/_example.md", L0_BODY)
+    text = SPEC_TABLE.replace("| DOM | l0/probe-skeleton.md |", "| DOM | _example.md |")
+    return _mk(root, f"spec/{spec_name}", text), root
+
+
+def test_real_spec_entry_must_not_cite_the_exempt_sample_record(tmp_path):
+    path, root = _with_sample_basis(tmp_path)
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert any("落在样例豁免件上" in x and "条目 TV-DW-01" in x for x in problems), problems
+    assert cited == set(), problems  # 豁免件也不许进 cited：它不是被抓出来的证据
+
+
+def test_the_sample_spec_file_may_still_cite_the_sample_record(tmp_path):
+    """豁免面不咬自己人：规格文件自己就是 SPEC_EXEMPT 的那一份，引 _example.md 仍然合法。"""
+    path, root = _with_sample_basis(tmp_path, spec_name="_example.md")
+    problems, _cited, _i = _audit_spec(path, "spec/_example.md", root)
+    assert problems == [], problems
+
+
+def test_citing_a_real_capture_is_not_the_new_violation(tmp_path):
+    root = _forensics(tmp_path)
+    _mk(root, "l0/_example.md", L0_BODY)  # 豁免件就在树上，引用它隔壁那份真实记录
+    path = _mk(root, "spec/drawings.md", SPEC_TABLE)
+    problems, cited, _i = _audit_spec(path, "spec/drawings.md", root)
+    assert not any("落在样例豁免件上" in x for x in problems), problems
+    assert cited == {"probe-skeleton.md"}, problems
 
 
 # ---------------------------------------------------------------------------
@@ -1145,11 +1187,43 @@ def test_live_forensics_tree_is_not_vacuous():
 
 @live_forensics
 def test_live_example_files_use_the_contract_shape():
-    """_example.md 被审计豁免，所以它的表头／条目号／六把键形状只能在这里单独钉。"""
-    spec = (LIVE_FORENSICS / "spec" / "_example.md").read_text(encoding="utf-8")
-    assert SPEC_HEADER in spec
-    ids = re.findall(r"^\| (TV-[A-Z][A-Z0-9]*-\d{2}) \|", spec, flags=re.M)
-    assert len(ids) == 1, ids
-    l0 = (LIVE_FORENSICS / "l0" / "_example.md").read_text(encoding="utf-8")
-    for key in L0_REQUIRED_KEYS:
-        assert f"- {key}：" in l0, key
+    """_example.md 被审计豁免，所以它的形状只能在这里单独钉——钉法是**让样例走一遍真规则**。
+
+    修复轮 1（评审 I3／I4／N3）：旧针自己重写子串判断，5 样形状只钉住 3 样——评审席拿变异体
+    实测过：判据类型改成「可达性」、判据那一格改成单字「空」、条目号改名 TV-ZZZ-99，三种都
+    照样绿（`_example.md` 永远豁免，真规则碰不到它，而针又没复刻真规则）；六把键那根还
+    不分围栏，把 `- 命令：` 整行删掉它才红，把同一串塞进 ```text 摘录块里它照样绿。
+    现在这四段全由校验器自己的函数裁决：``_audit_spec`` 管表头逐字／条目号形状与值／
+    判据 ≥MIN_VERDICT_LEN／判据类型域／L0 依据落点与豁免，``_audit_l0`` 按围栏感知的
+    ``_meta_keys`` 查六把必填键并跑命令卫生。两个签名的第 3 个参数不是一回事：
+    ``_audit_spec`` 收 ``forensics_root``，``_audit_l0`` 收 ``repo_root``——传串了 l0 那半边
+    就看不见 ``tools/rea_probe_site/app.js``。
+    ``spec/_example.md`` 的 `L0 依据` 那一格写的就是 `_example.md`，所以
+    ``problems == []`` 同时是 F1 那条新规则「豁免面不咬自己人」的活树读数。
+    """
+    spec_path = LIVE_FORENSICS / "spec" / "_example.md"
+    l0_path = LIVE_FORENSICS / "l0" / "_example.md"
+    l0 = l0_path.read_text(encoding="utf-8")
+
+    problems, _cited, ids = _audit_spec(spec_path, "spec/_example.md", LIVE_FORENSICS)
+    assert problems == [], problems
+    assert ids == ["TV-EX-01"], ids  # 钉值，不只钉「恰好一个」
+
+    l0_problems, _purpose = _audit_l0(l0_path, "l0/_example.md", REPO_ROOT)
+    assert l0_problems == [], l0_problems
+
+    # 显式补的那一格：真规则只查判据类型的**域**（DOM／状态／像素）与判据长度，
+    # 这里要钉的是样例用的是**哪一把**——换成「状态」校验器不红，可后来人抄走的形状就变了。
+    _seen, rows, _bad = _table(spec_path.read_text(encoding="utf-8"), SPEC_HEADER)
+    assert len(rows) == 1, rows
+    _eid, _sentence, verdict, vtype, basis = rows[0]
+    assert vtype == "DOM", vtype
+    assert len(verdict) >= MIN_VERDICT_LEN, verdict
+    assert basis == "_example.md", basis  # 这一格换成实抓记录，上面那条 F1 豁免读数就悄悄没针了
+
+    # F4（评审 N3）：样例件第 9 行那串探针校验和过去没有任何东西复验——它故意不写 `用途：`
+    # （写了会撞孤证规则）＋文件名豁免 ⇒ forensics_audit 的反编造针两道门都不走，app.js 一改
+    # 它就变成静默的旧断言。期望值必须**现算**，不许把 62ea3b37… 抄成字面量（那等于用被验证
+    # 的表达式当基准）；口径与校验器同尺：LF 归一。
+    probe = (REPO_ROOT / PROBE_APP_JS).read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(probe).hexdigest() in l0, PROBE_APP_JS

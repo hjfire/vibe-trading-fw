@@ -239,6 +239,16 @@ def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], 
             resolved = _resolve_l0(forensics_root, ref)
             if resolved is None:
                 v.append(f"{tag}: L0 依据 {ref!r} 指向的文件不存在")
+            elif resolved in L0_EXEMPT and path.name not in SPEC_EXEMPT:
+                # 样例豁免件是**本地探针页**的记录，跟 tradingview.com 没有任何关系。
+                # `_resolve_l0` 只认落点，`l0/_example.md` 又是 l0/ 下的真文件，所以它过去
+                # 能被真实条目当依据且**不红**——`audit_forensics` 把 `_example.md` 从 l0／spec
+                # 两个名单里滤掉了，孤证规则也看不见它，这个洞是静默的（评审 I5）。
+                # 「当前规格文件自己是否豁免」按 `SPEC_EXEMPT` 里的文件名判，与
+                # `audit_forensics:358-360` 走查时用的 `q.name` 同一把尺：样例引样例仍合法。
+                v.append(
+                    f"{tag}: L0 依据 {ref!r} 落在样例豁免件上——样例证据不能当真实条目的依据（真实条目必须指实抓记录）"
+                )
             else:
                 cited.add(resolved)
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
