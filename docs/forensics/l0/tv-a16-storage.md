@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：C:\Users\fire\AppData\Local\Temp\rea-t10\a16.txt（正式趟，41,220 行／1,063,091 字节）；同目录 a16-count.txt（--token-count 读数＝288,917）
 - 观察条件：Edge --headless=new ＋ 当次现读到的系统代理 127.0.0.1:7897；未交互、未点按、未禁用优化、未改 UA；观察窗 observation_ms=1500；本面**只开两把 storage 旗标**（`--include-storage-keys`＋`--include-storage-fingerprints`），不开 accessibility-text／json-body-shapes／websocket-shapes，`--include-script-sources` 与 `--include-console-text` 按批次清单 §2 写死不开；与 A1 **分趟**（各自主键，见 §1 末尾那条 GC7 理由）；值一律不落（`values_redacted: true` 在本趟 stdout 里自证）
 - 完整性：completeness.status=policy_filtered；conditions[2]=attach_limited,policy_filtered；policy_filtered_sections[9]=accessibility,console_events,console_text,json_body_shapes,metadata,resources,script_sources,scripts,websocket_shapes；attach_limited_sections[5]=console_events,metadata,network_requests,websocket_connections,websocket_frames；truncated_sections 与 unavailable_sections 都是空列表；excluded[11] 的 reason 分布＝disallowed_origin（metadata 489、resources 679、scripts 345、console_events 4）＋unsupported_url（resources 37）＋unattributed_origin（console_events 1）＋not_approved（console_text、script_sources、accessibility 计 1305 个字段、json_body_shapes、websocket_shapes）；dropped_events 七类计数全 0；本面 stdout 里没有 parse_failures 键（那把键属 A2 面）
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T21:32:31+08:00（留档落盘 mtime；同一 stdout 里 capture_window.started_at 写作 2026-10-13T13:32:29.633Z、ended_at 13:32:31.462Z，即 UTC）
 
 ## 摘录（逐字，未改写）

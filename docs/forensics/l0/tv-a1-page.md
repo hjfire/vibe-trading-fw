@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：C:\Users\fire\AppData\Local\Temp\rea-t10\a1-full.txt（正式趟，40,422 行／1,042,800 字节）；同目录 a1-truncated.txt（被体积闸门切在半截的第一趟）、a1-count.txt（--token-count 那一行读数）、targets.txt（挂载趟）
 - 观察条件：Edge --headless=new，`--proxy-server` 指向当次 `reg query` 现读到的系统代理（ProxyEnable=0x1／ProxyServer=127.0.0.1:7897）；URL 作为 Edge 命令行参数交出；未点按任何元素、未派发事件、未禁用优化、未改 UA；观察窗 observation_ms=1500；本面只开三把旗标（accessibility-text／json-body-shapes／websocket-shapes），`--include-script-sources` 与 `--include-console-text` 按批次清单 §2 不开；一次一面——本条只有 A1，storage 面在 tv-a16-storage.md 另起一趟
 - 完整性：completeness.status=policy_filtered；conditions[2]=attach_limited,policy_filtered；policy_filtered_sections[7]=console_events,console_text,metadata,resources,script_sources,scripts,storage_keys；attach_limited_sections[5]=console_events,metadata,network_requests,websocket_connections,websocket_frames；truncated_sections 与 unavailable_sections 都是空列表；excluded[9] 的 reason 分布＝disallowed_origin（metadata 488、resources 679、scripts 345、console_events 4）＋unsupported_url（resources 37）＋unattributed_origin（console_events 1）＋not_approved（console_text、script_sources、storage_keys，count 均为 null）；dropped_events 七类计数全 0；本面 stdout 里没有 parse_failures 这个键（它是 A2 那面的键，见 tv-a2-bundle.md），所以本记录不解释它的值
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T21:24:33+08:00（留档落盘 mtime；同一 stdout 里 capture_window.started_at 写作 2026-10-13T13:24:31.613Z、ended_at 13:24:33.390Z，即 UTC）
 
 ## 摘录（逐字，未改写）

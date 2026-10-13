@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：`C:\Users\fire\AppData\Local\Temp\rea-t10b\a9.txt`（正式趟整份 stdout，39 行／301,831 字节，其中**第 21 行 `data_base64` 单行就占 300,417 字节＝图像本体，一个字都不进仓**）；同目录 `a9.cmd`（逐字命令行，216 字节）、`a9-count.txt`（`--token-count` 读数＝62,017）
 - 观察条件：Edge `--headless=new` ＋ `--remote-debugging-port=9222` ＋ 专属 profile 目录 `%TEMP%\rea-cdp-profile-t10b` ＋ `--proxy-server="http://127.0.0.1:7897"`（当次 `reg query` 现读：`ProxyEnable=0x1`／`ProxyServer=127.0.0.1:7897`；裸连那一腿当次实测 `http_code=000`／`curl` 退出码 28 连接失败，带代理那一腿＝200）；URL 走 Edge 命令行参数；未点按、未滚动、未派发事件、未登录、未改 UA、未禁用优化；观察窗＝当次可见视口 746×483（第 15-16 行，是**浏览器窗口几何**，不是对页面上任何元素的尺寸测量）；提供方自陈不滚动、不执行 JS、不越当前视口（第 39 行 `limitations[2]` 原文）；一次一面——本条只有 A9 这一个像素面，作为对比基线的那趟在 `tv-a15-pixel-baseline.md`
 - 完整性：completeness.status=complete_within_window（第 23 行照抄）；conditions[1]=complete_within_window（24）；policy_filtered_sections／attach_limited_sections／truncated_sections／unavailable_sections／excluded 五项全是空列表（25-29）；dropped_events 七类＋total 计数全为 0（30-38）；全文 `grep -c '[truncated'`＝0 ⇒ `--token-limit 150000` 这一闸门没切到这趟载荷（count 读数 62,017 是下界，按批次清单 §7 的口径放大后才跑正式趟）
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T22:40:24+08:00（留档落盘 mtime；同一 stdout 第 13 行 `captured_at` 写作 `2026-10-13T14:40:24.921Z`，即 UTC）
 
 ## 摘录（逐字，未改写）

@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：`C:\Users\fire\AppData\Local\Temp\rea-t10b\a4-rolemenu.txt`（正式趟整份 stdout，7 行／208 字节，是八枚 A4 里最大的一份）；同目录 `a4-rolemenu.cmd`（逐字命令行，276 字节）、`a4-rolemenu-count.txt`（`--token-count` 读数＝59，八枚里最高，与「未命中也照样有读数」这一形状一致）
 - 观察条件：Edge `--headless=new` ＋ `--remote-debugging-port=9222` ＋ 专属 profile 目录 `%TEMP%\rea-cdp-profile-t10b` ＋ `--proxy-server="http://127.0.0.1:7897"`（当次 `reg query` 现读：`ProxyEnable=0x1`／`ProxyServer=127.0.0.1:7897`）；URL 走 Edge 命令行参数；**未做任何点按**，所以本趟的观察条件是「菜单从未被打开过」的静态页；selector 实参 `[role="menu"]` 是我方入参；一次一面；`--token-limit 500` 体积闸门，第 7 行即末行、无 `[truncated` 标记
 - 完整性：本面 stdout 里**没有 completeness 块**（A4 形状，八份留档复验 `grep -c completeness`＝0）⇒ 无 `status` 可抄；**注意这一面是 `not_found` 而 `rc` 仍是 0、不报错**，命令成功与「没找到」是两件事，本记录的 完整性： 与其余七枚同一形状
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T22:37:14+08:00（留档落盘 mtime；本面 stdout 无时间戳键）
 
 ## 摘录（逐字，未改写）

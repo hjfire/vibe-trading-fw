@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：`C:\Users\fire\AppData\Local\Temp\rea-t10b\a4-canvas.txt`（正式趟整份 stdout，7 行／195 字节）；同目录 `a4-canvas.cmd`（上面那条 命令： 的逐字留档，269 字节）、`a4-canvas-count.txt`（`--token-count` 那一趟的读数＝52）
 - 观察条件：Edge `--headless=new` ＋ `--remote-debugging-port=9222` ＋ 专属 profile 目录 `%TEMP%\rea-cdp-profile-t10b`（本次新建）＋ `--proxy-server="http://127.0.0.1:7897"`，端口是当次 `reg query` 现读到的值（`ProxyEnable=0x1`／`ProxyServer=127.0.0.1:7897`）；URL 作为 Edge 命令行参数交出；未点按任何元素、未派发事件、未登录、未改 UA、未禁用优化；selector 实参 `canvas` 是**我方入参**（「我告诉它看哪」），不是观察；一次一面——本条只有这一枚 selector，批次 A 的 A4 共八枚、各占一份记录（其余七枚见 `tv-a4-toolbar.md` 等）；`--token-limit 500` 是体积闸门（按批次清单 §7「count 是下界、不是目标数」的口径从 52 放大），正式趟第 7 行就是文件末行、全文无 `[truncated` 标记 ⇒ 闸门没切到这趟载荷
 - 完整性：本面 stdout 里**没有 completeness 块**（批次清单 §4 写死的 A4 形状，本席在八份 A4 留档上逐一复验：`grep -c completeness` 均为 0）⇒ 没有 `status` 值可照抄，本键记的是「这一面的提供方不给完整性读数」这一事实；本面也不给解析计数类键，所以那类键的值无从解释
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T22:37:04+08:00（留档落盘 mtime；本面 stdout 里没有 `captured_at`／时间戳键，只有主键与 `selected_node`／`listeners` 两类读数）
 
 ## 摘录（逐字，未改写）

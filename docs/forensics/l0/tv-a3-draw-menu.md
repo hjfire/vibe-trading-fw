@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：C:\Users\fire\AppData\Local\Temp\rea-t10c\a3.txt（正式趟整份 stdout，208 行／16,390 字节；第 170 行是 at_end accessibility 的单行文本串）；同目录 a3.cmd（本记录 命令： 的逐字命令行，正式趟执行前先 tee 落档）、a3-count.txt（--token-count 读数＝5,707）、discover.cmd／discover.txt（枚举趟 162 行／15,033 字节，主键 ev_ba280ca2dc3ab88359551bcc1868687099a6731826804f5002eb4c98cab748d2——它只是取定位名的工作辅助，不落成 L0 记录、其键不是本面证据）、targets-1.txt（挂载趟，PID 与 target_id 读数）、precheck.txt 与 precheck-reg-internet-settings.txt（预检两腿与注册表现读）
 - 观察条件：Edge --headless=new（我方 PID 30280，netstat 现读）＋ --remote-debugging-port=9222 ＋ 专属新建 profile 目录 rea-cdp-profile-t10c ＋ --proxy-server=http://127.0.0.1:7897（当次 reg query 现读 ProxyEnable=0x1／ProxyServer=127.0.0.1:7897；同场预检裸连腿 http_code=000 且 curl 退出码 28，代理腿＝200）；URL 走 Edge 命令行参数；一趟一个打开动作：仅 click 一枚 role:button／name:"Trend tools"（定位名逐字取自本机枚举趟 discover.txt:124 的可达文本读数，不是上一批的起点名），随后 wait_for_timeout 1500ms；未 fill、未提交、未登录、未保存、未交易、未派发 Escape（flyout 由下一趟的 goto_start 重载自然关闭）；未改 UA、未禁用优化；视口 1280×720（第 19-22 行 environment 回声，是我方窗口几何，不是对方布局声明）；一次一面——本条只有 A3；正式趟闸门 --token-limit 100000 按 count 读数 5,707 作下界大幅放宽，全文 truncated 标记计数 0
 - 完整性：顶层 completeness.status=incomplete（第 194 行）；equality_eligible: false（195）；missing_sections[1]: events（196）——按批次清单 §4 的解释：这一项是**本趟没开事件记录**（capture.events: []，第 48 行），不是页面上没有事件；truncated_sections: []（197）。步骤级（s2 工件的 completeness，第 182-186 行）是另一层：status: complete、equality_eligible: true、missing_sections: []。本记录 完整性： 抄顶层那一层，两层形状都在此写明。第 163-164 行 dom 工件 state: not_requested ⇒ 本面根本没采 dom；第 198 行 provider 自陈 limitations[7]、第 206 行顶层 limitations[9]
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T23:07:07+08:00（留档 a3.txt 落盘 mtime；场景趟 stdout 不含绝对时间戳键，只有 duration_ms 4041（第 70 行）与逐步 elapsed_ms）
 
 ## 摘录（逐字，未改写）

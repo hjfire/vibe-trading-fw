@@ -1,0 +1,35 @@
+# 规格：图表交互（批次 A 的 L0 → L1）
+
+面归属：这一份收「图表交互」相关条目——周期与分辨率目录、指标对话框、面板开关语义、打开动作对 URL 的影响，
+以及原生监听器枚举面本身可用性的判据形状。画线目录／图元管理面板／存储键形状／画布可指认性在
+[`drawings.md`](drawings.md)，同一条目号不在两份表里重复。
+
+判据列只有两种形状（仓内复算型／本机重跑型），口径与限制逐字见 `docs/forensics/spec/drawings.md` 的开头
+与 `docs/forensics/batch-A-playbook.md` §8。本表同样只用不带管道的 `grep -c` 复算转录条目行；
+转录块行数按 `batch-A-playbook.md` §2② 的「围栏自身行数（含容器行）」口径读，本表判据不复述该口径。
+
+本表面刻意不写这几类句子：「TV 那处没有事件绑定／不响应事件」（八枚 A4 的 `listeners: []` 是枚举面空读数，
+连对照组 `body` 也空）、「`[role="menu"]` 没命中所以对方没有菜单」（那是静态页、未点按状态下的一趟读数，
+且不排除写法导致）、「任何时候都单元素」（周期目录展开后树里同时有同名 row 与 button）、「样式页／每页字段名」
+（A7 一趟只放了一个打开动作）、「图例每行显示哪几个字段」（A8 点开的是 widget 面板，不是图例）。
+
+| 条目号 | 规格句 | 判据 | 判据类型 | L0 依据 |
+|---|---|---|---|---|
+| TV-CI-01 | 周期与分辨率目录是一棵两层 treegrid：7 个 level=1 行（6 个自陈 expanded 的分组行＋首行 `Add custom interval`）下挂 32 个 level=2 档位行，档位按 ticks／seconds／minutes／hours／days／ranges 六类分组 | 在 `docs/forensics/l0/tv-a5-intervals.md` 上四条只读计数：`grep -c '^  - row "' docs/forensics/l0/tv-a5-intervals.md`＝39（条目行，＝7 个 level=1 行＋32 个 level=2 行）、`grep -c '\[level=2\]' docs/forensics/l0/tv-a5-intervals.md`＝32、`grep -c '\[level=1\]' docs/forensics/l0/tv-a5-intervals.md`＝7、`grep -c '\[expanded\] \[level=1\]' docs/forensics/l0/tv-a5-intervals.md`＝6，再加 `grep -c '^  - row "Add custom interval" \[level=1\]' docs/forensics/l0/tv-a5-intervals.md`＝1；39−32＝7 与 level=1 计数必须自洽 | DOM | tv-a5-intervals.md |
+| TV-CI-02 | 当前档位以 selected 态标在目录行上，且该行的可达名与主工具栏那枚周期按钮的可达名同名（本批两处的名字逐字都是 `1 day`）⇒「按钮显示的就是选中档位」这一交互形状到名字级可验 | 在 `docs/forensics/l0/tv-a5-intervals.md` 上两条各＝1：`grep -c '"1 day" \[level=2\] \[selected\]' docs/forensics/l0/tv-a5-intervals.md`＝1（目录里的选中行）与 `grep -c '"name":"1 day"' docs/forensics/l0/tv-a5-intervals.md`＝1（同档 `命令：` 行里 click 定位的可达名）；限制：目录展开后树里同时存在 `row "1 day"` 与 `button "1 day"`，「用档位名当定位名」依赖「click 先于目录出现」这个顺序，**不许**写成「任何时候都单元素命中」 | 状态 | tv-a5-intervals.md |
+| TV-CI-03 | 周期切换按钮是弹层入口而不是「点一下换一档」的即时开关：它在无障碍树里自陈 `hasPopup,menu` 状态 | 在 `docs/forensics/l0/tv-a1-page.md` 上三条只读计数各＝1：`grep -c '^      - node_id: "1173"' docs/forensics/l0/tv-a1-page.md`＝1、`grep -c '^        name: 1 day' docs/forensics/l0/tv-a1-page.md`＝1、`grep -c '^          hasPopup,menu' docs/forensics/l0/tv-a1-page.md`＝1，三行都在该记录摘录的同一块节点条目（`node_id` 1173 那条 `role: button`，正文行 80-89）里；限制：本批不据此断言「带 hasPopup 的按钮共 9 枚」那种总数——那是 `%TEMP%` 留档上的活树计数、留档会随清理消失，仓内数不出来 | DOM | tv-a1-page.md |
+| TV-CI-04 | 指标入口按钮打开的是一个 role: dialog 的浮层（不是新页面），骨架含一枚关闭按钮、一个搜索框与列表区标题三件控件 | 在 `docs/forensics/l0/tv-a7-indicator-dialog.md` 上四条只读计数各＝1：`grep -c '^- dialog ' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1、`grep -c '^  - button "Close menu"' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1、`grep -c '^  - searchbox "Search"' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1、`grep -c 'heading "Script name" \[level=3\]' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1；限制：本面未往搜索框填任何东西（`fill` 本批禁用），搜索行为与结果没有任何读数，不许把「有 searchbox」写成「可按关键字过滤」 | DOM | tv-a7-indicator-dialog.md |
+| TV-CI-05 | 指标对话框顶层是五个 tab，默认落在 `Indicators` 页（selected 态唯一），其余四页各自的内容本批未读取 | 在 `docs/forensics/l0/tv-a7-indicator-dialog.md` 上三条只读计数：`grep -c '^    - tab "' docs/forensics/l0/tv-a7-indicator-dialog.md`＝5、`grep -c '\[selected\]' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1、`grep -c '^  - tablist:' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1；限制：切页要第二次 click，纪律不允许 ⇒ 「Strategies／Profiles／Patterns／Options 里有什么」与批次清单 §1 给 A7 的另一半「样式页字段名」都**没有**判据级证据，不许据本条外推 | 状态 | tv-a7-indicator-dialog.md |
+| TV-CI-06 | 四个交互面的打开动作都不改 URL、不改路由：at_end 的 url 工件与该趟 start_url 回声逐字同值，query 参数名仍只有 `symbol` | 对四面各跑一条不带管道的计数：`grep -c 'url: "https://www.tradingview.com/chart/?symbol=NASDAQ%3AAAPL"' docs/forensics/l0/tv-a3-draw-menu.md docs/forensics/l0/tv-a5-intervals.md docs/forensics/l0/tv-a7-indicator-dialog.md docs/forensics/l0/tv-a8-legend.md` ⇒ 每份＝2（start_url 回声行＋at_end url 工件行，两处字符串逐字相同 ⇒ 点开面板／对话框之后当次仍是同一个 URL），再 `grep -c '^            query_parameter_names\[1\]: symbol' docs/forensics/l0/tv-a7-indicator-dialog.md`＝1；限制：本批判据只断言「at_end 读到的 url ＝ start_url」；s1 的 `before_url`／`after_url` 两块在四面都未进逐字转录（只在各记录正文里给了留档行号），所以「click 前后那一刻也没换页」这一半在仓内数不出来 | 状态 | tv-a3-draw-menu.md、tv-a5-intervals.md、tv-a7-indicator-dialog.md、tv-a8-legend.md |
+| TV-CI-07 | 右侧面板那枚入口按钮是开关（toggle）而不是单向打开：面板打开时它自陈 pressed 态，且同一条 click 命令在连续两趟里读到**相反**的面板态（上一趟留下的态活到了下一趟——只记现象） | pressed 那一半在仓内数：`grep -c '^- button "Object tree and data window" \[pressed\]' docs/forensics/l0/tv-a8-legend.md`＝1（转录围栏第一段条目）；「两趟相反」那一半的验收在自家页做：把同一条 `命令：` 逐字连跑两趟（同一浏览器现场、不重启），两趟 at_end 树里 `tab "Object tree"` 的命中数必须互补（一趟 0、一趟 1）⇒ 自家实现必须让这枚按钮在打开／关闭之间翻转并暴露 pressed；红线：**不许**指名存续载体（四面场景 JSON 的 `storage` 段逐字是 `"cookies":[],"local_storage":[],"session_storage":[]`＝未请求任何 storage 读数），也**不许**把判据写成依赖「count 趟执行了什么」——那是 `tv-a8-legend.md` 与 `batch-A-playbook.md` §3③ 都标了「强推断，不是读数」的那件事 | 状态 | tv-a8-legend.md |
+| TV-CI-08 | 原生监听器枚举面按 selector 写法可用，且「命中与否」与「命中的句柄」这两个字段可分：命中的回 `match: found`＋非空 `backend_node_id`，未命中的回 `match: not_found`＋`backend_node_id: null`，而 rc 仍是 0、不报错 | 一条不带管道的 glob 计数：`grep -c '^    match: found' docs/forensics/l0/tv-a4-*.md` ⇒ 七份各＝1、`tv-a4-rolemenu.md`＝0；同处再验未命中那一枚：`grep -c '^    match: not_found' docs/forensics/l0/tv-a4-rolemenu.md`＝1 与 `grep -c '^    backend_node_id: null' docs/forensics/l0/tv-a4-rolemenu.md`＝1；反面红线：`grep -c '^  listeners: \[\]' docs/forensics/l0/tv-a4-*.md` 八份各＝1，即**七枚命中的也全为空读数**（连对照组 `body` 都空）⇒ 本批只撑得起「枚举面可用性」这一级，**绝对不许**把任何一条写成「TV 那处没有事件绑定／不响应事件」，也不许用 `[role="menu"]` 的 not_found 推「对方没有菜单」（静态页未点按＋写法未排除） | DOM | tv-a4-canvas.md、tv-a4-toolbar.md、tv-a4-priceaxis.md、tv-a4-timeaxis.md、tv-a4-legend.md、tv-a4-dataqa.md、tv-a4-rolemenu.md、tv-a4-body.md |
+
+## 本面在本批的证据边界
+
+- 「图例每行显示哪几个字段、顺序如何」（批次清单 §1 给 A8 的取物口径）在本批**没有判据**：`tv-a8-legend.md`
+  写明点开的是右侧 widget 面板，图例行文本是 `text:` 合串（红线不入库），图例区按钮在枚举基线里就存在、
+  本面没点过它。这一句进 L2 时只能落成判据缺口。
+- 告警对话框（A13）是**判据缺口**：需登录、按裁定 1 不做登录绕过，本席未跑该命令，结构上没有 `evidence_id`，
+  条目引用不到它；同样不许拿 A4 那枚 `[role="menu"]` 的 not_found 去推「对话框不存在」。
+- 刻度与轴的**结构**（刻度档位、轴标签文本、字号、配色、坐标位置）在本批一份读数都没有：A9／A15 两个像素面
+  只给 `sha256`／`bytes`／`media_type` 三键（见 `drawings.md` 的 TV-DW-07 与 `tv-a9-axis-scale.md`「本面撑不住的结论」）。

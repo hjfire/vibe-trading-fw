@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：`C:\Users\fire\AppData\Local\Temp\rea-t10b\a4-dataqa.txt`（正式趟整份 stdout，7 行／203 字节）；同目录 `a4-dataqa.cmd`（逐字命令行，275 字节）、`a4-dataqa-count.txt`（`--token-count` 读数＝58）
 - 观察条件：Edge `--headless=new` ＋ `--remote-debugging-port=9222` ＋ 专属 profile 目录 `%TEMP%\rea-cdp-profile-t10b` ＋ `--proxy-server="http://127.0.0.1:7897"`（当次 `reg query` 现读：`ProxyEnable=0x1`／`ProxyServer=127.0.0.1:7897`）；URL 走 Edge 命令行参数；未点按、未派发事件、未登录、未改 UA；selector 实参 `[data-qa-id]` 是**属性存在性**匹配的我方入参（押「对方有 QA 锚点属性体系」这一件事），只写属性名、不猜属性值；一次一面；`--token-limit 500` 体积闸门，第 7 行即末行、无 `[truncated` 标记
 - 完整性：本面 stdout 里**没有 completeness 块**（A4 形状，八份留档复验 `grep -c completeness`＝0）⇒ 无 `status` 可抄；不给解析计数类键
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T22:39:26+08:00（留档落盘 mtime；本面 stdout 无时间戳键）
 
 ## 摘录（逐字，未改写）

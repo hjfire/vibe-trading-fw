@@ -382,3 +382,85 @@ T9 把它们逐条引用进条目表之后，再把 `用途：` 改成 `规格`�
   摘录首行与 `- 证据：`／`- evidence_id：` 必须同值、同趟。
 - 收口时跑一次机械核对：`grep -l '^evidence_id: ev_xxx$' <留档>` 要么命中要么别写这条记录。
   校验器只查主键的**形状**（`ev_<64 hex>`），查不出「键与摘录不同源」——这一层只能靠留档反查。
+
+## 8. 批次 A → L1 规格条目表：本批落地的条数偏差与三类判据边界（2026-10-14 追加）
+
+> 追加前的 HEAD：`528883bd`（`git rev-parse --short HEAD` 的当次读数）。本节**只追加在文件末尾**，
+> §1–§7 的正文与其中的带日期更正块一个字未动。两表落点：`docs/forensics/spec/drawings.md`（7 条）、
+> `docs/forensics/spec/chart-interaction.md`（8 条）。本节写的是「为什么是这个形状」，不是第三批的口径。
+
+**(a) 条数偏差：本批为什么不是「每面 ≥20」**
+
+- spec §7 那句「每面 ≥20 条」的基数是当时排定的六个面（A1–A6）。批次 A 真正落档的是 19 份记录，
+  能喂给这两个规格面的只有 16 份：A3、A8、A16（画线与图元）＋ A1、A4（八枚单 selector 命令）、A5、A7（图表交互）
+  ＋ A9、A15（像素）。
+- 进不了表的，按形状分三类：`tv-a2-bundle.md` 是 bundle 侧的三枚 `call:n.get` 端点形状，不属这两个面，
+  它保持 `- 用途：基线`；`probe-bundle.md`／`probe-events.md`／`probe-skeleton.md` 是 `- 用途：harness`；
+  `tv-a12-pine-editor.md`／`tv-a13-alert-dialog.md` 是 `- 状态：不可取证`（原因逐字：需登录，按裁定 1 不做登录绕过；
+  两份都写明「本席未执行这一条」）⇒ 没有 `evidence_id`、没有 stdout、没有逐字摘录。
+- 于是本批不按「每面 ≥20」收，按 spec §12 的降级口径给下限：**两张表合计 ≥12 条**。实测 **15 条**（7＋8）。
+  凑不满的那部分没编——被砍掉的候选连理由一起记在（c）。
+- 门 1（`python -X utf8 tools/forensics_audit.py`）当前唯一的红就是这条口径差，原文（逐字，RC=1）：
+  `有 15 条规格条目但 docs/forensics/gap-matrix.md 不存在`（`tools/forensics_audit.py:407` 那句模板）。
+  缺口矩阵是 L2（T10）的产物，本批**不建**，也不许为了让门变绿去建。
+
+**(b) 三类判据边界：本批证据形状导致的**
+
+1. **像素面只能写指纹等值**。A9／A15 两趟的产出逐字只有 `captured_at`／`width`／`height`／
+   `artifact` 下的 `sha256`＋`bytes`＋`media_type`（图像本体 `data_base64` 按批次清单 §2 的像素红线不入库），
+   且 `compare`／`similarity` 这两次对比本批从未发生 ⇒ 判据形状只能到「同 target、同视口、同一条命令连跑两趟，
+   两趟的 `sha256` 与 `bytes` 逐项相等」这一级（TV-DW-07）。写不成「像素差 < x%」「相似度 ≥ y」
+   「同尺度族 ⇒ 像素全等」，也写不成期望常量：A9 与 A15 同命令同 target 同 746×483 视口、`captured_at` 相隔
+   5.184 秒，字节分别是 225300 与 231704（差 6404）——这两份记录本身就是「常量不可期望」的证据。
+2. **A4 面只能证明枚举面可用**。八枚 `inspect-web-event-listeners` 里七枚 `match: found`＋非空
+   `backend_node_id`、一枚 `match: not_found`＋`backend_node_id: null`，而八份的 `listeners: []` **全为空读数**
+   （连对照组 `body` 都空，见各记录的 limitations）⇒ 能立的只有「selector 写法命中／未命中可分、rc 恒 0」
+   （TV-CI-08）。「空数组」不等于「无监听器」，而本面真正的核心问题「画线手势绑在哪个节点」**一份读数都没有**。
+   另注：校验器不会替你挡这一步——`_resolve_l0` 只认落点，`l0/` 下的真文件都能被引用；把空手面写进表是
+   **内容层**的空手（判据里没有可数的读数），门 1 查不出来，只能靠写句子的人自己守。
+3. **A12、A13 是判据缺口，不是弱证据**。两份记录自己就写了这条边界（`- 本面在 L1 里的位置：判据缺口`），
+   且 `tools/forensics_audit.py:27-30` 那段注释说明给不可取证记录编条目撞的是「写不出判据不算条目」。
+   它们进 L2 时只能落成「本批次未取证，成因＝登录门前置＋裁定 1 不绕过」；也不许拿 A4 那枚 `[role="menu"]`
+   的 `not_found` 去推「告警对话框不存在」（另一枚 selector、另一趟、另一主键）。
+
+**(c) 被砍掉的候选句子与砍掉的理由（本批不立条目的，逐条）**
+
+- 「主工具栏有 6 枚工具条／96 枚按钮／20 个 CANVAS／4,232 个节点」「带 hasPopup 的按钮共 9 枚」——这些是
+  `%TEMP%` 留档上的**活树计数**，仓内转录只切了分段；留档按记录自己的说法会随清理消失，三个月后数不出来。
+- 「画线工具总共 17 件」——本批只点开了 `Trend tools` 一个目录；`tv-a3-draw-menu.md` 正文另列的
+  `Fib retracement`／`Gann and Fibonacci tools`／`XABCD pattern`／`Patterns`／`Brush`／`Geometric shapes`／
+  `Text`／`Annotation tools`／`Icon` 等目录没有各自的展开记录，写成总量是外推。
+- 「图例每行显示 `OHLC4`／`Volume` 等字段、顺序是……」——A8 点开的是右侧 widget 面板而不是图例，
+  图例行文本在 stdout 里是 `text:` 合串（红线不入库）。
+- 「切到 `Data window` 页后表头是……」「切页后 `Object tree` 从树里消失」——都要第二次 click，
+  §5① 的纪律是一趟一个打开动作。
+- 「面板开关状态存在 localStorage 里」——§3③ 的带日期更正：四面场景 JSON 的 `storage` 段逐字是
+  `"cookies":[],"local_storage":[],"session_storage":[]`＝未请求任何 storage 读数，载体**未读到**，
+  只准写「上一趟留下的态活到了下一趟」这一现象（TV-CI-07 就是这么写的）。
+- 「`--token-count` 那一趟把侧栏按钮真点了一次」——同一处更正标的是**强推断，不是读数**：count 趟的 stdout
+  没留档，每份 count 文件只有 5 字节（只够放那个 token 数）⇒ 任何判据都不许依赖「count 趟执行了什么」。
+- 「click 前后 URL 也没变」——四面的 s1 `before_url`／`after_url` 两块只在正文里给了留档行号，
+  没进逐字转录；TV-CI-06 因此只断言「at_end 的 url ＝ 该趟 start_url 回声」。
+- 「`[role="menu"]` 没命中，所以对方没有那个菜单」——静态页、未点按状态下的一趟读数，且 selector 写法导致的
+  未命中没被排除（§4 的空手面先排除写法问题）。
+- 「样式／周期／symbol 三个键里存的是……」「`ChartFavoriteDrawingToolbarWidget.visible` 的值是 true」——
+  A16 是本批**唯一**一份键名级证据，那一趟自陈 `fingerprints_complete: false` 且 `values_redacted: true`，
+  值一律没落；引用它必须带上这条限制（TV-DW-04／TV-DW-05 都带了）。
+- 「有 searchbox ⇒ 指标可按关键字过滤」——本批未 `fill`，没有任何搜索行为读数。
+- A12／A13 的任何句子——本席未执行，见（b）第 3 条。
+
+**(d) 判据写法两型与两条口径**
+
+- **仓内复算型**（本批 14 条）：一条 `grep -c` 打在 `docs/forensics/l0/tv-*.md` 的逐字转录上，数出记录里
+  已写明的那个数；不碰网络、不依赖 `%TEMP%`。
+- **本机重跑型**（本批 1 条，TV-DW-07）：同一条命令在自家页连跑两趟，断言的是**两趟读数之间的等值关系**，
+  不声明任何跨现场可复现的常量。
+- **表里不许出现 shell 管道**：`tools/forensics_audit.py` 的 `_table()` 按 `|` 切列，判据里一个管道就把五行表
+  的一行切成 6 格，报的是「列数不是 5」。本批全部判据因此写成「整行锚定 ＋ `grep -c`」的形式
+  （例：`^    - row "`、`^        hasPopup,menu`），锚定同时把正文里的散文重复排除在计数外。
+- **行数口径**沿用 §2②：「共 N 行」＝围栏自身行数（含容器行）。条目格里只数**条目行**，不复述围栏自身行数；
+  要复算围栏自身行数的那两条 `awk` 管道留在各记录自己的复算段里（形状基准 `tv-a3-draw-menu.md`）。
+- **L0 用途回标**：16 份被引用的记录 `- 用途：` 由 `基线` 改为 `规格`——`tv-a1-page`、`tv-a3-draw-menu`、
+  八份 `tv-a4-*`、`tv-a5-intervals`、`tv-a7-indicator-dialog`、`tv-a8-legend`、`tv-a9-axis-scale`、
+  `tv-a15-pixel-baseline`、`tv-a16-storage`；`tv-a2-bundle.md` 保持 `基线`（两张表都没引用它）；
+  A12／A13 无 `- 用途：` 键（不可取证），不回标。每份都只改了那一行，摘录一个字节没动。

@@ -7,7 +7,7 @@
 - 留档（仓外临时件，会随清理消失）：`C:\Users\fire\AppData\Local\Temp\rea-t10b\a15.txt`（正式趟整份 stdout，39 行／310,371 字节，其中**第 21 行 `data_base64` 单行占 308,957 字节＝图像本体，不进仓**）；同目录 `a15.cmd`（逐字命令行，216 字节）、`a15-count.txt`（`--token-count` 读数＝64,348）
 - 观察条件：与 A9 **同一条命令、同一 target、同一现场**的**另起一趟**（批次清单 §1 对 A15 的定义就是「同 A9，另起一趟作为后续对比的基线 id」）；Edge `--headless=new` ＋ 9222 ＋ 专属 profile 目录 `%TEMP%\rea-cdp-profile-t10b` ＋ 当次 `reg query` 现读到的系统代理 `http://127.0.0.1:7897`；未点按、未滚动、未登录、未改 UA；视口几何 746×483（第 15-16 行）；两趟相隔 **5.184 秒**（本趟 `captured_at` 14:40:30.105Z vs A9 那趟 14:40:24.921Z，第 13 行）；一次一面——本条只有这一趟基线，被它对照的那趟在 `tv-a9-axis-scale.md`
 - 完整性：completeness.status=complete_within_window（第 23 行照抄）；conditions[1]=complete_within_window（24）；policy_filtered_sections／attach_limited_sections／truncated_sections／unavailable_sections／excluded 全为空列表（25-29）；dropped_events 七类＋total 计数全 0（30-38）；`grep -c '[truncated'`＝0 ⇒ 150,000 的闸门没切到这趟载荷（count 读数 64,348 为下界）
-- 用途：基线
+- 用途：规格
 - 取证时间：2026-10-13T22:40:30+08:00（留档落盘 mtime；同一 stdout 第 13 行 `captured_at` 写作 `2026-10-13T14:40:30.105Z`，即 UTC）
 
 ## 摘录（逐字，未改写）
