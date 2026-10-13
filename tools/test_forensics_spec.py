@@ -14,6 +14,8 @@ Run with::
 from __future__ import annotations
 
 import hashlib
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1027,3 +1029,94 @@ def test_tv_host_contract_constants_are_verbatim():
     assert TV_WIDGET_SRC_LINE == (
         'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"'
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 4 修复轮 1（T4-F1／T4-F2 ＋ Minor3）：红线不能对着它自己存在的理由静默失明。
+# 两个坏方向都是本机实测复现过的：单文件读不动 ⇒ PermissionError 穿出
+# audit_tv_host_allowlist 也穿出 main()，前面 collected 的违规一条都不打印；子目录列不
+# 出来 ⇒ Path.rglob 在内部吞掉 PermissionError 并跳过该目录，审计照样返回 []，main()
+# 印 clean。权限夹具只准作用在 tmp_path 下，绝不打仓库路径。
+# ---------------------------------------------------------------------------
+
+def _deny_read(path: Path, *, directory: bool = False) -> bool:
+    """Make ``path`` unreadable for the current user. Return True only when the condition
+    measurably took hold — a silently-ineffective fixture is how a permission test lies.
+
+    Windows: icacls /deny works without elevation (verified on this machine).
+    posix: chmod 000. NEVER call this on a repo path; tmp_path only.
+    """
+    if os.name == "nt":
+        perm = "(RX)" if directory else "(R)"
+        subprocess.run(
+            ["icacls", str(path), "/deny", f"{os.environ['USERNAME']}:{perm}"],
+            capture_output=True, check=False,
+        )
+    else:
+        path.chmod(0o000)
+    if directory:
+        try:
+            list(path.iterdir())
+        except OSError:
+            return True
+        return False
+    try:
+        path.read_bytes()
+    except OSError:
+        return True
+    return False
+
+
+def _restore_read(path: Path) -> None:
+    """Always run this in a finally: an unrestored deny leaves tmp_path undeletable."""
+    if os.name == "nt":
+        subprocess.run(["icacls", str(path), "/reset"], capture_output=True, check=False)
+    else:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def test_unreadable_allowlist_file_is_a_violation_not_a_blind_spot(tmp_path):
+    _fake_tv_tree(tmp_path)
+    victim = tmp_path / "frontend/src/lib/pineLang.ts"
+    if not _deny_read(victim):
+        _restore_read(victim)
+        pytest.skip("本机造不出「文件存在但读不动」的条件")
+    try:
+        problems = audit_tv_host_allowlist(tmp_path)   # 修前：PermissionError 直接穿出
+    finally:
+        _restore_read(victim)
+    assert any("pineLang.ts" in x and "读不出来" in x for x in problems), problems
+
+
+def test_unlistable_directory_under_frontend_src_is_named(tmp_path):
+    _fake_tv_tree(tmp_path)
+    hidden = tmp_path / "frontend/src/lib/hidden"
+    hidden.mkdir(parents=True)
+    (hidden / "tvFetch.ts").write_bytes(b'const u = "https://scanner.tradingview.com/";\n')
+    if not _deny_read(hidden, directory=True):
+        _restore_read(hidden)
+        pytest.skip("本机造不出「目录列不出来」的条件")
+    try:
+        problems = audit_tv_host_allowlist(tmp_path)   # 修前：[]，红线静默报干净
+    finally:
+        _restore_read(hidden)
+    assert any("hidden" in x and "列不出来" in x for x in problems), problems
+
+
+def test_missing_frontend_src_names_the_missing_directory(tmp_path):
+    # 伴随针：test_missing_frontend_src_is_named 只看 != []，摘掉早退也照样绿（它会被别的规则填上）。
+    assert any("不存在：无法核对" in x for x in audit_tv_host_allowlist(tmp_path))
+
+
+def test_mixed_case_host_is_not_a_free_pass(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/lib/tvFetch.ts", 'const u = "https://Scanner.TradingView.com/";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("白名单不符" in x and "tvFetch.ts" in x for x in problems), problems
+
+
+def test_mixed_case_s3_host_is_still_counted_outside_the_widget_file(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/lib/sneaky.ts", 'const s = "https://S3.TradingView.com/x.js";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("s3.tradingview 只允许出现在" in x and "lib/sneaky.ts" in x for x in problems), problems

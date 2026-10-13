@@ -18,6 +18,7 @@ Run with::
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -401,6 +402,25 @@ TV_SUPPORT_HOST_LINE = 'support_host: "https://www.tradingview.com"'
 TV_WIDGET_SRC_LINE = 'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"'
 
 
+def _scannable_files(root: Path) -> tuple[list[Path], list[str]]:
+    """Walk ``root`` and report directories we could not list.
+
+    ``Path.rglob`` swallows ``PermissionError`` internally, so a deny-read subdirectory
+    makes the host red line return a clean list while blind to exactly what it exists to
+    refuse. ``os.walk`` with ``onerror`` surfaces that instead of hiding it. ``followlinks``
+    stays False on purpose: this walk must not be able to loop.
+    """
+    files: list[Path] = []
+    unlistable: list[str] = []
+
+    def _note_error(err: OSError) -> None:
+        unlistable.append(str(getattr(err, "filename", "") or err))
+
+    for dirpath, _dirs, names in os.walk(root, onerror=_note_error):
+        files.extend(Path(dirpath) / name for name in names)
+    return files, unlistable
+
+
 def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
     """Spec ruling 1: TradingView is a research subject, never a dependency."""
     v: list[str] = []
@@ -409,14 +429,26 @@ def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
         return [f"{src} 不存在：无法核对 TradingView 主机白名单"]
     hits: set[str] = set()
     s3_counts: dict[str, int] = {}
-    for p in sorted(src.rglob("*")):
+    files, unlistable = _scannable_files(src)
+    for dirpath in sorted(unlistable):
+        try:
+            rel_dir = Path(dirpath).relative_to(repo_root).as_posix()
+        except ValueError:
+            rel_dir = dirpath
+        v.append(f"{rel_dir} 列不出来（权限／竞态）：主机红线看不见里面的文件，不许当作没有依赖")
+    for p in sorted(files, key=lambda q: q.relative_to(repo_root).as_posix()):
         if not p.is_file() or p.suffix not in (".ts", ".tsx"):
             continue
         rel = p.relative_to(repo_root).as_posix()
-        text = _read(p)
-        if "tradingview.com" in text:
+        try:
+            text = _read(p)
+        except (OSError, ValueError):
+            v.append(f"{rel}: 读不出来（权限／竞态）——不许把读不动的文件当作「不含 tradingview.com」")
+            continue
+        low = text.lower()
+        if "tradingview.com" in low:
             hits.add(rel)
-        n = text.count("s3.tradingview")
+        n = low.count("s3.tradingview")
         if n:
             s3_counts[rel] = n
     extra = sorted(hits - TV_HOST_ALLOWLIST)
@@ -432,12 +464,16 @@ def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
         v.append(f"s3.tradingview 只允许出现在 {S3_HOST_FILE}，实际还有：{'、'.join(offenders)}")
     widget = repo_root / S3_HOST_FILE
     if widget.is_file():
-        text = _read(widget)
-        if TV_SUPPORT_HOST_LINE not in text:
-            v.append(f"{S3_HOST_FILE}: 逐字行 {TV_SUPPORT_HOST_LINE} 不见了或被改过——"
-                     "那是对外部站点的运行时依赖，改动要重新裁定")
-        if TV_WIDGET_SRC_LINE not in text:
-            v.append(f"{S3_HOST_FILE}: 逐字行 {TV_WIDGET_SRC_LINE} 不见了或被改过——同上")
+        try:
+            widget_text = _read(widget)
+        except (OSError, ValueError):
+            v.append(f"{S3_HOST_FILE}: 读不出来（权限／竞态）——逐字主机子式没法核对")
+        else:
+            if TV_SUPPORT_HOST_LINE not in widget_text:
+                v.append(f"{S3_HOST_FILE}: 逐字行 {TV_SUPPORT_HOST_LINE} 不见了或被改过——"
+                         "那是对外部站点的运行时依赖，改动要重新裁定")
+            if TV_WIDGET_SRC_LINE not in widget_text:
+                v.append(f"{S3_HOST_FILE}: 逐字行 {TV_WIDGET_SRC_LINE} 不见了或被改过——同上")
     return v
 
 
