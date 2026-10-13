@@ -41,7 +41,7 @@ evidence_id: ev_96e65a0561f3da4489dbf03f41db8d56e7c73624c4dbaaf3fb8a0df25b022a70
     origin: "https://www.tradingview.com"
     usage_bytes: 1167837
     quota_bytes: 401094222642
-    local_storage_keys[20]: cookie_dialog_tracked,tradingview.globalNotification,tradingview.details.force_uncheck_bid_ask_03_2023,tvlocalstorage.available,tradingview.widgetbar.layout-settings,tradingview.widgetbar.widget.alerts.NirPG2OMjcuR,tradingview.trading.orderWidgetMode.,tradingview.hint.pineEditorDialogMoved,tradingview.widgetbar.widget.object_tree.lwgFPzLQmg6a,tradingview.toggle_delete_locked_linetools,snowplowOutQueue_tv_cf_post2.expires,tvlocalstorage.available,tradingview.editchart.model.style,tradingview.editchart.model.interval,tradingview.editchart.model.symbol,last-crosstab-monotonic-timestamp,signin-promo-story,tradingview.details.force_uncheck_ranges_03_2023
+    local_storage_keys[20]: cookie_dialog_tracked,tradingview.globalNotification,tradingview.details.force_uncheck_bid_ask_03_2023,tvlocalstorage.available,tradingview.widgetbar.layout-settings,tradingview.widgetbar.widget.alerts.NirPG2OMjcuR,tradingview.trading.orderWidgetMode.,tradingview.hint.pineEditorDialogMoved,tradingview.widgetbar.widget.object_tree.lwgFPzLQmg6a,tradingview.toggle_delete_locked_linetools,snowplowOutQueue_tv_cf_post2.expires,tradingview.RightToolbarProducts.storeVersion,featuretoggle_seed,snowplowOutQueue_tv_cf_post2,tradingview.editchart.model.style,tradingview.editchart.model.interval,tradingview.editchart.model.symbol,last-crosstab-monotonic-timestamp,signin-promo-story,tradingview.details.force_uncheck_ranges_03_2023
     session_storage_keys[4]: widgetbar.layout-settings,ChartFavoriteDrawingToolbarWidget.visible,chartPageGrid.maximizedPanel,symbol-lists.activeList
     indexed_db_names[1]: Sessions Logs
     cache_names[1]: TVChartApi
@@ -75,3 +75,17 @@ evidence_id: ev_96e65a0561f3da4489dbf03f41db8d56e7c73624c4dbaaf3fb8a0df25b022a70
 - **`--token-count` 又报低了**：count 趟报 288,917（`a16-count.txt:1`），本趟载荷把闸门放到 400,000 才收全——EOF 是 `limitations[5]` 那一行、全文没有 `[truncated:` 标记。与 A1 同一形状的实测：**`--token-count` 的读数是下界，不是目标数**（活树在两趟之间会长）。
 - 本面与 A1 各有一把自己的 `evidence_id`（A1＝`ev_c9e4190b…bbf46`，本面＝`ev_96e65a05…b022a70`），这是 §1 末尾「A16 必须与 A1 分趟」那条的落地：两份记录不是同一主键的两块摘录。
 - **2026-10-13 22:20 更正：本记录的 `evidence_id` 原先写作 `ev_8e37f921…af8e5`，那把键在任何一份留档里都不存在**——`grep -rl 'ev_8e37f921' %TEMP%\rea-t10\` 数出 0 份命中，而 `sed -n '1p' a16.txt` ＝ `ev_96e65a0561f3da4489dbf03f41db8d56e7c73624c4dbaaf3fb8a0df25b022a70`。本记录的全部行号（41180／41181／41184／41185／41218／41219／41220）与指纹值都在 `a16.txt` 上逐行验过、原样成立，所以错的是那把键，不是摘录：它挂成了另一趟（没留档、或留档已被覆盖）的读数。键与摘录首行现已改成 `a16.txt` 第一行的值，改完这条记录才满足它自己第 7 行承诺的「留档＝正式趟」。**教训形状：`evidence_id` 必须由 `sed -n '1p' <留档>` 当场取，不能从终端回显里抄。**
+- **2026-10-14 更正（摘录转录保真）：第 44 行的 `local_storage_keys[20]` 原先只抄了 18 项——漏三项、重一项。**
+  现读复算（仓内）：`sed -n '44p' docs/forensics/l0/tv-a16-storage.md | awk '{sub(/^ *local_storage_keys\[20\]: */,""); print NF}' FS=','`＝**20**；
+  `sed -n '44p' docs/forensics/l0/tv-a16-storage.md | tr ',' '\n' | grep -c 'tvlocalstorage.available'`＝**1**（原先＝2）。
+  留档侧同一条管道打在 `%TEMP%\rea-t10\a16.txt` 第 41180 行上＝20，两边现已**逐字等串**：
+  `diff <(sed -n '41180p' "$TEMP/rea-t10/a16.txt") <(sed -n '44p' docs/forensics/l0/tv-a16-storage.md)` 无输出。
+  被漏掉的三项逐字（留档第 12／13／14 位）：`tradingview.RightToolbarProducts.storeVersion`／`featuretoggle_seed`／`snowplowOutQueue_tv_cf_post2`；
+  原先仓内第 12 位是 `tvlocalstorage.available` 的**第二次**出现（该串本已在第 4 位）。
+  ⇒ 上面「本趟枚举到的 20 个 localStorage 键名里**没有**画线集合的键」这句全称话，在修平之前是说在一份 18 项清单上的；
+  补回的三项名逐字在上面这三串里，都不含 `linetool`／`drawing`／`overlay` 词根 ⇒ **结论不变**，但它的证据面从「一份名不副实的清单」
+  换成「与留档逐字等长的清单」。同段的 `content_fingerprints[32]` scope 分布里 `local_storage` 20 条这一数与本行修平后的项数**互证**。
+  ⇒ 归属与成因：这一行最后由 `29365de9`（T8 落档席）写下，缺陷在**摘录转录**那一步（把留档的一行抄短并重复了一项），
+  不是留档缺失、也不是判据造假；由 T9 评审席（`task-9-review.md` I-6）报出，控制席当场按留档补平。
+  补平是**单行换单行**（第 44 行换成第 44 行）⇒ 本文件既有行号坐标一个没挪，L1 那张表里指向本记录的「摘录第 56／57 行」仍逐字可达；
+  本文件的行数不写在这里（写了就立刻作废），要数请现读 `wc -l < docs/forensics/l0/tv-a16-storage.md`。
