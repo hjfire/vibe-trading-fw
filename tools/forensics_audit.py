@@ -389,8 +389,63 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     return v
 
 
+TV_HOST_ALLOWLIST: frozenset[str] = frozenset({
+    "frontend/src/components/chat/PineScriptViewer.tsx",
+    "frontend/src/lib/__tests__/scriptExchange.test.ts",
+    "frontend/src/lib/pineLang.ts",
+    "frontend/src/lib/scriptLibrary.ts",
+    "frontend/src/pages/TVChart.tsx",
+})
+S3_HOST_FILE = "frontend/src/pages/TVChart.tsx"
+TV_SUPPORT_HOST_LINE = 'support_host: "https://www.tradingview.com"'
+TV_WIDGET_SRC_LINE = 'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"'
+
+
+def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
+    """Spec ruling 1: TradingView is a research subject, never a dependency."""
+    v: list[str] = []
+    src = repo_root / "frontend" / "src"
+    if not src.is_dir():
+        return [f"{src} 不存在：无法核对 TradingView 主机白名单"]
+    hits: set[str] = set()
+    s3_counts: dict[str, int] = {}
+    for p in sorted(src.rglob("*")):
+        if not p.is_file() or p.suffix not in (".ts", ".tsx"):
+            continue
+        rel = p.relative_to(repo_root).as_posix()
+        text = _read(p)
+        if "tradingview.com" in text:
+            hits.add(rel)
+        n = text.count("s3.tradingview")
+        if n:
+            s3_counts[rel] = n
+    extra = sorted(hits - TV_HOST_ALLOWLIST)
+    gone = sorted(TV_HOST_ALLOWLIST - hits)
+    if extra or gone:
+        v.append(
+            "frontend/src 里含 tradingview.com 的文件集合与白名单不符："
+            f"新增={extra or '无'}；消失={gone or '无'}"
+            "（新增＝把外部站点接成了运行时依赖；消失＝白名单该同步收紧）"
+        )
+    offenders = sorted(f"{f}（{n} 次）" for f, n in s3_counts.items() if f != S3_HOST_FILE)
+    if offenders:
+        v.append(f"s3.tradingview 只允许出现在 {S3_HOST_FILE}，实际还有：{'、'.join(offenders)}")
+    widget = repo_root / S3_HOST_FILE
+    if widget.is_file():
+        text = _read(widget)
+        if TV_SUPPORT_HOST_LINE not in text:
+            v.append(f"{S3_HOST_FILE}: 逐字行 {TV_SUPPORT_HOST_LINE} 不见了或被改过——"
+                     "那是对外部站点的运行时依赖，改动要重新裁定")
+        if TV_WIDGET_SRC_LINE not in text:
+            v.append(f"{S3_HOST_FILE}: 逐字行 {TV_WIDGET_SRC_LINE} 不见了或被改过——同上")
+    return v
+
+
 def main(repo_root: Path) -> int:
-    problems = audit_forensics(repo_root / "docs" / "forensics", repo_root)
+    problems = (
+        audit_forensics(repo_root / "docs" / "forensics", repo_root)
+        + audit_tv_host_allowlist(repo_root)
+    )
     for line in problems:
         print(line)
     if not problems:

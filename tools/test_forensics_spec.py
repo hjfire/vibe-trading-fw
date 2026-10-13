@@ -27,7 +27,11 @@ from forensics_audit import (  # type: ignore[import-untyped]
     MATRIX_PRIORITIES,
     MATRIX_STATUSES,
     MIN_VERDICT_LEN,
+    S3_HOST_FILE,
     SPEC_HEADER,
+    TV_HOST_ALLOWLIST,
+    TV_SUPPORT_HOST_LINE,
+    TV_WIDGET_SRC_LINE,
     VERDICT_TYPES,
     _audit_l0,
     _audit_spec,
@@ -36,6 +40,8 @@ from forensics_audit import (  # type: ignore[import-untyped]
     _resolve_l0,
     _table,
     audit_forensics,
+    audit_tv_host_allowlist,
+    main,
 )
 
 EVID = "ev_" + "ab" * 32  # ev_ + 64 个十六进制字符
@@ -904,3 +910,120 @@ def test_phantom_row_with_an_empty_entry_id_says_empty(tmp_path):
     problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE + "|  |  |  |  |  |\n"), tmp_path)
     assert any("矩阵里的 (空) 在任何规格文件里都不存在" in x for x in problems), problems
     assert not any("矩阵里的  " in x for x in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# Task 4（TradingView 主机红线）：spec 裁定 1 的第三条硬线是「TradingView 接口不作为
+# 运行时依赖」。判据是**集合相等**不是「零出现」——本仓 frontend/src 今天就有 5 个文件
+# 含 tradingview.com（pages/TVChart.tsx 是官方 embed-widget 集成），零出现的门一落地就
+# 恒红。新增＝把外部站点接成了依赖；消失＝白名单该同步收紧，两种都要人看一眼。
+# 活树针 test_current_repo_passes_the_host_red_line 打的是真仓库，其余主机判据针打
+# tmp_path 假树；段末另有 main() 的组合针与四个契约常量的逐字钉。
+# ---------------------------------------------------------------------------
+
+def _src(repo_root: Path, rel: str, text: str) -> Path:
+    """rel is repo-relative, e.g. frontend/src/lib/x.ts."""
+    return _mk(repo_root, rel, text)
+
+
+def _fake_tv_tree(tmp_path: Path) -> None:
+    """Reproduce today's real shape: 5 allowlisted files mention tradingview.com, one hosts s3."""
+    for rel in sorted(TV_HOST_ALLOWLIST):
+        _src(tmp_path, rel, 'const h = "tradingview.com";\n')
+    _src(tmp_path, "frontend/src/pages/TVChart.tsx",
+         "const widget = {\n"
+         '  support_host: "https://www.tradingview.com",\n'
+         "};\n"
+         "const script = document.createElement('script');\n"
+         'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";\n')
+
+
+def test_current_repo_passes_the_host_red_line():
+    repo_root = Path(__file__).resolve().parents[1]
+    assert audit_tv_host_allowlist(repo_root) == []
+
+
+def test_new_tradingview_host_file_is_refused(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/lib/tvFetch.ts", 'const u = "https://scanner.tradingview.com/";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("白名单不符" in x and "frontend/src/lib/tvFetch.ts" in x for x in problems), problems
+
+
+def test_disappearing_allowlist_entry_is_also_reported(tmp_path):
+    _fake_tv_tree(tmp_path)
+    (tmp_path / "frontend/src/lib/pineLang.ts").unlink()
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("白名单不符" in x and "pineLang.ts" in x for x in problems), problems
+
+
+def test_s3_host_outside_the_widget_file_is_refused(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/lib/sneaky.ts", 'const s = "https://s3.tradingview.com/x.js";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("s3.tradingview 只允许出现在" in x and "lib/sneaky.ts" in x for x in problems), problems
+
+
+def test_pinned_widget_lines_are_checked_verbatim(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/pages/TVChart.tsx", 'const nothing = 1;\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("support_host" in x for x in problems), problems
+    assert any("s3.tradingview.com/external-embedding" in x for x in problems), problems
+
+
+def test_non_ts_files_are_not_scanned(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/notes.md", "讲讲 tradingview.com 的设计取舍\n")
+    assert audit_tv_host_allowlist(tmp_path) == []
+
+
+def test_missing_frontend_src_is_named(tmp_path):
+    assert audit_tv_host_allowlist(tmp_path) != []
+
+
+def test_main_runs_both_audits(tmp_path, capsys):
+    """main() 的替换体：两支审计都要跑，打印的就是违规行本身（每支各验一个红方向）。
+
+    夹具全是既有的，四段各钉一条边：``_tree()`` 造一棵合规的 docs/forensics，它的
+    frontend/src 只有不含 tradingview.com 的 chartDrawings.ts ⇒ 第一段的红只能来自主机
+    侧（实测：main 漏掉 audit_tv_host_allowlist 时这里红）；``_fake_tv_tree()`` 把主机
+    侧补齐成今天的形状 ⇒ 第二段两支都绿；第三段只把规格表的判据类型改坏、主机侧保持
+    干净 ⇒ 红只能来自取证侧，且输出里不再出现主机那条（实测：main 漏掉 audit_forensics
+    时第三段红）。
+    """
+    root = _tree(tmp_path)
+    assert main(tmp_path) == 1
+    assert "白名单不符" in capsys.readouterr().out
+    _fake_tv_tree(tmp_path)
+    assert main(tmp_path) == 0
+    assert "forensics audit: clean" in capsys.readouterr().out
+    _mk(root, "spec/drawings.md", SPEC_TABLE.replace("| DOM |", "| 视觉 |"))
+    assert main(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "判据类型" in out and "白名单不符" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# 四个契约常量逐字钉住（同 I4／L2 那两根的理由）：``_fake_tv_tree`` 是拿
+# ``sorted(TV_HOST_ALLOWLIST)`` 插出夹具的，两条逐字行也嵌在夹具自己的字面字节里，
+# 所以常量漂移时假树侧要么跟着漂、要么只报一条难读的「与白名单不符」；实测两根针
+# 都追不上契约变更——TV_HOST_ALLOWLIST 多一条路径时只有活树针红（变异 G），
+# TV_SUPPORT_HOST_LINE 改成单引号时
+# test_pinned_widget_lines_are_checked_verbatim 照样绿，因为它断言的是实现回显进消息
+# 的子串（变异 H）。这条针让改白名单／改主机串的人当场看到「契约变了」。
+# ---------------------------------------------------------------------------
+
+def test_tv_host_contract_constants_are_verbatim():
+    assert TV_HOST_ALLOWLIST == frozenset({
+        "frontend/src/components/chat/PineScriptViewer.tsx",
+        "frontend/src/lib/__tests__/scriptExchange.test.ts",
+        "frontend/src/lib/pineLang.ts",
+        "frontend/src/lib/scriptLibrary.ts",
+        "frontend/src/pages/TVChart.tsx",
+    })
+    assert S3_HOST_FILE == "frontend/src/pages/TVChart.tsx"
+    assert TV_SUPPORT_HOST_LINE == 'support_host: "https://www.tradingview.com"'
+    assert TV_WIDGET_SRC_LINE == (
+        'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"'
+    )
