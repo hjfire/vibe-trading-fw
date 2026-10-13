@@ -71,7 +71,7 @@ evidence_id: ev_d9cdbd192fffe709aaff5f54178427b2d849f760f6fc1dac08592a52a7537b15
 
 - `listeners[1]` 只有**一条**，`type: pointerdown`，且 `use_capture: false`、`passive: false`、`once: false`。这就是工单 A4 要回答的问题形状：这块画布接的是 pointerdown，不是 click，也没有 pointerup／pointermove——app.js 里确实只 `addEventListener` 了一次。
 - `location` 给的是 `script_id: "3"`／`url: http://127.0.0.1:8077/app.js`／`line_number: 4`／`column_number: 43`／`function_name: null`／`source_association: script_id`，`execution: unknown`。**`line_number` 是 0-based**：4 对应工作树 app.js 的第 5 行 `canvas.addEventListener("pointerdown", (event) => this.pick(event));`。这一条与 A2 的 `location.line: 23`（1-based）口径不同，写判据时不能混用。
-- `column_number: 43` 是 CDP 给的列，本记录不解释它指向哪个字符（工作树里那一行的 `"pointerdown"` 字面量起点按 0-based 数是 27，对不上 ⇒ CDP 的列口径不是「标识符起始」，具体是什么没验，别拿去当判据）。
+- `column_number: 43` 是 CDP 给的列，本记录不解释它指向哪个字符（工作树里那一行的 `"pointerdown"` 字面量起点按 0-based 数是 28，对不上 ⇒ CDP 的列口径不是「字面量起始」，具体是什么没验，别拿去当判据）。
 - `sources[1]` 两条指纹 `producer_hash` 与 `source.sha256` 都等于 `62ea3b37…e52f`，`utf8_bytes: 697`／`utf16_units: 697` ⇒ 监听器回调所在脚本就是这棵树里的探针脚本；`source.state: captured` 说明这一面把源码文本一并带回来了（A1 那面是 `included: false`，因为它没选 source capture）。
 - `cleanup: confirmed` 的含义在 limitations 末条原文里：REA 释放远端对象组、关掉启用的域、断开 transport，「the externally owned page remains open」——页面还在，不是被它关掉的。
 - 这一面撑不住的结论（limitations 逐条圈住）：它「Inspects listeners registered directly on the first native CSS match」，所以**委托在祖先上的监听、子元素上的监听、闭合 shadow root、框架自己的注册表都不在这份枚举里**；`execution: unknown` 加上「REA does not dispatch an event, evaluate JavaScript or invoke a handler」⇒ 「按下 pointerdown 之后会发生什么」不在这份证据里，那是行为面，要另开一趟真的派发。
