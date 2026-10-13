@@ -24,6 +24,10 @@ from pathlib import Path
 
 L0_REQUIRED_KEYS: tuple[str, ...] = ("命令", "evidence_id", "浏览器", "目标 URL", "观察条件", "完整性")
 L0_PURPOSES: tuple[str, ...] = ("harness", "规格", "基线")
+# 不是 用途 的第四种合法值，是 `_audit_l0` 给 `状态：不可取证` 记录的专用回执。它必须和
+# 「完整记录但没写 用途」那个 None 分开：后者正是孤证规则要挡的形状，前者记的是一面拿不到
+# 判据的面——给它编一条规格条目去引用，撞的是「写不出判据不算条目」那条红线。
+UNCAPTURABLE: str = "不可取证"
 L0_EXEMPT: frozenset[str] = frozenset({"_example.md"})
 SPEC_EXEMPT: frozenset[str] = frozenset({"_example.md"})
 
@@ -79,7 +83,7 @@ def _command_hygiene(rel: str, cmd: str) -> list[str]:
 
 
 def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | None]:
-    """One L0 record -> (violations, declared 用途 or None)."""
+    """One L0 record -> (violations, declared 用途／UNCAPTURABLE／None)."""
     v: list[str] = []
     text = _read(path)
     keys = _meta_keys(text)
@@ -91,7 +95,7 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
         if not keys.get("原因"):
             v.append(f"{rel}: 标记为不可取证但没有 原因：")
         v += _command_hygiene(rel, cmd)
-        return v, None
+        return v, UNCAPTURABLE
 
     for key in L0_REQUIRED_KEYS:
         if key not in keys:
@@ -385,9 +389,13 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     # 孤证规则只在规格侧真解析出条目号、且整层没有格式失败时才开口：表写坏了 ⇒ `cited` 是
     # 残缺的，那时候说「没人引用这份证据」是在拿规格的格式失败 blame 证据文件。
     # 取舍：一处格式失败 ⇒ 这一轮别处没被引用的证据也不再上报，但树已经红了，不会漏过。
+    # UNCAPTURABLE 让路：那类记录没有 `evidence_id`，结构上就引用不到任何条目。
     if spec_ids and not spec_format_failure:
         for name in sorted(purposes):
-            if name not in cited and purposes[name] not in ("harness", "基线"):
+            if (
+                name not in cited
+                and purposes[name] not in ("harness", "基线", UNCAPTURABLE)
+            ):
                 v.append(f"l0/{name}: 没有被任何规格条目引用，也没标 用途：harness 或 用途：基线")
 
     # 矩阵走查不挂在 `if spec_ids:` 上：规格表写坏的时候，矩阵自己的表头／域／坐标

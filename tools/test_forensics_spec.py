@@ -35,6 +35,7 @@ from forensics_audit import (  # type: ignore[import-untyped]
     TV_HOST_ALLOWLIST,
     TV_SUPPORT_HOST_LINE,
     TV_WIDGET_SRC_LINE,
+    UNCAPTURABLE,
     VERDICT_TYPES,
     _audit_l0,
     _audit_spec,
@@ -66,6 +67,13 @@ L0_BODY = f"""# L0：探针页面骨架
 "completeness": {{"status": "parsed"}}
 ```
 """
+
+UNCAPTURABLE_BODY = (
+    "# L0：画线工具目录\n\n"
+    "- 命令：npx -y rea-agents@latest inspect-web-page http://127.0.0.1:9222 TID --token-limit 200\n"
+    "- 状态：不可取证\n"
+    "- 原因：headless 下工具条容器是空节点，页面对象自报反自动化拦截\n"
+)
 
 
 def _mk(base: Path, rel: str, text: str) -> Path:
@@ -161,16 +169,10 @@ def test_parse_failures_must_be_explained(tmp_path):
 
 
 def test_unusable_capture_needs_only_command_and_reason(tmp_path):
-    text = (
-        "# L0：画线工具目录\n\n"
-        "- 命令：npx -y rea-agents@latest inspect-web-page http://127.0.0.1:9222 TID --token-limit 200\n"
-        "- 状态：不可取证\n"
-        "- 原因：headless 下工具条容器是空节点，页面对象自报反自动化拦截\n"
-    )
-    path, repo = _l0(tmp_path, text, name="tv-drawings.md")
+    path, repo = _l0(tmp_path, UNCAPTURABLE_BODY, name="tv-drawings.md")
     problems, purpose = _audit_l0(path, "l0/tv-drawings.md", repo)
     assert problems == []
-    assert purpose is None
+    assert purpose == UNCAPTURABLE
 
 
 def test_unusable_capture_without_reason_fails(tmp_path):
@@ -195,7 +197,7 @@ def test_unusable_capture_command_must_still_cap_output(tmp_path):
     path, repo = _l0(tmp_path, text, name="tv-drawings.md")
     problems, purpose = _audit_l0(path, "l0/tv-drawings.md", repo)
     assert any("--filter-output" in x and "--token-limit" in x for x in problems), problems
-    assert purpose is None
+    assert purpose == UNCAPTURABLE
 
 
 def test_harness_purpose_must_carry_the_current_probe_checksum(tmp_path):
@@ -759,6 +761,9 @@ def test_missing_status_with_empty_needle_is_named(tmp_path):
 def test_uncited_l0_without_purpose_is_named(tmp_path):
     root = _tree(tmp_path)
     _mk(root, "l0/loose.md", L0_BODY)
+    path = root / "l0" / "loose.md"
+    _problems, purpose = _audit_l0(path, "l0/loose.md", tmp_path)
+    assert purpose is None  # 「完整记录但没写 用途」必须是 None，不能和 UNCAPTURABLE 同值
     problems = audit_forensics(root, tmp_path)
     assert any("loose.md: 没有被任何规格条目引用" in x for x in problems), problems
 
@@ -786,6 +791,23 @@ def test_baseline_purpose_exempts_an_uncited_l0(tmp_path):
     root = _tree(tmp_path)
     _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：基线\n")
     assert audit_forensics(root, tmp_path) == []
+
+
+def test_uncapturable_l0_is_not_an_orphan(tmp_path):
+    """一条 `状态：不可取证` 的记录不是一份「没被引用的证据」——它记的是一面拿不到判据的面。
+
+    孤证规则今天把它算进 `purposes`（`_audit_l0` 为它提前 `return (v, None)`，调用方无条件
+    登记），只要规格侧真解析出条目号就报红。而 P1 批次 A 会同时交出规格表与两页需登录的
+    不可取证记录，那两条红没有出路：给它们编条目撞「写不出判据不算条目」红线，
+    把它们标 `用途：基线` 又撞「提前 return 根本不读 用途 键」。
+
+    判别力在配对上：如果修法退化成「`purpose is None` 一律放行」，
+    ``test_uncited_l0_without_purpose_is_named``（一份完整记录但没写 用途，同样是 None）就红。
+    """
+    root = _tree(tmp_path)
+    _mk(root, "l0/tv-a12-pine-editor.md", UNCAPTURABLE_BODY)
+    problems = audit_forensics(root, tmp_path)
+    assert not any("没有被任何规格条目引用" in x for x in problems), problems
 
 
 def test_example_files_are_exempt_by_exact_name(tmp_path):
