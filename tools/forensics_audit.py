@@ -35,6 +35,11 @@ ENTRY_ID = re.compile(r"TV-[A-Z][A-Z0-9]*-\d{2}")
 VERDICT_TYPES: tuple[str, ...] = ("DOM", "状态", "像素")
 MIN_VERDICT_LEN = 12
 
+MATRIX_HEADER = "| 条目号 | 状态 | 本仓坐标或搜索记录 | 优先级 | 说明 |"
+MATRIX_STATUSES: tuple[str, ...] = ("已有", "部分", "缺", "不可复刻")
+MATRIX_PRIORITIES: tuple[str, ...] = ("高", "中", "低", "-")
+COORD = re.compile(r"[\w./-]+:\d+")
+
 
 def _outside_fences(text: str) -> list[str]:
     """Lines that are not inside a ``` fence — evidence excerpts are fenced."""
@@ -240,6 +245,64 @@ def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], 
     return v, cited, ids
 
 
+def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str]) -> list[str]:
+    """One L2 gap matrix -> violations, cross-checked against the spec layer's entry ids."""
+    v: list[str] = []
+    seen, rows, bad = _table(_read(path), MATRIX_HEADER)
+    if not seen:
+        return [f"{rel}: 表头不是逐字的 {MATRIX_HEADER}，文件里没有差距矩阵表"]
+    # 与 `_audit_spec` 同一套分派（`_table` 的 docstring）：`bad` 有两种成因，
+    # 拿「列数不是 5」去描述一行正好五列、只是掉出窗口的矩阵行就是在撒谎。
+    narrow = [s for s in bad if len(s.strip("|").split("|")) != 5]
+    outside = [s for s in bad if len(s.strip("|").split("|")) == 5]
+    if narrow:
+        v.append(f"{rel}: 有 {len(narrow)} 行的列数不是 5（表行必须正好五列）：{narrow[0]!r}")
+    if outside:
+        v.append(
+            f"{rel}: 有 {len(outside)} 行落在差距矩阵窗口之外（表头与它之间隔了非 `|` 行），"
+            f"这些行没有被当成矩阵行审计：{outside[0]!r}"
+        )
+    counts: dict[str, int] = {}
+    for eid, status, coord, prio, note in rows:
+        tag = f"{rel} 条目 {eid or '(空)'}"
+        if not ENTRY_ID.fullmatch(eid):
+            v.append(f"{tag}: 条目号 {eid!r} 不符合 TV-<大写字母…>-<两位数字>")
+        counts[eid] = counts.get(eid, 0) + 1
+        if status not in MATRIX_STATUSES:
+            v.append(f"{tag}: 状态 {status!r} 不在 {'/'.join(MATRIX_STATUSES)} 之内")
+        if prio not in MATRIX_PRIORITIES:
+            v.append(f"{tag}: 优先级 {prio!r} 不在 {'/'.join(MATRIX_PRIORITIES)} 之内")
+        if not note:
+            v.append(f"{tag}: 说明是空的")
+        if status in ("已有", "部分"):
+            # 「已有／部分」是本仓的声称，必须落到一个数得出来的坐标上。
+            if not COORD.fullmatch(coord):
+                v.append(f"{tag}: 状态 {status} 要给本仓坐标 file:line，实际是 {coord!r}")
+                continue
+            f, _, ln = coord.rpartition(":")
+            target = repo_root / f
+            if not target.is_file():
+                v.append(f"{tag}: 坐标 {coord} 的文件不存在")
+            else:
+                n = len(_read(target).splitlines())
+                if int(ln) > n:
+                    v.append(f"{tag}: 坐标 {coord} 的行号 {ln} 超出 {f} 的实际 {n} 行")
+        elif status == "缺":
+            # 「缺」留下的必须是能复跑的搜索记录，不是一句「没有」。
+            if not coord.startswith("未找到："):
+                v.append(f"{tag}: 状态 缺 的记录要以 未找到： 开头（写清搜过的 needle）")
+            elif len(coord) <= len("未找到："):
+                v.append(f"{tag}: 状态 缺 但 needle 为空")
+    for eid in sorted(spec_ids):
+        k = counts.get(eid, 0)
+        if k != 1:
+            v.append(f"{rel}: 规格条目 {eid} 在矩阵里出现 {k} 次（要求恰好 1 次）")
+    for eid in sorted(counts):
+        if eid not in spec_ids:
+            v.append(f"{rel}: 矩阵里的 {eid} 在任何规格文件里都不存在（凭空条目）")
+    return v
+
+
 def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     """Every violation in the funnel artefacts. Empty list == the contract holds."""
     if not forensics_root.is_dir():
@@ -252,16 +315,42 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     )
     if not l0_files:
         v.append("docs/forensics/l0/ 下没有任何证据文件（骨架不等于取证）")
+    purposes: dict[str, str | None] = {}
     for p in l0_files:
-        problems, _purpose = _audit_l0(p, f"l0/{p.name}", repo_root)
+        problems, purpose = _audit_l0(p, f"l0/{p.name}", repo_root)
         v += problems
+        purposes[p.name] = purpose
 
+    cited: set[str] = set()
+    spec_ids: dict[str, str] = {}
     spec_dir = forensics_root / "spec"
     for p in sorted(
         q for q in (spec_dir.glob("*.md") if spec_dir.is_dir() else []) if q.name not in SPEC_EXEMPT
     ):
-        problems, _cited, _ids = _audit_spec(p, f"spec/{p.name}", forensics_root)
+        rel = f"spec/{p.name}"
+        problems, refs, ids = _audit_spec(p, rel, forensics_root)
         v += problems
+        cited |= refs
+        # 条目号是三层咬合的主键：两份表各写一遍就能冒充两条规格，所以后一份要报。
+        for i in ids:
+            first = spec_ids.setdefault(i, rel)
+            if first != rel:
+                v.append(f"{rel}: 条目号 {i} 已在 {first} 里出现过")
+
+    # 孤证规则只在规格侧真解析出条目号时才开口：表写坏了 ⇒ `cited` 是空的，那时候
+    # 说「没人引用这份证据」是在拿规格的格式失败 blame 证据文件（规格侧的违规自己会说话）。
+    if spec_ids:
+        for name in sorted(purposes):
+            if name not in cited and purposes[name] not in ("harness", "基线"):
+                v.append(f"l0/{name}: 没有被任何规格条目引用，也没标 用途：harness 或 用途：基线")
+
+    # 矩阵走查不挂在 `if spec_ids:` 上：规格表写坏的时候，矩阵自己的表头／域／坐标
+    # 判据更要照跑，否则整层判据被一个上游格式失败静默跳过。缺文件那条才需要条目数。
+    matrix = forensics_root / "gap-matrix.md"
+    if matrix.is_file():
+        v += _audit_matrix(matrix, "gap-matrix.md", repo_root, spec_ids)
+    elif spec_ids:
+        v.append(f"有 {len(spec_ids)} 条规格条目但 docs/forensics/gap-matrix.md 不存在")
     return v
 
 

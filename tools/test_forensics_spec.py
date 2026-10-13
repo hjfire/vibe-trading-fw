@@ -19,9 +19,13 @@ from pathlib import Path
 import pytest
 
 from forensics_audit import (  # type: ignore[import-untyped]
+    COORD,
     ENTRY_ID,
     L0_PURPOSES,
     L0_REQUIRED_KEYS,
+    MATRIX_HEADER,
+    MATRIX_PRIORITIES,
+    MATRIX_STATUSES,
     MIN_VERDICT_LEN,
     SPEC_HEADER,
     VERDICT_TYPES,
@@ -575,3 +579,221 @@ def test_resolve_l0_docstring_states_the_real_rule():
     assert "forensics_root/l0/" in doc  # 唯一的判据是落点
     assert "一律返回 None" not in doc, doc
     assert "末段" in doc or "basename" in doc, doc  # 要解释带目录的写法为何命中
+
+
+# ---------------------------------------------------------------------------
+# Task 3（L2 差距矩阵＋三层咬合）：一条规格恰好对一行矩阵，「已有／部分」必须指到
+# 本仓真实存在的 file:line，「缺」要留下能复跑的 needle，没被引用的证据要么当
+# harness 要么当基线。本层的测试全部走 audit_forensics，不直接调 _audit_matrix——
+# 要钉的就是跨文件咬合；单层判据在 L0／L1 的既有测试里已经打过了。
+# 夹具的三件事都必要：_forensics() 造 tools/rea_probe_site/app.js（harness 校验和针
+# 要读它），_tree() 造 frontend/src/lib/chartDrawings.ts（矩阵坐标针要读它），_mk()
+# 统一处理父目录与 LF 换行。少了前两样，针会因为「文件不存在」而红，掩盖真判据。
+# ---------------------------------------------------------------------------
+
+MATRIX_ROW = "| TV-DW-01 | 已有 | frontend/src/lib/chartDrawings.ts:2 | - | 本仓有同类工具目录 |"
+MATRIX_TABLE = f"""# 差距矩阵
+
+{MATRIX_HEADER}
+|---|---|---|---|---|
+{MATRIX_ROW}
+"""
+COORD_FILE = "frontend/src/lib/chartDrawings.ts"
+
+
+def _tree(tmp_path: Path, spec: str | None = SPEC_TABLE, matrix: str | None = MATRIX_TABLE) -> Path:
+    """A complete, valid tree: one L0 + one spec row + one matrix row + the cited source file."""
+    root = _forensics(tmp_path)
+    if spec is not None:
+        _mk(root, "spec/drawings.md", spec)
+    if matrix is not None:
+        _mk(root, "gap-matrix.md", matrix)
+    _mk(tmp_path, COORD_FILE, "one\ntwo\nthree\n")
+    return root
+
+
+def test_whole_tree_is_clean(tmp_path):
+    assert audit_forensics(_tree(tmp_path), tmp_path) == []
+
+
+def test_every_spec_id_needs_exactly_one_matrix_row(tmp_path):
+    root = _tree(tmp_path, matrix=None)
+    problems = audit_forensics(root, tmp_path)
+    assert any("有 1 条规格条目但 docs/forensics/gap-matrix.md 不存在" in x for x in problems), problems
+
+
+def test_matrix_without_a_header_row_is_named(tmp_path):
+    root = _tree(tmp_path, matrix="# 差距矩阵\n\n随手写的散文，没有表。\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any("gap-matrix.md: 表头不是逐字的" in x for x in problems), problems
+
+
+def test_missing_matrix_row_is_named(tmp_path):
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE.replace(MATRIX_ROW, "")), tmp_path)
+    assert any("TV-DW-01 在矩阵里出现 0 次" in x for x in problems), problems
+
+
+def test_duplicate_matrix_row_is_named(tmp_path):
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE + MATRIX_ROW + "\n"), tmp_path)
+    assert any("TV-DW-01 在矩阵里出现 2 次" in x for x in problems), problems
+
+
+def test_phantom_matrix_row_is_named(tmp_path):
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE.replace("TV-DW-01", "TV-ZZZ-99")), tmp_path)
+    assert any("TV-ZZZ-99 在任何规格文件里都不存在" in x for x in problems), problems
+
+
+def test_same_entry_id_in_two_spec_files_is_named(tmp_path):
+    root = _tree(tmp_path)
+    _mk(root, "spec/interaction.md", SPEC_TABLE)
+    problems = audit_forensics(root, tmp_path)
+    assert any("spec/interaction.md: 条目号 TV-DW-01 已在 spec/drawings.md 里出现过" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("bad", ["有", "部分实现", "", "缺憾"])
+def test_matrix_status_domain(tmp_path, bad):
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE.replace("| 已有 |", f"| {bad} |", 1)), tmp_path)
+    assert any("状态" in x and "不在 已有/部分/缺/不可复刻 之内" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("bad", ["P0", "", "很高"])
+def test_matrix_priority_domain(tmp_path, bad):
+    problems = audit_forensics(_tree(tmp_path, matrix=MATRIX_TABLE.replace("| - |", f"| {bad} |", 1)), tmp_path)
+    assert any("优先级" in x and "不在 高/中/低/- 之内" in x for x in problems), problems
+
+
+def test_empty_note_is_named(tmp_path):
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace("| 本仓有同类工具目录 |", "|  |")), tmp_path)
+    assert any("说明是空的" in x for x in problems), problems
+
+
+@pytest.mark.parametrize("bad", ["chartDrawings.ts", "frontend/src/lib/chartDrawings.ts", "x.ts:abc"])
+def test_existing_status_needs_file_line_shape(tmp_path, bad):
+    problems = audit_forensics(
+        _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"| {COORD_FILE}:2 |", f"| {bad} |")), tmp_path)
+    assert any("要给本仓坐标 file:line" in x for x in problems), problems
+
+
+def test_coordinate_file_must_exist(tmp_path):
+    root = _tree(tmp_path, matrix=MATRIX_TABLE.replace(COORD_FILE, "frontend/src/lib/nope.ts"))
+    problems = audit_forensics(root, tmp_path)
+    assert any("坐标 frontend/src/lib/nope.ts:2 的文件不存在" in x for x in problems), problems
+
+
+def test_coordinate_line_must_be_within_the_file(tmp_path):
+    _mk(tmp_path, "short.ts", "one\n")
+    root = _tree(tmp_path, matrix=MATRIX_TABLE.replace(f"{COORD_FILE}:2", "short.ts:9"))
+    problems = audit_forensics(root, tmp_path)
+    assert any("行号 9 超出 short.ts 的实际 1 行" in x for x in problems), problems
+
+
+def test_missing_status_needs_a_rerunnable_needle(tmp_path):
+    problems = audit_forensics(_tree(
+        tmp_path, matrix=MATRIX_TABLE.replace(f"| 已有 | {COORD_FILE}:2 |", "| 缺 | 没有这个东西 |")), tmp_path)
+    assert any("要以 未找到： 开头" in x for x in problems), problems
+
+
+def test_missing_status_with_empty_needle_is_named(tmp_path):
+    problems = audit_forensics(_tree(
+        tmp_path, matrix=MATRIX_TABLE.replace(f"| 已有 | {COORD_FILE}:2 |", "| 缺 | 未找到： |")), tmp_path)
+    assert any("needle 为空" in x for x in problems), problems
+
+
+def test_uncited_l0_without_purpose_is_named(tmp_path):
+    root = _tree(tmp_path)
+    _mk(root, "l0/loose.md", L0_BODY)
+    problems = audit_forensics(root, tmp_path)
+    assert any("loose.md: 没有被任何规格条目引用" in x for x in problems), problems
+
+
+def test_harness_purpose_exempts_an_uncited_l0(tmp_path):
+    """孤证规则给 用途：harness 让路（校验和那两个方向由 Task 1 的
+    test_harness_purpose_must_carry_the_current_probe_checksum 钉，这里不重复）。
+    """
+    root = _tree(tmp_path)
+    app = tmp_path / "tools" / "rea_probe_site" / "app.js"
+    want = hashlib.sha256(app.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    assert audit_forensics(root, tmp_path) == []
+
+
+def test_baseline_purpose_exempts_an_uncited_l0(tmp_path):
+    root = _tree(tmp_path)
+    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：基线\n")
+    assert audit_forensics(root, tmp_path) == []
+
+
+def test_example_files_are_exempt_by_exact_name(tmp_path):
+    root = _tree(tmp_path)
+    _mk(root, "l0/_example.md", "- 命令：随便\n")
+    _mk(root, "spec/_example.md", "随便一张表\n")
+    assert audit_forensics(root, tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# brief 清单之外、三条裁定各自需要的针（不钉就等于没钉）：L2 契约常量逐字钉住
+# （理由同 I4——夹具会跟着实现漂）；``bad`` 的两种成因按列数分派（裁定 1）；矩阵
+# 走查不被 ``if spec_ids:`` 跳过，孤证规则也不拿规格侧的格式失败去 blame 证据
+# （裁定 2）；三种用途只豁免两种。
+# ---------------------------------------------------------------------------
+
+def test_l2_contract_constants_are_verbatim():
+    assert MATRIX_HEADER == "| 条目号 | 状态 | 本仓坐标或搜索记录 | 优先级 | 说明 |"
+    assert MATRIX_STATUSES == ("已有", "部分", "缺", "不可复刻")
+    assert MATRIX_PRIORITIES == ("高", "中", "低", "-")
+    assert COORD.pattern == r"[\w./-]+:\d+"
+
+
+def test_matrix_row_with_wrong_column_count_is_named_by_column_count(tmp_path):
+    """少一列的行如果被丢掉，矩阵就「空着也全绿」——这一种成因才配「列数不是 5」。"""
+    broken = MATRIX_ROW.rsplit("|", 2)[0] + "|"  # 砍掉最后一列
+    assert broken.count("|") == 5
+    root = _tree(tmp_path, matrix=MATRIX_TABLE.replace(MATRIX_ROW, broken))
+    problems = audit_forensics(root, tmp_path)
+    assert any("gap-matrix.md" in x and "列数不是 5" in x and broken in x for x in problems), problems
+
+
+def test_matrix_row_outside_the_window_is_not_called_a_column_problem(tmp_path):
+    """裁定 1：五列齐全、只是掉出窗口的行，拿「列数不是 5」描述它就是在撒谎。"""
+    root = _tree(tmp_path, matrix=f"# 差距矩阵\n\n{MATRIX_HEADER}\n\n|---|---|---|---|---|\n{MATRIX_ROW}\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any("gap-matrix.md" in x and "窗口之外" in x and MATRIX_ROW in x for x in problems), problems
+    assert not any("列数不是 5" in x for x in problems), problems
+
+
+def test_blank_matrix_row_is_reported_not_dropped(tmp_path):
+    """全空的行不是 `|---|` 分隔行：条目号／状态／优先级／说明四条判据都要落到它身上。"""
+    root = _tree(tmp_path, matrix=MATRIX_TABLE + "|  |  |  |  |  |\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any("条目号 '' 不符合" in x for x in problems), problems
+    assert any("状态 '' 不在 已有/部分/缺/不可复刻 之内" in x for x in problems), problems
+    assert any("优先级 '' 不在 高/中/低/- 之内" in x for x in problems), problems
+    assert any("说明是空的" in x for x in problems), problems
+
+
+def test_matrix_is_audited_even_when_no_spec_id_was_parsed(tmp_path):
+    """裁定 2：``if spec_ids:`` 会把整张矩阵的判据一起跳过——规格表写坏时矩阵仍要走查。"""
+    root = _tree(
+        tmp_path,
+        spec=f"{SPEC_HEADER}\n\n|---|---|---|---|---|\n{SPEC_ROW}\n",
+        matrix=MATRIX_TABLE.replace("| 已有 |", "| 有 |", 1),
+    )
+    problems = audit_forensics(root, tmp_path)
+    assert any("状态 '有' 不在 已有/部分/缺/不可复刻 之内" in x for x in problems), problems
+
+
+def test_broken_spec_table_does_not_make_the_orphan_rule_blame_the_l0(tmp_path):
+    """裁定 2：规格侧的格式失败要说在规格侧，不能造出一条「没人引用这份证据」。"""
+    root = _tree(tmp_path, spec=f"{SPEC_HEADER}\n\n|---|---|---|---|---|\n{SPEC_ROW}\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any("spec/drawings.md" in x and "窗口之外" in x for x in problems), problems
+    assert not any("没有被任何规格条目引用" in x for x in problems), problems
+
+
+def test_spec_purpose_does_not_exempt_an_uncited_l0(tmp_path):
+    """harness／基线两种用途让路，规格那种不让：标了 用途：规格 却没人引用，照样是孤证。"""
+    root = _tree(tmp_path)
+    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：规格\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any("loose.md: 没有被任何规格条目引用" in x for x in problems), problems
