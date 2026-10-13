@@ -102,7 +102,7 @@ evidence_id: ev_8fa76e4388ea8d83ef71d2d45f3374b431bf861c48e7e3ef849adf1d9ed59a70
     truncated_sections: []
 ```
 
-第二段：第 170 行 accessibility 串里与画线目录有关的条目（点开后新增；共 23 行，上限 40 行之内）——
+第二段：第 170 行 accessibility 串里与画线目录有关的条目（点开后新增；**这块围栏实测 24 行＝容器行 `- treegrid:` 1 行＋条目行 23 行**——「23」是不含容器行的条目行数，「24」是围栏自身的行数，两个数指的是同一块围栏，复算命令见「读数含义」的「本面行数与增行数的复算」；按 24 行计也仍在 40 行上限之内）——
 
 ```text
 - treegrid:
@@ -137,11 +137,35 @@ evidence_id: ev_8fa76e4388ea8d83ef71d2d45f3374b431bf861c48e7e3ef849adf1d9ed59a70
 
 **留档行号（`grep -n` 可反查，文件＝`%TEMP%\rea-t10c\a3.txt`）**：`evidence_id` 第 1 行；parameters 回声的 browser 块 11-14、start_url 15-17、environment 18-27、actions 28-39（locator 31-34，name 行 34）、storage 40-43、secrets 44、capture 45-52（at_end 行 47、events 行 48、三个 network 旗标 49-52）、scenario_sha256 行 53；normalized_result 的 browser 块 56-61、scenario 62-69（action_count 行 64）、duration_ms 行 70；steps[3] 表头行 71，scenario_start 步 72-107（status／error 在 106-107），s1 步 108-143（elapsed_ms 行 111，before_url 112-116、after_url 117-121，status／error 142-143），s2 步 144-188（elapsed_ms 行 147，before_url 148-152、after_url 153-157，accessibility 工件 165-170（state 行 166、sha256 行 168、bytes 行 169、文本单行 170），url 工件 171-177，步骤级 completeness 182-186，status／error 187-188）；events 189-192；顶层 completeness 193-197；limitations[7] 行 198；confidence／authority／environment 199-205；limitations[9] 行 206；locations／evidence_links 207-208。主键 `sed -n '1p' a3.txt` 当场取，与摘录首行同值同趟。定位名 `"Trend tools"` 逐字出自本机枚举趟 `discover.txt:124`（该整棵树也是单行；`grep -Fn 'Trend tools' discover.txt` 命中第 124 行）。
 
+**本面行数与增行数的复算（只读，2026-10-14 在本机复跑；「136 行增行」与「围栏 24 行／条目行 23 行」这四个数只由下面两条命令支撑）**：
+
+增行＝本趟第 170 行树相对基线 `discover.txt:124` 树的多集合差（`Counter(本趟) - Counter(基线)`），本面取 `a3.txt` 那一枚＝136：
+
+```bash
+cd "$TEMP/rea-t10c" && PYTHONIOENCODING=utf-8 python -X utf8 -c "
+from collections import Counter
+def T(fn,n): return open(fn,encoding='utf-8').read().split(chr(10))[n-1].split(chr(92)+'n')
+b=Counter(T('discover.txt',124))
+for f in ['a3.txt','a5.txt','a7.txt','a8.txt','a8-firsttrip-closed.txt']:
+    print(f, sum((Counter(T(f,170))-b).values()))"
+```
+
+原始读数逐字：`a3.txt 136`／`a5.txt 182`／`a7.txt 30`／`a8.txt 16`／`a8-firsttrip-closed.txt 6`。口径两条：把留档里那一行转义树按字面 `\n` 切开成行集合后再算多集合差（重复行按重数计，被基线吃掉的重数不计）；这个计数**含侧栏残留行与瞬时 `text:` 行**（报价／时刻那种），它们只影响这个增行数，一律不进摘录。
+
+转录条目的两个行数——第二段围栏（文件里第 2 个 `text` 围栏）本身 24 行、其中容器行 1 行：
+
+```bash
+cd "E:/Vibe-Trading-main/Vibe-Trading-main" && awk '/^```text$/{c++; f=1; next} /^```$/{f=0} f&&c==2' docs/forensics/l0/tv-a3-draw-menu.md | wc -l
+cd "E:/Vibe-Trading-main/Vibe-Trading-main" && awk '/^```text$/{c++; f=1; next} /^```$/{f=0} f&&c==2' docs/forensics/l0/tv-a3-draw-menu.md | grep -c 'treegrid'
+```
+
+原始读数逐字：第一条＝`24`，第二条＝`1` ⇒ 围栏 24 行＝容器行 `- treegrid:` 1 行＋条目行 23 行，摘录转录的是那 23 行条目行（3 个分组行＋17 个工具行＋3 行 `gridcell`）。
+
 - **本面撑得住的结论（名字与结构级）**：`Trend tools` 这枚按钮点开的是一个 **treegrid 形态的目录**，自陈 **3 个分组行（Lines／Channels／Pitchforks）与 17 个工具行**——Lines 组 9 项（Trendline／Ray／Info line／Extended line／Trend angle／Horizontal line／Horizontal ray／Vertical line／Crossline）、Channels 组 4 项（Parallel channel／Regression trend／Flat top/bottom／Disjoint channel）、Pitchforks 组 4 项（Pitchfork／Schiff pitchfork／Modified Schiff pitchfork／Inside pitchfork）。每个工具行带一枚 `Add to favorites` 按钮，条目行名里带 `Click here to learn more` 的学习入口按钮——这两类是**行内动作**，本面只指认其存在，未点按。定位单元素命中（s1 completed、elapsed_ms 144、无 strict mode violation）。⇒ 对账本仓画线件数／类别的判据，L1 可引用「它有这个类别形状」这一级。
 - **本面撑不住的结论**：
   - 「画线工具**总共**就这 17 件」——不成立。枚举趟基线树里主工具栏另有 `Fib retracement`、`Gann and Fibonacci tools`、`XABCD pattern`、`Patterns`、`Brush`、`Geometric shapes`、`Text`、`Annotation tools`、`Icon` 等**独立分组按钮**（discover.txt:124 可读），本面只点了 Trend tools 这一个目录，其它目录各自的展开态没有本面证据。
   - 任何图标形状、配色、CSS 类名、快捷键文字的值——红线：`dom` 未采集（state: not_requested），树里 `text:` 项的成段正文不入库；本面给的是 role＋name 级。
   - 「flyout 会不会遮挡／怎么关闭」——本趟没派发 Escape，也没观察关闭过程；只证明了 1500ms 时点开态稳定可读。
-- **现场污染披露（重要，报告里同文写了一份）**：本趟是同一浏览器现场的第 6 次场景动作；先前 A8 的 count 趟点开的 widget-bar 侧栏面板经 localStorage 持久化，**残留在本趟第 170 行的树里**（`tab "Object tree"` 等几项）。那些项**不是** A3 点开的新增，上面第二段摘录已把它们剔除；A3 的增行判据是以本机枚举趟 discover.txt:124 作基线做差得到的（新增 132 行中价格／时刻类瞬时 text 行与侧栏残留行均不转录）。
+- **现场污染披露（重要，报告里同文写了一份）**：本趟是同一浏览器现场的第 6 次场景动作；先前 A8 的 count 趟点开的 widget-bar 侧栏面板经 localStorage 持久化，**残留在本趟第 170 行的树里**（`tab "Object tree"` 等几项）。那些项**不是** A3 点开的新增，上面第二段摘录已把它们剔除；A3 的增行判据是与本机枚举趟的基线树做**多集合差**：**136 行＝本趟第 170 行树相对基线 `discover.txt:124` 树新增的行数**，按多集合差（`Counter(本趟) - Counter(基线)`）算。这个计数**含侧栏残留行与瞬时 `text:` 行**（报价／时刻那种），它们只影响计数、**不进摘录**；摘录另计「本面转录条目行 23 行」（同一块围栏 24 行，含容器行 `- treegrid:` 1 行）。两个口径的复算命令与原始读数逐字见下面「本面行数与增行数的复算」。
 - **动作纪律自证**：本趟只有 `goto_start`＋一枚「打开」click＋一次 wait_for_timeout；`fill`／`select_option`／`check`／`uncheck` 未使用；没有第二次 click；cookie 弹窗的按钮未点按（它全程都在树里，属对方合规控件，与打开类动作纪律无涉）。
 - **体积闸门形状（与批次清单 §7 同形）**：count 趟读数 5,707 是**下界**，正式趟放到 100,000 后整份 208 行落到第 208 行 `evidence_links: []` 结束、`grep -c '[truncated'`＝0。摘录按行号切片，第 170 行单行实测 9,270 字节，从不整行打进终端。

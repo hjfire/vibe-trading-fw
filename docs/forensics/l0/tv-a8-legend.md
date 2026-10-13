@@ -8,7 +8,7 @@
 - 观察条件：Edge --headless=new（我方 PID 30280，netstat 现读）＋ --remote-debugging-port=9222 ＋ 专属新建 profile 目录 rea-cdp-profile-t10c ＋ --proxy-server=http://127.0.0.1:7897（当次 reg query 现读 ProxyEnable=0x1／ProxyServer=127.0.0.1:7897；预检裸连腿 http_code=000 且 curl 退出码 28，代理腿＝200）；URL 走 Edge 命令行参数；一趟一个打开动作：仅 click 一枚 role:button／name:"Object tree and data window"（定位名逐字取自本机枚举趟 discover.txt:124），随后 wait_for_timeout 1500ms；这枚按钮是**开关型**控件——本席第一趟正式跑恰好落在「面板已被 count 趟点开」的态上，同一次 click 把它关掉了（那次是真实观察，留档 a8-firsttrip-closed.txt）；第二次跑落在关闭态上，click 打开面板，本记录引用第二次；未切 tab、未点按面板内任何按钮、未 fill、未提交、未登录、未保存、未交易、未派发 Escape；未改 UA、未禁用优化；视口 1280×720（第 19-22 行 environment 回声，我方窗口几何）；一次一面——本条只有 A8；闸门 --token-limit 100000（count 读数 3,153 是下界），全文 truncated 标记计数 0
 - 完整性：顶层 completeness.status=incomplete（第 194 行）；equality_eligible: false（195）；missing_sections[1]: events（196）——批次清单 §4 的解释：本趟没开事件记录（capture.events: []，第 48 行），不是页面上没有事件；truncated_sections: []（197）。步骤级（s2 工件 completeness，182-186 行）：status: complete、equality_eligible: true、missing_sections: []。本记录 完整性： 抄顶层，两层都写明。第 163-164 行 dom 工件 state: not_requested ⇒ 本面未采 dom；第 198 行 limitations[7]、第 206 行顶层 limitations[9]
 - 用途：基线
-- 取证时间：2026-10-13T23:14:27+08:00（留档 a8.txt 落盘 mtime，即第二次正式跑；第一次跑落盘 23:08:35 前后在同目录 a8-firsttrip-closed.txt 可查 mtime；场景趟 stdout 无绝对时间戳键，只有 duration_ms 5074（第 70 行）与逐步 elapsed_ms；第一次跑的留档 a8-firsttrip-closed.txt 的 mtime 已被复制动作覆盖，不能当执行时刻用——本记录不引用它的时间）
+- 取证时间：2026-10-13T23:14:27+08:00（＝**第二次正式跑那趟的落盘 mtime**，复算命令与属性在「读数含义」的「时间戳复算」一段里逐字给出：`stat -c %y a8.txt`＝`2026-10-13 23:14:27.390920500 +0800`、python `os.stat('a8.txt').st_mtime` 格式化到秒＝23:14:27，两条同值。盘上可复算的只有**文件时间戳**这一类，它们记的是「写文件」不是「跑命令」，而写文件晚于跑命令 ⇒ **两趟的执行时刻都不可复算**：场景趟 stdout 里没有绝对时间戳键，只有 duration_ms 5074（第 70 行）与逐步 elapsed_ms。第一次正式跑（读到关闭态那趟）没有任何可引的时间读数——同目录 a8-firsttrip-closed.txt 的 mtime 与 st_ctime 现值都是 23:14:11，那是**另存（复制）时刻**（复制动作把新文件的时刻写进了这两个属性），不是那次执行的完成时刻，本记录不据它给第一次跑定时间，也不把 a8.txt 的 st_ctime 23:08:21 早于其 mtime 23:14:27 这一先后读成任何一趟的执行时刻。引用时间戳的坑（写明才不串味）：Windows 上 python 的 `os.stat().st_ctime` 是**创建时刻**，不是 Unix 语义的 inode-change——同一份 a8.txt，Git Bash `stat -c %z a8.txt` 给 23:14:27、python `st_ctime` 给 23:08:21，两个读数都真实但语义不同，引用时只准用**本条写明的那条命令的那一个属性值**）
 
 ## 摘录（逐字，未改写）
 
@@ -120,6 +120,21 @@ evidence_id: ev_a2586fe4d3cd4341353feb1e7f10ab7bfb365d24de46339e159e66d3ff54d437
 ## 读数含义
 
 **留档行号（`grep -n` 可反查，文件＝`%TEMP%\rea-t10c\a8.txt`）**：`evidence_id` 第 1 行；parameters 回声 browser 11-14、start_url 15-17、environment 18-27、actions 28-39（locator 31-34，name 行 34）、capture 45-52（at_end 行 47）、scenario_sha256 行 53；normalized_result browser 56-61、scenario 62-69、duration_ms 行 70；steps[3] 表头行 71，scenario_start 步 72-107（elapsed 行 75＝2122，status／error 106-107），s1 步 108-143（elapsed 行 111＝1377，status／error 142-143），s2 步 144-188（elapsed 行 147，before_url 148-152、after_url 153-157，accessibility 工件 165-170（state 166、sha256 168、bytes 169＝4,305、树文本单行 170），url 工件 171-177，步骤级 completeness 182-186，status／error 187-188）；events 189-192；顶层 completeness 193-197；limitations[7] 行 198；environment 199-205；limitations[9] 行 206；locations／evidence_links 207-208。主键 `sed -n '1p' a8.txt` 当场取，与摘录首行同值同趟。定位名 `Object tree and data window` 逐字出自本机枚举趟 `discover.txt:124`（`grep -Fn 'Object tree and data window' discover.txt` 命中第 124 行）。
+
+**时间戳复算（本记录 取证时间： 那一行唯一的可复算依据；只读，2026-10-14 在本机复跑）**：
+
+```bash
+cd "$TEMP/rea-t10c"
+PYTHONIOENCODING=utf-8 python -X utf8 -c "
+import os,time
+for f in ['a8.txt','a8-firsttrip-closed.txt']:
+    s=os.stat(f)
+    print(f,'mtime',time.strftime('%H:%M:%S',time.localtime(s.st_mtime)),
+             'st_ctime',time.strftime('%H:%M:%S',time.localtime(s.st_ctime)))"
+stat -c '%y | %z' a8.txt a8-firsttrip-closed.txt
+```
+
+原始读数逐字：`a8.txt mtime 23:14:27 st_ctime 23:08:21`／`a8-firsttrip-closed.txt mtime 23:14:11 st_ctime 23:14:11`；`stat -c %y a8.txt`＝`2026-10-13 23:14:27.390920500 +0800`（`%z` 同值）、`stat -c %y a8-firsttrip-closed.txt`＝`2026-10-13 23:14:11.084323900 +0800`。三个读数各自的语义：a8.txt 的 mtime＝第二次正式跑的**落盘时刻**（本记录 取证时间： 抄的就是它，属性＝`st_mtime`／`stat %y`）；a8-firsttrip-closed.txt 的 23:14:11＝**另存（复制）时刻**，不是第一次跑的完成时刻；a8.txt 的 `st_ctime` 23:08:21＝Windows 语义下的**文件创建时刻**，与 `stat -c %z` 给的同名属性读数不同（23:14:27），两者都对但一个读作创建、一个读作 inode-change，本记录不在这两个值之间做任何换算或排序。
 
 - **本面撑得住的结论（面板有哪两页、面板上有哪些控件名）**：`Object tree and data window` 按钮点开右侧 widget 面板后：该按钮自陈 **[pressed]**；面板顶部是 **tablist 两页**——`Object tree`（selected）与 `Data window`；对象树工具条有四枚按钮 `Create a group of drawings`／`Clone, Copy`／`Move to`（三枚 [disabled]）与 `Manage layout drawings`（未 disabled）。⇒ 「图例／数据窗口这一面的入口是 widget 面板、它有两页、默认落在 Object tree 页、工具条四按钮且其中三枚在无选中对象时禁用」到名字级有证据面——三枚 disabled 正是「未选中图元时不可用」这一交互约束的可达文本证据。
 - **toggle 语义是本席现场读到两趟的真实形状**：A8 的 count 趟（也真实执行了场景）把面板点开，状态经 localStorage 类持久化跨趟存续；第一次正式跑在「已开」态上点同枚按钮 ⇒ 读到**关闭**态（增行仅 6 行瞬时价格类文本、无 tablist；键 ev_8c88d265…，留档 a8-firsttrip-closed.txt）；第二次跑在「已关」态上点 ⇒ 读到**打开**态（本记录）。两次都是 completed、error null。⇒ 「这枚按钮是开关不是单向打开」这句话有两趟方向相反的读数支持；本记录的主键与全部行号只来自第二次那趟。

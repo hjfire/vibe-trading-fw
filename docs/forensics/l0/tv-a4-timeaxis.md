@@ -28,7 +28,7 @@ normalized_result:
 
 **留档行号（`grep -n` 可反查，文件＝`%TEMP%\rea-t10b\a4-timeaxis.txt`）**：`evidence_id` 第 1 行；`normalized_result` 第 2 行；`selected_node` 块 3-6（`selector` 4、`match` 5、`backend_node_id` 6）；`listeners` 第 7 行（末行）。主键 `sed -n '1p' a4-timeaxis.txt` 当场取，与摘录首行同值同趟。
 
-- **本面撑得住的结论**：页面上存在 class 含 `time` 子串的节点且可被 A4 指到（第 5 行 `found`、第 6 行句柄 124）；句柄 124 与 a4-legend 那枚（122）、a4-priceaxis 那枚（85）互不相同 ⇒ 三枚 selector 命中的是**三个不同句柄**，本面没有给「句柄大小＝文档顺序」这类语义键，所以只能说它们不是同一个节点，**不能**说谁在谁前面。
+- **本面撑得住的结论**：页面上存在 class 含 `time` 子串的节点且可被 A4 指到（第 5 行 `match: found`、第 6 行句柄数值 124）；三趟读到的句柄**数值**互不相同（本趟 124，a4-legend 那趟 122、a4-priceaxis 那趟 85——复算：`cd "$TEMP/rea-t10b" && grep -n backend_node_id a4-timeaxis.txt a4-legend.txt a4-priceaxis.txt`，原始读数逐字 `a4-timeaxis.txt:6:    backend_node_id: 124`／`a4-legend.txt:6:    backend_node_id: 122`／`a4-priceaxis.txt:6:    backend_node_id: 85`）。但 CDP `backend_node_id` 是**会话内句柄**，这三枚来自三趟各跑一次、各自主键的三次会话 ⇒ **跨 session 不保证可比**：既不据此断言它们命中的是三个不同节点，也不据此排序（本面也没有「句柄大小＝文档顺序」这类语义键；同批 `tv-a4-rolemenu.md` 那条「两趟各有各的主键」的口径就是禁止把跨趟读数拼成存在性结论）。本面撑住的只有「按这个写法，本趟读到 found＋句柄 124」这一句。
 - **本面撑不住的结论**：
   - 「命中的那枚就是时间轴」——子串匹配命中任何 class 带 `time` 的元素都可能（周期按钮、时间戳显示、datetime 类名都算），本面无位置／尺寸键。⇒ 「时间轴组件」这句在本面没有证据面。
   - 「命中几枚」——无基数键，读不到。

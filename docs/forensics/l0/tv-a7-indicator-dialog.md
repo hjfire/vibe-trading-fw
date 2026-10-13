@@ -123,12 +123,25 @@ evidence_id: ev_2a1fbb5acb6ca4e0e03776896a78fd3978c725c1a70129e1e64de8ad64415b99
 
 **留档行号（`grep -n` 可反查，文件＝`%TEMP%\rea-t10c\a7.txt`）**：`evidence_id` 第 1 行；parameters 回声 browser 11-14、start_url 15-17、environment 18-27、actions 28-39（locator 31-34，带引号的 name 行 34）、capture 45-52（at_end 行 47）、scenario_sha256 行 53；normalized_result browser 56-61、scenario 62-69、duration_ms 行 70；steps[3] 表头行 71，scenario_start 步 72-107（elapsed 行 75＝4794，status／error 106-107），s1 步 108-143（elapsed 行 111＝204，status／error 142-143），s2 步 144-188（elapsed 行 147，before_url 148-152、after_url 153-157，accessibility 工件 165-170（state 166、sha256 168、bytes 169＝5,416、树文本单行 170），url 工件 171-177，步骤级 completeness 182-186，status／error 187-188）；events 189-192；顶层 completeness 193-197；limitations[7] 行 198；environment 199-205；limitations[9] 行 206；locations／evidence_links 207-208。主键 `sed -n '1p' a7.txt` 当场取，与摘录首行同值同趟。定位名 `Indicators, metrics, and strategies` 逐字出自本机枚举趟 `discover.txt:124`（`grep -Fn 'Indicators, metrics, and strategies' discover.txt` 命中第 124 行）。
 
+**本面增行数的复算（只读，2026-10-14 在本机复跑；「30 行」这一个数只由下面这条命令支撑）**：增行＝本趟第 170 行树相对基线 `discover.txt:124` 树的多集合差（`Counter(本趟) - Counter(基线)`），本面取 `a7.txt` 那一枚＝30。
+
+```bash
+cd "$TEMP/rea-t10c" && PYTHONIOENCODING=utf-8 python -X utf8 -c "
+from collections import Counter
+def T(fn,n): return open(fn,encoding='utf-8').read().split(chr(10))[n-1].split(chr(92)+'n')
+b=Counter(T('discover.txt',124))
+for f in ['a3.txt','a5.txt','a7.txt','a8.txt','a8-firsttrip-closed.txt']:
+    print(f, sum((Counter(T(f,170))-b).values()))"
+```
+
+原始读数逐字：`a3.txt 136`／`a5.txt 182`／`a7.txt 30`／`a8.txt 16`／`a8-firsttrip-closed.txt 6`。口径：把留档里那一行转义树按字面 `\n` 切开成行集合后再算多集合差（重复行按重数计，被基线吃掉的重数不计）；这个计数**含侧栏残留行与瞬时 `text:` 行**（报价／时刻那种），它们只影响这个增行数，一律不进摘录——本面转录的是另一件事：第二段围栏里那 10 行对话框骨架。
+
 - **本面撑得住的结论（对话框有哪几页、每页有哪些控件名）**：这枚按钮打开的是一个 **role: dialog**（可达名与按钮同名），骨架含：关闭按钮 `Close menu` 一枚、搜索框 `searchbox "Search"`（存在性证据；本面**没有**往里填任何东西）、**tablist 五页**——`Indicators`（selected）／`Strategies`／`Profiles`／`Patterns`／`Options`——以及列表区标题 `heading "Script name"`（level 3）。⇒ 「指标对话框顶层有五页签、默认落在 Indicators 页、页内有搜索框与脚本名列表」这句话到名字级有证据面。
 - **「样式页」这一半本面没读到（如实）**：批次清单 §1 给 A7 的取物口径是「对话框有哪几页／每页有哪些字段名」，其中**样式／属性配置页**是选中某个指标之后才出现的第二层页面——那是第二次 click（先选列表行、再开属性），违反「一趟一个打开动作」，本席未跑。⇒ 本记录只覆盖主对话框；「样式页字段名」**没有**本面证据，L1 不许据本面写它。
 - **本面撑不住的结论**：
   - 内置指标清单的内容——第 170 行内有一段**成段的可达文本**（`Script name` 标题之后的单行合串，枚举了内置技术指标名，bytes 169＝5,416 的树里主要体积就是它）。按 §2 红线（成段 accessibility 文本不入库）与裁定 1（不搬对方表达层），本记录**不转录、不计数**，只指认它存在于第 170 行。
   - 搜索行为与结果（禁 fill）、Strategies／Profiles／Patterns／Options 四页各自内容（未切页）、登录态分区（Personal／Purchased 类是匿名会话下的可达名，背后数据未验证）。
   - 「对话框＝新路由／弹层可分享链接」——before_url 与 after_url 逐字段相同（148-157 行），它不换页。
-- **现场污染披露**：同 A3／A5——本趟第 170 行树里残留先前 A8 count 趟持久化的 widget-bar 面板项（tab Object tree／Data window 等），非本面点开所得，摘录已剔除；本面与基线做差净增 28 行，其中转录 10 行对话框骨架。
+- **现场污染披露**：同 A3／A5——本趟第 170 行树里残留先前 A8 count 趟持久化的 widget-bar 面板项（tab Object tree／Data window 等），非本面点开所得，摘录已剔除；本面增行的判据是与基线树做**多集合差**：**30 行＝本趟第 170 行树相对基线 `discover.txt:124` 树新增的行数**，按多集合差（`Counter(本趟) - Counter(基线)`）算。这个计数**含侧栏残留行与瞬时 `text:` 行**（报价／时刻那种），它们只影响计数、**不进摘录**；转录另计，本面转录的是那 10 行对话框骨架。复算命令与原始读数逐字见下面「本面增行数的复算」。
 - **动作纪律自证**：goto_start＋一枚打开类 click＋wait_for_timeout；未填、未选、未提交、未登录、未添加指标到图表（列表行一个都没点）；cookie 弹窗未点按。
 - **体积闸门形状**：count 读数 4,546 是下界；正式趟 100,000 闸门下 208 行收全、无 truncated 标记。本面 accessibility 工件 bytes＝5,416，比 A3／A5 那两趟小——因为对话框打开时右侧 widget／图例区文本被对话框遮挡收进同一行树，体积不构成「内容缺失」的读数，以步骤级 completeness status: complete 为准。

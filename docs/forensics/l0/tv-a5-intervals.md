@@ -153,13 +153,36 @@ evidence_id: ev_b9a6851ee5882a8b46efe0a6b36bd92d9e9d6bf454c42b70d30baa7ee3ea36ca
 
 **留档行号（`grep -n` 可反查，文件＝`%TEMP%\rea-t10c\a5.txt`）**：`evidence_id` 第 1 行；parameters 回声 browser 11-14、start_url 15-17、environment 18-27、actions 28-39（locator 31-34，name 行 34）、capture 45-52（at_end 行 47）；normalized_result browser 56-61、scenario 62-69、duration_ms 行 70；steps[3] 表头行 71，scenario_start 步 72-107（elapsed 行 75，status／error 106-107），s1 步 108-143（elapsed 行 111＝1247，status／error 142-143），s2 步 144-188（elapsed 行 147，before_url 148-152、after_url 153-157，accessibility 工件 165-170（state 166、sha256 168、bytes 169＝9,759、树文本单行 170），url 工件 171-177，步骤级 completeness 182-186，status／error 187-188）；events 189-192；顶层 completeness 193-197；limitations[7] 行 198；environment 199-205；limitations[9] 行 206；locations／evidence_links 207-208。主键 `sed -n '1p' a5.txt` 当场取，与摘录首行同值同趟。定位名 `1 day` 逐字出自本机枚举趟 `discover.txt:124`（`grep -Fn '1 day' discover.txt` 命中第 124 行）。
 
+**本面两个数的复算（只读，2026-10-14 在本机复跑；「四面最慢」那句话与「增行 182」都只由这两条命令支撑）**：
+
+四面 `click` 步耗时——本面第 111 行是 1247，四面里最慢的是 A8 的 1377，本面不是最慢：
+
+```bash
+cd "$TEMP/rea-t10c" && for f in a3.txt a5.txt a7.txt a8.txt; do printf '%s ' $f; sed -n '111p' $f; done
+```
+
+原始读数逐字：`a3.txt       elapsed_ms: 144`／`a5.txt       elapsed_ms: 1247`／`a7.txt       elapsed_ms: 204`／`a8.txt       elapsed_ms: 1377`。
+
+本趟第 170 行树相对 discover 基线树的多集合差增行——本面取 `a5.txt` 那一枚＝182：
+
+```bash
+cd "$TEMP/rea-t10c" && PYTHONIOENCODING=utf-8 python -X utf8 -c "
+from collections import Counter
+def T(fn,n): return open(fn,encoding='utf-8').read().split(chr(10))[n-1].split(chr(92)+'n')
+b=Counter(T('discover.txt',124))
+for f in ['a3.txt','a5.txt','a7.txt','a8.txt','a8-firsttrip-closed.txt']:
+    print(f, sum((Counter(T(f,170))-b).values()))"
+```
+
+原始读数逐字：`a3.txt 136`／`a5.txt 182`／`a7.txt 30`／`a8.txt 16`／`a8-firsttrip-closed.txt 6`。口径：把留档里那一行转义树按字面 `\n` 切开成行集合，再算 `Counter(本趟) - Counter(基线)` 的多集合差（重复行按重数计，被基线吃掉的不计）；这个计数含侧栏残留行与瞬时 `text:` 行，只影响增行数，不改变任何转录名。
+
 - **本面撑得住的结论（档位全集，可达文本级）**：周期切换按钮点开的是一个 treegrid 分辨率目录，**6 个分组共 32 个分辨率行**，另有首行 `Add custom interval`（level=1）：Ticks 4 行（1／10／100／1000 ticks）、Seconds 6 行（1／5／10／15／30／45 seconds）、Minutes 8 行（1／2／3／5／10／15／30／45 minutes）、Hours 4 行（1／2／3／4 hours）、Days 6 行（1 day／1 week／1 month／3 months／6 months／12 months）、Ranges 4 行（1／10／100／1000 ranges）。六个分组行都自陈 **[expanded]**，当前选中行是 `1 day`（`[selected]` 标记）——与主工具栏按钮名同名，即「按钮显示的就是选中档位」这一交互形状的可达文本证据。⇒ 对本仓 8 档周期的对账，L1 可以引用「对方档位目录的形状与命名到名字级」。
-- **定位歧义的实测边界（strict mode 教训的复验）**：菜单展开后树里同时存在 `row "1 day"` 与 `button "1 day"`，但 click 发生在菜单打开**之前**——那一刻 `1 day` 只有工具栏一枚按钮，s1 completed（elapsed_ms 1247，四面里最慢的一次点击，与菜单构建同时发生），无 strict mode violation。⇒ 「用档位名当定位名」在本页可命中，但它依赖「点击先于目录出现」这个顺序；L1 判据别把它写成「任何时候都单元素」。
+- **定位歧义的实测边界（strict mode 教训的复验）**：菜单展开后树里同时存在 `row "1 day"` 与 `button "1 day"`，但 click 发生在菜单打开**之前**——那一刻 `1 day` 只有工具栏一枚按钮，s1 completed、elapsed_ms 1247；本面只有耗时读数，**慢在哪一步没有键可读**（四面 `click` 步的 elapsed_ms 是 144／1247／204／1377，本面不是最慢，最慢是 A8 那趟的 1377；复算命令与原始读数逐字见「读数含义」的「本面两个数的复算」一段），无 strict mode violation。⇒ 「用档位名当定位名」在本页可命中，但它依赖「点击先于目录出现」这个顺序；L1 判据别把它写成「任何时候都单元素」。
 - **本面撑不住的结论**：
   - 任何档位的**数值参数**（秒数映射、内部 interval id、是否支持 4 位自定义）——目录只给可达名，`dom` 未采集、`text:` 正文不入库。
   - `Add custom interval` 点开后的自定义对话框——那是第二个打开动作，本趟纪律不允许。
   - 「本仓的 8 档够不够」——那是 L2 差距矩阵的对账句，本面只提供对方档位清单。
   - 「默认展开组是页方的固定行为」——本趟只读到一个时点的展开态；分组 [expanded] 可能是会话持久状态（同一 profile 内多趟共享），limitations 首条的送达顺序口径同样适用于「谁先展开」。
-- **现场污染披露**：同 A3——本趟第 170 行树里残留先前 A8 count 趟点开并经 localStorage 持久化的 widget-bar 面板项（`tab "Object tree"` 等），非本面点开所得，摘录已剔除；本面增行判据是与 discover.txt:124 基线做差（净增 174 行，转录其中 40 行档位目录）。
+- **现场污染披露**：同 A3——本趟第 170 行树里残留先前 A8 count 趟点开并经 localStorage 持久化的 widget-bar 面板项（`tab "Object tree"` 等），非本面点开所得，摘录已剔除；本面增行的判据是与 discover 基线树做**多集合差**：**182 行＝本趟第 170 行树相对基线 `discover.txt:124` 树新增的行数**，按多集合差（`Counter(本趟) - Counter(基线)`）算。这个计数**含侧栏残留行与瞬时 `text:` 行**（报价／时刻那种），它们只影响计数、**不进摘录**；摘录另计「本面转录 40 行档位目录」。两个数的复算命令与原始读数逐字见下面「本面两个数的复算」。
 - **动作纪律自证**：goto_start＋一枚打开类 click＋wait_for_timeout；未选档位（click 只落在**按钮本身**，菜单开着没点任何行）、未 fill／未提交／未登录；cookie 弹窗未点按。
 - **体积闸门形状**：count 读数 6,166 是下界，正式趟 100,000 闸门下 208 行收全、无 truncated 标记；第 170 行单行实测 10,596 字节，从不整行进终端。
