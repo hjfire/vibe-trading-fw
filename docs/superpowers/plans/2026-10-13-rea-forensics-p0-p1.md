@@ -1854,3 +1854,26 @@ P1 产物就绪即报告。下一步（P2 对称取证／P3 排优先级／P4 �
    （Git-Bash 的 PID 不是 Windows 的），实测结果是 `python.exe`／`msedge.exe` 各留一个进程占着 8077/9222，
    临时 profile 目录 `rm -rf` 一路 `Device or resource busy`。取号一律走 `netstat -ano`，
    再用 `tasklist //FI "PID eq <号>"` 只读核对身份，然后才杀。**依旧绝不按镜像名杀 `msedge.exe`。**
+
+---
+
+## 执行期更正二（2026-10-13 晚，Task 6 落地之后）：页内交互在本机可用，Task 8 的「不可取证」名单要缩
+
+**绑住 spec §2.4.1（带日期追加子句，逐字到 `evidence_id` 与读数键路径那一级）。** 上一份更正里
+「A1 只给 `attribute_names`、不给属性值」等结论**全部保留**；这里否证的是另一条操作性推论：
+「需要先在页面上点一下才出现的面（Task 7 面表里那批『明说跑不了』）拿不到」。
+
+- 实测：`capture-browser-scenario` 吃**内联 JSON**，`browser.mode: connect` 只要 `cdp_endpoint`＋`target_id`，
+  一步 `click` 在探针页上 `status: completed`／`error: null`；`capture.at_end: ["url","dom","accessibility","screenshot"]`
+  能在**同一趟**里给出点击后的可达树（`accessibility.value.text` 逐字含 `- button "Trend line"` 这一族）与 PNG 工件。
+- 对 **Task 8** 的三处具体改法：
+  1. 「被挡的面＝写一份 `状态：不可取证`」那条支路，适用范围**收窄到**需要登录／需要 `executable_path` 的 `launch` 模式／
+     一切吃磁盘路径的命令。A3（展开画线工具条）、A5（周期下拉）、A7（指标对话框）、A8（图例／数据窗口）
+     改为「先 `click` 一步、再读同趟 `at_end` 工件」；A6（右键菜单）要先确认 `right_click` 这个 action 名，未确认前仍按不可取证写。
+  2. **像素判据（`判据类型：像素`）自此可用**，但硬红线是 `data_base64` **绝不进仓库**——
+     L0 只落 `sha256`＋`bytes`＋`media_type` 三键。这条同时是合规要求（spec 裁定 1 的表达层）与内存要求。
+  3. `--filter-output` 的**下标键路径不生效**（`…steps[1].artifacts.screenshot` → `steps: []`，`rc=0` 静默空）
+     ⇒ 场景类证据必须整份落到仓外留档再本地切片，键路径过滤只用于非下标面。
+- **范围重定＝先停先问**：扩面改的是批次内容，而本计划 Task 7 的停等条款（＋计划 Global Constraints 第 11 条）
+  要求「改动批次内容要重新问一次」。所以 **Task 8 在用户答复扩面问题之前不派发**；
+  这份更正只写清「怎么改」，不等于授权「改」。

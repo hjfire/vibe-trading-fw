@@ -150,6 +150,29 @@ detail: "Directory entry changed before open: a.js"
 - 需要「把对方脚本落到磁盘再慢慢读」的深挖（`export-web-scripts` → `analyze-javascript-application` → `recover-javascript-sources`）在本机**当前不可用**。若要做，得先解决环境（把 Node 升到 ≥22.19 是最可能的解药，但那是项目外动作 ⇒ §9 需你批准项）。
 - 内联 JSON 参数是通的：`rea build-reconstruction-obligation-ledger '{"obligations":[]}'` 走到了 schema 校验并回报缺哪三个键（`evidence_bundle`(object)／`reviewed_obligations`(array)／`manifest`(object)），说明「小载荷走 argv」可行；Windows 的命令行上限约 32,767 字符，所以这条只对**小** Evidence 成立。
 
+#### 2.4.1 带日期追加（2026-10-13 晚，P0 收口后实测）：上面那句「小载荷走 argv」把一条更大的门打开了
+
+本节的架构结论（证据只走 CDP 单趟命令＋stdout 摘录）**不变**；被否证的是一条**操作性推论**——
+「要在页面上先做一次交互（点开工具条／下拉／对话框）才能看到的面，本机拿不到」。
+现读留档（`$TEMP/rea-t8-*.txt`，本机自家探针页 `http://127.0.0.1:8077/`，未碰任何第三方站点）：
+
+- `capture-browser-scenario` 的入参 `inputJson` 帮助原文是 **"Inline browser scenario JSON or JSON file path"** ⇒ 可以**只给内联 JSON**，不碰文件通道；
+  `browser.mode: connect` 只需 `cdp_endpoint`＋`target_id`（**不需要 `executable_path`**，那才是会 ESTALE 的 `launch` 模式）。
+  于是「交互 → 复捕」在一趟里就成立：`evidence_id ev_497acbd544027225a276811991e53b64a137cda560f206a7de51d6a10687572a`，
+  `rc=0`，`steps[1]{step_id: s1, action: click, status: completed, error: null}`，
+  `browser{mode: connect, process_ownership: external, cleanup: disconnected-external, product: Chromium, version: 155.0.4283.45}`。
+- `capture.at_end` 是**枚举数组**（值如 `["url","dom","accessibility","screenshot"]`），点完直接拿到改后的可达树：
+  `accessibility.value.text` 逐字给出 `- button "Trend line"` 这一族 `role`＋`name`（`bytes: 136`），
+  与 §5 里 A1 需要 `--include-accessibility-text` 才有的读数面同形 ⇒ **A3／A5／A7／A8 这类「未点开就不在可达文本里」的面从此有判据级证据**，
+  §7 P1 那条「懒加载／虚拟 DOM」风险降级为「先跑一步 click，再读同趟工件」。
+- 像素面同样可用：`at_end: ["screenshot"]` ⇒ `value{sha256, bytes, media_type: image/png, data_base64}`。
+  **硬红线**：`data_base64` 绝不准进仓库（它是图像资产本体，撞裁定 1 的表达层那条），L0 里像素证据只落 `sha256`＋`bytes`＋`media_type`。
+- 两条限制，别当成万能：① `--filter-output` 的**下标键路径不生效**（`normalized_result.steps[1].artifacts.screenshot` 返 `steps: []` 且 `rc=0` ⇒ 静默空，只能整份落盘再本地切）；
+  ② 该 provider 自己的 `limitations` 里有「CDP attachment cannot recover pre-attach events」，所以**attach 之前**发生的事件仍然取不到，
+  「没报」不等于「没有」（§2.4 的原意在这一条上依然成立）。
+- 需要**登录**才能看到的面（指标模板云同步、多布局保存等）与一切吃磁盘路径的命令（`export-web-scripts`／`inspect-evidence-bundle`／`compare-web-captures`）
+  **不受本次实测影响**，仍是不可用。
+
 ### 2.5 输出控制（内存只有 2GB，且证据会很大）
 
 REA 的全局旗标里，本计划会常态使用的四个：
