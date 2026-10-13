@@ -217,6 +217,20 @@ storage 读数**（逐字见那四份记录的 `命令：` 行）。⇒ 能落�
 限 400 的那份把 `    - type:` 切在半截，`pointerdown` 零命中。每面**先不限流跑一次**确认目标键在、
 有多大，再决定收口口径。
 
+（**2026-10-14 活体趟追加第④条口径：`--filter-output` 在错误信封上会把整份 payload 滤空。**
+两条现读，同一条命令只差这一把旗标：带 `--filter-output evidence_id,normalized_result` 时 rc＝**1** 而
+stdout **0 字节**（留档 `rea-t11b/mode-probe.cmd`／`mode-probe.out`）；去掉它、其余逐字不动时 rc＝1 而
+stdout 540 字节，`details.issues[3]` 逐字是
+`path[2]: browser,mode / reason: invalid_value / expected[2]: launch,connect`、
+`path[1]: start_url / reason: missing_argument / expected: object`、
+`path[1]: actions / reason: missing_argument / expected: array`（留档 `rea-t11b/mode-probe2.cmd`／`mode-probe2.out`，
+`cdp_endpoint` 指向死端口 `http://127.0.0.1:9`，全程没起浏览器）。⇒ 三条后果：
+①**逼词表／试错那一趟不要带 `--filter-output`**，否则 rc＝1 时连报错正文都拿不到；
+②§5 那条「坏入参不挂、schema 校验跑在连浏览器之前」被第二次独立复现（死端口秒回）；
+③场景命令的 `browser.mode` 只有 `launch,connect` 两值，且 `start_url` 与 `actions` 都是必填——这正是
+「`capture-browser-scenario` 每趟开头强制一次 `goto_start` 导航、没有任何场景形状能跳过它」的机制根据，
+见 §8 末那条本机重跑型的边界。本节标题写的「三条」是它写作时的条数，现在多一条。）
+
 ## 4. 判据写法上的硬限制（决定 L1 能写什么）
 
 - A1 的 `dom` 段**只给属性名，不给属性值**（探针页留档里 `grep toolbar` 零命中，而页面上写的就是
@@ -468,6 +482,16 @@ T9 把它们逐条引用进条目表之后，再把 `用途：` 改成 `规格`�
 - **本机重跑型**（本批 **2 条含本机重跑半**：TV-DW-07 全条、TV-CI-07 后一半；**两趟本批均未跑**——写条目的两席都是
   只读席、不起浏览器，执行落在 T10／T11 的门禁趟，「本席未跑」的标记写在两格的判据列里）：同一条命令在自家页连跑两趟，
   断言的是**两趟读数之间的等值关系**，不声明任何跨现场可复现的常量。
+- （2026-10-14 活体趟更正上一那一条的「两趟本批均未跑」，并给出本型的**结构性边界**——原文按纪律原地留着）：
+  两趟都跑了。TV-DW-07 成立（自家页同命令两趟的 `artifact.sha256`／`bytes` 逐字相等）；TV-CI-07 的「两趟互补」
+  **不成立**，而且不是实现的问题：`capture-browser-scenario` 每趟开头都强制一次 `goto_start` 导航（两趟 stdout 逐字
+  有 `step_id: scenario_start`／`action: goto_start`，且 `start_url` 是必填、`browser.mode` 只有 `launch,connect`
+  两个取值 ⇒ 没有任何场景形状能跳过这趟导航），于是一个**初值非持久**的页内开关（本仓那枚绑在 `useState(false)` 上）
+  必然每趟同相。所以本型只对**不依赖上一页状态**的观测量成立（整页像素快照就是这一类）；要判「一个开关翻了没有」，
+  得写成**同一趟内的多步**、把可达树收到 `after_each_step`，读两步之间的差——本批按这条裁定把 TV-CI-07 的验收形状
+  改了（诊断趟实测第一步带 `[pressed]`、第二步不带）。另一件同趟撞到的：L1 那一格原先写的重跑命令**逐字不可执行**
+  （`--allowed-origins` 不是场景类命令的旗标；`mode:"connect"` 下 `browser.target_id` 必填），与本文件 §78 那条
+  「场景命令不吃 `--allowed-origins`」的正确结论互相矛盾——是 L1 那一格写错了，已按最小修正后的形状在 L0 里落档。
 - **表里不许出现 shell 管道，也不许出现带竖线的正则**：`tools/forensics_audit.py` 的 `_table()` 按 `|` 切列，判据里一个
   管道就把五行表的一行切成 6 格，报的是「列数不是 5」（2026-10-14 修复轮实测：本席把一条 `grep -rn 'A\|B'` 写进
   TV-CI-08 那一格，门 1 立刻报「有 1 行的列数不是 5」＋条目数掉成 14，改回不带竖线的写法后复原）。

@@ -8,6 +8,11 @@
 
 - **L0 观察**（`l0/<面>.md`）：一条 REA 单趟 CDP 命令 ＋ 一个观察面 ＋ 一份记录。记录内容＝命令原文、
   `evidence_id`、浏览器读数、目标 URL、观察条件、完整性读数，再加一段**从 stdout 逐字抄的摘录**。
+  （2026-10-14 追加一条形状：一份记录可以是**多趟等值型**的——一个观察面、同一条命令连跑两趟、一份记录，
+  摘录里把两趟的读数并排逐字抄，`evidence_id：` 那一把填**被判据引用的那趟**的主键，另一趟的主键写在正文里。
+  先例是 `l0/tv-a8-legend.md`（一面两趟），自家页的两份 `l0/self-dw07-pixel-equality.md`／
+  `l0/self-ci07-panel-toggle.md` 按同一形状落。校验器对此没有专门规则，它只认那六把必填键——
+  「摘录是否逐字、主键是否同趟」仍然只能靠纪律，见下一节末那句。）
 - **L1 规格**（`spec/<面>.md`）：把 L0 读数翻成条目 `TV-<面>-<两位序号>`，每条自带一个可执行判据。
 - **L2 差距**（`gap-matrix.md`）：一条规格一行，对本仓现状做四态对账（已有／部分／缺／不可复刻）。
 - 往上还有 L3 分片实现与 L4 验收，那两层不在本目录里，走本仓既有的六片式交付纪律。
@@ -56,7 +61,7 @@ L2 的表头（`MATRIX_HEADER`，整行比对）：
 
 ```bash
 python -X utf8 tools/forensics_audit.py                    # rc=0 clean ／ rc=1 逐条打印违规
-python -X utf8 -m pytest tools/test_forensics_spec.py -q    # 校验器自己的测试（2026-10-13 实测 120 passed）
+python -X utf8 -m pytest tools/test_forensics_spec.py -q    # 校验器自己的测试（2026-10-13 实测 120 passed；2026-10-14 现读 127 passed——这条数随套件在漂，别引用它，要判就跑）
 ```
 
 两条都要显式给路径：`tools/test_*.py` 不在 `pyproject.toml` 的 `testpaths` 里，裸 `pytest` 收不到它。
@@ -96,6 +101,8 @@ npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222   # 取 targ
    放宽到 1500 才读到 `pointerdown`。
 5. **`--filter-output normalized_result` 会把顶层 `evidence_id` 一起滤掉**（2026-10-13 A1 实测）。
    要留主键就把过滤键写成 `evidence_id,normalized_result…`；`l0/` 三份记录的 `命令：` 就是加了它的版本。
+   （2026-10-14 澄清：这一句里的「三份」指 `l0/probe-skeleton.md`／`probe-bundle.md`／`probe-events.md` 那三份
+   本地探针记录，不是 `l0/` 的总份数——`l0/` 早就远不止三份，份数请自己 `ls` 数。）
 
 另外两条形状上的事实：键名是 **`target_id`**（不是 `targetId`），三条命令共用同一趟 `list-browser-targets` 的那一个；
 `completeness.status` 的合法读数按面不同——A1 实测 `policy_filtered`（策略扣字段，不是解析失败），
@@ -163,6 +170,10 @@ frontend/src/pages/TVChart.tsx
 - 本目录当前实有内容：`l0/probe-skeleton.md`／`l0/probe-bundle.md`／`l0/probe-events.md`（三份 `用途：harness`
   的本地探针记录，2026-10-13 同趟产出）＋ `_templates/` 三份模板。还没有 `spec/`，也没有 `gap-matrix.md`
   ——没有条目时矩阵不是必需，孤证规则也不开口。
+  （2026-10-14 更正：中间那两句已过期——`spec/drawings.md`／`spec/chart-interaction.md` 与 `gap-matrix.md` 都已建立，
+  `l0/` 下还多了批次 A 的对方现场记录与自家页的活体记录，份数按上一条的口径自己 `ls` 数、别引用这里的数字。
+  最后那半句讲的**规则**仍然有效，而且现在是有后果的：`l0/` 里凡没被任何 L1 条目引用的记录，必须是
+  `用途：harness`／`基线` 或标了「不可取证」，否则校验器 rc=1。）
 
 ## 附：`docs/` 被整目录忽略
 
