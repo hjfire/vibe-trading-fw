@@ -204,6 +204,15 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 要么把它的读数与副作用一起留档，要么把易被开关的面放到**最后**跑。两趟的 `evidence_id` 不同，
 `命令：` 与主键只能取自正式那一趟（§7）。）
 
+（**2026-10-14 追正：上面「这个态经当次 profile 目录持久化」是机制名，本批没有它的读数。**
+四面场景 JSON 的 `storage` 段逐字是 `"cookies":[],"local_storage":[],"session_storage":[]`＝**未请求任何
+storage 读数**（逐字见那四份记录的 `命令：` 行）。⇒ 能落的只有现象：「上一趟留下的态活到了下一趟，
+改变了正式趟读到的现场」；**存续载体（localStorage／IndexedDB／profile 目录，哪一个）本批未读**，不许指名。
+已把 `tv-a3-draw-menu.md`:169／`tv-a5-intervals.md`:186／`tv-a7-indicator-dialog.md`:145／`tv-a8-legend.md`:140
+四处的「经 localStorage 持久化」改成现象形并各标「存续载体未读」。下一批要坐实载体，就在场景的 `storage`
+段里请求 `local_storage` 的**键名**枚举（键名级读数的形状与它的限制见 `docs/forensics/l0/tv-a16-storage.md`
+「本面撑得住的结论」条——注意那趟记过 `fingerprints_complete: false`）。）
+
 `--token-limit` 只当**体积闸门**用，别当「反正能截出我要的东西」：探针页 A4 整份约 1,477 tokens，
 限 400 的那份把 `    - type:` 切在半截，`pointerdown` 零命中。每面**先不限流跑一次**确认目标键在、
 有多大，再决定收口口径。
