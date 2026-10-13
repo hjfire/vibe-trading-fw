@@ -1,0 +1,51 @@
+# 差距矩阵（L2）：批次 A 的规格条目 ↔ 本仓实现面
+
+这一层的唯一问题是一句话：**这条规格在本仓有没有对应实现**。它把 L1（`docs/forensics/spec/`）的每一条
+条目号拿到本仓 `frontend/src` 与 `tools/` 对照一遍，四态判：`已有`／`部分`／`缺`／`不可复刻`。
+
+口径（写死在这里，别让下一席猜）：
+
+- 状态列判的是**本仓有没有这段实现**，不是「取证那一趟跑没跑」。L1 里 TV-DW-07／TV-CI-07 的判据列明写了
+  「本席未跑这两趟（只读席不起浏览器）」，那是执行归属（T10／T11 门禁趟），不是 L1 缺陷，也不构成这里的 `缺`。
+- `已有`／`部分` 的第三列只有一个 `路径:行号`，由校验器验「在仓库根之内、不在 docs/forensics 之下、文件存在、
+  行号不越界」；「那一行指的是不是那回事」它判不了，所以每一条本席都 `sed -n '<行号>p'` 亲眼开过，
+  读数逐字贴在 `.superpowers/sdd/2026-10-13-rea-forensics-p0-p1/task-10-report.md`。
+- `缺` 的第三列以 `未找到：` 开头，后面是给下一席复制粘贴就能复跑的 needle；每条本席当场跑过、当场 0 命中。
+- 优先级列本片全写 `-`：排期属 P3，本片不替它决定。
+- 判不准／证据不够的宁可降级成 `部分` 或 `缺`，并把降级理由写进说明列——这些行在报告里另立一节。
+- 三条批次 A 带过来的限制照走：像素类条目只写等值形状，不写期望常量也不写像素差；A4 那一族八枚 `listeners`
+  全空（含 `body` 对照组）只证「枚举面可用」，任何一行都不许推成「TV 那处没有事件绑定」；A1 的 `dom` 段只给
+  属性名不给值，所以本矩阵没有任何一行拿 id／class 属性值当凭据。
+- A12（Pine 编辑器）与 A13（告警对话框）是判据缺口、结构上没有 `evidence_id`，L1 未为它们立条目 ⇒
+  本矩阵也没有它们的行（出现了就是「凭空条目」）；它们的成因（需登录＋裁定 1 不做登录绕过）在 L1 的边界小节里。
+- 条目号一列是从两张 L1 表的第一列**抄**的（`eba67683` 之后那版），本席数出 15 条，与校验器的
+  「有 N 条规格条目」同一把尺；没有自拟、合并或省略。
+
+| 条目号 | 状态 | 本仓坐标或搜索记录 | 优先级 | 说明 |
+|---|---|---|---|---|
+| TV-DW-01 | 部分 | frontend/src/pages/ProChart.tsx:2778 | - | 那一行是 `{DRAW_TOOLS.map((t) => (` ——本仓的画线目录是工具条里平铺出来的一排按钮（目录数组＝`frontend/src/lib/chartDrawings.ts:131` 的 DRAW_TOOLS，本席现读 13 枚条目行）。有「扁平＋可达名到名字级」这一半（可达名是中文：趋势线／射线／平行线／价格通道／标注…），没有 20 行 row 条目、没有 3 行自带同名 gridcell 的分组行、没有 Lines／Channels／Pitchforks 三个分组，工具集也按 klinecharts 的 overlay 名划分、与对方 Trend tools 那个目录不同集。本行不拿 A1 的 dom 段（只给属性名）指认任何元素。 |
+| TV-DW-02 | 部分 | frontend/src/pages/ProChart.tsx:3060 | - | 那一行是 `{drawPanelOpen && (` ——图元集合的管理面板有，入口就是 TV-CI-07 那枚开关，但形状不同：面板体是工具条下方的整宽滚动条（同一行往下是 `max-h-[132px]` 那个 div），不是右侧面板；面板里只有一列画线行，没有两页 tablist、没有 Object tree 与 Data window 之分（本席在 `frontend/src/pages/ProChart.tsx` 与 `frontend/src/components/charts` 里搜 tablist 与 role=tab 均 0 命中，见 TV-CI-01 那行的 needle）。「默认落在哪一页」在本仓没有对应物。 |
+| TV-DW-03 | 缺 | 未找到：对象树工具条那四个动作（建组／克隆复制／移动／管理布局图元）的任何一个 —— 复跑命令 `grep -rn --include=*.ts --include=*.tsx -e 对象树 -e 克隆 -e 建组 frontend/src`（本席 2026-10-14 跑＝0 命中，rc=1） | - | 本仓清单给的不是那四个动作：行内是 选中／画线文字／锁定／隐藏／删除（`frontend/src/pages/ProChart.tsx` 的 3077／3114／3158／3167／3176），面板级是 清除／导出／链接／导入（同一文件 2822／2847／2858／2866）——没有建组、没有克隆复制、没有把线移到别处、没有管理布局图元。disabled 态在本仓存在但挂在别的按钮上（如 2836 那枚「清单」在无画线时 disabled），不构成本条的对应物，所以本行也不写「三枚带 disabled」。 |
+| TV-DW-04 | 部分 | frontend/src/pages/ProChart.tsx:182 | - | 那一行是 `const SESSION_KEY = "pro-chart.session.v1";` ——「图表状态落 localStorage」这条通道有，「样式／周期／品种三项各成独立键名」的形状没有：品种＋周期＋分时三项合存在这一个键的 JSON 值里（写点＝同文件 792 行 `localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval, timeShare }))`），画线样式另有一键（`frontend/src/lib/chartDrawings.ts` 的 STYLE_KEY），主题走全局键。本行不写「本仓已有同名键」，也不据 tv-a16 那趟外推任何值面：那份记录是键名级、`fingerprints_complete: false`、`values_redacted: true`，「有没有一个装三项合并值的键」这一问在批次 A 两边都没有证据面。 |
+| TV-DW-05 | 缺 | 未找到：收藏画线工具栏可见性偏好与「锁定线可否删除」持久开关 —— 复跑命令 `grep -rn --include=*.ts --include=*.tsx -e deleteLocked -e 收藏画线 -e 锁定删除 frontend/src`（本席 2026-10-14 跑＝0 命中，rc=1） | - | 本仓的「收藏」只有标的 watchlist（`frontend/src/components/charts/WatchList.tsx:91` 那句「点图表栏的 ★ 收藏当前标的」），没有收藏画线工具栏；清单面板的可见性是组件内 useState（`frontend/src/pages/ProChart.tsx:561`），刷新即回默认，没有任何会话级存储；锁与删是两个互不干涉的行内动作，且 `frontend/src/lib/chartDrawings.ts` 顶部第 5 条自陈右键删除不读 lock ⇒ 既没有那个开关，也没有治理它的持久级偏好键。两条都不许读成「本仓已有同名键」。 |
+| TV-DW-06 | 部分 | frontend/src/pages/ProChart.tsx:3238 | - | 那一行是图表容器 `<div ref={hostRef} …>`，画布由 klinecharts 在同文件 1218 行的 `init(hostRef.current, {` 里于运行时产出——本仓源里没有 canvas 标签字面量，产品页的绘制层因此只有挂载点这一处仓内落点，「按 canvas 这一标签写法命中＋取回 CDP 后端句柄」在仓内没有静态凭据，本席也没跑那一趟（按上面的口径这不算 `缺`，但也不够判 `已有`）。探针页那一枚 canvas（`tools/rea_probe_site/index.html:14`）是 harness 面，不拿来当产品页的实现面。dom 段只给属性名不给值是取证工具的性质，本矩阵不据它发任何「已有」。 |
+| TV-DW-07 | 部分 | frontend/src/pages/ProChart.tsx:1398 | - | 那一行是 `const report = restoreDrawings(`（图表 init 里把存过的画线放回画布的调用点；另有 2234 行 `chart.createOverlay({` 是手画路径）——等值判据的前置「画布上已有一条图元的渲染态」在本仓指得出来。自家页的两把锚本席现开过：`frontend/vite.config.ts:43` 逐字 `port: 5899,`、`frontend/src/router.tsx:89` 逐字 `{ path: "/pro-chart", element: wrap(ProChart) },`。两趟 `sha256` 与 `bytes` 逐项等值那一半本席未跑（只读席不起浏览器），故不判 `已有`；按批次 A 的证据面，本行也不写期望常量、不写像素差 x%。 |
+| TV-CI-01 | 缺 | 未找到：两层 treegrid 周期目录与自定义档位入口 —— 复跑命令 `grep -rn --include=*.ts --include=*.tsx -e treegrid -e "Add custom interval" frontend/src`（本席 2026-10-14 跑＝0 命中，rc=1） | - | 本仓的周期与分辨率面是工具条上 8 枚即时按钮（目录数组＝`frontend/src/lib/marketApi.ts:20` 的 INTERVALS，本席现读 8 枚条目行；渲染点＝`frontend/src/pages/ProChart.tsx:2698`）：没有 level=1 与 level=2 两级、没有 Ticks／Seconds／Minutes／Hours／Days／Ranges 六类分组、没有 Add custom interval 那一行；档位集合也不同集（本仓最细到 1分，无 tick 与秒级；要补这一档需后端先有秒级源）。这是形状与内容两样都不在，不是「跑没跑」的问题。 |
+| TV-CI-02 | 部分 | frontend/src/pages/ProChart.tsx:2716 | - | 那一行是 `periodActive(i.key) && "bg-muted font-medium",` ——当前档位有标记，但走的是 CSS 类（谓词在同文件 2492 行 `const periodActive = (key) => !timeShare && interval === key;`），不是无障碍 selected 态：本席在 `frontend/src/pages/ProChart.tsx` 与 `frontend/src/components/charts` 里搜 aria-selected＝0 命中（仓内 aria-selected 只活在聊天／筛选等别的页）。而且本仓没有「目录行」与「主工具栏那枚周期按钮」两个元素——按钮自己就是目录，「两处可达名同名到名字级」这一形状没有对应物。 |
+| TV-CI-03 | 缺 | 未找到：周期按钮自陈弹层入口 —— 复跑命令 `grep -rn --include=*.tsx -e aria-haspopup frontend/src/pages/ProChart.tsx frontend/src/components/charts`（本席 2026-10-14 跑＝0 命中，rc=1） | - | 本仓点周期按钮是即时换档，不是弹层入口：`frontend/src/pages/ProChart.tsx:1930` 的 `pickInterval` 直接 setView 并 setPeriod，没有目录浮层、没有 hasPopup／menu 语义。仓内唯一一枚 aria-haspopup 在聊天输入区（`frontend/src/components/chat/Composer.tsx:331`），与图表无关，不构成本条对应物。 |
+| TV-CI-04 | 部分 | frontend/src/components/charts/IndicatorEditor.tsx:250 | - | 那一行是指标工作台浮层的遮罩 `<div className="fixed inset-0 z-40 bg-black/30" onClick={onClose}>` ——打开的确实是浮层而不是新页面（右侧 34rem 抽屉，点遮罩即关），骨架里也有那一枚关闭按钮（同文件 257 行起），但它没有可达名（无 aria-label，内容只有 X 图标）。骨架没有 role=dialog 也没有 aria-modal（本席 grep 该文件＝0 命中；仓内这种写法只出现在别处，如 `frontend/src/components/chat/PineScriptViewer.tsx:52`），顶层既没有搜索框也没有列表区三级标题——搜索框在「脚本库」那一页里（`frontend/src/components/charts/workbench/LibraryTab.tsx:52`）。三件控件只对上一件半。 |
+| TV-CI-05 | 部分 | frontend/src/components/charts/IndicatorEditor.tsx:65 | - | 那一行是 `const TABS: { key: TabKey; label: string }[] = [` ——顶层多页 tab 这一形状有，枚数与默认页不同：本仓 6 页（编辑器／脚本库／导入导出／策略报告／条件筛选／脚本告警），默认落 editor（同文件 91 行 `useState<TabKey>("editor")`，另有 104 行由分享链接 seed 切页），不是 5 页、也没有「selected 态唯一」的暴露——tab 是普通按钮，没有 tablist／tab／aria-selected（同 TV-CI-01 那把 0 命中 needle）。其余几页里有什么本批未读取，这一限制不影响本行判定：本行只判顶层形状。 |
+| TV-CI-06 | 部分 | frontend/src/pages/ProChart.tsx:527 | - | 那一行是 `const [indPanelOpen, setIndPanelOpen] = useState(false);` ——四个打开面（工作台／副图指标／清单／图例）在本仓都是组件内 useState，没有 navigate 也没有 pushState，所以「打开动作对 URL 净变化为零」这一半在本仓成立。判 `部分` 而不判 `已有` 的两条理由：其一，它是顺带结果而不是被断言的性质，仓内没有任何 URL 读数判据；其二，本仓 URL 确实会被写——分享链接消费后的 `stripQueryKey`（同文件 415-421 行，421 行是 `window.history.replaceState(`），且 query 参数名不止一个（`?s=`＝`frontend/src/lib/scriptExchange.ts:218`、`?d=`＝`frontend/src/lib/drawingExchange.ts:74`），与「参数名仍只有 symbol」不同形。 |
+| TV-CI-07 | 已有 | frontend/src/pages/ProChart.tsx:2830 | - | 那一行是 `aria-pressed={drawPanelOpen}` ——右侧（本仓是下方）面板那枚入口按钮是开关而不是单向打开：pressed 绑的就是面板状态，onClick 走 toggleDrawPanel（同文件 2283 行 `setDrawPanelOpen((open) => !open);`），开与关在同一条翻转里，pressed 跟着翻。同族另两枚：副图指标（2764 行）、图例（2887 行）。差异如实记着：本仓这枚按钮在无画线时 disabled（2836 行），对方那枚是常开并自陈 pressed。「连续两趟读到相反面板态」那一半本席未跑（只读席不起浏览器，控制席 2026-10-14 追加第(2)条裁定这不算缺），执行归门禁趟。 |
+| TV-CI-08 | 部分 | tools/rea_probe_site/app.js:5 | - | 那一行是 `canvas.addEventListener("pointerdown", (event) => this.pick(event));` ——本仓为枚举面备的可指认目标在这行：探针页画布上有一个真监听器，A4 那一族的 harness 趟用它读到过 `selected_node.match=found` 与非空 listeners（那份留档写的是 `docs/forensics/l0/probe-events.md`，用途＝harness；本行的坐标只指仓内实现，不拿漏斗文档自证）。判 `部分` 的两条理由：其一，枚举工具本身（inspect-web-event-listeners 与 CDP 现场）不在本仓，仓内没有这段实现可指；其二，产品页 /pro-chart 的画布由 klinecharts 运行时生成，本批没有对它命中的读数。红线照批次 A 走：八枚 `listeners` 全空（含 body 对照组）只证枚举面可用，任何一行都不许推成「TV 那处没有事件绑定」，也不许用 `[role="menu"]` 的 not_found 推「对方没有菜单」。 |
+
+## 这一层没有回答的问题（交给 P3 排期时别当成已答）
+
+- 说明列里的行号是本席 2026-10-14 现读的，`frontend/src` 的三条 ` M`（`frontend/public/usage-guide.md`、
+  `frontend/src/lib/chartDrawings.ts`、`frontend/src/lib/__tests__/chartDrawings.test.ts`）是别席未提交的活，
+  它们一旦被提交就会让引用到该文件的读数搬家——本矩阵的坐标列因此只落在 ProChart.tsx、IndicatorEditor.tsx、
+  marketApi.ts 与 tools/rea_probe_site/app.js 这些本席可见的干净文件上，画线目录的条数与 chartDrawings.ts 的行号
+  只写在说明列里，并带「本席现读」四个字。
+- 「部分」不等于「不用做」，「已有」也不等于「不用测」：TV-CI-07 那行的等值／互补两趟、TV-DW-07 那行的两趟
+  像素等值，仍然要由带浏览器的门禁趟跑一次才算验收。
+- A12／A13 两面在本矩阵里没有行（见开头那条），P3 若要排它们，得先重开一个能落 `evidence_id` 的取证面。
