@@ -45,6 +45,19 @@ npx -y rea-agents@latest list-browser-targets http://127.0.0.1:9222            #
 不是判网络全灭。⇒ 往上那句「又被 RST」当**其中一形**读，别把它当唯一形状去比对；预检要记的是
 「裸连的 `http_code` 与退出码」这两件事，不是某个固定错误串。）
 
+（2026-10-13 深夜，交互面席位把上面那句「先 `reg query` 现读那两个键」落实时撞到的：**键路径不在惯常那个位置**。
+`reg query "HKCU\Environment" //v ProxyEnable` 与 `//v ProxyServer` 本机都报「系统找不到指定的注册表项或值」，
+真实位置是 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`（`ProxyEnable` 是 `REG_DWORD`、
+`ProxyServer` 是 `REG_SZ`）。逐字两条：
+
+```bash
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyEnable
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyServer
+```
+
+读到值不等于该用它：还要看 `ProxyEnable` 是不是 `0x1`（当次读到 `0x1`／`127.0.0.1:7897`，
+留档 `%TEMP%\rea-t10c\precheck-reg-internet-settings.txt`）。↑ 上面那句「现读那两个键」当**没写路径的初版**读。）
+
 收尾**只按 `netstat -ano` 取到的那两个 Windows PID** `taskkill`，然后删 `$TEMP/rea-cdp-profile`。
 **绝不按镜像名杀 `msedge.exe`**——机器上同时开着人工使用的真实 Edge 窗口。
 
@@ -158,6 +171,14 @@ A4 的 selector 候选（**我方假设，不是观察结论**）：图表 canva
 `命令：` 逐字抄正式那一趟（含 `--token-limit`，校验器 `_command_hygiene` 要看到它）。
 切出来的每一行都要能在留档里 `grep -n` 到行号，写进记录。
 
+（**2026-10-13 深夜现读：`--token-count` 那一趟会真实执行场景**，它不是零副作用的预检。
+`capture-browser-scenario` 带 `--token-count` 跑 A8 时，页面里那枚开关按钮被**真点了一次**，而且这个态经当次
+profile 目录持久化**跨趟存续**，直接改变了随后正式趟读到的现场（四面 count 读数 5,707／6,166／4,546／3,153
+都带这次副作用）。⇒ 上面「先 `--token-count` 量大小，再跑正式一趟」这句只对**不产生页内副作用**的面成立
+（A1／A2／A4／A9／A15 那类单次读取的面照旧）。对 §5① 这种带 `click` 的场景面，**count 趟＝一次真实点按**：
+要么把它的读数与副作用一起记进留档，要么把易被开关的面放到**最后**跑。两趟的 `evidence_id` 不同，
+`命令：` 与主键只能取自正式那一趟（§7）。）
+
 `--token-limit` 只当**体积闸门**用，别当「反正能截出我要的东西」：探针页 A4 整份约 1,477 tokens，
 限 400 的那份把 `    - type:` 切在半截，`pointerdown` 零命中。每面**先不限流跑一次**确认目标键在、
 有多大，再决定收口口径。
@@ -229,6 +250,13 @@ npx -y rea-agents@latest capture-browser-scenario '{
              "network":{"request_body":false,"response_body":false,"header_values":false}}
 }' --token-limit <见 §3③>
 ```
+
+**开关型控件要先固定基线（2026-10-13 深夜，A8 实测）。** TV 右侧 widget 面板那枚按钮是 **toggle**，不是单向打开：
+同一枚 `click` 连跑两趟读到的是**相反**的两个态（本席第一趟落在已被 count 趟点开的态上 ⇒ 那一次 click 把它**关**了，
+第二次跑落在关闭态上 ⇒ 读到**打开**）。⇒ 任何「点开某面板再读它里面有什么」的场景面，正式趟之前先跑一趟
+**不点任何东西**的枚举趟（`actions` 只放 `wait_for_timeout`，`at_end` 带 `url,accessibility`）确认当次基线态，
+并在 `观察条件：` 里写明本趟那次 click 之后面板是**开**还是**关**；读到意外态的那一趟**另存不删**，
+把它当第二条方向相反的真实读数写进「读数含义」，别让主键与行号落到没被引用的那一趟上（§7）。
 
 词表与形状（全部是「喂非法值逼工具自陈」现读来的，留档 `%TEMP%\rea-t8-enum.txt`、`rea-t9-enum2.txt`、
 `rea-t9-enum3.txt`；三处都是 `code: invalid_request`／`category: invalid_input`／`details.issues[]` 的
