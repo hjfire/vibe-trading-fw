@@ -47,6 +47,21 @@ PROBE_APP_JS = "tools/rea_probe_site/app.js"
 DATA_BASE64_PAYLOAD = re.compile(r"""data_base64["'\s:=]*[A-Za-z0-9+/]{200,}""")
 THIRD_PARTY_MARKUP = re.compile(r'<!doctype|<html|class="tv-', re.IGNORECASE)
 TV_PAGE_HOST = "tradingview.com"
+# F3-1（控制席探针 P-C）：「是不是三方页记录」判的是 **host**，不是子串。`目标 URL` 是
+# 「散文＋说明」混排的一行，活树实测 2 份自家页记录合法地在值里写着
+# 「**自家 dev server，不是 tradingview.com**」这句免责声明（`self-dw07-pixel-equality.md`／
+# `self-ci07-panel-toggle.md`），子串判定把它们读成了三方页记录 ⇒ 自家页／探针页的标记
+# （本来允许进仓）一进 L0 就吃一句「不拷第三方标记正文」的假话。
+# 为什么这样切：**带 scheme 的**第一个 URL token 才算目标——scheme 是必需项，正是它把
+# 「目标是这个 host」与「散文里提到了这个 host」分开；省掉 scheme 等于回到子串判定，缺陷照旧。
+# host 截到第一个 ``/``／``?``／``#``／空白／CJK 与全角标点为止，所以
+# `http://localhost:5899/pro-chart（**自家 dev server，不是 tradingview.com**；…）` 的 host 是
+# `localhost`，而 `https://www.tradingview.com/chart/?symbol=…` 的是 `www.tradingview.com`。
+# 登记的边界（F3 报告 §需裁）：值里没有任何带 scheme 的 URL ⇒ 判不出 host ⇒ 不进这把尺
+# （保守到「不猜」那一侧）；活树 24/24 份的 `目标 URL` 都含 scheme，实测零遗漏。
+URL_HOST_TOKEN = re.compile(
+    r"https?://([^/?#\s\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+)", re.IGNORECASE
+)
 
 # 命令形状（评审 A 的 N2）：旧判据 `"rea-agents" in cmd` 连 `curl https://x/rea-agents` 都放过。
 # 只钉形状，**不做子命令白名单**——REA 的词汇表写在文档里还会加，钉死词表＝下次多一条命令就假红。
@@ -107,6 +122,29 @@ def _l0_evidence_id(path: Path) -> str:
         return ""
 
 
+def _url_host(url_field: str) -> str:
+    """`目标 URL` 里**第一个带 scheme 的** URL token 的主机名（小写、去 userinfo、去端口、去尾点）。
+
+    取不到 URL token 就回 ""——调用方据此判「这不是任何三方页记录」，不拿散文去猜 host。
+    """
+    m = URL_HOST_TOKEN.search(url_field or "")
+    if not m:
+        return ""
+    host = m.group(1).lower().rsplit("@", 1)[-1]  # `https://user:pw@host/…` 取最后那段
+    return host.split(":", 1)[0].strip(".")  # `host:5899` 的端口不是主机名的一部分
+
+
+def _is_tv_page_record(url_field: str) -> bool:
+    """host 逐字是 ``tradingview.com`` 或它的**子域** ⇒ 三方页记录（F3-1：子串判定作废）。
+
+    两条来路都要留着：裸 host（`https://tradingview.com/chart/`）与任意子域
+    （`www.`／`s3.`／大写形状）。像 `tradingview.com.evil.example` 这种「后缀挂着 TV 字样」的
+    host 不算——点号边界就是它与真子域的唯一区别，子串判定分不开这两个。
+    """
+    host = _url_host(url_field)
+    return host == TV_PAGE_HOST or host.endswith(f".{TV_PAGE_HOST}")
+
+
 def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | None]:
     """One L0 record -> (violations, declared 用途／UNCAPTURABLE／None)."""
     v: list[str] = []
@@ -123,7 +161,9 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
         )
     # 只对「真实三方页记录」开口：自家页与探针页的标记本来就在仓里，拿同一把尺量它
     # 就把「观察自己的页面」变成了违规；`_example.md` 由 L0_EXEMPT 挡在走查之外。
-    if TV_PAGE_HOST in keys.get("目标 URL", "").lower() and THIRD_PARTY_MARKUP.search(text):
+    # F3-1：作用域按 **host** 判（`_is_tv_page_record`），不再按 `目标 URL` 的子串判——那句尺
+    # 把写着「不是 tradingview.com」免责声明的自家页记录也算了进去（活树实测 2 份）。
+    if _is_tv_page_record(keys.get("目标 URL", "")) and THIRD_PARTY_MARKUP.search(text):
         v.append(
             f"{rel}: 目标 URL 是 {TV_PAGE_HOST} 的三方页记录里出现标记正文（`<!DOCTYPE`／`<html`／`class=\"tv-`）——"
             "不拷第三方源码与标记正文，只落结构化读数与三键 sha256＋bytes＋media_type"
@@ -424,11 +464,15 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
         purposes[p.name] = purpose
         # 评审 A 的 I2（裁过的一半）：只禁重复 `evidence_id`，**不**禁重复 `命令`
         # （活树实测有 1 组逐字相同的命令行，合法：同一条件重跑、主键不同）。
-        # harness／基线／不可取证三种声明与孤证规则同样让路——它们不冒充观察面。
-        if purpose not in ("harness", "基线", UNCAPTURABLE):
-            ev = _l0_evidence_id(p)
-            if EVIDENCE_ID.fullmatch(ev):
-                by_evidence.setdefault(ev, []).append(p.name)
+        # F3-2：这把尺**不给 用途 让路**（控制席探针 P-E 抓到旧写法能隐身：`if purpose not in
+        # ("harness", "基线", UNCAPTURABLE)` ⇒ 抄一份再补一行 `用途：基线` 就躲过去，成本一行字）。
+        # 两把尺判的是两件事——孤证规则判「有没有被 L1 引用」，所以 用途 声明让路是对的（见下面
+        # `if spec_ids and not spec_format_failure:` 那一段）；重复主键判「一份捕获有没有被抄成
+        # 两个面」，与引用无关。`状态：不可取证` 的记录结构上没有 `evidence_id`，
+        # `EVIDENCE_ID.fullmatch` 自己就把它挡在表外；`L0_EXEMPT` 早被 `l0_files` 滤掉了。
+        ev = _l0_evidence_id(p)
+        if EVIDENCE_ID.fullmatch(ev):
+            by_evidence.setdefault(ev, []).append(p.name)
     for ev in sorted(by_evidence):
         names = sorted(by_evidence[ev])
         if len(names) > 1:

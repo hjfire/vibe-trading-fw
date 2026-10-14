@@ -68,6 +68,14 @@ L0_BODY = f"""# L0：探针页面骨架
 ```
 """
 
+# F3-2：`_tree()` 之外新造的「第二份记录」（`loose.md` 那一族）的主键，逐字等于 `L0_BODY`
+# 只是换了 `evidence_id`。老针 `test_harness_purpose_exempts_an_uncited_l0`／
+# `test_baseline_purpose_exempts_an_uncited_l0` 钉的是「孤证规则给 用途 让路」，不是「允许两份
+# 记录共用主键」；原夹具直接抄 `L0_BODY` 才顺带造出一枚重复主键。重复主键这把尺现在不吃
+# 用途 豁免，所以改的是**夹具数据**（换一枚独立主键），两根老针的 `== []` 断言一字未动。
+LOOSE_EVID = "ev_" + "cd" * 32
+LOOSE_BODY = L0_BODY.replace(EVID, LOOSE_EVID)
+
 UNCAPTURABLE_BODY = (
     "# L0：画线工具目录\n\n"
     "- 命令：npx -y rea-agents@latest inspect-web-page http://127.0.0.1:9222 TID --token-limit 200\n"
@@ -775,11 +783,14 @@ def test_harness_purpose_exempts_an_uncited_l0(tmp_path):
     checksum 钉，这里不重复。本机 core.autocrlf=true 且仓库根没有 .gitattributes
     （实测），checkout 出来的 app.js 就是 CRLF —— 行尾不是证据的一部分，摘掉
     _audit_l0 的 replace(b"\\r\\n", b"\\n") 这根针要红。
+
+    F3-2：夹具从 `L0_BODY` 换成 `LOOSE_BODY`（逐字同一份记录，只换 `evidence_id`），
+    因为重复主键那把尺现在不吃 用途 豁免；`== []` 这两行断言一字未动。
     """
     root = _tree(tmp_path)
     app = tmp_path / "tools" / "rea_probe_site" / "app.js"
     want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
-    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    _mk(root, "l0/loose.md", LOOSE_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
     assert audit_forensics(root, tmp_path) == []
 
     app.write_bytes(PROBE_APP_JS_LF.replace(b"\n", b"\r\n"))  # 同一个文件按 CRLF 落盘
@@ -789,7 +800,7 @@ def test_harness_purpose_exempts_an_uncited_l0(tmp_path):
 
 def test_baseline_purpose_exempts_an_uncited_l0(tmp_path):
     root = _tree(tmp_path)
-    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：基线\n")
+    _mk(root, "l0/loose.md", LOOSE_BODY + "\n- 用途：基线\n")  # 夹具换主键，断言一字未动（F3-2）
     assert audit_forensics(root, tmp_path) == []
 
 
@@ -1321,6 +1332,73 @@ def test_the_same_markup_on_a_self_page_record_is_not_the_new_violation(tmp_path
     assert problems == [], problems
 
 
+# --- F3-1（控制席探针 P-C）：这把尺的作用域判的是 **host**，不是子串。 ----------------
+# `目标 URL` 是「散文＋说明」混排的一行，不是纯 URL：活树实测 2 份自家页记录合法地在值里
+# 写着「**自家 dev server，不是 tradingview.com**」这句免责声明（`self-dw07-pixel-equality.md`
+# 与 `self-ci07-panel-toggle.md`），旧实现那句 `TV_PAGE_HOST in keys.get("目标 URL", "").lower()`
+# 拿子串量散文行 ⇒ 把它们当成三方页记录 ⇒ 自家页标记一进仓就判「不拷第三方标记正文」，
+# 而那句话对 host 是 `localhost:5899` 的记录是**假的**。下面两根针的观测量只能来自 host
+# 判定：换回子串判定它们立刻红（F3 报告 §变异 第 1 行）。
+OWN_PAGE_URL_LINE = (
+    "- 目标 URL：http://localhost:5899/pro-chart（**自家 dev server，不是 tradingview.com**；"
+    "当趟 stdout 的 target 块回声同一 url 与 origin http://localhost:5899）"
+)
+PROBE_PAGE_URL_LINE = "- 目标 URL：http://127.0.0.1:8077/（本地探针页，**不是 tradingview.com**）"
+OWN_PAGE_MARKUP = '```html\n<!DOCTYPE html>\n<html lang="zh"><div class="pro-chart-toolbar">\n```\n'
+
+
+@pytest.mark.parametrize(
+    "url_line",
+    [OWN_PAGE_URL_LINE, PROBE_PAGE_URL_LINE],
+    ids=["self-dev-server-disclaims-tv", "local-probe-disclaims-tv"],
+)
+def test_a_own_page_record_naming_tv_in_its_disclaimer_is_not_a_third_party_record(tmp_path, url_line):
+    """F3-1 的钉：`目标 URL` 值里逐字含「不是 tradingview.com」，host 是 localhost／127.0.0.1
+    ⇒ 它不是三方页记录，贴自家页标记（`<!DOCTYPE`／`<html`）不得红。
+
+    反向那半（简报 §F3-1 第 3 条）：host `127.0.0.1:8077` 的探针页记录同样不红——两个 case
+    共用一把尺，所以免责声明这一半也钉住了（子串实现下两个 case 都红）。
+    """
+    body = _l0_with_url(L0_BODY, url_line) + OWN_PAGE_MARKUP
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/self-dw07-pixel-equality.md", repo)
+    assert problems == [], problems
+
+
+@pytest.mark.parametrize(
+    "url_line",
+    [
+        "- 目标 URL：https://tradingview.com/chart/",
+        "- 目标 URL：https://s3.tradingview.com/snippets/",
+        "- 目标 URL：HTTPS://WWW.TRADINGVIEW.COM/chart/?symbol=NASDAQ%3AAAPL",
+    ],
+    ids=["bare-host", "subdomain", "uppercase"],
+)
+def test_host_judgement_still_refuses_every_tradingview_shape(tmp_path, url_line):
+    """收紧的那一半：改成 host 判定**不许**顺手把真三方页放走（裸 host／子域／大写照样红）。
+
+    `host == "tradingview.com" or host.endswith(".tradingview.com")` 两条来路各钉一次，
+    再加上大小写一向——摘掉 endswith 或摘掉 lower() 都有针红。
+    """
+    body = _l0_with_url(L0_BODY, url_line) + "```html\n" + MARKUP_EXCERPT
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/tv-a1-page.md", repo)
+    assert any("标记正文" in x and "tradingview.com" in x for x in problems), problems
+
+
+def test_a_lookalike_host_is_not_a_tradingview_page_record(tmp_path):
+    """点号边界：`tradingview.com.evil.example` 里逐字含着 `tradingview.com`，但它不是 TV 的页面。
+
+    子串判定会把它当三方页记录（=F3-1 那个缺陷的镜像形状），host 判定按点号边界把它放在尺外。
+    这根针钉的是**边界方向**：摘掉 `endswith("." + TV_PAGE_HOST)` 换成子串 ⇒ 本针红。
+    """
+    url_line = "- 目标 URL：https://tradingview.com.evil.example/chart/"
+    body = _l0_with_url(L0_BODY, url_line) + "```html\n" + MARKUP_EXCERPT
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/tv-a1-page.md", repo)
+    assert not any("标记正文" in x for x in problems), problems
+
+
 def test_captured_evidence_with_an_empty_spec_table_is_not_green(tmp_path):
     """I1：表头齐＋分隔行齐＋零条目 ⇒ 「取证了但没写规格」，门禁不许沉默。"""
     empty = f"# 规格：画线面\n\n{SPEC_HEADER}\n|---|---|---|---|---|\n"
@@ -1369,14 +1447,50 @@ def test_the_same_command_on_two_faces_is_not_a_duplicate_key(tmp_path):
 
 
 def test_a_harness_copy_does_not_collide_under_the_orphan_exemptions(tmp_path):
-    """既有针 `test_harness_purpose_exempts_an_uncited_l0` 的语义边界：声明了 用途 的记录
-    不进重复主键这把尺（harness／基线／不可取证三种都是「不冒充观察面」的声明）。
+    """孤证规则给 用途：harness 让路，但那份副本**带自己的主键**——F3-2 起这把尺不吃 用途 豁免。
+
+    原先这份夹具拿 `L0_BODY` 逐字再造一个文件，于是 `loose.md` 与 `_tree()` 里的
+    `probe-skeleton.md` 共用同一枚 `EVID`，它才需要「重复主键也按 用途 让路」这个豁免来保住
+    `assert not any("同一枚 evidence_id" …)`。豁免面已在 F3-2 被摘掉（台账裁定：抄一份再补
+    一行 `用途：基线` 就躲过这把尺，成本一行字 ⇒ 不接受），所以这里改的是**夹具数据**
+    （副本换一枚独立主键 `LOOSE_EVID`），断言一字未动。两根老针的豁免腿仍由
+    `test_harness_purpose_exempts_an_uncited_l0`／`test_baseline_purpose_exempts_an_uncited_l0` 钉。
     """
     root = _tree(tmp_path)
     want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
-    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    _mk(root, "l0/loose.md", LOOSE_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
     problems = audit_forensics(root, tmp_path)
     assert not any("同一枚 evidence_id" in x for x in problems), problems
+
+
+def test_a_purposed_copy_still_collides_on_its_primary_key(tmp_path):
+    """F3-2 的钉：两份记录都声明 用途（一份 基线、一份 harness）＋共用同一枚合法主键 ⇒ 必须红，
+    而且红在「同一枚 evidence_id」这一条上。
+
+    这是 F2 报告主动披露的那个豁免逃逸面（控制席探针 P-E：把副本标成 `用途：基线` ⇒ 重复主键
+    隐身）。裁定理由：两把尺判的是两件不同的事——孤证规则判「这份证据有没有被 L1 引用」，
+    所以 用途 声明让路是对的；重复主键判「一份捕获有没有被抄成两个面」，**跟有没有被引用无关**。
+    判别力形状：这两份记录都声明了 用途 ⇒ 孤证那一条**不许**出现（豁免照旧），所以树上关于
+    这两份记录的红只可能来自重复主键；把 `用途` 豁免加回倒排表 ⇒ 本针立刻不红（F3 报告 §变异 第 2 行）。
+    """
+    root = _tree(tmp_path)
+    want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
+    copy = "ev_" + "cd" * 32  # 与 _tree() 里那枚 EVID 不同，两副本之间逐字相同
+    base = L0_BODY.replace(EVID, copy)
+    _mk(root, "l0/tv-copycat-baseline.md", base + "\n- 用途：基线\n")
+    _mk(root, "l0/tv-copycat-harness.md", base + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    problems = audit_forensics(root, tmp_path)
+    assert any(
+        "同一枚 evidence_id" in x
+        and "tv-copycat-baseline.md" in x
+        and "tv-copycat-harness.md" in x
+        for x in problems
+    ), problems
+    assert not any(
+        "没有被任何规格条目引用" in x
+        and ("tv-copycat-baseline.md" in x or "tv-copycat-harness.md" in x)
+        for x in problems
+    ), problems  # 孤证那一条照旧让路 ⇒ 红只可能来自重复主键这把尺
 
 
 # ---------------------------------------------------------------------------
