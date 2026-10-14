@@ -159,6 +159,16 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
             f"{rel}: 图像本体（`data_base64` 后面跟着 base64 载荷）一字节都不许进仓——"
             "像素证据只落三键：sha256＋bytes＋media_type"
         )
+    # F3-1 的配套腿（F3 报告「需裁」第 1 条 → 控制席裁定）：host 判定要求 scheme，所以值里
+    # 一个带 scheme 的 URL 都没有时，不能猜它是自家页——判不出 host 就是这条记录不合格。
+    # 活树现读 24/24 份走查内的记录都带 scheme，本判据零红。占位符值让给上面那条「还留着
+    # 占位符尖括号」（`"<" not in`），免得同一条记录收到两句归因不同的话、下一席修错那半。
+    url_field = keys.get("目标 URL", "")
+    if url_field and "<" not in url_field and not _url_host(url_field):
+        v.append(
+            f"{rel}: 目标 URL 里没有带 scheme 的 URL（`http://`／`https://`），判不出 host——"
+            "三方页那把尺看不见这条记录，所以不许静默通过"
+        )
     # 只对「真实三方页记录」开口：自家页与探针页的标记本来就在仓里，拿同一把尺量它
     # 就把「观察自己的页面」变成了违规；`_example.md` 由 L0_EXEMPT 挡在走查之外。
     # F3-1：作用域按 **host** 判（`_is_tv_page_record`），不再按 `目标 URL` 的子串判——那句尺

@@ -1399,6 +1399,37 @@ def test_a_lookalike_host_is_not_a_tradingview_page_record(tmp_path):
     assert not any("标记正文" in x for x in problems), problems
 
 
+@pytest.mark.parametrize(
+    "url_line",
+    ["- 目标 URL：tradingview.com/chart/", "- 目标 URL：www.tradingview.com/chart/"],
+    ids=["bare-host-no-scheme", "subdomain-no-scheme"],
+)
+def test_a_target_url_without_a_scheme_is_refused_not_read_blindly(tmp_path, url_line):
+    """F3-1 的配套腿：host 判定要求 scheme，所以裸 `tradingview.com/…` 会掉出标记正文那把尺。
+
+    裁定＝不猜 host，改判「这条记录不合格」：`目标 URL` 里必须有一个带 scheme 的 URL，
+    否则红。判别力＝把 `_audit_l0` 里那句「判不出 host 就出违规」摘掉 ⇒ 本针不红，而
+    那份正文里的 `<!DOCTYPE` 会安静地待在一个尺看不见的记录里（正是 F3 报告需裁第 1 条）。
+    """
+    body = _l0_with_url(L0_BODY, url_line) + "```html\n<!DOCTYPE html>\n```\n"
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/tv-a1-page.md", repo)
+    assert any("判不出 host" in x for x in problems), problems
+
+
+def test_a_placeholder_target_url_keeps_only_the_placeholder_violation(tmp_path):
+    """绿方向：占位符值已经有「还留着占位符尖括号」那条红，不许再叠一条「判不出 host」。
+
+    钉的是两条判据的**分工**——把 `"<" not in url_field` 那个前置摘掉 ⇒ 本针红（同一条记录
+    收到两句归因不同的话，下一席会去修错的那半）。
+    """
+    body = _l0_with_url(L0_BODY, "- 目标 URL：<换成真实地址>")
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/tv-a1-page.md", repo)
+    assert any("占位符" in x for x in problems), problems
+    assert not any("判不出 host" in x for x in problems), problems
+
+
 def test_captured_evidence_with_an_empty_spec_table_is_not_green(tmp_path):
     """I1：表头齐＋分隔行齐＋零条目 ⇒ 「取证了但没写规格」，门禁不许沉默。"""
     empty = f"# 规格：画线面\n\n{SPEC_HEADER}\n|---|---|---|---|---|\n"
