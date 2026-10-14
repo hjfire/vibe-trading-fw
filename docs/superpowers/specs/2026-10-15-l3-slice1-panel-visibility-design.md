@@ -66,7 +66,14 @@ export function savePanelVisibility(v: PanelVisibility): void;
 - **读＝逐键严格判定**：`obj[field] === true` 才真，其余（缺键、`"true"` 字符串、`1`、坏 JSON、存储被禁）一律回落默认
   `{ workbench: false, subIndicator: false, drawings: false, legend: false }`。和 `readSession` 那句「strict `=== true`, so a
   corrupted or hand-edited bucket cannot turn the chart into a line nobody asked for」同一条纪律。
-- **写＝整体替换，不合并**：`JSON.stringify(v)`；任何异常（隐私模式、配额）静默吞掉——持久化是便利，不该让一次点击报错。
+- **写＝只落偏差，全 false 就删键**（与 `lib/chartLegend.ts:167` 的 `saveLegendPrefs` 同规：现读那段注释
+  「未偏离默认的键一律不落盘」＋`if (Object.keys(deviated).length === 0) { removeItem; return; }`）。
+  于是盘上的形状是 `{"drawings":true}` 这种**只含为真的键**，不是一枚全量四键的快照。
+  为什么跟本仓最近的先例而不是跟 `SESSION_KEY`（那枚是无条件整体写）：图例与 Heikin-Ashi 这两枚是**同族**（界面偏好，读侧从默认补齐），
+  `SESSION_KEY` 装的是「上次看的标的与周期」——那本来就没有「默认」可回落。同族照同族。
+  带来一条要说清的性质：首挂载时若盘上是**坏值**（load 判成全 false），合成点会把那枚键**删掉**——自愈，
+  且 §5(2) 给它一根明写的针，免得下一个人把它当意外。
+- **写不合并，整体替换**：`JSON.stringify(偏差对象)`；任何异常（隐私模式、配额）静默吞掉——持久化是便利，不该让一次点击报错。
 
 ### 4.2 接线（`ProChart.tsx`）
 
@@ -76,9 +83,8 @@ export function savePanelVisibility(v: PanelVisibility): void;
   不在六七个 `set*` 调用点上分散写——分散写漏一个点就是「这个面板的记忆半真半假」，而那正是本仓图例那一章记过的同型坑
   （多个写入点 ⇒ 必须并到一个合成点）。合成点只写不读，读只发生在初值，方向单一。
 - StrictMode 下初值会双读、effect 会双跑，但写的是同一个值，幂等。
-- **首挂载就写一次全 false**，不做「未偏离不落盘」。图例／Heikin-Ashi 那两条偏好刻意不落默认值，是因为它们的落点会经
-  `setStyles` 变成像素输出；这一枚和 `SESSION_KEY` 同族（会话态，`:790` 那枚 effect 无条件写），键小、会话级、关标签即清。
-  写在首挂载换来一条好处：读侧的回落路径与「键存在但全是 false」在真机上同形，活体趟不必区分。
+- **首挂载写不写盘由 §4.1 那条偏差编码决定**：没开过任何面板 ⇒ 合成点跑到 `removeItem`，键始终不存在；这条性质是刻意的（同族先例如此），
+  所以 §5(2) 有一根「未动过 ⇒ 键为 `null`」的针守着它，别让人日后把它「修」成无条件写。
 
 ### 4.3 坐标漂移：这片不去躲它，而是当场重钉
 
@@ -110,7 +116,9 @@ export function savePanelVisibility(v: PanelVisibility): void;
 
 ## 5. 判据与验收
 
-1. **纯函数单测**（`frontend/src/lib/__tests__/chartPanels.test.ts`）四态：默认为全 false；写后读回往返；坏 JSON／缺键／非 `true` 值回落默认；`sessionStorage` 抛异常时 load 回落、save 不抛。
+1. **纯函数单测**（`frontend/src/lib/__tests__/chartPanels.test.ts`）五态：①键不存在 ⇒ 全 false；②写一枚为真再读回 ⇒ 只有那枚真、且盘上 JSON 只含该键；
+   ③坏 JSON／缺键／非 `true` 值回落默认；④**先让键存在**（先写 `{"drawings":true}`）再写回全 false ⇒ 键被 `removeItem` 删掉（`getItem` 得 `null`）——不先建键就断言 `null`，
+   那根针在「从来没写过」的世界里也绿，属本仓记过的空集合真空通过；⑤`sessionStorage` 抛异常时 load 回落、save 不抛。
 2. **页面级针**（`frontend/src/pages/__tests__/ProChartPanels.test.tsx`，测试替身形状照 `ProChartLegend.test.tsx` 直接 render `ProChart`）：
    - **前置（不然「四个动作」这句话在 jsdom 里点不动）**：`画线清单` 那枚按钮在 `drawCount === 0 && parkedCount === 0` 时 `disabled`
      （现读 `ProChart.tsx:2836`），所以本测试在挂载前往 `localStorage` 塞一枚 `pro-chart.drawings.v1` 桶、里面放一条 `priceLine`，
@@ -119,12 +127,16 @@ export function savePanelVisibility(v: PanelVisibility): void;
      而**工作台入口那枚没有 `aria-label`**（现读 2750-2756：只有 `title="编写/管理自定义指标公式（保存在本地）"`，可达名来自文本 `ƒ 指标公式`），
      所以测试里取它要用 `getByRole("button", { name: /指标公式/ })`，别按 `aria-label` 找——按 label 找会在「夹具没做对」和「机制坏了」之间给出假红。
      同文件 3229 那枚「去修正」也走 `openFormulaPanel`，但它是错误横幅里的补救入口，不属于本条那「四个打开动作」。
-   - 点 `画线清单` 开关 → `sessionStorage` 里 `pro-chart.panels.v1` 含 `"drawings":true`（四枚各点一次，逐枚断言自己的键）；
-   - **关掉也要落盘**：把工作台点开后经遮罩 `onClose`（现读 `ProChart.tsx:3245`）关掉 → 同一枚键回 `"workbench":false`。
+   - 点 `画线清单` 开关 → `sessionStorage` 的 `pro-chart.panels.v1` 读出来逐键等于 `{"drawings":true}`
+     （四枚各点一次，各断言自己那一枚；偏差编码 ⇒ 键里**只有**那一枚为真的键）；
+   - **未动过 ⇒ 键不存在**：干净挂载、一次都不点，`sessionStorage.getItem(PANELS_KEY)` 为 `null`（守 §4.1 那条偏差编码，
+     也顺手证明合成点没在首挂载把默认值刷上盘）；
+   - **关掉也要落盘**：把工作台点开后经遮罩 `onClose`（现读 `ProChart.tsx:3245`）关掉 → 那枚键**回到 `null`**。
      这根针存在的理由是 §5(3) 的变异②——只在 toggle 里写、漏掉 `onClose` 那类「非翻转的关闭路径」，没有它就照不出来；
    - 带着这条会话记录重新挂载 → 四枚开关都读得到 `aria-pressed="true"`（这就是「活过一次刷新」在 jsdom 里的等价物；
      jsdom 的 `sessionStorage` 在同一测试文件内跨挂载共享，`beforeEach` 里显式清，否则第二根针会读到第一根留下的值）；
-   - **严格判定**：预置 `{"drawings":"yes"}` 再挂载 → 那枚开关读不到 pressed（truthy 但非 `true` 不算开）；
+   - **严格判定＋自愈**：预置 `{"drawings":"yes"}` 再挂载 → 那枚开关读不到 pressed（truthy 但非 `true` 不算开），
+     且首挂载后那枚键被删成 `null`（§4.1 说的坏值自愈，写成针而不是留在注释里）；
    - **URL 不变性**（CI-06 要的那根针）：四个打开动作各点一次，逐次断言 `window.location.href` 与动作前逐字相同。
    - **链接优先**（§7 那条风险）：先塞 `{"workbench":false}`，再经 `?s=` 分享链接挂载，断言工作台被打开**且**会话键被写成 `workbench:true`。
 3. **变异自证**：摘掉机制必须有针变红，三处各配一根指定的针——①把四枚初值改回 `useState(false)` ⇒ 「带记录重新挂载读到 pressed」红；
@@ -169,9 +181,14 @@ export function savePanelVisibility(v: PanelVisibility): void;
 - 一致性：§2 说「只取 DW-05 前半个键」，§4 的键里确实只有可见性四枚，没有删除开关；§6 的两条排除各自给了理由，不与 §4 冲突。
 - 歧义：「活过一次刷新」在 §5(2) 被换成 jsdom 里可断言的具体形状（带记录重新挂载读到 pressed），不留在口号层。
 - 范围：单片单表面，够一份计划、够一次评审。
-- **本轮改过的一处**：§4.2 原先只写「一个 useEffect 当合成点」，没交代它会挪号；发现这一点后先把四种接线形状权衡完（§4.3 的 (B)(C)(D)），
-  裁定照本仓先例走 effect 合成点、把漂移当固有代价并配一条重钉任务（§5(4)）。这条裁定记进本片台账，理由＝(A) 与 `:781`／`:790` 两枚同类 effect 同形，
-  而行中性方案省下的行数挡不住「任何实现都挪号」这件事。
+- **本轮改过两处**（都发生在实现之前、无人引用过旧文本，故原地改写而不是追加更正）：
+  1. §4.2 原先只写「一个 useEffect 当合成点」，没交代它会挪号；发现这一点后先把四种接线形状权衡完（§4.3 的 (B)(C)(D)），
+     裁定照本仓先例走 effect 合成点、把漂移当固有代价并配一条重钉任务（§5(4)）。理由＝(A) 与 `:781`／`:790` 两枚同类 effect 同形，
+     而行中性方案省下的行数挡不住「任何实现都挪号」这件事。
+  2. §4.1 的写侧第一版是「无条件整体写四枚布尔的快照」，理由写成「和 `SESSION_KEY` 同族」；现读 `lib/chartLegend.ts:143-180` 与
+     `ProChartLegend.test.tsx:225`／`:255` 后改判——本仓最近的同族先例是**偏差编码＋全默认删键**（`saveLegendPrefs`），
+     且 `:781`／`:790` 那两枚无条件写的装的不是「可回落默认的偏好」。改判连带把 §5(1) 从四态扩成五态、§5(2) 多加两根针
+     （未动过 ⇒ 键为 `null`；坏值 ⇒ 首挂载删键）。台账里这条记成 `Ruling`。
 - **本轮复跑／现读的读数**：§4.3 那张表来自 2026-10-15 在仓库根跑的 `grep -roE "ProChart\\.tsx:[0-9]+" docs tools`（命中分布在 `gap-matrix.md`／`spec/chart-interaction.md`／`l0/self-ci07-panel-toggle.md` 三份取证文档，加上 `docs/superpowers/` 里历片的旧 spec／plan——后者是历史记录，按既有口径不改写）；
   `tools/forensics_audit.py:402-436` 的坐标规则是现读那段 `v.append(...)`；`:2836` 的 disabled 谓词、`:3245` 的遮罩 `onClose`、2750-2756 那枚入口按钮没有 `aria-label`、
   `ProChartDrawings.test.tsx:1124-1145` 的桶夹具、`:781`／`:790` 两枚同类 effect 的形状——都是本轮 `sed -n` 开出来的，不是转述。
