@@ -1592,6 +1592,74 @@ def test_shipped_wiki_tree_is_trademark_clean():
     assert scan_trademark(tree) == []
 
 
+GATE_B_SUFFIXES = {".md", ".html", ".json", ".py"}
+
+
+def tracked_artifact_paths(repo: Path) -> list[str]:
+    """The files upstream's gate (b) *would* read, minus the two exemptions it grants.
+
+    `docs/` is excluded by the gate itself (internal planning prose about the policy)
+    and `tools/ci_grep_gates.sh` necessarily carries the pattern string it greps for —
+    upstream owns that file, so its exemption is not ours to widen.
+    """
+    try:
+        proc = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True)
+    except FileNotFoundError:
+        pytest.skip("[git-absent] 取不到跟踪清单——跳过＝未覆盖，不是通过")
+    if proc.returncode != 0:
+        raise RuntimeError(f"git ls-files 读坏了（rc={proc.returncode}）：{proc.stderr!r}")
+    paths = []
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        posix = raw.decode("utf-8")
+        if Path(posix).suffix.lower() not in GATE_B_SUFFIXES:
+            continue
+        if posix.startswith("docs/") or posix == "tools/ci_grep_gates.sh":
+            continue
+        paths.append(posix)
+    return sorted(paths)
+
+
+def test_tracked_artifacts_are_trademark_clean():
+    """门禁 (b) 看不见跟踪面里的那枚字面量——这条守卫补上它漏掉的那一维。
+
+    门尾的 `| grep -v "tools/ci_grep_gates.sh"` 按**整行**过滤，所以一行正文只要同时提到
+    那个脚本路径，它的命中就被整行吃掉。于是「门报的命中全在未跟踪 scratch」这句
+    **不等于**「跟踪面干净」——本针判的是后一件事，判据是逐枚文件的命中集合为空，
+    不是门报了几条（条数会随本地 scratch 漂移，且被那层 `grep -v` 系统性改小）。
+    摘掉本函数的 `TM_RE.search` ⇒ 本针失去判别力；摘掉上面两条豁免中任一条 ⇒ 本针立刻红
+    （脚本自身与被排除的 `docs/**` 都带这个字面量，现读即可复算），所以那两条豁免是
+    **门自己的排除表的镜像**，不是本针的宽恕面。
+    """
+    paths = tracked_artifact_paths(REAL_REPO)
+    assert len(paths) > 100, f"扫描集只有 {len(paths)} 枚——这条守卫会在近空集合上真空通过"
+    hits = []
+    for posix in paths:
+        path = REAL_REPO / posix
+        if not path.is_file():  # 已跟踪但工作区缺件：门按文件系统扫，同样看不见它
+            continue
+        for n, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            if TM_RE.search(line):
+                hits.append((posix, n))
+    assert not hits, (
+        f"跟踪面带商标字面量：{hits}——按 M1 全局约束改写为"
+        "「禁止商标字面量，见 `tools/ci_grep_gates.sh`」那一型"
+    )
+
+
+def test_a_hit_line_naming_the_gate_script_is_still_a_hit(tmp_path):
+    """本守卫与门的那处差别的形状针：同一行既带字面量又提脚本路径，仍然算命中。"""
+    planted = tmp_path / "log.md"
+    planted.write_text(
+        f"grep 门 `bash tools/ci_grep_gates.sh` rc=1，报 `FAIL: literal '{TM_NEEDLE}' found`\n",
+        encoding="utf-8",
+    )
+    assert scan_trademark(tmp_path) == [("log.md", 1)]
+
+
 # ---------------------------------------------------------------------------
 # WikiRoot: one root, two layouts, no silent empty tree
 # ---------------------------------------------------------------------------
