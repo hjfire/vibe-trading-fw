@@ -3,9 +3,14 @@
 The funnel only holds if every level's artefact is machine-checkable: an L0
 record without an ``evidence_id`` is a memory, a spec entry without a verdict is
 prose, and a gap row without a coordinate is a guess. This module turns those
-three sentences into violations so the test suite can refuse them, and carries
-the compliance red line: TradingView must never become a runtime dependency of
-``frontend/src``.
+three sentences into violations so the test suite can refuse them, and it
+carries the funnel side of the compliance red line as two *content* criteria on
+L0 records: an image body (a ``data_base64`` payload) never enters the repo —
+pixel evidence is only ``sha256`` + ``bytes`` + ``media_type`` — and a
+third-party page's markup body（标记正文）is never transcribed into an L0
+record. The
+runtime-dependency half of that red line is not carried here: it lives in
+``audit_tv_host_allowlist`` below.
 
 Stdlib only. A missing ``docs/forensics/`` is reported as a violation here; it
 is the *test* that decides to skip instead (see tools/test_forensics_spec.py).
@@ -34,6 +39,18 @@ SPEC_EXEMPT: frozenset[str] = frozenset({"_example.md"})
 EVIDENCE_ID = re.compile(r"ev_[0-9a-f]{64}")
 KEY_LINE = re.compile(r"^- ([^：\n]{1,24})：(.*)$")
 PROBE_APP_JS = "tools/rea_probe_site/app.js"
+
+# 内容红线（评审 A 的 C1 两半，spec 那一节的「硬红线」逐字：`data_base64` 绝不准进仓库、
+# L0 里像素证据只落 sha256＋bytes＋media_type；不拷 TV 源码／标记正文）。两条都只对**内容**
+# 开口，都不数行多长：通用「超长行」阈值被控制席两次否决（现测活树最长行 3,103，且它正落在
+# 即将变长的 CI-07 格里），任意的数下次编辑就变成假红。
+DATA_BASE64_PAYLOAD = re.compile(r"""data_base64["'\s:=]*[A-Za-z0-9+/]{200,}""")
+THIRD_PARTY_MARKUP = re.compile(r'<!doctype|<html|class="tv-', re.IGNORECASE)
+TV_PAGE_HOST = "tradingview.com"
+
+# 命令形状（评审 A 的 N2）：旧判据 `"rea-agents" in cmd` 连 `curl https://x/rea-agents` 都放过。
+# 只钉形状，**不做子命令白名单**——REA 的词汇表写在文档里还会加，钉死词表＝下次多一条命令就假红。
+REA_COMMAND_SHAPE = re.compile(r"npx\s+-y\s+rea-agents@latest\s+([a-z-]+)")
 
 SPEC_HEADER = "| 条目号 | 规格句 | 判据 | 判据类型 | L0 依据 |"
 ENTRY_ID = re.compile(r"TV-[A-Z][A-Z0-9]*-\d{2}")
@@ -75,18 +92,42 @@ def _read(path: Path) -> str:
 def _command_hygiene(rel: str, cmd: str) -> list[str]:
     """命令卫生：Global Constraint 5 是无条件的，不可取证的记录同样要限住自己的输出。"""
     v: list[str] = []
-    if cmd and "rea-agents" not in cmd:
-        v.append(f"{rel}: 命令里没有 rea-agents，这不是一条 REA 取证记录")
+    if cmd and not REA_COMMAND_SHAPE.search(cmd):
+        v.append(f"{rel}: 命令里没有 rea-agents@latest 的 REA 形状（要 `npx -y rea-agents@latest <子命令> …`）")
     if cmd and "--filter-output" not in cmd and "--token-limit" not in cmd:
         v.append(f"{rel}: 命令既没有 --filter-output 也没有 --token-limit（证据体积会吃掉内存）")
     return v
 
 
+def _l0_evidence_id(path: Path) -> str:
+    """一份 L0 记录的主键；读不出来或没写就回 ""（读失败那条由 `_audit_l0` 报，这里不重复）。"""
+    try:
+        return _meta_keys(_read(path)).get("evidence_id", "")
+    except (OSError, ValueError):  # 权限／竞态／目录当文件：交给 `_audit_l0` 说，这里不许打穿调用方
+        return ""
+
+
 def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | None]:
     """One L0 record -> (violations, declared 用途／UNCAPTURABLE／None)."""
     v: list[str] = []
-    text = _read(path)
+    try:
+        text = _read(path)
+    except (OSError, ValueError):  # 评审 A 的 I3：回溯穿出 audit_forensics 就吞掉全部已收集的违规
+        return [f"{rel}: 读不出来（权限／竞态），这份记录没被审计"], None
     keys = _meta_keys(text)
+
+    if DATA_BASE64_PAYLOAD.search(text):
+        v.append(
+            f"{rel}: 图像本体（`data_base64` 后面跟着 base64 载荷）一字节都不许进仓——"
+            "像素证据只落三键：sha256＋bytes＋media_type"
+        )
+    # 只对「真实三方页记录」开口：自家页与探针页的标记本来就在仓里，拿同一把尺量它
+    # 就把「观察自己的页面」变成了违规；`_example.md` 由 L0_EXEMPT 挡在走查之外。
+    if TV_PAGE_HOST in keys.get("目标 URL", "").lower() and THIRD_PARTY_MARKUP.search(text):
+        v.append(
+            f"{rel}: 目标 URL 是 {TV_PAGE_HOST} 的三方页记录里出现标记正文（`<!DOCTYPE`／`<html`／`class=\"tv-`）——"
+            "不拷第三方源码与标记正文，只落结构化读数与三键 sha256＋bytes＋media_type"
+        )
 
     if "不可取证" in keys.get("状态", ""):
         cmd = keys.get("命令", "")
@@ -126,9 +167,14 @@ def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | N
         else:
             # 行尾不是证据的一部分：本机 core.autocrlf=true 会把工作树里的 app.js
             # 变成 CRLF，裸 read_bytes() 会让反编造针在下次 checkout 时假红。
-            want = hashlib.sha256(app.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-            if want not in text:
-                v.append(f"{rel}: 声明 harness 用途但正文没有探针 app.js 的当前 sha256（{want}）")
+            try:
+                raw = app.read_bytes()
+            except (OSError, ValueError):  # 同 I3：核不了校验和要说出来，不许把回溯打出去
+                v.append(f"{rel}: {PROBE_APP_JS} 读不出来（权限／竞态）——harness 的 sha256 没法核对")
+            else:
+                want = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+                if want not in text:
+                    v.append(f"{rel}: 声明 harness 用途但正文没有探针 app.js 的当前 sha256（{want}）")
     return v, (purpose or None)
 
 
@@ -210,7 +256,10 @@ def _resolve_l0(forensics_root: Path, ref: str) -> str | None:
 
 def _audit_spec(path: Path, rel: str, forensics_root: Path) -> tuple[list[str], set[str], list[str]]:
     v: list[str] = []
-    text = _read(path)
+    try:
+        text = _read(path)
+    except (OSError, ValueError):  # 评审 A 的 I3：同 `_audit_l0`，读不动 ⇒ 违规，不许回溯
+        return [f"{rel}: 读不出来（权限／竞态），这份规格没被审计"], set(), []
     seen, rows, bad = _table(text, SPEC_HEADER)
     if not seen:
         return [f"{rel}: 表头不是逐字的 {SPEC_HEADER}，文件里没有规格表"], set(), []
@@ -267,7 +316,11 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
     ``audit_forensics`` 的跨文件查重用的，本函数不碰。
     """
     v: list[str] = []
-    seen, rows, bad = _table(_read(path), MATRIX_HEADER)
+    try:
+        matrix_text = _read(path)
+    except (OSError, ValueError):  # 评审 A 的 I3：矩阵侧原本把 `_read` 裸写在调用里，同形缺陷同法兜
+        return [f"{rel}: 读不出来（权限／竞态），差距矩阵没被审计"]
+    seen, rows, bad = _table(matrix_text, MATRIX_HEADER)
     if not seen:
         return [f"{rel}: 表头不是逐字的 {MATRIX_HEADER}，文件里没有差距矩阵表"]
     # 与 `_audit_spec` 同一套分派（`_table` 的 docstring）：`bad` 有两种成因，
@@ -354,24 +407,47 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
 
     v: list[str] = []
     l0_dir = forensics_root / "l0"
-    l0_files = sorted(
-        p for p in (l0_dir.glob("*.md") if l0_dir.is_dir() else []) if p.name not in L0_EXEMPT
-    )
+    l0_candidates = sorted(l0_dir.glob("*.md")) if l0_dir.is_dir() else []
+    l0_files = [p for p in l0_candidates if p.is_file() and p.name not in L0_EXEMPT]
+    # 评审 A 的 I3②：`glob` 连目录一起返回，旧写法拿它当文件去 `read_text()`，于是
+    # 一个叫 `x.md` 的目录把整个门禁打穿成回溯。加 `is_file()` 守卫，但**不许静默跳过**。
+    for p in l0_candidates:
+        if not p.is_file() and p.name not in L0_EXEMPT:
+            v.append(f"l0/{p.name}: 是目录不是文件——L0 记录得是一份 markdown 文件，这一份没被审计")
     if not l0_files:
         v.append("docs/forensics/l0/ 下没有任何证据文件（骨架不等于取证）")
     purposes: dict[str, str | None] = {}
+    by_evidence: dict[str, list[str]] = {}
     for p in l0_files:
         problems, purpose = _audit_l0(p, f"l0/{p.name}", repo_root)
         v += problems
         purposes[p.name] = purpose
+        # 评审 A 的 I2（裁过的一半）：只禁重复 `evidence_id`，**不**禁重复 `命令`
+        # （活树实测有 1 组逐字相同的命令行，合法：同一条件重跑、主键不同）。
+        # harness／基线／不可取证三种声明与孤证规则同样让路——它们不冒充观察面。
+        if purpose not in ("harness", "基线", UNCAPTURABLE):
+            ev = _l0_evidence_id(p)
+            if EVIDENCE_ID.fullmatch(ev):
+                by_evidence.setdefault(ev, []).append(p.name)
+    for ev in sorted(by_evidence):
+        names = sorted(by_evidence[ev])
+        if len(names) > 1:
+            v.append(
+                f"同一枚 evidence_id（{ev[:16]}…）出现在 {len(names)} 份 L0 记录里：{'、'.join(names)}"
+                "——一份 L0 只对应一条 REA 命令、一个观察面，重复主键就是同一份捕获冒充两个面"
+            )
 
     cited: set[str] = set()
     spec_ids: dict[str, str] = {}
     spec_format_failure = False  # 规格层有没有格式失败（列数／窗口）——它决定这一轮能不能下引用结论
     spec_dir = forensics_root / "spec"
-    for p in sorted(
-        q for q in (spec_dir.glob("*.md") if spec_dir.is_dir() else []) if q.name not in SPEC_EXEMPT
-    ):
+    spec_candidates = sorted(spec_dir.glob("*.md")) if spec_dir.is_dir() else []
+    for p in spec_candidates:
+        if p.name in SPEC_EXEMPT:
+            continue
+        if not p.is_file():  # 与 l0/ 同形（I3②）：显式报，不静默
+            v.append(f"spec/{p.name}: 是目录不是文件——规格表得是一份 markdown 文件，这一份没被审计")
+            continue
         rel = f"spec/{p.name}"
         problems, refs, ids = _audit_spec(p, rel, forensics_root)
         v += problems
@@ -385,6 +461,17 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
             first = spec_ids.setdefault(i, rel)
             if first != rel:
                 v.append(f"{rel}: 条目号 {i} 已在 {first} 里出现过")
+
+    # 评审 A 的 I1：孤证那道门写成 `if spec_ids and …`、缺矩阵那道门写成 `elif spec_ids:`，
+    # 于是「L1 整层为空」时门禁沉默——一张写坏了的表也能零条目全绿，撞的就是本模块 docstring
+    # 那句「a spec entry without a verdict is prose」。口径（本席选的，见报告 F2-3）：
+    # **捕到过 L0 证据却没有规格条目**才报；既没证据也没规格的骨架红在既有的 l0 那一条上，
+    # 不在这里叠加（那棵树上「没规格」不是新信息）。
+    if l0_files and not spec_ids:
+        v.append(
+            "docs/forensics/spec/ 里没解析出任何规格条目（骨架不等于规格："
+            "取证了却不写规格就是 prose，L1 空层不能让孤证与矩阵两道门沉默）"
+        )
 
     # 孤证规则只在规格侧真解析出条目号、且整层没有格式失败时才开口：表写坏了 ⇒ `cited` 是
     # 残缺的，那时候说「没人引用这份证据」是在拿规格的格式失败 blame 证据文件。
@@ -419,24 +506,59 @@ S3_HOST_FILE = "frontend/src/pages/TVChart.tsx"
 TV_SUPPORT_HOST_LINE = 'support_host: "https://www.tradingview.com"'
 TV_WIDGET_SRC_LINE = 'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"'
 
+# 评审 A 的 I4（裁过的半）：`frontend/src` 的集合等式尺以前只看 `.ts`／`.tsx`，写在
+# `.html`／`.js`／`.json` 里的一条 `<script src="https://s3.tradingview.com/…">` 于是被
+# 当成「没有新增依赖」。代码类扩展名全部纳进同一把尺；`.md`／`.pine`／第三方语料继续不进
+# （把文档里的一句字样当运行时依赖＝拿文案当依赖，控制席 2026-10-14 裁定）。
+TV_SCAN_SUFFIXES: tuple[str, ...] = (
+    ".ts", ".tsx",
+    ".js", ".jsx", ".mjs", ".cjs", ".html", ".htm", ".css", ".json", ".svg",
+)
+# 与扩展名过滤无关的一条：这三份是真正会被浏览器／构建器加载的入口，住在 `frontend/src`
+# 之外，所以前面那把尺永远看不见它们（活树现读三份各 0 命中）。
+TV_ENTRY_FILES: tuple[str, ...] = (
+    "frontend/index.html",
+    "frontend/vite.config.ts",
+    "frontend/package.json",
+)
 
-def _scannable_files(root: Path) -> tuple[list[Path], list[str]]:
-    """Walk ``root`` and report directories we could not list.
+
+def _scannable_files(root: Path) -> tuple[list[Path], list[str], list[str]]:
+    """Walk ``root`` and report (files seen, directories we could not list, symlinked dirs).
 
     ``Path.rglob`` swallows ``PermissionError`` internally, so a deny-read subdirectory
     makes the host red line return a clean list while blind to exactly what it exists to
     refuse. ``os.walk`` with ``onerror`` surfaces that instead of hiding it. ``followlinks``
-    stays False on purpose: this walk must not be able to loop.
+    stays False on purpose: this walk must not be able to loop. That safety, however, also
+    makes a directory symlink (the usual shape of "the TV corpus checked out next to the
+    app") invisible — it is neither scanned nor reported. Reviewer A's N1 rules that a
+    silent skip is not acceptable here: such directories are collected and the caller
+    turns every one of them into a violation.
     """
     files: list[Path] = []
     unlistable: list[str] = []
+    linked: list[str] = []
 
     def _note_error(err: OSError) -> None:
         unlistable.append(str(getattr(err, "filename", "") or err))
 
-    for dirpath, _dirs, names in os.walk(root, onerror=_note_error):
+    for dirpath, dirnames, names in os.walk(root, onerror=_note_error):
+        keep: list[str] = []
+        for d in dirnames:
+            cand = Path(dirpath) / d
+            try:
+                is_link = cand.is_symlink()
+            except OSError:  # 连判定本身都判不动：同样是「看不见」，显式报，不许静默
+                is_link = True
+            if is_link:
+                linked.append(str(cand))
+            else:
+                keep.append(d)
+        # 真实链接本来就不会被 `followlinks=False` 跟进去；这里显式剪掉，为的是调用方那句
+        # 「它不进扫描」在自己的走查里也是真的，而不是只对 os.walk 的默认行为抱有期待。
+        dirnames[:] = keep
         files.extend(Path(dirpath) / name for name in names)
-    return files, unlistable
+    return files, unlistable, linked
 
 
 def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
@@ -447,15 +569,22 @@ def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
         return [f"{src} 不存在：无法核对 TradingView 主机白名单"]
     hits: set[str] = set()
     s3_counts: dict[str, int] = {}
-    files, unlistable = _scannable_files(src)
-    for dirpath in sorted(unlistable):
+    files, unlistable, linked_dirs = _scannable_files(src)
+
+    def _rel(pathish: str) -> str:
         try:
-            rel_dir = Path(dirpath).relative_to(repo_root).as_posix()
+            return Path(pathish).relative_to(repo_root).as_posix()
         except ValueError:
-            rel_dir = dirpath
-        v.append(f"{rel_dir} 列不出来（权限／竞态）：主机红线看不见里面的文件，不许当作没有依赖")
+            return pathish
+
+    for dirpath in sorted(unlistable):
+        v.append(f"{_rel(dirpath)} 列不出来（权限／竞态）：主机红线看不见里面的文件，不许当作没有依赖")
+    # N1：`followlinks=False` 只对环路，代价是指向仓外的目录符号链接整个消失——不扫也不报。
+    for dirpath in sorted(set(linked_dirs)):
+        v.append(f"{_rel(dirpath)}: 目录级符号链接——它不进扫描（followlinks=False），显式报此违规，"
+                 "不许当作链接后面没有依赖")
     for p in sorted(files, key=lambda q: q.relative_to(repo_root).as_posix()):
-        if not p.is_file() or p.suffix not in (".ts", ".tsx"):
+        if not p.is_file() or p.suffix not in TV_SCAN_SUFFIXES:
             continue
         rel = p.relative_to(repo_root).as_posix()
         try:
@@ -492,14 +621,35 @@ def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
                          "那是对外部站点的运行时依赖，改动要重新裁定")
             if TV_WIDGET_SRC_LINE not in widget_text:
                 v.append(f"{S3_HOST_FILE}: 逐字行 {TV_WIDGET_SRC_LINE} 不见了或被改过——同上")
+    # I4 的另一条来路：入口件不进 `frontend/src` 那把集合等式尺，永远照不到这三份文件，
+    # 而它们才是真正会被浏览器／构建器加载的东西。判据与扩展名过滤无关，只看 tradingview
+    # 这个词（大小写不敏感）——入口件里没有理由出现第三方站点的名字。
+    for rel in TV_ENTRY_FILES:
+        entry = repo_root / rel
+        if not entry.is_file():
+            continue  # 缺件不是这条判据的形状（构建入口的存亡是另一把尺）
+        try:
+            entry_text = _read(entry)
+        except (OSError, ValueError):
+            v.append(f"{rel}: 入口件读不出来（权限／竞态）——主机判据没法核对它")
+            continue
+        if "tradingview" in entry_text.lower():
+            v.append(
+                f"{rel}: 入口件里出现 tradingview——{'、'.join(TV_ENTRY_FILES)} 这三份是真正会被浏览器／"
+                "构建加载的入口，第三方站点只能以白名单的形式住在 frontend/src 里（裁定 1）"
+            )
     return v
 
 
 def main(repo_root: Path) -> int:
-    problems = (
-        audit_forensics(repo_root / "docs" / "forensics", repo_root)
-        + audit_tv_host_allowlist(repo_root)
-    )
+    try:
+        problems = (
+            audit_forensics(repo_root / "docs" / "forensics", repo_root)
+            + audit_tv_host_allowlist(repo_root)
+        )
+    except Exception as exc:  # 评审 A 的 I3③：回溯穿出 main() 就把已收集的违规全吞了——炸了也算一条违规
+        print(f"取证门禁自己炸了：{type(exc).__name__}: {exc}——按一条违规处理，rc=1")
+        return 1
     for line in problems:
         print(line)
     if not problems:

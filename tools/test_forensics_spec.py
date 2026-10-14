@@ -1040,8 +1040,18 @@ def test_pinned_widget_lines_are_checked_verbatim(tmp_path):
 
 
 def test_non_ts_files_are_not_scanned(tmp_path):
+    """F2-6② 之后这根针钉的是**文档／语料不进主机白名单这把尺**，不再是「非 TS 一律不扫」。
+
+    2026-10-14 终席裁定（A-I4 只取半）：`.js/.jsx/.mjs/.cjs/.html/.htm/.css/.json/.svg`
+    已纳入同一把集合等式尺（见 `test_tv_host_in_a_non_ts_code_file_is_now_scanned`），
+    `.md`／`.pine`／第三方语料继续不进——把 `frontend/src/**/*.md` 里一句「tradingview.com」
+    当成运行时依赖，就是把「写文档」变成违规（现读活树正好有 1 个这样的 `.md`）。
+    这根针改动的只有注释与覆盖面（多钉一把 `.pine`）；断言方向没动：文档里的字样
+    既不产「新增」也不产「消失」，白名单等式照样成立。
+    """
     _fake_tv_tree(tmp_path)
     _src(tmp_path, "frontend/src/notes.md", "讲讲 tradingview.com 的设计取舍\n")
+    _src(tmp_path, "frontend/src/pine/idea.pine", 'study("tradingview.com")\n')
     assert audit_tv_host_allowlist(tmp_path) == []
 
 
@@ -1249,3 +1259,314 @@ def test_live_example_files_use_the_contract_shape():
     # 的表达式当基准）；口径与校验器同尺：LF 归一。
     probe = (REPO_ROOT / PROBE_APP_JS).read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(probe).hexdigest() in l0, PROBE_APP_JS
+
+
+# ---------------------------------------------------------------------------
+# F2（门与测试席，任务 #137）· 评审 A 的 C1(i)／C1(ii)／I1／I2
+# 这四条都是**漏报**判据：`audit_forensics` 对文件内容零判据（base64 载荷、三方页标记
+# 正文）、L1 整层为空时门禁沉默（零条目全绿）、重复 `evidence_id` 无人查。
+# 每条都是先写针（当趟读到 RED）再写实现；红绿两根针成对出现，绿的这根证明判据不是
+# 「只要出现这个词就红」。硬纪律：不钉任何计数不变量，钉的是**形状**与**规则**。
+# ---------------------------------------------------------------------------
+
+B64_PAYLOAD = "Q" * 300  # 一段图像本体的形状（base64 字母表，200 字符以上）
+
+TV_URL_LINE = "- 目标 URL：https://www.tradingview.com/chart/?symbol=NASDAQ%3AAAPL"
+SELF_URL_LINE = "- 目标 URL：http://localhost:5899/pro-chart"
+MARKUP_EXCERPT = '```html\n<!DOCTYPE html>\n<html lang="en"><div class="tv-toolbar-button">\n```\n'
+
+
+def _l0_with_url(body: str, url_line: str) -> str:
+    return body.replace("- 目标 URL：http://127.0.0.1:8077/", url_line)
+
+
+def test_l0_must_not_carry_an_image_payload(tmp_path):
+    """C1(i)：`data_base64` 后面跟着一长串载荷 ⇒ 图像本体进仓了，一字节都不许。"""
+    body = L0_BODY + f'\n```json\n"data_base64": "{B64_PAYLOAD}"\n```\n'
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
+    assert any("图像本体" in x and "三键" in x for x in problems), problems
+
+
+def test_a_data_base64_key_name_without_a_payload_is_still_clean(tmp_path):
+    """C1(i) 的绿方向：键名与说明（活树 9 处就是这个形状）不是载荷，不得红。"""
+    body = L0_BODY + '\n```json\n"data_base64": "（载荷不进仓）"\n```\n- 说明：data_base64 只落 sha256 三键\n'
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
+    assert problems == [], problems
+
+
+@pytest.mark.parametrize("marker", [
+    '<!DOCTYPE html>\n<html lang="en">\n',
+    '<!doctype html>\n<HTML>\n',
+    '<div class="tv-chart-view__legend">\n',
+])
+def test_third_party_page_markup_in_a_tv_record_is_refused(tmp_path, marker):
+    """C1(ii)：`目标 URL` 是 tradingview.com 的记录里出现标记正文（大小写都判）⇒ 红。"""
+    body = _l0_with_url(L0_BODY, TV_URL_LINE) + "```html\n" + marker + "```\n"
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/tv-a1-page.md", repo)
+    assert any("标记正文" in x and "tradingview.com" in x for x in problems), problems
+
+
+def test_the_same_markup_on_a_self_page_record_is_not_the_new_violation(tmp_path):
+    """C1(ii) 的绿方向：与上面逐字同一份正文，只差 `目标 URL` ——自家页／探针页合法有标记。
+
+    这对针的差**只能来自 `目标 URL`**：harness／自家 dev server 的页面上本来就有标记，
+    拿同一把尺去量它就把「观察自己的页面」变成了违规。
+    """
+    body = _l0_with_url(L0_BODY, SELF_URL_LINE) + "```html\n" + MARKUP_EXCERPT
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/self-dw07-pixel-equality.md", repo)
+    assert problems == [], problems
+
+
+def test_captured_evidence_with_an_empty_spec_table_is_not_green(tmp_path):
+    """I1：表头齐＋分隔行齐＋零条目 ⇒ 「取证了但没写规格」，门禁不许沉默。"""
+    empty = f"# 规格：画线面\n\n{SPEC_HEADER}\n|---|---|---|---|---|\n"
+    root = _tree(tmp_path, spec=empty, matrix=None)
+    problems = audit_forensics(root, tmp_path)
+    assert any("没解析出任何规格条目" in x for x in problems), problems
+
+
+def test_captured_evidence_without_any_spec_layer_is_named(tmp_path):
+    """I1 的第二种来路：只有 l0/ 没有 spec/ ——同样是 prose，选的是「有证据却没规格」这个口径。"""
+    root = _forensics(tmp_path)  # l0/probe-skeleton.md，既没有 spec/ 也没有 gap-matrix.md
+    problems = audit_forensics(root, tmp_path)
+    assert any("没解析出任何规格条目" in x for x in problems), problems
+
+
+def test_no_spec_layer_and_no_evidence_keeps_the_existing_l0_message_only(tmp_path):
+    """口径收窄的边界针：一棵没捕过任何东西的树红在 l0 那条，不叠加「没规格」（钉现状）。"""
+    root = _forensics(tmp_path)
+    (root / "l0" / "probe-skeleton.md").unlink()
+    problems = audit_forensics(root, tmp_path)
+    assert any("l0/ 下没有任何证据文件" in x for x in problems), problems
+    assert not any("没解析出任何规格条目" in x for x in problems), problems
+
+
+def test_one_capture_cannot_be_two_l0_records(tmp_path):
+    """I2（裁过的一半）：同一枚 `evidence_id` 出现在两份文件里 ⇒ 一份捕获冒充两个面。"""
+    root = _tree(tmp_path)
+    _mk(root, "l0/tv-a9-axis-scale.md", L0_BODY)  # 逐字复制：主键与 L0_BODY 完全相同
+    problems = audit_forensics(root, tmp_path)
+    assert any(
+        "同一枚 evidence_id" in x and "tv-a9-axis-scale.md" in x and "probe-skeleton.md" in x
+        for x in problems
+    ), problems
+
+
+def test_the_same_command_on_two_faces_is_not_a_duplicate_key(tmp_path):
+    """I2 裁掉的那一半不许顺手加回来：`命令：` 逐字相同、主键不同是合法的（活树实测 1 组）。
+
+    到达即绿；它的咬合力由变异自证证明——把 F2-4 的倒排键从 `evidence_id` 换成 `命令`
+    这根针就红（那正是要拒绝的恒红形状）。
+    """
+    root = _tree(tmp_path)
+    _mk(root, "l0/tv-a15-pixel-baseline.md", L0_BODY.replace(EVID, "ev_" + "cd" * 32))
+    problems = audit_forensics(root, tmp_path)
+    assert not any("同一枚 evidence_id" in x for x in problems), problems
+
+
+def test_a_harness_copy_does_not_collide_under_the_orphan_exemptions(tmp_path):
+    """既有针 `test_harness_purpose_exempts_an_uncited_l0` 的语义边界：声明了 用途 的记录
+    不进重复主键这把尺（harness／基线／不可取证三种都是「不冒充观察面」的声明）。
+    """
+    root = _tree(tmp_path)
+    want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
+    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    problems = audit_forensics(root, tmp_path)
+    assert not any("同一枚 evidence_id" in x for x in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# F2-5（评审 A 的 I3）：读失败／目录名打穿 `audit_forensics` ⇒ 出违规，不许吐回溯。
+# 同形缺陷早已在矩阵侧修过（`test_absurd_line_number_is_a_violation_not_a_traceback`、
+# `_resolve_l0`／坐标解析各自的 `except (OSError, ValueError)`），L0／L1 侧原样留着：
+# `_audit_l0`／`_audit_spec`／`_audit_matrix` 三处 `_read` 与 harness 分支的
+# `app.read_bytes()` 一个 except 都没有；`l0_files` 与 spec 走查的 glob 结果没有
+# `is_file()` 守卫（目录名叫 `x.md` 会被当成文件去读）；`main()` 外层没有 try，
+# 回溯一穿，前面 collected 的违规一条都不打印。权限夹具只作用在 tmp_path 下。
+# ---------------------------------------------------------------------------
+
+def test_unreadable_l0_record_is_a_violation_not_a_traceback(tmp_path):
+    root = _tree(tmp_path)
+    victim = root / "l0" / "probe-skeleton.md"
+    if not _deny_read(victim):
+        _restore_read(victim)
+        pytest.skip("本机造不出「文件存在但读不动」的条件")
+    try:
+        problems = audit_forensics(root, tmp_path)  # 修前：PermissionError 直接穿出
+    finally:
+        _restore_read(victim)
+    assert any("probe-skeleton.md" in x and "读不出来" in x for x in problems), problems
+    assert not any("l0/ 下没有任何证据文件" in x for x in problems), problems
+
+
+def test_directory_named_md_in_l0_is_reported_not_read(tmp_path):
+    """`l0/probe-dir.md` 是个目录：出一条「是目录不是文件」，不许静默跳过、更不许回溯。"""
+    root = _tree(tmp_path)
+    (root / "l0" / "probe-dir.md").mkdir()
+    problems = audit_forensics(root, tmp_path)  # 修前：IsADirectoryError 穿出
+    assert any("probe-dir.md" in x and "是目录不是文件" in x for x in problems), problems
+    assert not any("l0/ 下没有任何证据文件" in x for x in problems), problems
+
+
+def test_directory_named_md_in_spec_is_reported_not_read(tmp_path):
+    root = _tree(tmp_path)
+    (root / "spec" / "probe-dir.md").mkdir()
+    problems = audit_forensics(root, tmp_path)  # 修前：同样是 IsADirectoryError
+    assert any("spec/probe-dir.md" in x and "是目录不是文件" in x for x in problems), problems
+
+
+def test_unreadable_spec_file_is_a_violation_not_a_traceback(tmp_path):
+    """规格层自己那把 `is_file()` 守卫挡不住「是文件但读不动」——`_audit_spec` 的 except
+    必须有独立的针（变异自证：摘掉那个 except 时只有这根针红，两根目录针都还是绿的）。
+    """
+    root = _tree(tmp_path)
+    victim = root / "spec" / "drawings.md"
+    if not _deny_read(victim):
+        _restore_read(victim)
+        pytest.skip("本机造不出「文件存在但读不动」的条件")
+    try:
+        problems = audit_forensics(root, tmp_path)  # 修前：PermissionError 穿出
+    finally:
+        _restore_read(victim)
+    assert any("spec/drawings.md" in x and "读不出来" in x for x in problems), problems
+    assert any("没解析出任何规格条目" in x for x in problems), problems
+
+
+def test_unreadable_gap_matrix_is_a_violation_not_a_traceback(tmp_path):
+    root = _tree(tmp_path)
+    victim = root / "gap-matrix.md"
+    if not _deny_read(victim):
+        _restore_read(victim)
+        pytest.skip("本机造不出「文件存在但读不动」的条件")
+    try:
+        problems = audit_forensics(root, tmp_path)  # 修前：`_table(_read(path))` 直接抛
+    finally:
+        _restore_read(victim)
+    assert any("gap-matrix.md" in x and "读不出来" in x for x in problems), problems
+    assert problems, problems
+
+
+def test_unreadable_probe_app_is_a_violation_not_a_traceback(tmp_path):
+    """harness 分支的 `app.read_bytes()` 同法兜住：校验和核不了要说出来，不许崩。"""
+    root = _tree(tmp_path)
+    want = hashlib.sha256(PROBE_APP_JS_LF).hexdigest()
+    _mk(root, "l0/loose.md", L0_BODY + "\n- 用途：harness\n" + f"\n探针 app.js 的当前 sha256：{want}\n")
+    app = tmp_path / "tools" / "rea_probe_site" / "app.js"
+    if not _deny_read(app):
+        _restore_read(app)
+        pytest.skip("本机造不出「文件存在但读不动」的条件")
+    try:
+        problems = audit_forensics(root, tmp_path)  # 修前：PermissionError 穿出
+    finally:
+        _restore_read(app)
+    assert any("app.js" in x and "读不出来" in x for x in problems), problems
+    assert problems, problems
+
+
+def test_main_turns_its_own_crash_into_a_violation_line(tmp_path, monkeypatch, capsys):
+    """③：门自己炸了也要 rc=1 并印一行——回溯穿出的话前面收集的违规一条都看不见。"""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("门自己炸了")
+
+    monkeypatch.setattr("forensics_audit.audit_forensics", boom)
+    rc = main(tmp_path)  # 修前：RuntimeError 穿出 main()，这里根本拿不到返回值
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "门自己炸了" in out, out
+
+
+# ---------------------------------------------------------------------------
+# F2-6（评审 A 的 I4 裁过的半＋N1＋N2）：主机红线的两条来路。
+# ① 入口件判据（与扩展名过滤无关）——`frontend/index.html`／`vite.config.ts`／
+#    `package.json` 是真正会被浏览器与构建加载的三份，住在 `frontend/src` 之外，
+#    所以这两把尺互不遮蔽。
+# ② 代码类扩展名进同一把集合等式尺（`.md`／`.pine` 按裁定继续不进）。
+# ③ 目录级符号链接：`os.walk(followlinks=False)` 防环对，但指向仓外的链接被静默跳过
+#    ——要显式出一条违规。本机造不出真实链接（现读：`os.symlink` → WinError 1314
+#    客户端没有所需的特权），这根针用 monkeypatch 钉**判定形状**，不是钉现场。
+# ④ `命令` 形状正则：`"rea-agents" in cmd` 连 `curl https://x/rea-agents` 都放过。
+#    只做形状匹配，不做子命令白名单（词汇表在文档里会漂，钉白名单＝下次加一条 REA
+#    命令就假红）。
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("entry", [
+    "frontend/index.html",
+    "frontend/vite.config.ts",
+    "frontend/package.json",
+])
+def test_tradingview_in_a_build_entry_file_is_refused(tmp_path, entry):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, entry, '<script src="https://s3.tradingview.com/external-embedding/x.js"></script>\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("入口" in x and entry in x for x in problems), problems
+
+
+@pytest.mark.parametrize("rel", [
+    "frontend/src/lib/tvFetch.js",
+    "frontend/src/embed.html",
+    "frontend/src/assets/lib.json",
+])
+def test_tv_host_in_a_non_ts_code_file_is_now_scanned(tmp_path, rel):
+    """PROBE P9 的形状现在要能红：写在 `.js`／`.html`／`.json` 里的 embed 不是「没有新增依赖」。"""
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, rel, 'const u = "https://scanner.tradingview.com/";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("白名单不符" in x and rel.rsplit("/", 1)[-1] in x for x in problems), problems
+
+
+def test_tv_widget_embed_in_a_js_file_is_refused_by_the_s3_rule_too(tmp_path):
+    _fake_tv_tree(tmp_path)
+    _src(tmp_path, "frontend/src/lib/tvFetch.js",
+         'script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";\n')
+    problems = audit_tv_host_allowlist(tmp_path)
+    assert any("s3.tradingview 只允许出现在" in x and "tvFetch.js" in x for x in problems), problems
+
+
+def test_directory_symlink_under_frontend_src_is_an_explicit_violation(tmp_path, monkeypatch):
+    """N1：防环对不等于可以静默跳过——目录级符号链接要显式报出来。
+
+    本机造不出真实符号链接（现读 `os.symlink` → WinError 1314 客户端没有所需的特权），
+    所以这根针打的是 `Path.is_symlink` 的**判定形状**，不是「现场已封闭」的凭据。
+    代价要说清：夹具里的 `linked` 在磁盘上是真目录，只有谓词被打了桩，所以 `os.walk`
+    照样进去扫（RED 读数里同时有「白名单不符」那一条）——这根针断言的只是「符号链接
+    那一条必须出现」，真实链接「进去就不扫」那一半本机证明不了，报告里按盲区登记。
+    """
+    _fake_tv_tree(tmp_path)
+    linked = tmp_path / "frontend" / "src" / "lib" / "linked"
+    linked.mkdir(parents=True)
+    _mk(linked, "inside.ts", 'const u = "https://scanner.tradingview.com/";\n')
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == "linked")
+    problems = audit_tv_host_allowlist(tmp_path)  # 修前：返回里没有「符号链接」那一条
+    assert any("linked" in x and "符号链接" in x for x in problems), problems
+
+
+def test_a_url_that_merely_mentions_rea_agents_is_not_a_rea_command(tmp_path):
+    """N2：形状正则取代「命令里含 rea-agents 这个词」。"""
+    body = L0_BODY.replace(
+        "- 命令：npx -y rea-agents@latest inspect-web-page http://127.0.0.1:9222 TID1 --filter-output normalized_result",
+        "- 命令：curl https://mirror.example.com/rea-agents --filter-output evidence_id --token-limit 1")
+    path, repo = _l0(tmp_path, body)
+    problems, _purpose = _audit_l0(path, "l0/probe-skeleton.md", repo)
+    assert any("命令里没有 rea-agents" in x for x in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# F2-7（评审 A 的 C1 附带）：模块 docstring 那句 "carries the compliance red line"
+# 只在 F2-1／F2-2 落地后才成立，落地前要改成准确描述（漏斗侧承载的是两条内容判据，
+# 运行时依赖那半在 `audit_tv_host_allowlist`）。这是文本针，与
+# `test_resolve_l0_docstring_states_the_real_rule` 同一套路：钉措辞不许过强。
+# ---------------------------------------------------------------------------
+
+def test_module_docstring_describes_the_red_lines_it_actually_carries():
+    import forensics_audit
+
+    doc = " ".join((forensics_audit.__doc__ or "").split())
+    assert "carries the compliance red line" not in doc, doc
+    assert "data_base64" in doc, doc  # 漏斗侧承载的两条内容判据要点名
+    assert "标记正文" in doc, doc
+    assert "audit_tv_host_allowlist" in doc, doc  # 运行时依赖那半的落点要说清在哪
