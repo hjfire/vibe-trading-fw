@@ -192,24 +192,36 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     expect(sessionStorage.getItem(PANELS_KEY)).toBeNull();
   });
 
-  it("四枚开关各点一次，盘上逐枚只含自己的键", async () => {
-    const cases: Array<[string, string]> = [
-      ["副图指标", "subIndicator"],
-      ["图例", "legend"],
-      ["画线清单", "drawings"],
-    ];
-    for (const [name, field] of cases) {
-      sessionStorage.clear();
+  // 四枚开关各点一次。评审 F4：原来这一格是一枚 `it` 里的 `for`，第一枚坏掉就把剩下三枚
+  // 一起带走，红法只说「某一枚不对」。按 `it.each` 拆开，覆盖面不变，一圈一个断言，
+  // 标题直接报出是哪一枚。每一圈都是新会话（文件级 `beforeEach` 清 `sessionStorage`，
+  // `mountWithOneDrawing` 先 `cleanup()`），所以「逐枚只含自己的键」这句话仍然算数。
+  // 工作台那枚没有 `aria-label`，可达名来自文本（接线后现读 ProChart.tsx:2765-2772），
+  // 所以那一格的 `name` 给的是正则。评审 F2：四枚都读 `aria-pressed`，包括它。
+  const fourSwitches: Array<[string | RegExp, string]> = [
+    ["副图指标", "subIndicator"],
+    ["图例", "legend"],
+    ["画线清单", "drawings"],
+    [/指标公式/, "workbench"],
+  ];
+
+  it.each(fourSwitches)(
+    "只点「%s」这一枚 ⇒ 盘上只含自己的键「%s」，且这一枚自己报 pressed=true",
+    async (name, field) => {
       await mountWithOneDrawing();
       fireEvent.click(screen.getByRole("button", { name }));
       expect(stored()).toEqual({ [field]: true });
       expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
-    }
-    // 工作台那枚没有 aria-label，可达名来自文本（接线后现读 ProChart.tsx:2765-2771）
-    sessionStorage.clear();
+    },
+  );
+
+  // 评审 F5：偏差集是**整份重写**，所以上面那一组每圈都必须从干净会话挂载 —— 它们因此
+  // 证不到「同一次会话里第二枚开的时候，第一枚那格字段还在」。这一根补的就是那一面。
+  it("同一会话里连开两枚 ⇒ 第二枚写盘时第一枚的字段还在", async () => {
     await mountWithOneDrawing();
-    fireEvent.click(screen.getByRole("button", { name: /指标公式/ }));
-    expect(stored()).toEqual({ workbench: true });
+    fireEvent.click(screen.getByRole("button", { name: "副图指标" }));
+    fireEvent.click(screen.getByRole("button", { name: "图例" }));
+    expect(stored()).toEqual({ subIndicator: true, legend: true });
   });
 
   it("经遮罩 onClose 关掉工作台也会写盘 ⇒ 键回到不存在", async () => {
@@ -228,12 +240,21 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     expect(screen.getByRole("button", { name: "副图指标" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "图例" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "画线清单" }).getAttribute("aria-pressed")).toBe("true");
+    // 评审 F2：spec §5(2) 那句「带着这条会话记录重新挂载 ⇒ 四枚开关都读得到 aria-pressed=true」
+    // 的第四枚。这一格读的是**页面**（`ProChart.tsx:2765-2772` 那枚入口按钮自报 pressed），
+    // 不是替身 —— 下面那行 `mock-close-workbench` 因此不再是工作台唯一的证据。
+    expect(screen.getByRole("button", { name: /指标公式/ }).getAttribute("aria-pressed")).toBe("true");
     expect(stored()).toEqual({ workbench: true, subIndicator: true, drawings: true, legend: true });
-    // 读侧不脏写：整份值原样还在
-    expect(screen.getByRole("button", { name: /指标公式/ })).toBeTruthy();
-    // 工作台那枚入口没有 `aria-pressed`（`ProChart.tsx:2765-2771` 是动作按钮，不是开关），
-    // 所以 spec §5(2)「四枚都读得到」在这一枚上只能经替身读：`IndicatorEditor` 只在
-    // `open` 为真时渲染那枚关闭按钮 ⇒ 首屏就有它，才是「会话记录活过一次刷新」。
+    // 读侧不脏写：整份值原样还在。
+    // 评审 F1：这一格原来写的是 `expect(screen.getByRole(…)).toBeTruthy()` —— 那枚按钮
+    // 在任何状态下都渲染，所以那一行永远不会红。改成逐字钉它的 `title`（仓内同型钉法见
+    // `ProChartCompare.test.tsx:461`、`ProChartDrawings.test.tsx:1657`），判据还是
+    // 「这枚入口在场」，但现在文案一改就红 ⇒ 可失败。
+    expect(screen.getByRole("button", { name: /指标公式/ }).getAttribute("title")).toBe(
+      "编写/管理自定义指标公式（保存在本地）",
+    );
+    // 保留：`IndicatorEditor` 替身只在 `open` 为真时渲染那枚关闭按钮 ⇒ 这一行判的是
+    // 「遮罩首屏真的挂上了」，与 pressed（按钮自陈状态）是两件不同的事。
     expect(screen.getByRole("button", { name: "mock-close-workbench" })).toBeTruthy();
   });
 
