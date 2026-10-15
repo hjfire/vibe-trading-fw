@@ -361,6 +361,10 @@ beforeEach(() => {
     },
   ];
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom hands a whole
+  // file one session store. No pin here flips one of those four switches today, so this
+  // clear is preventive: the day one does, the file stops depending on its run order.
+  sessionStorage.clear();
   // 模块 store 跨 `render` 存活：上一支用例交付进桶的序列若不清，本支就可能在页面自己
   // 还没取到数时读到它——这正是 `clearCompareSeries()` 在**生产侧**没有调用者的原因：
   // 页面自己清就会把挂卸 effect 正在读的桶掏空，得到一条永远不存在的线。

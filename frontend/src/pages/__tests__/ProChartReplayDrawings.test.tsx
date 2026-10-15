@@ -295,6 +295,10 @@ beforeEach(() => {
   h.askedType = "";
   h.loader = null;
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom gives a
+  // whole file one session store: without this clear, a test that opens 清单 leaves it
+  // open for the next mount, whose own click on that button then *closes* it.
+  sessionStorage.clear();
 });
 
 describe("/pro-chart 回放中的画线", () => {

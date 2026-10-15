@@ -302,6 +302,10 @@ beforeEach(() => {
   h.fail = false;
   h.loader = null;
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom hands a whole
+  // file one session store. No pin here flips one of those four switches today, so this
+  // clear is preventive: the day one does, the file stops depending on its run order.
+  sessionStorage.clear();
 });
 
 describe("/pro-chart 回放的数据通路", () => {
