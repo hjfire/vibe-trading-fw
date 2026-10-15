@@ -395,6 +395,9 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
 import { loadPanelVisibility, savePanelVisibility } from "@/lib/chartPanels";
 ```
 
+> 2026-10-15 更正（T2 开工前现读）：3a 那个行号是错的——`} from "@/lib/chartLegend";` 现读在 `ProChart.tsx:115`，`:116` 是下一枚 import 的开头 `import {`（`@/lib/heikinAshiChart`）。
+> 内容锚是权威的，按内容锚插；若照字面在 `:116` 之后插一行，会把 `heikinAshiChart` 那枚多行 import 从中间劈开。3b 表里那四枚行号（527／548／561／591）与 Step 3 末尾那个 `}, [symbol, interval, timeShare]);`（796）现读都对得上，不必改。
+
 3b. 四枚初值（**同一行内替换，不增行**；逐字旧文本现读自 2026-10-15 的树）：
 
 | 行号 | 旧（逐字） | 新（逐字） |
