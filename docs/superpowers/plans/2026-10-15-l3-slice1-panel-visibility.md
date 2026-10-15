@@ -134,6 +134,11 @@ describe("normalizePanelVisibility", () => {
 在 `frontend/` 下：`npx vitest run src/lib/__tests__/chartPanels.test.ts`
 期望：FAIL，报错形如 `Failed to resolve import "../chartPanels"`（不是断言失败、也不是 0 个测试被收集）。
 
+> 2026-10-15 更正（T1 实测）：括号里后半句在 vitest 4 下不可满足——套件级 import 解析失败时 stdout 必然同时印
+> `❯ src/lib/__tests__/chartPanels.test.ts (0 test)` 与 `Tests  no tests`，所以「0 个测试被收集」不能当排除项用。
+> 实质判据改成两半：①错误文本逐字含 `Failed to resolve import "../chartPanels"`；②`Test Files  1 failed (1)`（文件被收集且判红）。
+> 两半都在 T1 那次 RED 运行里成立，留档读数见 `.superpowers/sdd/2026-10-15-l3-slice1-panel-visibility/task-1-report.md` §2。前半句照旧有效。
+
 - [ ] **Step 3：写实现**
 
 `frontend/src/lib/chartPanels.ts`：
