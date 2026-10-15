@@ -220,6 +220,12 @@ export function savePanelVisibility(v: PanelVisibility): void {
 
 `npx vitest run src/lib/__tests__/chartPanels.test.ts` → 期望 6 passed。**输出必须干净**（无 console 噪音、无 unhandled rejection）。
 
+> 2026-10-15 更正（T1 评审收口，提交 `fe442489`）：上面 Step 1／Step 3 的两段代码有一处实现形状与一根针的判据被评审席判为不判别，已改，后续席**不许照本文旧码重抄**：
+> ① `const FIELDS: ReadonlyArray<keyof PanelVisibility> = ["workbench", …]` 手抄第四份字段名单，且 `keyof` 数组不强制穷尽——将来加第五枚面板会静默地「读成默认、永不落盘」。现在派生自 `Object.keys(DEFAULT_PANEL_VISIBILITY)`，
+> 而那个对象头上的 `Readonly<PanelVisibility>` 已经强制它带满四枚键。② ⑤号针末尾的 `expect(loadPanelVisibility()).toEqual(ALL)` 在「还原成功」与「getter 仍中毒」两个世界里都绿（load 自己吞异常），
+> 已换成中毒世界里必红的往返针（`savePanelVisibility({ …ALL, legend: true })` 后 `getItem` 逐字等于 `'{"legend":true}'` 再读回）。判别力实测：摘掉 `try/finally` 还原块 ⇒ `Tests 2 failed | 4 passed (6)`，
+> 红的两枚＝⑤本体（新针那一行）与下一枚 `normalizePanelVisibility` 针（中毒 getter 漏到它的 `beforeEach` 里）；装回还原块 ⇒ `6 passed`，`npx tsc -b` 无输出。
+
 - [ ] **Step 5：类型门**
 
 `npx tsc -b` → 期望无输出。
