@@ -7,7 +7,7 @@
  * visibility *key name* on its `session_storage_keys` line (that entry's own
  * 2026-10-14 correction says key name → behaviour is an inference, the value side
  * was never read). So `sessionStorage` copies the *scope*, and "survives a reload,
- * resets with the tab" is this repo's own behaviour spec — not a复刻 claim.
+ * resets with the tab" is this repo's own behaviour spec — not a reproduction claim.
  *
  * Encoding follows `saveLegendPrefs` (same family: a UI pref whose read side falls
  * back to defaults): only deviations are written, and an all-closed write deletes
@@ -32,7 +32,7 @@ export const DEFAULT_PANEL_VISIBILITY: Readonly<PanelVisibility> = Object.freeze
   legend: false,
 });
 
-const FIELDS: ReadonlyArray<keyof PanelVisibility> = ["workbench", "subIndicator", "drawings", "legend"];
+const FIELDS = Object.keys(DEFAULT_PANEL_VISIBILITY) as ReadonlyArray<keyof PanelVisibility>;
 
 /** Strict `=== true`: a hand-edited or stale value cannot open a panel nobody asked for. */
 export function normalizePanelVisibility(raw: unknown): PanelVisibility {

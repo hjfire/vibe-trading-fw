@@ -72,7 +72,10 @@ describe("loadPanelVisibility", () => {
     } finally {
       if (real) Object.defineProperty(window, "sessionStorage", real);
     }
-    expect(loadPanelVisibility()).toEqual(ALL);
+    // 还原必须真的还原：这根针在「getter 仍然中毒」的世界里红（写入被 save 吞掉 ⇒ 读回 null）
+    savePanelVisibility({ ...ALL, legend: true });
+    expect(sessionStorage.getItem(PANELS_KEY)).toBe('{"legend":true}');
+    expect(loadPanelVisibility()).toEqual({ ...ALL, legend: true });
   });
 });
 
