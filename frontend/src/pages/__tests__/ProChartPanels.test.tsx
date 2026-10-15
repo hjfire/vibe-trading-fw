@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PANELS_KEY } from "@/lib/chartPanels";
@@ -379,15 +379,21 @@ it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话
     const { ProChart: WithLink } = await import("../ProChart");
     vi.spyOn(window.HTMLElement.prototype, "clientHeight", "get").mockReturnValue(HOST_HEIGHT);
     render(<WithLink />);
-    await flush();
-    await flush(); // 解码是 promise，`takeShareTask()` 的 `.then` 要再排一次微任务
+    // 解码链（`scriptExchange.ts:426-475`）走的是 `DecompressionStream` + `ReadableStream`，
+    // 不是微任务链：200 轮 `await Promise.resolve()` 也等不到它落地，要等的是**可变次数的事件循环圈**
+    // （本机 20 趟分布读数＝1 圈 9 次／2 圈 11 次）。所以这里不数 tick，改成条件等待
+    // —— 仓内既有约定，先例 `497fabae`／`a56e6ace`。
     // spec §5(2) 那句「断言工作台被打开**且**会话键被写成 `workbench:true`」是合取，原来这根针
     // 只钉了后半句 —— 存储那半句会红，「被打开」这半句没钉任何东西。判据不另造：抄本文件
     // `:242` 那根既有针用的同一个 handle —— `IndicatorEditor` 替身（`:143-149`）只在 `open`
-    // 为真时渲染这枚按钮，工作台没开时 `getByRole` 直接抛 ⇒ 结构上不可能恒真。
-    expect(screen.getByRole("button", { name: "mock-close-workbench" })).toBeTruthy();
+    // 为真时渲染这枚按钮，工作台没开时这句直接超时抛 ⇒ 结构上不可能恒真。
+    const workbenchHandle = await screen.findByRole("button", { name: "mock-close-workbench" });
+    expect(workbenchHandle).toBeTruthy();
     // 跨 describe 取不到 Task 2 那枚 `stored()`（它声明在持久化块的作用域里），直接读键。
-    expect(JSON.parse(sessionStorage.getItem(PANELS_KEY) ?? "null")).toEqual({ workbench: true });
+    // 写点（`ProChart.tsx:803-810` 的合成 `useEffect`）跟在面板状态之后，同一把条件等待的尺。
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem(PANELS_KEY) ?? "null")).toEqual({ workbench: true });
+    });
   } finally {
     Object.defineProperty(window, "location", { configurable: true, value: real });
     vi.resetModules();
