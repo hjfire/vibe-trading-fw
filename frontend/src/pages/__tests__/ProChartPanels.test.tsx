@@ -15,6 +15,10 @@ import { ProChart } from "../ProChart";
  * 编解码在 `lib/chartPanels.ts`（T1）。这里钉的是页面这一侧的两件事：四枚初值确实
  * 从那枚键上取，以及开与关都从同一个合成写点回去 —— 包括工作台被遮罩 `onClose` 关掉、
  * 而不是被工具条那枚开关翻转掉的那条路径。
+ *
+ * T3 再补两件：四个打开动作对 URL 的净变化为零（`docs/forensics/gap-matrix.md` TV-CI-06
+ * 缺的就是「没有任何测试针钉这件事」），以及 `?s=` 分享链接对盘上初值的优先权 —— 后者
+ * 是唯一一条由 URL 反向驱动面板的路径，写点必须比读点晚一步。
  */
 
 const DAY = 86_400_000;
@@ -159,6 +163,13 @@ beforeEach(() => {
   // jsdom shares one session store across the whole file, so a pin that reads
   // "what survived the reload" has to start from an empty one (spec §5(2)).
   sessionStorage.clear();
+  // Same reasoning one layer up for the URL (T3): the 净变化为零 pin below compares
+  // `window.location.href` before/after a click, and a comparison of two *dirty*
+  // URLs is an identity that can never go red. jsdom shares one history across the
+  // file too, so every case starts from a known-clean address. Fixed at the face
+  // (this hook), not at the observed red — same ruling as the sessionStorage line
+  // above (评审 F3, `89b49e9a`).
+  window.history.replaceState({}, "", "/");
   document.documentElement.classList.remove("dark");
 });
 
@@ -264,4 +275,96 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     expect(screen.getByRole("button", { name: "画线清单" }).getAttribute("aria-pressed")).toBe("false");
     expect(sessionStorage.getItem(PANELS_KEY)).toBeNull();
   });
+});
+
+/**
+ * TV-CI-06 的驱动缺口（T3 第一根针）。
+ *
+ * 矩阵那一行判 `部分` 的**唯一**理由不是「本仓会改 URL」——它不会（那一行的现读记录
+ * 是 `grep -n -e useNavigate -e "navigate(" -e pushState ProChart.tsx` ＝ 0 命中）——
+ * 而是「这是顺带结果，不是被断言的性质」。下面四格把那个 0 命中变成会红的东西：
+ * 开一次、关一次，两次都逐字比 `window.location.href`。
+ *
+ * 这四格在实现之前就是绿的，这是本任务如实要记的形状；它的判别力由 Step 5 的变异自证
+ * 补上（临时往 `toggleDrawPanel` 里塞一行 `replaceState` ⇒ 「画线清单」那格必须红）。
+ * 注意本仓确实有写 URL 的动作，但它不在这四格里：`stripQueryKey`（`ProChart.tsx:416`，
+ * 写点 `:422`）只在 `?s=`／`?d=` 在场时才落笔，盘上没有那两个参数时它 `:419` 早退。
+ */
+const fourOpenActions: Array<[string, string | RegExp]> = [
+  ["副图指标", "副图指标"],
+  ["图例", "图例"],
+  ["画线清单", "画线清单"],
+  // 工作台那枚入口没有 `aria-label`，可达名来自文本（现读 ProChart.tsx:2765-2772），
+  // 所以给正则 —— 和上面四枚开关那组同判据。
+  ["指标公式工作台", /指标公式/],
+];
+
+describe("/pro-chart 四个打开动作对 URL 的净变化为零（TV-CI-06 的针）", () => {
+  it.each(fourOpenActions)(
+    "%s：点之前点之后 window.location.href 逐字相同",
+    async (_label, name) => {
+      await mountWithOneDrawing();
+      const before = window.location.href;
+      fireEvent.click(screen.getByRole("button", { name }));
+      await flush();
+      expect(window.location.href).toBe(before);
+      // 第二圈回到关：开与关两个方向都不许留下 URL 痕迹。
+      fireEvent.click(screen.getByRole("button", { name }));
+      await flush();
+      expect(window.location.href).toBe(before);
+    },
+  );
+});
+
+/**
+ * `?s=` 分享链接优先（T3 第二根针）。
+ *
+ * 链接是在**模块作用域**被捕获的（`ProChart.tsx:398` `let pendingShare = readShareQuery();`），
+ * 所以必须先换 `window.location` 再 `vi.resetModules()` ＋ 动态 `import("../ProChart")` ——
+ * 和 `ProChartDrawings.test.tsx:1731-1769` 那根 `?d=` 针同一配方。
+ *
+ * 预置的是 `{"workbench":false}`。按 `chartPanels.ts:37-44` 的严格读取，`false` 本来也读成关，
+ * 所以这根针钉的不是「真赢过假」，而是**挂载时初值来自盘、随后被链接的 `setIndPanelOpen(true)`
+ * （`:1622`）覆盖并回写盘**：偏差编码 ⇒ 全 false 时键被删 ⇒ 若链接没打开工作台，这里读到的是
+ * `null` 而不是 `{ workbench: true }`。所以断言不许写成 `toBeNull()` 来「过」。
+ */
+it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话键", async () => {
+  // 文件级 `beforeEach` 不清 DOM，先 cleanup —— 本文件 `mountWithOneDrawing()` 的同一条约定。
+  cleanup();
+  sessionStorage.setItem(PANELS_KEY, JSON.stringify({ workbench: false }));
+  // `?s=` 一侧有公开的写侧编码器（`scriptExchange.ts:233` `createShareLink(card, base)`），
+  // 所以这里用真码，不用夹具。解码只在 `out.ok` 时才走到 `:1622` 那句 setIndPanelOpen(true)，
+  // 故卡片必须能过 `readCard`：`code` 是非空字符串就够，dialect 缺省会由 pickDialect 推。
+  const { createShareLink } = await import("@/lib/scriptExchange");
+  const { url } = await createShareLink(
+    { id: "pin-link", dialect: "pine", name: "链接优先针", code: 'indicator("1")', display: "pane", params: [] },
+    "http://localhost:3000/pro-chart",
+  );
+  const search = url.slice(url.indexOf("?"));
+  const real = window.location;
+  // 换不掉 location 就等于这根针什么都没测 —— 按 `ProChartDrawings.test.tsx:1749-1755` 的
+  // 形状把它变成一句会红的断言，而不是静默跳过。
+  let redefined = true;
+  try {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: new URL(`http://localhost:3000${search}`),
+    });
+  } catch {
+    redefined = false;
+  }
+  expect(redefined, "jsdom 不允许换掉 location：这根针必须跑在能换的环境上").toBe(true);
+  vi.resetModules();
+  try {
+    const { ProChart: WithLink } = await import("../ProChart");
+    vi.spyOn(window.HTMLElement.prototype, "clientHeight", "get").mockReturnValue(HOST_HEIGHT);
+    render(<WithLink />);
+    await flush();
+    await flush(); // 解码是 promise，`takeShareTask()` 的 `.then` 要再排一次微任务
+    // 跨 describe 取不到 Task 2 那枚 `stored()`（它声明在持久化块的作用域里），直接读键。
+    expect(JSON.parse(sessionStorage.getItem(PANELS_KEY) ?? "null")).toEqual({ workbench: true });
+  } finally {
+    Object.defineProperty(window, "location", { configurable: true, value: real });
+    vi.resetModules();
+  }
 });
