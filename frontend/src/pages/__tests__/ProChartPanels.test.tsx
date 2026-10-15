@@ -283,35 +283,55 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
  * 矩阵那一行判 `部分` 的**唯一**理由不是「本仓会改 URL」——它不会（那一行的现读记录
  * 是 `grep -n -e useNavigate -e "navigate(" -e pushState ProChart.tsx` ＝ 0 命中）——
  * 而是「这是顺带结果，不是被断言的性质」。下面四格把那个 0 命中变成会红的东西：
- * 开一次、关一次，两次都逐字比 `window.location.href`。
+ * 每格开一次、关一次，两个方向都逐字比 `window.location.href`。
  *
- * 这四格在实现之前就是绿的，这是本任务如实要记的形状；它的判别力由 Step 5 的变异自证
- * 补上（临时往 `toggleDrawPanel` 里塞一行 `replaceState` ⇒ 「画线清单」那格必须红）。
+ * 每格带两枚动作（评审 修复轮 F2「让形状追上声明」，不是把注释改口）：`openName` 打开、
+ * `closeName` 关回去；`aria-pressed` 一律从 `openName` 读，四枚入口都自报状态（现读
+ * `:2779` subPanelOpen／`:2902` legendPanelOpen／`:2845` drawPanelOpen／`:2767` indPanelOpen）。
+ * 前三格 `closeName === openName` —— 那三枚是真翻转（现读 `ProChart.tsx:2783`
+ * `setSubPanelOpen((v) => !v)`、`:2904` `setLegendPanelOpen((v) => !v)`、`toggleDrawPanel`
+ * `:2296-2299` `setDrawPanelOpen((open) => !open)`）。
+ * **第四格的关闭为什么必须借替身 handle**：页面那枚入口按钮的 `onClick` 是
+ * `openFormulaPanel`（现读 `ProChart.tsx:762-765`），体内只有 `setFormulaError(null);` ＋
+ * `:764 setIndPanelOpen(true);` —— 单向打开、没有关闭分支，所以点第二次什么都没关，
+ * 唯一能把工作台关回去的可达点是遮罩 `onClose`（现读 `:3260`），它在替身里就是那枚
+ * `mock-close-workbench`（本文件 `:143-149`）。上一版四格都点同一枚按钮两次、注释却写
+ * 「开一次、关一次」，对第四格是不实的声明，本轮改的是针的形状而不是那句注释。
+ *
+ * 每格还读 `aria-pressed` 开→true、关→false（评审 修复轮 F3）：只比 URL 的话，一次静默的
+ * 空点击也照样绿（「the URL is unchanged」恒成立），而这根针什么也没测。
+ *
+ * 这四格在实现之前就是绿的，这是本任务如实要记的形状；判别力由变异自证补上——
+ * Task 3 那席往 `toggleDrawPanel` 塞一行 `replaceState` ⇒ 「画线清单」红；本轮 修复轮 1
+ * 往 `ProChart.tsx:2783` 之后塞一行 `replaceState` ⇒ 「副图指标」红（两枚不同格，各证一次本体）。
  * 注意本仓确实有写 URL 的动作，但它不在这四格里：`stripQueryKey`（`ProChart.tsx:416`，
  * 写点 `:422`）只在 `?s=`／`?d=` 在场时才落笔，盘上没有那两个参数时它 `:419` 早退。
  */
-const fourOpenActions: Array<[string, string | RegExp]> = [
-  ["副图指标", "副图指标"],
-  ["图例", "图例"],
-  ["画线清单", "画线清单"],
+const fourOpenActions: Array<[string, string | RegExp, string | RegExp]> = [
+  ["副图指标", "副图指标", "副图指标"],
+  ["图例", "图例", "图例"],
+  ["画线清单", "画线清单", "画线清单"],
   // 工作台那枚入口没有 `aria-label`，可达名来自文本（现读 ProChart.tsx:2765-2772），
-  // 所以给正则 —— 和上面四枚开关那组同判据。
-  ["指标公式工作台", /指标公式/],
+  // 所以给正则 —— 和上面四枚开关那组同判据。关闭动作换成替身 handle，理由见上面那段。
+  ["指标公式工作台", /指标公式/, "mock-close-workbench"],
 ];
 
 describe("/pro-chart 四个打开动作对 URL 的净变化为零（TV-CI-06 的针）", () => {
   it.each(fourOpenActions)(
-    "%s：点之前点之后 window.location.href 逐字相同",
-    async (_label, name) => {
+    "%s：开一次、关一次，两次都逐字比 window.location.href，且 aria-pressed 跟着开→关走",
+    async (_label, openName, closeName) => {
       await mountWithOneDrawing();
       const before = window.location.href;
-      fireEvent.click(screen.getByRole("button", { name }));
+      // 第一圈：打开。URL 不许留痕迹，且这一下必须真的把面板打开了（pressed=true）。
+      fireEvent.click(screen.getByRole("button", { name: openName }));
       await flush();
       expect(window.location.href).toBe(before);
-      // 第二圈回到关：开与关两个方向都不许留下 URL 痕迹。
-      fireEvent.click(screen.getByRole("button", { name }));
+      expect(screen.getByRole("button", { name: openName }).getAttribute("aria-pressed")).toBe("true");
+      // 第二圈：关回去。前三格点同一枚真翻转，第四格点替身那枚 handle（入口按钮单向打开）。
+      fireEvent.click(screen.getByRole("button", { name: closeName }));
       await flush();
       expect(window.location.href).toBe(before);
+      expect(screen.getByRole("button", { name: openName }).getAttribute("aria-pressed")).toBe("false");
     },
   );
 });
@@ -361,6 +381,11 @@ it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话
     render(<WithLink />);
     await flush();
     await flush(); // 解码是 promise，`takeShareTask()` 的 `.then` 要再排一次微任务
+    // spec §5(2) 那句「断言工作台被打开**且**会话键被写成 `workbench:true`」是合取，原来这根针
+    // 只钉了后半句 —— 存储那半句会红，「被打开」这半句没钉任何东西。判据不另造：抄本文件
+    // `:242` 那根既有针用的同一个 handle —— `IndicatorEditor` 替身（`:143-149`）只在 `open`
+    // 为真时渲染这枚按钮，工作台没开时 `getByRole` 直接抛 ⇒ 结构上不可能恒真。
+    expect(screen.getByRole("button", { name: "mock-close-workbench" })).toBeTruthy();
     // 跨 describe 取不到 Task 2 那枚 `stored()`（它声明在持久化块的作用域里），直接读键。
     expect(JSON.parse(sessionStorage.getItem(PANELS_KEY) ?? "null")).toEqual({ workbench: true });
   } finally {
