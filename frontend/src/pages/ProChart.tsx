@@ -2764,6 +2764,7 @@ export function ProChart() {
         />
         <button
           className="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+          aria-pressed={indPanelOpen}
           title="编写/管理自定义指标公式（保存在本地）"
           onClick={openFormulaPanel}
         >
