@@ -57,7 +57,7 @@ function runLoad(): void {
     period: { type: "day", span: 1 },
     symbol: { ticker: "600519.SH" },
     // The callback is the only way bars reach the double's `getDataList`, and
-    // the restore path needs `lastBarTimestamp(bars)` (`ProChart.tsx:1389`) —
+    // the restore path needs `lastBarTimestamp(bars)` (`ProChart.tsx:1403`) —
     // a `() => []` answer would leave 清单 disabled, and every `drawings` pin
     // below would then be asserting nothing at all.
     callback: (data) => {
@@ -101,7 +101,7 @@ vi.mock("klinecharts", () => ({
       h.overlays.push(o);
       return o.id;
     }),
-    // The page clears a chart with `chart.removeOverlay()` (`:1382`), so the
+    // The page clears a chart with `chart.removeOverlay()` (`:1396`), so the
     // double has to accept the no-argument form as well as `{ id }`.
     removeOverlay: vi.fn(({ id }: { id?: string } = {}) => {
       h.overlays = id ? h.overlays.filter((o) => o.id !== id) : [];
@@ -205,7 +205,7 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
       expect(stored()).toEqual({ [field]: true });
       expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
     }
-    // 工作台那枚没有 aria-label，可达名来自文本（现读 ProChart.tsx:2750-2756）
+    // 工作台那枚没有 aria-label，可达名来自文本（接线后现读 ProChart.tsx:2765-2771）
     sessionStorage.clear();
     await mountWithOneDrawing();
     fireEvent.click(screen.getByRole("button", { name: /指标公式/ }));
@@ -231,7 +231,7 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     expect(stored()).toEqual({ workbench: true, subIndicator: true, drawings: true, legend: true });
     // 读侧不脏写：整份值原样还在
     expect(screen.getByRole("button", { name: /指标公式/ })).toBeTruthy();
-    // 工作台那枚入口没有 `aria-pressed`（`ProChart.tsx:2752-2758` 是动作按钮，不是开关），
+    // 工作台那枚入口没有 `aria-pressed`（`ProChart.tsx:2765-2771` 是动作按钮，不是开关），
     // 所以 spec §5(2)「四枚都读得到」在这一枚上只能经替身读：`IndicatorEditor` 只在
     // `open` 为真时渲染那枚关闭按钮 ⇒ 首屏就有它，才是「会话记录活过一次刷新」。
     expect(screen.getByRole("button", { name: "mock-close-workbench" })).toBeTruthy();
