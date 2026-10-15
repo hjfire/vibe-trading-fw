@@ -270,9 +270,10 @@ beforeEach(() => {
     },
   ];
   localStorage.clear();
-  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom gives a
-  // whole file one session store: without this clear, the 图例偏好 pin below leaves
-  // 图例 open for the next mount, whose own click on that button then *closes* it.
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom gives a whole
+  // file one session store. The 图例 click in this file's last test does write that key
+  // today, but nothing mounts after it, so this clear is preventive rather than a repair:
+  // the day a test lands below it, it starts from an empty session, not a half-open 图例.
   sessionStorage.clear();
   document.documentElement.classList.remove("dark");
 });
@@ -635,7 +636,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     render(<ProChart />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "图例" }));
-    // label 原文就是带括号这一串（`ProChart.tsx:2714`）；写成「指标图例显示规则」会
+    // label 原文就是带括号这一串（`ProChart.tsx:3031`）；写成「指标图例显示规则」会
     // `Unable to find label` ——那是替身替测试编了个不存在的控件名。
     fireEvent.change(screen.getByLabelText("指标图例显示规则（含主图 MA／均价）"), { target: { value: "none" } });
     await flush();

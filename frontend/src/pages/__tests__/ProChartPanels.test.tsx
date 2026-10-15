@@ -248,7 +248,7 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     // 读侧不脏写：整份值原样还在。
     // 评审 F1：这一格原来写的是 `expect(screen.getByRole(…)).toBeTruthy()` —— 那枚按钮
     // 在任何状态下都渲染，所以那一行永远不会红。改成逐字钉它的 `title`（仓内同型钉法见
-    // `ProChartCompare.test.tsx:461`、`ProChartDrawings.test.tsx:1657`），判据还是
+    // `ProChartCompare.test.tsx:465`、`ProChartDrawings.test.tsx:1657`），判据还是
     // 「这枚入口在场」，但现在文案一改就红 ⇒ 可失败。
     expect(screen.getByRole("button", { name: /指标公式/ }).getAttribute("title")).toBe(
       "编写/管理自定义指标公式（保存在本地）",
