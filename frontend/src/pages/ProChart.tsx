@@ -113,6 +113,7 @@ import {
   RULE_OPTIONS,
   saveLegendPrefs,
 } from "@/lib/chartLegend";
+import { loadPanelVisibility, savePanelVisibility } from "@/lib/chartPanels";
 import {
   CANDLE_HIDDEN,
   HEIKIN_ASHI_NAME,
@@ -524,7 +525,7 @@ export function ProChart() {
   });
   const dark = useThemeDark();
   // Indicator-formula workbench (local custom ⑩).
-  const [indPanelOpen, setIndPanelOpen] = useState(false);
+  const [indPanelOpen, setIndPanelOpen] = useState(() => loadPanelVisibility().workbench);
   const [indCount, setIndCount] = useState(() => loadUserIndicators().filter((x) => x.enabled).length);
   // Which chart instances have already had the saved indicators replayed.
   // Per-instance on purpose: React StrictMode mounts this effect twice in dev,
@@ -545,7 +546,7 @@ export function ProChart() {
   // first two read it before a re-render could have updated the state.
   const [subSets, setSubSets] = useState<SubPaneSets>(loadSubPaneSets);
   const subSetsRef = useRef<SubPaneSets>(subSets);
-  const [subPanelOpen, setSubPanelOpen] = useState(false);
+  const [subPanelOpen, setSubPanelOpen] = useState(() => loadPanelVisibility().subIndicator);
   const [subNotice, setSubNotice] = useState<string | null>(null);
   // Drawing (local custom ⑭): which tool is armed, and how many finished
   // drawings the chart holds. The count drives the undo/clear buttons and the
@@ -558,7 +559,7 @@ export function ProChart() {
   // count and the list, so the toolbar number can never disagree with what the
   // panel shows — the lesson ⑮ had to learn the hard way.
   const [drawRows, setDrawRows] = useState<DrawingRow[]>([]);
-  const [drawPanelOpen, setDrawPanelOpen] = useState(false);
+  const [drawPanelOpen, setDrawPanelOpen] = useState(() => loadPanelVisibility().drawings);
   // Exchange feedback (local custom ⑱): one line, shown in the hint slot, with
   // the per-entry skip reasons parked in `detail` (the tooltip) so the toolbar
   // does not turn into a log. `shareFallback` only earns its rows when the
@@ -588,7 +589,7 @@ export function ProChart() {
   // Legend (第③片 C): every value defaults to the library's own, so a user who
   // never opens the panel gets the pre-feature picture pixel for pixel.
   const [legend, setLegend] = useState<LegendPrefs>(() => loadLegendPrefs());
-  const [legendPanelOpen, setLegendPanelOpen] = useState(false);
+  const [legendPanelOpen, setLegendPanelOpen] = useState(() => loadPanelVisibility().legend);
   // Same closure problem as `drawStyleRef`/`magnetRef`: two clicks inside one
   // task would otherwise both compose onto the same stale snapshot and the
   // second would undo the first.
@@ -618,7 +619,7 @@ export function ProChart() {
   // `loading` 的初值跟着**恢复出来的开关**走，而不是恒假：`cmpOn` 与 `cmpSymbol` 同源于
   // `loadCompare()`（上面那三格），恢复成「开」必带一个非空标的，两格那一刻都已就位。留一格假的
   // "不在飞"在初值上，读得到的代价是 effect 跑起来之前那一帧里按钮那句说的是「结果为空」。
-  // 一个例外如实记着（第三席的 S3-4）：`timeShare` 来自**会话**（`sessionStorage`）而不是偏好，
+  // 一个例外如实记着（第三席的 S3-4）：`timeShare` 来自**会话键**（`localStorage` 的 `SESSION_KEY`，见 282 行）而不是偏好，
   // 与上面两格不同源 ⇒ 「`cmpOn` 真 ＋ 分时态」那一格守卫直接早退，这一格会一路真到用户切回蜡烛。
   // 那一屏读不到它（title 第 1 支排在所有 `cmpStatus` 分支之前），所以形状不动、只把话说对。
   const [cmpStatus, setCmpStatus] = useState<CmpStatus>(() => {
@@ -794,6 +795,19 @@ export function ProChart() {
       /* quota errors are non-fatal for a convenience feature */
     }
   }, [symbol, interval, timeShare]);
+
+  // Panel visibility (L3 第①片): one session key, deviation-only, the only writer
+  // being this composition point. Scattering the write over the six `set*` call
+  // sites is what the legend chapter already paid for — a missed path leaves the
+  // chart's memory half-true, and nothing downstream can see which half.
+  useEffect(() => {
+    savePanelVisibility({
+      workbench: indPanelOpen,
+      subIndicator: subPanelOpen,
+      drawings: drawPanelOpen,
+      legend: legendPanelOpen,
+    });
+  }, [indPanelOpen, subPanelOpen, drawPanelOpen, legendPanelOpen]);
 
   /**
    * Size the sub panes so the main chart keeps a usable height (⑬→⑭).
