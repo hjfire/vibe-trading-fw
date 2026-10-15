@@ -107,6 +107,10 @@ beforeEach(() => {
   h.styles = [];
   h.loader = null;
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片), and jsdom hands the
+  // whole file one session store: without this clear a test that opens 图例 leaves
+  // it open for the next mount, whose own click on that button then *closes* it.
+  sessionStorage.clear();
   document.documentElement.classList.remove("dark");
 });
 

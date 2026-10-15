@@ -463,6 +463,10 @@ const readStylePref = (): Record<string, unknown> =>
 
 beforeEach(() => {
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom gives a
+  // whole file one session store: without this clear, a test that opens 清单 or the
+  // 副图 picker leaves it open for the next mount, whose click then closes it.
+  sessionStorage.clear();
   seq = 0;
   h.ticker = "600519.SH";
   h.list = [];

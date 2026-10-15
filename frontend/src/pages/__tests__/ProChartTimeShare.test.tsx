@@ -386,6 +386,10 @@ function candleRequests(interval: string): Record<string, unknown>[] {
 
 beforeEach(() => {
   localStorage.clear();
+  // Panel visibility is a `sessionStorage` key now (L3 第①片) and jsdom gives a
+  // whole file one session store: without this clear, a test that opens the 副图
+  // picker leaves it open for the next mount, whose click then closes it instead.
+  sessionStorage.clear();
   document.documentElement.classList.remove("dark");
   h.ticker = "600519.SH";
   h.period = { type: "day", span: 1 };
