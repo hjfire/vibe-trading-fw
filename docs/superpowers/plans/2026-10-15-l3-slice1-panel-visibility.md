@@ -772,6 +772,8 @@ git diff --numstat <BASE> HEAD -- frontend/src/pages/ProChart.tsx
 2. 第三列换成 `frontend/src/lib/chartPanels.ts:<PANELS_KEY 那行的行号>`（先 `grep -n 'PANELS_KEY' frontend/src/lib/chartPanels.ts` 取现读行号；这枚锚是本片新产出的，指得到）。
 3. 原来那段 `未找到：… ＋复跑命令` 整段搬进**说明列**开头，逐字不删（`缺` 才要求第三列以 `未找到：` 起头；改成 `部分` 后第三列必须是 `路径:行号`，所以这条搜索记录只能挪，不能删也不能留在第三列），并写明它跑出来仍然 0 命中这件事。
 4. 说明列补一句后半个键为什么还没做：`tradingview.toggle_delete_locked_linetools` 落在 spec §6 排除的第一条（库没有删除前否决钩子，`chartDrawings.ts` 头部第 5 条自陈右键删除不读 lock），并**不许**把对方那个键名以外的任何 TV 键值抄进被跟踪文件；写矩阵格时也不要往 `frontend/src` 里塞含 `tradingview.com` 的串（`forensics_audit.py` 的主机白名单那把尺扫的是 `frontend/src`）。
+   **【2026-10-16 第②片可行性探针席更正】本条括号里那句「库没有删除前否决钩子」是假的**，原句一字不删——它按本条要求已经写进了矩阵说明列，现在那格里带日期追加了更正，spec §6 第一条底下同样追加了一条；两处更正的逐字锚（`klinecharts@10.0.3` 的 `dist/index.esm.js` 右键删除 :8774-8784 带 `preventDefault` 旗标、`OverlayImp.override` :8277-8281 会把函数键合进实例、默认热键表四枚里没有键盘删除 :2132-2137）以那两条为准，本条不重述。
+   本条其余部分照旧成立：不许把对方键值抄进被跟踪文件这条禁令不动，而 `chartDrawings.ts` 头部第 5 条「右键删除不读 `lock`」也仍然对——假的是从它推出来的「没有否决钩子」那一步。
 
 - [ ] **Step 5：复跑三层门**
 

@@ -160,6 +160,18 @@ export function savePanelVisibility(v: PanelVisibility): void;
   `lib/chartDrawings.ts` 头部第 5 条自陈 `lock` 只被 `_figureMouseDownEvent`  honour，选中（8746）与右键删（8774）都无视它；
   库没有「删除前否决」的公开钩子，能走的是 `onRemoved` 之后把那条线救回来，而那会换 id、动清单与存储，
   可行性本身是一个独立的 spike 问题，且 `chartDrawings.ts` 正被别的席改。⇒ 留下一片，先做可行性探针。
+  **【2026-10-16 第②片可行性探针席更正】上面这四行里那句「库没有「删除前否决」的公开钩子」**是假的**，原句一字不删。
+  同一席现读 `klinecharts@10.0.3` 的发布物（该包只有 dist，无 TS 源）：`dist/index.esm.js:8774` 起 `_figureMouseRightClickEvent`，
+  :8779 立 `prevented_3` 旗标、:8780 把 `preventDefault` 连同 `{chart, overlay, figure}` 交给 `overlay.onRightClick`、
+  :8783 `if (!prevented_3)` 才在 :8784 调 `removeOverlay(overlay)` ⇒ 公开否决钩子存在，且正好挂在要拦的那条入口上；
+  能逐实例挂＝`OverlayImp` 构造 :8275 `this.override(overlay)` ＋ `override` :8280-8281 `merge(this, others)`，而 `merge` :157 对函数是赋值（`isObject` :207 只认 `typeof 'object'`）；
+  类型面齐＝`index.d.ts:1041`（`Overlay` 继承 `OverlayEventCollection`）→ `:1145`（`OverlayCreate`）→ `:978`（`createOverlay`／`overrideOverlay` 都收），
+  `preventDefault?: () => void` 声明在 `MouseTouchEvent` `:546-550`、经 `OverlayEvent` `:1034` 继承到，不必 cast。
+  上面引的两枚 dist 坐标（选中 8746、右键删 8774）**本身没漂**，`chartDrawings.ts` 头部第 5 条那句「`lock` 只被 `_figureMouseDownEvent` honour」（现读 :8732-8734）也仍然成立——
+  假的只是从它们推出来的「所以没有否决钩子」。⇒ 这条排除的**理由**被推翻，排除这个动作反而提前结束：第②片应当实现它，形状＝一枚读 `overlay.lock` 的共享 `onRightClick` 守卫（挂在四条入口收敛后的那个 create 漏斗＋`restoreDrawings` 两处），
+  自家清单删除按钮那次 `chart.removeOverlay({ id })`（`pages/ProChart.tsx:2351`）另在按钮层判 `lock` 后不调它（公开 API 上没有否决位）。
+  两条边界登记：库里根本没有键盘删除（默认热键表只有 `scrollLeft/scrollRight/zoomIn/zoomOut` 四枚，:2132-2137），本仓图上也未绑 Delete 键，所以要拦的入口只有右键＋自家按钮两处；
+  且以上全是**静态源码判据**，`preventDefault` 拦住删除**没有在活体上点过**，第②片第一步要起 dev server 真点一次右键。逐字锚与更细的判据见 `docs/forensics/gap-matrix.md` 的 TV-DW-05 格（2026-10-16 第②片那段更正）。
 - **DW-04 的「样式／周期／品种三项各成独立键名」**。本仓是一个键装三项（`SESSION_KEY`，写点 792 行）。
   拆键要迁移动已存在的用户会话值，而 L1 那一格自己写了「有没有一个装三项合并值的键，在本批没有证据面」——
   拿一条没有证据面的形状去做破坏性迁移，不符合本仓「只接纳能被数值对账 harness 验证的改进」的取向。⇒ 不跟，并把它记成**刻意分歧**。
