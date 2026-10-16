@@ -250,13 +250,13 @@ describe("新增工具与建线附加键", () => {
 
   it("13 件工具，落点数与库的 totalStep 逐行相等", () => {
     expect(DRAW_TOOLS.map((t) => t.name)).toEqual([
-      "segment",
+      "straightLine",
       "rayLine",
+      "segment",
       "horizontalStraightLine",
       "priceLine",
       "fibonacciLine",
       "brush",
-      "straightLine",
       "verticalStraightLine",
       "horizontalSegment",
       "horizontalRayLine",
@@ -325,11 +325,21 @@ describe("tool metadata", () => {
   });
 
   it("the hint tells the user how many clicks and how to quit", () => {
-    const line = drawHint(toolOf("segment")!);
+    const line = drawHint(toolOf("straightLine")!);
     expect(line).toContain("趋势线");
     expect(line).toContain("2");
     expect(line).toContain("Esc");
     expect(drawHint(toolOf("brush")!)).toContain("按住拖动");
+  });
+
+  // 趋势线要的是两端无限延长的那条，有限线段另设一个按钮；`segment` 必须继续
+  // 留在表里，否则旧画线在导入白名单（`drawingExchange.ts` 问的就是 `toolOf`）
+  // 和清单标签（`describeDrawing` 的 `toolOf(name)?.label ?? name`）两处一起退化。
+  it("趋势线是无限延长的 straightLine，有限线段另设按钮且没有失籍", () => {
+    expect(toolOf("straightLine")?.label).toBe("趋势线");
+    expect(toolOf("segment")?.label).toBe("线段");
+    expect(DRAW_TOOLS.filter((t) => t.name === "straightLine")).toHaveLength(1);
+    expect(DRAW_TOOLS.filter((t) => t.name === "segment")).toHaveLength(1);
   });
 });
 
@@ -693,7 +703,7 @@ describe("drawing list and per-line flags (local custom ⑰)", () => {
     expect(rows[0].label).toBe("价格线");
     expect(rows[0].detail).toBe("09-02 10:30 · 价位 1327.82");
     expect(rows[0].style).toEqual(DEFAULT_DRAWING_STYLE);
-    expect(rows[1].label).toBe("趋势线");
+    expect(rows[1].label).toBe("线段");
     expect(rows[1].detail).toBe("09-02 → 09-05 14:05 · 1300 → 1290.5");
     expect(rows[1].pointCount).toBe(2);
     // A point with no timestamp (the one on the price axis) still gets named.
