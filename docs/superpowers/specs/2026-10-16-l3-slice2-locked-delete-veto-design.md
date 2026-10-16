@@ -60,9 +60,9 @@ TV-DW-05 那格的两半里，本片只落「锁定线可否删除」那一半�
 
 **豁免线不是注释，是针**：每条豁免都要有一根「摘掉守卫后它会红」的针。最承重的是 `:1396`——判据形状＝锁定一条线 → 切标的 → 再切回来，锁定线**不**跨标的存活（跨了就是 bug），而在同一标的内切回来仍按存储复现。
 
-### 3.3 开关关时＝现状
+### 3.3 开关**开**时＝现状；默认是**关**，所以默认手感会变
 
-`allowDeleteLocked === true`（开关打开）时，五个入口的行为与本片之前**逐字相同**。这条本身就是判据：它是「本片默认不改变任何既有手感」的凭据，也是回归针的来源。
+`allowDeleteLocked === true`（开关打开＝「锁定线可删」）时，五个入口的行为与本片之前**逐字相同**。这条判据的价值不是「本片无风险」——出厂默认是关（§4），上线当天锁定线就删不掉，**手感确实变了**，那正是 §4 要的效果。它的价值在于把整片的行为差压成一道开关：回归针可以成对写，同一入口开＝现状形状、关＝拦下，两半各自可红，「规则本体是唯一的行为差」才有读数。
 
 ---
 
@@ -74,8 +74,10 @@ TV-DW-05 那格的两半里，本片只落「锁定线可否删除」那一半�
 - 值：`"1"` / `"0"`；** Anything but the stored "1" is off**——照 `loadMagnet` 的既有口径，读不到、读坏、被外部写脏一律按 `false`（＝锁定受保护）
 - **默认 `false`＝锁定受保护**。默认值的方向不是审美：`lock` 这个标志已经存在一整片了，它此前什么都不挡；本片给它效力，若默认「允许删除」，那上线当天没有任何用户能观察到这道规则，功能等于零。
 - 读写各自 `try/catch`、写侧 best-effort（照 `saveMagnet`）。
+  - 沿用的是磁吸那枚键的**存储形状与严格读判**，不是它的返回类型：`loadMagnet` 交回 `MagnetMode`（`"normal" | "strong_magnet"`，`:1026`），本片这枚交回 `boolean`。别把联合类型抄过来。
 - UI：画线工具栏里一枚按钮，形状照 `frontend/src/pages/ProChart.tsx:2806-2822` 的磁吸按钮——`aria-label` ＋ `aria-pressed` ＋ 双态 `title`（开／关各一句解释），文案**硬编码中文**。
   - 这条是**跟着同一条工具栏的既有惯例**：磁吸、撤销、清空、清单的文案全在 `ProChart.tsx` 里写死中文，一份都不在 `src/i18n/locales/*.json` 里。本片不进 locale，否则同一个工具条上两种文案通道，比现状更糟。
+  - `aria-pressed` 与 `title` 的真值面要说「**允许删除**」而不是「保护」——按下＝允许＝现状手感，未按下（出厂默认）＝受保护。这枚开关天然带负负得正的坑：按钮文案写成肯定句「锁定线可删」，别写成「锁定线保护」再把值取反。
 
 按钮文案里要说清**它管什么**：不只右键，而是清单行删除、清空、撤销、暂存丢弃四处一起（§3.1 的表就是给用户看的范围）。
 
@@ -93,7 +95,7 @@ TV-DW-05 那格的两半里，本片只落「锁定线可否删除」那一半�
 
 ### 5.2 入参类型要带 `preventDefault`
 
-库把 `preventDefault` 与 `{chart, overlay, figure}` **并进同一个入参对象**（`dist/index.esm.js:8780`）。本仓现有的 `OverlayEventArg`（`frontend/src/lib/chartDrawings.ts:472`）只有 `overlay?: unknown`，需要加 `preventDefault?: () => void`；`makeDrawingEvents` 返回值的键并集要加 `"onRightClick"`。调用点写 `e.preventDefault?.()`——**可选链是必须的**，测试替身不实现它时守卫只能不否决，而这正是 §3.3 那条「关＝现状」判据要的降级形状。
+库把 `preventDefault` 与 `{chart, overlay, figure}` **并进同一个入参对象**（`dist/index.esm.js:8780`）。本仓现有的 `OverlayEventArg`（`frontend/src/lib/chartDrawings.ts:472`）只有 `overlay?: unknown`，需要加 `preventDefault?: () => void`；`makeDrawingEvents` 返回值的键并集要加 `"onRightClick"`。调用点写 `e.preventDefault?.()`——**可选链是必须的**，测试替身不实现它时守卫只能不否决，而那种降级恰好落在 §3.3「开关开＝现状」的那一侧形状上。
 
 类型面不缺：`Overlay` 继承 `OverlayEventCollection`（`dist/index.d.ts:1041`）⇒ `onRightClick` 进得了 `OverlayCreate`（`:1145`），`preventDefault?: () => void` 声明在 `MouseTouchEvent`（`:546`–`:550`）经 `OverlayEvent`（`:1034`）继承到 ⇒ **不需要 cast**。
 
@@ -139,7 +141,7 @@ TV-DW-05 那格的两半里，本片只落「锁定线可否删除」那一半�
 3. 六道门：`npx tsc -b`／`npx vitest run`／`npm run build`／wiki 两面（`tools/test_wiki_drift.py`＋`tools/test_wiki_qmind.py`）／`python -X utf8 tools/forensics_audit.py`／`python -X utf8 -m pytest tools/test_forensics_spec.py -q`。
    - **注意**：`tools/test_forensics_spec.py` 没有 `__main__`，`python -X utf8 tools/test_forensics_spec.py -q` 会以 rc=0 零输出假绿，必须走 `-m pytest`（第①片实测踩过）。
    - 本机两枚恒红门（水位、grep）要按交集证据证明本片 0 贡献，不靠感觉。
-4. 活体回归：五个入口逐个真点一遍（右键／清单行删除／清空／撤销／暂存丢弃），加上开关翻到「允许删除」再逐个点一遍——**两组都要点**，因为 §3.3 那条判据讲的是「关＝现状」。
+4. 活体回归：五个入口逐个真点一遍（右键／清单行删除／清空／撤销／暂存丢弃），加上开关翻到「允许删除」再逐个点一遍——**两组都要点**，因为 §3.3 那条成对判据讲的是「开＝现状、关＝拦下」，只点一组读不出规则本体是唯一的行为差。
 5. 未来函数自查：本片不碰行情读数，仍走一遍画线不漂移自查（锁定态与偏好翻转不该改几何）。
 6. 文档面：矩阵格带日期追加（判态仍 `部分`＋新锚指 `chartDrawings.ts` 里新键的**当片产出**坐标，现读再写）→ 档案 §7.26 排**最后一笔**。
 
