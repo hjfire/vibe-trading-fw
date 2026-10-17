@@ -766,6 +766,49 @@ export function applyDrawingFlags(chart: OverlayHost, id: string, flags: Drawing
 }
 
 /**
+ * 整片的裁判：一条线能不能被「用户发起的删除」删掉。四行真值表，只有一行挡。
+ * `locked` 已经由调用方算好（是 `isLockedUserDrawing` 的结果，不是裸 `lock`），
+ * 所以这里不再问归属——归属只有一处判断点。
+ */
+export function canDeleteDrawing(locked: boolean, allowDeleteLocked: boolean): boolean {
+  return !locked || allowDeleteLocked;
+}
+
+/**
+ * 「这条**用户的**线正锁着」——规则的唯一归属判断点。
+ *
+ * 必须问 `toolOf(name)`（同一枚过滤在 `applyMagnetMode` 里已经站了整一片），
+ * 因为 `pineDrawings.ts:374` 交的就是 `lock: true`：只问 `lock` 会让「清除」
+ * 跳过脚本画的层，而今天的无参 `removeOverlay()` 是把它们一起删掉的——那是一条
+ * 没人要求的行为差。
+ *
+ * 图上的实例（`OverlayLike`）与存储条目（`StoredDrawing`）都吃这一个谓词：
+ * 两边都带 `name` 与 `lock`，暂存桶那一摊走的就是后者。
+ */
+export function isLockedUserDrawing(overlay: unknown): boolean {
+  const o = overlay as OverlayLike | null | undefined;
+  if (!o || o.lock !== true) return false;
+  return !!toolOf(o.name ?? "");
+}
+
+/**
+ * §3.1 的三个批量入口（清除、撤销、暂存丢弃）共用这一枚分拣。
+ * 顺序不动：撤销 = `deletable` 的最后一条，不再写第二套挑选逻辑。
+ */
+export function partitionDeletable<T>(
+  entries: readonly T[],
+  allowDeleteLocked: boolean,
+  lockedOf: (entry: T) => boolean,
+): { deletable: T[]; kept: T[] } {
+  const deletable: T[] = [];
+  const kept: T[] = [];
+  for (const entry of entries) {
+    (canDeleteDrawing(lockedOf(entry), allowDeleteLocked) ? deletable : kept).push(entry);
+  }
+  return { deletable, kept };
+}
+
+/**
  * Set one annotation's words, and read them back.
  *
  * Unlike `mode` and `lock`, `extendData` **is** in `shouldUpdate()`
@@ -927,6 +970,24 @@ export function removeLatestDrawing(chart: OverlayHost): string | null {
   return id;
 }
 
+/**
+ * 删掉图上除「受保护的锁定线」以外的一切，返回**被跳过**的条数。
+ *
+ * 走逐条 `{ id }` 而不是无参整体清，是因为那道整体清没有可插否决的地方；
+ * `StoreImp.removeOverlay` 对被指名的实例会先 `onRemoved` 再 splice，且当它
+ * `isDrawing()` 时顺手把 `_progressOverlayInfo` 置空（dist 14457-14475），
+ * 所以画到一半那条也在这一趟里出清，不必先调 `cancelInProgress`。
+ */
+export function removeDeletableDrawings(chart: OverlayHost, allowDeleteLocked: boolean): number {
+  const { deletable, kept } = partitionDeletable(
+    chart.getOverlays() as OverlayLike[],
+    allowDeleteLocked,
+    isLockedUserDrawing,
+  );
+  for (const o of deletable) if (o.id) chart.removeOverlay({ id: o.id });
+  return kept.length;
+}
+
 // ---------------------------------------------------------------------------
 // Per-symbol persistence: drawings belong to a chart, not to a page view.
 // ---------------------------------------------------------------------------
@@ -1039,6 +1100,32 @@ export function loadMagnet(): MagnetMode {
 export function saveMagnet(on: boolean): void {
   try {
     localStorage.setItem(MAGNET_KEY, on ? "1" : "0");
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * 锁定的画线到底删不删得掉（L3 第②片，TV-DW-05 后半个键的本仓对应物）。
+ * 形状逐字照磁吸那枚键——**照的是存储形状与严格读判，不是返回类型**：磁吸交回
+ * `MagnetMode`，这一枚交回 `boolean`。默认 false＝锁定受保护：`lock` 这个标志
+ * 已经存在一整片了而此前什么都不挡，若默认「允许删除」，上线当天没人能观察到
+ * 这道规则，功能等于零。
+ */
+const DELETE_LOCKED_KEY = "pro-chart.delete_locked.v1";
+
+/** 读不到、读坏、被外部写脏，一律按 false（只有逐字 "1" 算允许删锁定线）。 */
+export function loadAllowDeleteLocked(): boolean {
+  try {
+    return localStorage.getItem(DELETE_LOCKED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAllowDeleteLocked(on: boolean): void {
+  try {
+    localStorage.setItem(DELETE_LOCKED_KEY, on ? "1" : "0");
   } catch {
     /* best effort */
   }

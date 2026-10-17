@@ -12,6 +12,7 @@ import {
   applyDrawingText,
   applyMagnetMode,
   cancelInProgress,
+  canDeleteDrawing,
   clampDrawingsToLastBar,
   clampPointsToLastBar,
   describeDrawing,
@@ -20,9 +21,11 @@ import {
   formatBarTime,
   isInProgress,
   isDefaultStyle,
+  isLockedUserDrawing,
   isRestorablePaneId,
   lastBarTimestamp,
   listDrawings,
+  loadAllowDeleteLocked,
   loadDrawingStyle,
   loadDrawings,
   loadMagnet,
@@ -31,9 +34,11 @@ import {
   normalizeDrawingText,
   overlayStylesOf,
   paneIndicator,
+  partitionDeletable,
   reanchorOverlay,
   removeLatestDrawing,
   restoreDrawings,
+  saveAllowDeleteLocked,
   saveDrawingStyle,
   saveDrawings,
   saveMagnet,
@@ -1436,5 +1441,66 @@ describe("磁吸", () => {
     expect(chart.overrideOverlay).not.toHaveBeenCalled();
     // 磁吸是偏好，不是画线数据：开它绝不该让存储桶长出一个键。
     expect(localStorage.getItem("pro-chart.drawings.v1")).toBeNull();
+  });
+});
+
+describe("锁定线的删除规则", () => {
+  it("canDeleteDrawing：四行真值表，只有「锁着且不允许删锁定线」这一行挡住", () => {
+    expect(canDeleteDrawing(false, false)).toBe(true);
+    expect(canDeleteDrawing(false, true)).toBe(true);
+    expect(canDeleteDrawing(true, true)).toBe(true);
+    expect(canDeleteDrawing(true, false)).toBe(false);
+  });
+
+  it("isLockedUserDrawing：只认「用户自己的工具 ＋ 锁着」，Pine 那种 lock:true 不算", () => {
+    expect(isLockedUserDrawing(overlay({ id: "a", name: "priceLine", lock: true }))).toBe(true);
+    expect(isLockedUserDrawing(overlay({ id: "b", name: "priceLine", lock: false }))).toBe(false);
+    // `pineDrawings.ts:374` 逐字交 `lock: true`，名字（`pineBg`，现读 `:40` 的 `NAME` 表）
+    // 又不在 `DRAW_TOOLS` 里 ⇒ 规则不许碰它。
+    expect(isLockedUserDrawing(overlay({ id: "c", name: "pineBg", lock: true }))).toBe(false);
+    // 存储条目形状（`StoredDrawing`）也吃：暂存桶那一摊就是它。
+    expect(isLockedUserDrawing({ name: "priceLine", paneId: MAIN_PANE_ID, points: [], lock: true })).toBe(true);
+    expect(isLockedUserDrawing({ name: "pineBg", paneId: "sub:MACD", points: [], lock: true })).toBe(false);
+    expect(isLockedUserDrawing(undefined)).toBe(false);
+    expect(isLockedUserDrawing(null)).toBe(false);
+  });
+
+  it("partitionDeletable：保持原序，开关开着时 kept 必为空，不改变入参", () => {
+    const rows = [
+      { id: "1", lock: true },
+      { id: "2", lock: false },
+      { id: "3", lock: true },
+    ];
+    const lockedOf = (r: { lock: boolean }) => r.lock;
+    expect(partitionDeletable(rows, false, lockedOf)).toEqual({
+      deletable: [{ id: "2", lock: false }],
+      kept: [{ id: "1", lock: true }, { id: "3", lock: true }],
+    });
+    expect(partitionDeletable(rows, true, lockedOf)).toEqual({ deletable: rows, kept: [] });
+    expect(partitionDeletable([], false, lockedOf)).toEqual({ deletable: [], kept: [] });
+    // 空集合会造出真空通过（本仓记过的假绿形状），所以「非空输入也确实被分了」要单独钉。
+    expect(partitionDeletable(rows, false, () => true)).toEqual({ deletable: [], kept: rows });
+    expect(rows).toHaveLength(3);
+  });
+
+  it("偏好键：读侧只有逐字 \"1\" 算允许，写侧 true/false 各写 \"1\"/\"0\"，两侧都不许抛", () => {
+    expect(loadAllowDeleteLocked()).toBe(false);
+    localStorage.setItem("pro-chart.delete_locked.v1", "1");
+    expect(loadAllowDeleteLocked()).toBe(true);
+    localStorage.setItem("pro-chart.delete_locked.v1", "yes");
+    expect(loadAllowDeleteLocked()).toBe(false);
+    saveAllowDeleteLocked(true);
+    expect(localStorage.getItem("pro-chart.delete_locked.v1")).toBe("1");
+    saveAllowDeleteLocked(false);
+    expect(localStorage.getItem("pro-chart.delete_locked.v1")).toBe("0");
+
+    const boom = () => {
+      throw new Error("quota");
+    };
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(boom);
+    expect(loadAllowDeleteLocked()).toBe(false);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
+    expect(() => saveAllowDeleteLocked(true)).not.toThrow();
+    vi.restoreAllMocks();
   });
 });
