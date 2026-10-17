@@ -1498,7 +1498,8 @@ describe("锁定线的删除规则", () => {
 
   it("清除：Pine 那种 lock:true 的装饰被逐条删掉，与今天的整体清同形", () => {
     // 归属针的反面（豁免线 E5）：`clearPineDrawings` 走 `{ groupId }` 整层清，而
-    // 逐条交出去的是 `lock: true` 的四种装饰名——它们都不在 `DRAW_TOOLS` 里，
+    // 逐条交出去的是 `lock: true` 的装饰名（`pineDrawings.ts` 的 `NAME` 表七枚，
+    // 由 `toCreate` 统一交 `lock: true`）——它们都不在 `DRAW_TOOLS` 里，
     // 所以「清除」不许把它们留下来说「跳过了一条锁着的线」。
     const chart = fakeChart([
       overlay({ id: "u0", name: "priceLine", lock: true }),

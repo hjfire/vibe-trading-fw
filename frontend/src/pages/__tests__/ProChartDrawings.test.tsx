@@ -1101,8 +1101,8 @@ describe("/pro-chart 锁定线的删除否决", () => {
     finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
     await flush();
     const userId = h.overlays[0].id;
-    // Pine 那四种装饰（`pineDrawings.ts` 的 `NAME` 表）都不在用户工具表里，落地
-    // 时逐字交 `lock: true`（同一枚文件里 `createPineOverlays` 的交法），而
+    // Pine 那批装饰（`pineDrawings.ts` 的 `NAME` 表七枚）都不在用户工具表里，落地
+    // 时逐字交 `lock: true`（同一枚文件里 `toCreate` 的交法），而
     // `describeDrawing` 只滤「无 id／半成品／无 name」⇒ 清单上必有它的行、行上的
     // `locked` 必为 true，而删除问的是归属 ⇒ 删得动。
     let pineId = "";
