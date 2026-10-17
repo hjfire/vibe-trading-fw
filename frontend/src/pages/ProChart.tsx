@@ -68,10 +68,12 @@ import {
   applyMagnetMode,
   applyMagnetModeToArmed,
   cancelInProgress,
+  canDeleteDrawing,
   clampDrawingsToLastBar,
   drawingsBucket,
   drawHint,
   isInProgress,
+  isLockedUserDrawing,
   isRestorablePaneId,
   lastBarTimestamp,
   listDrawings,
@@ -82,9 +84,12 @@ import {
   makeDrawingEvents,
   overlayStylesOf,
   paneIndicator,
+  partitionDeletable,
   reanchorOverlay,
+  removeDeletableDrawings,
   removeLatestDrawing,
   restoreDrawings,
+  saveAllowDeleteLocked,
   saveDrawingStyle,
   saveDrawings,
   saveMagnet,
@@ -591,9 +596,10 @@ export function ProChart() {
   // 「点击那一刻」的真值——守卫活在**画线实例**上，一条线创建时捕获的闭包会一直
   // 读到它出生那天，翻转开关就对该页已有的一切线无效（spec §5.1，Task 3 的翻转针
   // 就是钉这一条）。同一个 task 里连点两次摊到同一份过期快照，理由同 `magnetRef`。
-  //  setter 不在本片出现：`noUnusedLocals` 会把它判成死码，Task 4 的开关按钮才是
-  //  它的唯一写者，那时连同 `saveAllowDeleteLocked` 一起接回来。
-  const [allowDeleteLocked] = useState(() => loadAllowDeleteLocked());
+  //  setter 唯一的写者是工具栏那枚「锁定线可删」（`toggleAllowDeleteLocked`），翻转时
+  //  连同 `saveAllowDeleteLocked` 一起落盘。写法是**先写 ref 再写 state**（同 `magnetRef`
+  //  那一姿势）：不靠重渲染把 ref 追平，那样闭包陈旧问题就原样请回来了。
+  const [allowDeleteLocked, setAllowDeleteLocked] = useState(() => loadAllowDeleteLocked());
   const allowDeleteLockedRef = useRef(allowDeleteLocked);
   // Legend (第③片 C): every value defaults to the library's own, so a user who
   // never opens the panel gets the pre-feature picture pixel for pixel.
@@ -2118,11 +2124,23 @@ export function ProChart() {
     syncDrawings(chart);
   };
 
-  /** Throw away the waiting lines — the only way out of a pane that is gone. */
+  /**
+   * Throw away the waiting lines — the only way out of a pane that is gone.
+   * §3.1 入口 5：桶里锁定 those 留着；全被留下时给一句解释，否则「按了没反应」
+   * 会被读成按钮坏了。
+   */
   const discardParked = () => {
-    replaceParked([]);
+    const { kept } = partitionDeletable(parkedRef.current, allowDeleteLockedRef.current, isLockedUserDrawing);
+    if (kept.length === parkedRef.current.length) {
+      setDrawNotice({ bad: true, text: `${kept.length} 条在等副图的线都锁着，一条都没删（打开「锁定线可删」或先「解锁」）` });
+      return;
+    }
+    replaceParked(kept);
     const chart = chartRef.current;
     if (chart) syncDrawings(chart);
+    if (kept.length > 0) {
+      setDrawNotice({ bad: true, text: `${kept.length} 条锁着的线留在等副图，其余已删` });
+    }
   };
 
   /**
@@ -2155,6 +2173,19 @@ export function ProChart() {
       applyMagnetMode(chart, next);
       applyMagnetModeToArmed(chart, next);
     }
+  };
+
+  /**
+   * 翻转「锁定线可删」。这里没有任何**批量**动作要做：守卫是在右键那一刻从实例的
+   * 回调里现读开关的（`makeDrawingEvents`），所以翻转不需要重新给每条线盖一遍东西
+   * ——那正是磁吸必须重盖而这一枚不必的原因，`mode` 是库在落点瞬间读的，否决是库在
+   * 删除瞬间问的。别照着 `toggleMagnet` 在这里加一轮 `overrideOverlay`。
+   */
+  const toggleAllowDeleteLocked = () => {
+    const next = !allowDeleteLockedRef.current;
+    allowDeleteLockedRef.current = next;
+    setAllowDeleteLocked(next);
+    saveAllowDeleteLocked(next);
   };
 
   /**
@@ -2282,19 +2313,42 @@ export function ProChart() {
     const chart = chartRef.current;
     if (!chart) return;
     cancelInProgress(chart);
-    if (removeLatestDrawing(chart)) syncDrawings(chart);
+    const allow = allowDeleteLockedRef.current;
+    if (removeLatestDrawing(chart, allow)) {
+      syncDrawings(chart);
+      const skipped = chart.getOverlays().filter((o) => !allow && isLockedUserDrawing(o)).length;
+      if (skipped > 0) {
+        setDrawNotice({ bad: true, text: `撤销跳过了 ${skipped} 条锁着的线（打开「锁定线可删」可一并删）` });
+      }
+      return;
+    }
+    // 什么都没删，但清单上有线 ⇒ 不是按钮坏了，是全被锁定挡着。不解释一次就会被当故障。
+    if (drawCount > 0) {
+      setDrawNotice({ bad: true, text: "最近的那些线锁着，撤销动不了它们（打开「锁定线可删」或先「解锁」）" });
+    }
     setDrawTool(null);
   };
 
   const clearDraw = () => {
     const chart = chartRef.current;
     if (!chart) return;
-    chart.removeOverlay();
-    // "全部画线" means the parked ones too (⑲) — they belong to this bucket, and
-    // leaving them behind would resurrect lines the user just asked to clear.
-    replaceParked([]);
+    const allow = allowDeleteLockedRef.current;
+    // 逐条指名删，而不是无参整体清——整体清没有可插否决的地方（§3.1 入口 3）。
+    const skippedOnChart = removeDeletableDrawings(chart, allow);
+    // 暂存桶那摊同样保留锁定条（`StoredDrawing.lock` 随存储往返，见
+    // chartDrawings.ts 的 serialize/restore 两侧）。parked 条目不在图上，
+    // 「删」＝从桶里去掉，所以这里只取 `kept` 一堆。
+    const { kept } = partitionDeletable(parkedRef.current, allow, isLockedUserDrawing);
+    replaceParked(kept);
     setDrawTool(null);
     syncDrawings(chart);
+    const skipped = skippedOnChart + kept.length;
+    if (skipped > 0) {
+      setDrawNotice({
+        bad: true,
+        text: `${skipped} 条锁着的线留着没删（要一起删就打开「锁定线可删」，或先「解锁」那几条）`,
+      });
+    }
   };
 
   /**
@@ -2354,10 +2408,21 @@ export function ProChart() {
    * Delete one line through the chart, so `onRemoved` runs the same way a
    * right-click delete runs it (⑮): selection and storage are cleaned by that
    * callback, not by this handler.
+   *
+   * §3.1 entry 2 — the public API has no veto slot here (`Chart.removeOverlay`
+   * just walks into `StoreImp.removeOverlay`), so the rule is checked **before**
+   * the call, against the live instance. Not against `drawRows`: a row carries
+   * `locked` but no ownership, and asking only "is it locked" would start
+   * blocking list rows that are a script's layer, which today delete fine.
    */
   const removeDrawing = (id: string) => {
     const chart = chartRef.current;
     if (!chart) return;
+    const [target] = chart.getOverlays({ id }) as unknown[];
+    if (!canDeleteDrawing(isLockedUserDrawing(target), allowDeleteLockedRef.current)) {
+      setDrawNotice({ bad: true, text: "这条线锁着，删不掉——先「解锁」，或打开「锁定线可删」" });
+      return;
+    }
     chart.removeOverlay({ id });
     syncDrawings(chart);
   };
@@ -2831,6 +2896,23 @@ export function ProChart() {
             磁吸
           </button>
           <button
+            type="button"
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs hover:bg-muted",
+              allowDeleteLocked && "bg-muted font-medium ring-1 ring-primary",
+            )}
+            aria-label="锁定线可删"
+            aria-pressed={allowDeleteLocked}
+            title={
+              allowDeleteLocked
+                ? "已允许删除锁定线：右键、清单行的删除、清除、撤销、删除待恢复这五条路都能删掉锁着的线（和以前一样）"
+                : "锁着的线删不掉：右键会被挡下，清单行的删除按不动它，清除与撤销跳过它，在等副图的锁定线也留着。要放行点这里，或先把那一条「解锁」"
+            }
+            onClick={toggleAllowDeleteLocked}
+          >
+            锁定线可删
+          </button>
+          <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             title="撤销最近一条画线"
             disabled={drawCount === 0 && drawTool === null}
@@ -3181,7 +3263,13 @@ export function ProChart() {
                 <button
                   type="button"
                   aria-label={`锁定画线 ${row.id}`}
-                  title={row.locked ? "解锁后可拖动改位" : "锁定后拖不动这条线（右键仍可删）"}
+                  title={
+                    row.locked
+                      ? "解锁后可拖动改位"
+                      : allowDeleteLocked
+                        ? "锁定后拖不动这条线；「锁定线可删」开着，右键与删除照旧删得动"
+                        : "锁定后拖不动这条线，右键点它也删不掉（打开「锁定线可删」可放行）"
+                  }
                   className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
                   onClick={() => flagDrawing(row.id, { lock: !row.locked })}
                 >
@@ -3199,7 +3287,11 @@ export function ProChart() {
                 <button
                   type="button"
                   aria-label={`删除画线 ${row.id}`}
-                  title="删除这条线"
+                  title={
+                    row.locked && !allowDeleteLocked
+                      ? "这条线锁着，删不掉——先「解锁」，或打开工具栏的「锁定线可删」"
+                      : "删除这条线"
+                  }
                   className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
                   onClick={() => removeDrawing(row.id)}
                 >

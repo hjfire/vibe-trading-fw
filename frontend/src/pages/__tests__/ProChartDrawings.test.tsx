@@ -185,12 +185,16 @@ function finishDrawing(at: { timestamp: number; value: number }) {
 }
 
 /**
- * Right-click a line body. Mirrors `OverlayView._figureMouseRightClickEvent`
- * (dist 8774-8789): the library hands `overlay.onRightClick` an event object
- * carrying a `preventDefault` it owns, and only reaches
- * `StoreImp.removeOverlay`—which fires `onRemoved` *before* splicing—when the
- * callback did not use it. The old double skipped straight to the removal, so
- * the veto was structurally untestable here.
+ * Right-click a line body. Models **only** the veto half of
+ * `OverlayView._figureMouseRightClickEvent` (dist 8774-8789): the library hands
+ * `overlay.onRightClick` an event object carrying a `preventDefault` it owns, and
+ * only reaches `StoreImp.removeOverlay`—which fires `onRemoved` *before*
+ * splicing—when the callback did not use it. The upstream
+ * `checkOverlayFigureEvent` hit-test gate is deliberately **not** modelled — this
+ * double dispatches by id, so it proves "the callback got the event and the
+ * removal followed the verdict", never "the figure was hit-tested". The old
+ * double skipped straight to the removal, so the veto was structurally
+ * untestable here.
  *
  * A missing id is an error, not a no-op: a pin that aims at an already-deleted
  * overlay would otherwise pass on an empty target set (the empty-collection
@@ -319,7 +323,6 @@ vi.mock("klinecharts", () => ({
           extendData?: unknown;
           mode?: string;
           needDefaultPointFigure?: boolean;
-          onRightClick?: (e: { overlay: FakeOverlay; preventDefault: () => void }) => void;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
@@ -623,9 +626,13 @@ describe("/pro-chart 画线交互", () => {
     await flush();
     expect(h.overlays.length).toBe(1);
 
+    // 第②片 Task 4（§3.1 入口 3）：清除改走逐条 `{ id }`，无参整体清那一站没有了
+    // ——那道整体清没有可插否决的地方。本针钉的仍是「连存储一起清掉」，所以删的
+    // 形状跟着改成指名删，存储那两行不动。
+    const cleared = h.overlays[0].id;
     fireEvent.click(screen.getByRole("button", { name: "清除" }));
     await flush();
-    expect(h.chart?.removeOverlay).toHaveBeenLastCalledWith();
+    expect(h.chart?.removeOverlay).toHaveBeenLastCalledWith({ id: cleared });
     expect(h.overlays.length).toBe(0);
     expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
   });
@@ -741,6 +748,27 @@ describe("/pro-chart 画线的拖动与删除", () => {
 });
 
 describe("/pro-chart 锁定线的删除否决", () => {
+  // Task 4 的三枚 helper：既有的 `bucketOf`/`disabled`/`reload` 住在
+  // `describe("/pro-chart 副图上的画线")` 的回调体里（现读 `:1863`/`:1867`/`:1884`），
+  // 跨 describe 抓不到，所以本 describe 逐字照那三行重新声明一份；`bucketOf` 在这里
+  // 只用一个键，换个短名读得动。
+  const bucket = (key = "600519.SH|1D"): Array<Record<string, unknown>> =>
+    (readBuckets()[key] ?? []) as Array<Record<string, unknown>>;
+  const disabled = (name: string): boolean =>
+    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+  /** Leave the symbol and come back: the path that re-runs the restore. */
+  async function reload(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    });
+    await flush();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "贵州茅台" }));
+    });
+    await flush();
+  }
+
   it("锁着的线：右键点它删不掉，图与存储都不动；解锁后同一条右键照删（默认态两半）", async () => {
     await mountChart();
     fireEvent.click(screen.getByRole("button", { name: "价格线" }));
@@ -776,6 +804,180 @@ describe("/pro-chart 锁定线的删除否决", () => {
     // 掉这一格（现读 `chartDrawings.ts:1061`），本文件既有针也是这么钉的
     // （现读 `:615`／`:691` 的 `toBeUndefined()`）。
     expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
+  });
+
+  it("开关成对：默认态右键与清单行都拦下，翻开「锁定线可删」两条路照旧删得动", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
+    await flush();
+    const id = h.overlays[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+    expect(h.overlays[0].lock).toBe(true);
+
+    // 清单行的删除按钮**不带 disabled**（Task 4 Step 3 的裁定：disabled 的按钮不给
+    // 解释，解释长在提示上）。所以它按得动、按了不删——这一行钉的就是「没被禁用」，
+    // 下一行钉「按了没删掉」。两行分开才有判别力：只钉后者的话，按钮整个消失也照过。
+    expect(disabled(`删除画线 ${id}`)).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: `删除画线 ${id}` }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([id]);
+    expect(screen.getByText("这条线锁着，删不掉——先「解锁」，或打开「锁定线可删」")).toBeTruthy();
+
+    const flip = screen.getByRole("button", { name: "锁定线可删" });
+    expect(flip.getAttribute("aria-pressed")).toBe("false"); // 出厂态＝保护
+    expect(localStorage.getItem(DELETE_LOCKED_KEY)).toBeNull();
+
+    fireEvent.click(flip);
+    await flush();
+    expect(flip.getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem(DELETE_LOCKED_KEY)).toBe("1");
+
+    // 后半的承重在这儿：这条线是**翻转之前**就画好、就锁上的，它的 `onRightClick`
+    // 闭包生在创建那天。守卫若在创建时捕获布尔，这一行会照样拦下——§5.1 之所以
+    // 要求点击那一刻读 ref，就是为了这一根针能红。
+    rightClickDelete(id);
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+
+    // 清单行那一路同样要放行；上面那条已被右键删掉，重画一条锁着的再走行删除。
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 7 * DAY, value: 1310 });
+    await flush();
+    const again = h.overlays[0].id;
+    // 面板前半就开着、没人关它（`toggleDrawPanel` 是唯一的写者，切标的也不 remount），
+    // 所以这里不再点「画线清单」——再点一次是**关**，行就没了。
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${again}` }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `删除画线 ${again}` }));
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+    // 删成了就不该再说它删不掉：`removeDrawing` 删后走 `syncDrawings`，那里
+    // `setDrawNotice(null)`（现读 `ProChart.tsx:1977`）把上一句提示冲掉。
+    expect(screen.queryByText(/这条线锁着，删不掉/)).toBeNull();
+  });
+
+  it("清除：锁定条跳过、没锁的照删，并说一句「N 条锁着的留着没删」", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1290 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1300 });
+    await flush();
+    const lockedId = h.overlays[1].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lockedId}` }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([lockedId]);
+    expect(bucket().map((d) => (d as { name?: string }).name)).toEqual(["priceLine"]);
+    expect(screen.getByText("1 条锁着的线留着没删（要一起删就打开「锁定线可删」，或先「解锁」那几条）")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "锁定线可删" }));
+    await flush();
+    // 上一条线要回来才能读「开＝现状」：清空后重新画两条。
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + 3 * DAY, value: 1295 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 4 * DAY, value: 1305 });
+    await flush();
+    const lid = h.overlays[1].id;
+    // 清单面板前半开着、清除不会关它 ⇒ 这里只等一轮 flush，不再点「画线清单」。
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lid}` }));
+    await flush();
+    h.chart?.removeOverlay.mockClear(); // 下面要读「有没有无参整体清」，先抹掉前面那几次指名删
+
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    await flush();
+    expect(h.overlays).toHaveLength(0); // 开＝现状：一条都不留
+    // 逐条 `{ id }`，一次无参整体清都没有（`:1214` 那句裁定的可读数）。
+    expect(h.chart?.removeOverlay.mock.calls.every((c) => c.length === 1 && !!c[0]?.id)).toBe(true);
+    expect(screen.queryByText(/条锁着的线留着没删/)).toBeNull(); // 也不落提示
+  });
+
+  it("撤销跳过锁定的那条去删后面一条；全是锁着的就什么都不动，并说明原因", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1290 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1300 });
+    await flush();
+    const lockedId = h.overlays[1].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lockedId}` }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" })); // 收面板，回到工具栏
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([lockedId]); // 取的是「最近一条**可删**的」
+    expect(screen.getByText(/撤销跳过了 1 条锁着的线/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([lockedId]); // 全锁着 ⇒ 一动不动
+    expect(screen.getByText(/最近的那些线锁着，撤销动不了它们/)).toBeTruthy();
+  });
+
+  it("删除待恢复的画线：锁定条留在桶里；开着开关就整桶清空（现状）", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          { name: "priceLine", paneId: "indicator_pane_1725507123456_4", points: [{ timestamp: START, value: 52874 }] },
+          { name: "priceLine", paneId: "indicator_pane_1725507123456_5", points: [{ timestamp: START, value: 52875 }], lock: true },
+        ],
+      }),
+    );
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    expect(screen.getByText(/2 条在等副图/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除待恢复的画线" }));
+    await flush();
+    const left = bucket() as Array<Record<string, unknown>>;
+    expect(left).toHaveLength(1);
+    expect(left[0].lock).toBe(true); // 锁着的那条留在桶里
+    expect(screen.getByText(/1 条锁着的线留在等副图，其余已删/)).toBeTruthy();
+
+    // 全锁着 ⇒ 「按了没反应」必须有话。
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          { name: "priceLine", paneId: "indicator_pane_1725507123456_6", points: [{ timestamp: START, value: 52876 }], lock: true },
+        ],
+      }),
+    );
+    await reload();
+    // 清单面板从上面那半起就开着，`reload` 是切标的、不是 remount ⇒ 状态还在，
+    // 再点「画线清单」会把它关掉，所以这里只 flush 一轮等暂存重新落桶。
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "删除待恢复的画线" }));
+    await flush();
+    expect(bucket()).toHaveLength(1);
+    expect(screen.getByText(/1 条在等副图的线都锁着，一条都没删/)).toBeTruthy();
+
+    // 开＝现状：整桶清空。
+    fireEvent.click(screen.getByRole("button", { name: "锁定线可删" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "删除待恢复的画线" }));
+    await flush();
+    expect(bucket()).toHaveLength(0);
   });
 });
 
