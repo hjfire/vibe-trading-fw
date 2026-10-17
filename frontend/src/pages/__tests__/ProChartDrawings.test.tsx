@@ -749,9 +749,9 @@ describe("/pro-chart 画线的拖动与删除", () => {
 
 describe("/pro-chart 锁定线的删除否决", () => {
   // Task 4 的三枚 helper：既有的 `bucketOf`/`disabled`/`reload` 住在
-  // `describe("/pro-chart 副图上的画线")` 的回调体里（现读 `:1863`/`:1867`/`:1884`），
-  // 跨 describe 抓不到，所以本 describe 逐字照那三行重新声明一份；`bucketOf` 在这里
-  // 只用一个键，换个短名读得动。
+  // `describe("/pro-chart 副图上的画线")` 的回调体里，跨 describe 抓不到，所以本
+  // describe 逐字照那三行重新声明一份；`bucketOf` 在这里只用一个键，换个短名读得
+  // 动。（同文件里 `closePane`/`finishWith` 也是这个形状，见下面那两份声明。）
   const bucket = (key = "600519.SH|1D"): Array<Record<string, unknown>> =>
     (readBuckets()[key] ?? []) as Array<Record<string, unknown>>;
   const disabled = (name: string): boolean =>
@@ -856,8 +856,8 @@ describe("/pro-chart 锁定线的删除否决", () => {
     fireEvent.click(screen.getByRole("button", { name: `删除画线 ${again}` }));
     await flush();
     expect(h.overlays).toHaveLength(0);
-    // 删成了就不该再说它删不掉：`removeDrawing` 删后走 `syncDrawings`，那里
-    // `setDrawNotice(null)`（现读 `ProChart.tsx:1977`）把上一句提示冲掉。
+    // 删成了就不该再说它删不掉：`removeDrawing` 删后走 `syncDrawings`，它函数体
+    // 里那句 `setDrawNotice(null)` 把上一句提示冲掉。
     expect(screen.queryByText(/这条线锁着，删不掉/)).toBeNull();
   });
 
@@ -900,7 +900,12 @@ describe("/pro-chart 锁定线的删除否决", () => {
     fireEvent.click(screen.getByRole("button", { name: "清除" }));
     await flush();
     expect(h.overlays).toHaveLength(0); // 开＝现状：一条都不留
-    // 逐条 `{ id }`，一次无参整体清都没有（`:1214` 那句裁定的可读数）。
+    // 逐条 `{ id }`，一次无参整体清都没有——这是本 describe 开头那条裁定（「批量
+    // 入口走逐条指名删，因为无参整体清没有可插否决的地方」）的可读数。
+    // 先钉次数再钉形状：`every()` 在**空调用数组**上是真空真，只钉形状的话这一行
+    // 在「一次都没调用」的世界里照样绿（本仓记过的假绿形状）。3 = 这一趟图上的
+    // 三条（先前被跳过的那条 ＋ 翻开开关后新画的两条）全被逐条指名删掉。
+    expect(h.chart?.removeOverlay.mock.calls.length).toBe(3);
     expect(h.chart?.removeOverlay.mock.calls.every((c) => c.length === 1 && !!c[0]?.id)).toBe(true);
     expect(screen.queryByText(/条锁着的线留着没删/)).toBeNull(); // 也不落提示
   });
@@ -972,12 +977,159 @@ describe("/pro-chart 锁定线的删除否决", () => {
     expect(bucket()).toHaveLength(1);
     expect(screen.getByText(/1 条在等副图的线都锁着，一条都没删/)).toBeTruthy();
 
-    // 开＝现状：整桶清空。
+    // 开＝现状：整桶清空。判据用「键整个消失」而不是「空数组」——`saveDrawings`
+    // 在 list 为空时 `delete` 掉这一格，而 `bucket()` 里那句 `?? []` 把两种形状
+    // 抹平成同一个读数（本文件姊妹针用的也是 `toBeUndefined()`）。
     fireEvent.click(screen.getByRole("button", { name: "锁定线可删" }));
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "删除待恢复的画线" }));
     await flush();
+    expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
+  });
+
+  /**
+   * 关掉一枚副图，姿势与 ㉛ 选单里的相同。`describe("/pro-chart 副图上的画线")`
+   * 的回调体里已有同名的一枚，本 describe 抓不到 ⇒ 照它的函数体再声明一份；这
+   * 个文件里 `bucketOf`/`disabled`/`reload` 早就是两枚 describe 各有一份的形状。
+   */
+  const closePane = (id: string, name = id.replace("sub:", "")) => {
+    fireEvent.click(screen.getByRole("button", { name: "副图指标" }));
+    fireEvent.click(screen.getByRole("button", { name: `关闭副图 ${name}` }));
+    const i = h.panes.findIndex((p) => p.id === id);
+    if (i >= 0) h.panes.splice(i, 1);
+  };
+
+  /** Land a multi-point tool in one go, the way the library's last click does. */
+  function finishWith(points: Array<Record<string, number>>): FakeOverlay {
+    const line = h.overlays[h.overlays.length - 1];
+    act(() => {
+      line.points = points.map((p) => ({ ...p }));
+      line.drawing = false;
+      line.currentStep = -1;
+      line.onDrawEnd?.({ overlay: line });
+    });
+    return line;
+  }
+
+  it("豁免：切标的的整图清不读锁定态——锁定线不许粘到另一个标的上", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
+    await flush();
+    const id = h.overlays[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "AAPL" }));
+    await flush();
+    expect(h.overlays).toHaveLength(0); // 拦下这次清理＝把它粘到别的标的上，那才是 bug
+    expect((readBuckets()["600519.SH|1D"] as Array<Record<string, unknown>>)[0].lock).toBe(true); // 离开的那个标的桶没动
+
+    fireEvent.click(screen.getByRole("button", { name: "贵州茅台" }));
+    await flush();
+    expect(h.overlays).toHaveLength(1); // 切回来：按存储复现，仍带着锁定态
+    expect(h.overlays[0].lock).toBe(true);
+    rightClickDelete(h.overlays[0].id);
+    await flush();
+    expect(h.overlays).toHaveLength(1); // 复现出来的那条依然删不动
+  });
+
+  it("豁免：副图关掉时锁定条照样进暂存，不留在图上", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    h.overlays[h.overlays.length - 1].paneId = SUB_MACD;
+    finishDrawing({ timestamp: START + DAY, value: -0.42 });
+    await flush();
+    const id = h.overlays[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+
+    closePane(SUB_MACD);
+    act(() => {
+      h.indProps?.onChartIndicatorsChanged?.();
+    });
+    await flush();
+    expect(h.overlays).toHaveLength(0); // 收纳这次清理必须照样发生
+    expect(screen.getByRole("button", { name: "画线清单" }).textContent).toBe("清单 · 0+1");
+    expect((bucket()[0] as Record<string, unknown>).lock).toBe(true); // 进桶时带着锁定态
+  });
+
+  it("豁免：吸回后退化成一点的锁定线照样被丢掉（退化丢弃这条路不问锁定开关）", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "趋势线" }));
+    // `lock` 只能手放到实例上：清单行要到画完才出现，而本针要的正是「带着
+    // lock 进 reanchor」这一趟。
+    h.overlays[h.overlays.length - 1].lock = true;
+    const line = finishWith([
+      { timestamp: START + 300 * DAY, value: 1300 },
+      { timestamp: START + 305 * DAY, value: 1320 },
+    ]);
+    await flush();
+
+    expect(h.overlays.some((o) => o.id === line.id)).toBe(false);
     expect(bucket()).toHaveLength(0);
+    expect(screen.getByText(/重合成一个点，已放弃/)).toBeTruthy();
+  });
+
+  it("豁免：画到一半的线被 cancelInProgress 清掉，锁定开关碰不到它（锁定只长在清单行上）", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "射线" }));
+    await flush();
+    // 半成品：清单上还没有它的行，所以这一根结构上拿不到 `lock`——形状照本文件
+    // 「画到一半被删掉时工具不卡在激活态」那根针（点工具 → 读最后一条实例）。
+    // 那枚 `lock = true` 是**判别力的全部来源**：不把它放上去，任何「让
+    // cancelInProgress 也问锁定」的变异都咬不到这根针，它就是一根恒绿的针。
+    // 真实库里这一态拿不到 lock（锁定只长在清单行上），所以这里是替身手工放形
+    // 状，钉的是「这条路不读规则」，不是「这条路读到了 false」。
+    const stuck = h.overlays[h.overlays.length - 1];
+    expect(stuck.drawing).toBe(true);
+    stuck.lock = true;
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+  });
+
+  it("清单行的删除文案问的是归属，不是行上的锁定态：Pine 那种锁定行说「删除这条线」，也真删得动", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
+    await flush();
+    const userId = h.overlays[0].id;
+    // Pine 那四种装饰（`pineDrawings.ts` 的 `NAME` 表）都不在用户工具表里，落地
+    // 时逐字交 `lock: true`（同一枚文件里 `createPineOverlays` 的交法），而
+    // `describeDrawing` 只滤「无 id／半成品／无 name」⇒ 清单上必有它的行、行上的
+    // `locked` 必为 true，而删除问的是归属 ⇒ 删得动。
+    let pineId = "";
+    act(() => {
+      pineId = String(h.chart?.createOverlay({ name: "pineBg", points: [{ timestamp: START + DAY, value: 1300 }], lock: true }));
+    });
+    expect(h.overlays.some((o) => o.id === pineId && o.lock === true && o.name === "pineBg")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${userId}` }));
+    await flush();
+    // 两行都在清单上，而且都带着锁定态——否则下面的 `title` 读的是不存在的行。
+    expect(screen.getByRole("button", { name: `锁定画线 ${pineId}` }).textContent).toBe("解锁");
+    expect(screen.getByRole("button", { name: `锁定画线 ${userId}` }).textContent).toBe("解锁");
+
+    expect(screen.getByRole("button", { name: `删除画线 ${pineId}` }).getAttribute("title")).toBe("删除这条线");
+    expect(
+      screen.getByRole("button", { name: `删除画线 ${userId}` }).getAttribute("title"),
+    ).toBe("这条线锁着，删不掉——先「解锁」，或打开工具栏的「锁定线可删」");
+
+    // 文案不许是假话：同一行的删除按钮点下去，Pine 那条真从图上消失，而用户的
+    // 锁定条照样留着（这就是 E5 那条豁免在页面面的同形针）。
+    fireEvent.click(screen.getByRole("button", { name: `删除画线 ${pineId}` }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([userId]);
+    expect(h.overlays[0].lock).toBe(true);
   });
 });
 

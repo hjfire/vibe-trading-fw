@@ -3288,9 +3288,12 @@ export function ProChart() {
                   type="button"
                   aria-label={`删除画线 ${row.id}`}
                   title={
-                    row.locked && !allowDeleteLocked
-                      ? "这条线锁着，删不掉——先「解锁」，或打开工具栏的「锁定线可删」"
-                      : "删除这条线"
+                    canDeleteDrawing(
+                      isLockedUserDrawing({ lock: row.locked, name: row.name }),
+                      allowDeleteLocked,
+                    )
+                      ? "删除这条线"
+                      : "这条线锁着，删不掉——先「解锁」，或打开工具栏的「锁定线可删」"
                   }
                   className="shrink-0 rounded-md border px-2 py-0.5 hover:bg-muted"
                   onClick={() => removeDrawing(row.id)}
