@@ -26,6 +26,16 @@
 - 规格边界（每份产出都要带上）：**scope 归属照 L1 的读数，行为面是本仓自拟**——L1 的 TV-DW-05 那一格自陈「键名↔界面行为＝推断，值面未读」。本片不声称对方那枚键在界面上是正是反、默认是什么。
 - 本片不碰行情读数、不产任何指标信号 ⇒ Bar Replay 那五步未来函数自查**不适用**（这是裁掉的，不是忘了；Task 6 Step 6 要写这一句并走「画线不漂移」自查代替）。
 
+## 2026-10-17 执行席追加更正：活体现场由 vite dev 改到后端服务的生产构建（原句保留，不删）
+
+Task 1 与 Task 6 正文里每一处 `http://localhost:5899/pro-chart`（探活、Edge 起始 URL、REA 场景的 `start_url`、`veto.mjs`／`regress.mjs` 的 `BASE`）**一律按 `http://localhost:<后端现读端口>/pro-chart` 执行**，vite dev 不再充当活体现场。
+
+- **触发读数**：Task 1 首趟在 dev 下跑不起来——`?d=` 第一方导入的那条锁定线从未落到**活着的**图表实例（活图 `getOverlays()` 为 0，而存储桶里 1 条、`清单 · 1`、`parkedCount` 0），三腿第一步就起不来，判决只能记「无判决力」。收集式 fiber 扫描只找到一枚图表候选且它 `bars=500`／DOM 在文档内，排除「绑到了旧实例」；把线先种进桶再整页重载的反向对照同样不落，排除「桶内容不对」。机制站点：`ProChart.tsx:1383` 的单槽门 `bars.length > 0 && drawingsKeyRef.current !== key` 配上 `:1490-1501` 的卸载钩子只 `dispose` 不清槽 ⇒ 第二枚图表实例挂载时那道门自己合不上。dev 下 effect 双跑（StrictMode）是触发条件，生产构建不双跑。
+- **裁定**：现场换成**后端服务的生产构建**，判据、三腿形状、偏移表、`exit 2` 语义一字不变。准备动作三条：① `frontend/` 下 `npm run build`（`frontend/dist` 若是旧产物，读数归属的就是旧树）；② `python agent/api_server.py --port <现读>` 起后端，日志里 `[prod] Frontend served from …\frontend\dist` 那行才算现场成立；③ **asset 指纹对账**——`curl -s http://127.0.0.1:<p>/pro-chart | grep -o 'assets/index-[^"]*\.js'` 必须等于 `grep -o 'assets/index-[^"]*\.js' frontend/dist/index.html` 里那一枚，因为 SPA 兜底会把任何路径都答成 `200 + HTML`，光看状态码是在探一个旧进程。
+- **不在本片**：那个 dev 侧恢复缺陷（以及它的下游后果——恢复没跑而页面以为有 1 条画线，下一次换周期时 `bankDrawings` 交回空列表，那条线在 dev 下被静默清掉）不改任何仓内代码去治，登记后另行处置。**不许**为了让 dev 现场跑通而调整页面代码——那是范围重定。
+- **代价**：Task 6 每改一轮 `frontend/src/**` 都要重跑一次 `npm run build` 才能取活体读数（它本来就要跑这道门）；本计划正文里那些 dev URL 留着当历史读数，读的时候记得这条更正。
+
+
 ## 判态与交付边界（先说死，免得拿升态当判据）
 
 本片只落 TV-DW-05 那一格的「锁定线可否删除」这一半。**另一半（收藏画线工具栏可见性）的前提控件在本仓不存在**（本仓「收藏」只有标的 watchlist，见 `frontend/src/components/charts/WatchList.tsx:91`）。⇒ Task 7 写矩阵格时判态句必须是**「本格仍 `部分`，只剩收藏画线工具栏那一半没做」**，不许升 `已有`。
