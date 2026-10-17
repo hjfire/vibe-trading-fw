@@ -36,6 +36,7 @@ import {
   paneIndicator,
   partitionDeletable,
   reanchorOverlay,
+  removeDeletableDrawings,
   removeLatestDrawing,
   restoreDrawings,
   saveAllowDeleteLocked,
@@ -1493,6 +1494,21 @@ describe("锁定线的删除规则", () => {
     expect(isLockedUserDrawing({ name: "pineBg", paneId: "sub:MACD", points: [], lock: true })).toBe(false);
     expect(isLockedUserDrawing(undefined)).toBe(false);
     expect(isLockedUserDrawing(null)).toBe(false);
+  });
+
+  it("清除：Pine 那种 lock:true 的装饰被逐条删掉，与今天的整体清同形", () => {
+    // 归属针的反面（豁免线 E5）：`clearPineDrawings` 走 `{ groupId }` 整层清，而
+    // 逐条交出去的是 `lock: true` 的四种装饰名——它们都不在 `DRAW_TOOLS` 里，
+    // 所以「清除」不许把它们留下来说「跳过了一条锁着的线」。
+    const chart = fakeChart([
+      overlay({ id: "u0", name: "priceLine", lock: true }),
+      overlay({ id: "p0", name: "pineBg", lock: true }),
+    ]);
+    const skipped = removeDeletableDrawings(chart as never, false);
+    expect(skipped).toBe(1); // 只有那条用户的锁定线被留下
+    // 「被留下」＝还在图上，所以幸存者是 `u0` 而不是 `p0`（简报那一行把两个 id
+    // 写反了，本运行读数：`["u0"]`）。Pine 那层当场消失，与今天的整体清同形。
+    expect(chart.overlays.map((o) => o.id)).toEqual(["u0"]);
   });
 
   it("partitionDeletable：保持原序，开关开着时 kept 必为空，不改变入参", () => {
