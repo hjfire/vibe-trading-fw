@@ -58,6 +58,8 @@ TV-DW-05 那格的两半里，本片只落「锁定线可否删除」那一半�
 | `frontend/src/lib/chartDrawings.ts:911` | `cancelInProgress` | 画到一半的线拿不到锁定标志（锁定开关只长在清单行上） |
 | `frontend/src/lib/pineDrawings.ts:357` | 脚本层的按 groupId 清除 | Pine 画的线不是用户的画线，`lock` 结构上不会是 `true`；守卫读的是逐条 `lock`，天然放行 |
 
+> **2026-10-17 实现席更正（原句保留，不删）**：本表最后一行那句「Pine 画的线不是用户的画线，`lock` 结构上不会是 `true`」**在现读代码里是假的**——`frontend/src/lib/pineDrawings.ts:374` 逐字是 `return { name, paneId, groupId, lock: true, zLevel, points, extendData };`，同文件头部注 19 也自陈每条都 `lock`ed。豁免本身仍然成立（`clearPineDrawings` 走 `{ groupId }`，守卫读的是逐条状态；右键那一路又被 `figure.ignoreEvent` 结构性挡掉，`checkOverlayFigureEvent` 在 dist 8223-8230），但**判据形状要收窄一层**：规则只作用于「`lock === true` 且 `toolOf(name)` 命中注册表」的用户画线，与 `applyMagnetMode` 用的同一枚归属过滤。不这么做的话，「清除」改走逐条删之后会**跳过脚本层**，而今天的无参 `removeOverlay()` 是把它们一起删的——一条没人要求的行为差。计划与本片的 `isLockedUserDrawing` 就是这条更正的落点。
+
 **豁免线不是注释，是针**：每条豁免都要有一根「摘掉守卫后它会红」的针。最承重的是 `:1396`——判据形状＝锁定一条线 → 切标的 → 再切回来，锁定线**不**跨标的存活（跨了就是 bug），而在同一标的内切回来仍按存储复现。
 
 ### 3.3 开关**开**时＝现状；默认是**关**，所以默认手感会变
