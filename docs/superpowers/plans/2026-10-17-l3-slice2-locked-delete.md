@@ -36,6 +36,14 @@ Task 1 与 Task 6 正文里每一处 `http://localhost:5899/pro-chart`（探活�
 - **代价**：Task 6 每改一轮 `frontend/src/**` 都要重跑一次 `npm run build` 才能取活体读数（它本来就要跑这道门）；本计划正文里那些 dev URL 留着当历史读数，读的时候记得这条更正。
 
 
+## 2026-10-17 控制席追加更正（二）：主机红线的真规则是**集合等式**，不是「`frontend/src` 一处不许出现」
+
+上面 Global Constraints 那句「`frontend/src/**` 里不许出现 `tradingview.com`」**写法过严，与 `tools/forensics_audit.py` 的实际判据不符**（原句保留，不删）。真规则现读该文件 `audit_tv_host_allowlist`（本席现读起于 `:618`）：扫 `frontend/src` 下 `TV_SCAN_SUFFIXES` 那些扩展名，取「文件正文小写比较后含 `tradingview.com`」的**文件集合**，与 `TV_HOST_ALLOWLIST` 五枚（`components/chat/PineScriptViewer.tsx`／`lib/__tests__/scriptExchange.test.ts`／`lib/pineLang.ts`／`lib/scriptLibrary.ts`／`pages/TVChart.tsx`）做**集合等式**——`新增` 与 `消失` 两个方向都算违规（后者措辞是「白名单该同步收紧」）。另有两条独立的尺：`s3.tradingview` 只许出现在 `frontend/src/pages/TVChart.tsx`，且那文件里两枚逐字主机子式不许被改。⇒ 本片合规判据收窄成两条：① 本片碰过的 `chartDrawings.ts`／`ProChart.tsx`／两份测试都不许长出 `tradingview.com`（它们不在白名单里，新增即红）；② 对方键名 `tradingview.toggle_delete_locked_linetools` 只属于 `docs/forensics/`。**任何一方都不许「顺手清掉」那五枚既存命中**——那会让集合等式右倾、把门跑红；本片也明令不改 `tools/forensics_audit.py`。
+
+## 2026-10-17 控制席追加更正（三）：Task 7 Step 5 第一笔的 pathspec 少一份文件（评审席发现，原句保留）
+
+`bb56c6a8` 给 Step 2 加的「补引用＋翻 `用途`」两半同笔那条，落到 Step 5 的命令面上是**接不住的**：第一笔 pathspec 只有 `docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md`，而 `用途` 那一行住在 `docs/forensics/l0/self-dw05-lock-veto.md`。带 pathspec 的提交（本仓规矩：脏树上禁用裸 `git commit`）会把改 `用途` 那行**永远留在工作树**，于是 `bb56c6a8` 自己禁的「长期挂 `基线`」照样成真。⇒ Step 5 第一笔的 `git add` 与 pathspec 都要加上那第三份文件；Task 7 简报按本节重抽。
+
 ## 判态与交付边界（先说死，免得拿升态当判据）
 
 本片只落 TV-DW-05 那一格的「锁定线可否删除」这一半。**另一半（收藏画线工具栏可见性）的前提控件在本仓不存在**（本仓「收藏」只有标的 watchlist，见 `frontend/src/components/charts/WatchList.tsx:91`）。⇒ Task 7 写矩阵格时判态句必须是**「本格仍 `部分`，只剩收藏画线工具栏那一半没做」**，不许升 `已有`。
@@ -1977,6 +1985,7 @@ L1 行（`docs/forensics/spec/drawings.md` 的 TV-DW-05）追加一小句同样�
 
 - 在那一格的 `L0 依据` 列末追加一枚引用，形状照该格既有那两枚的顿号分隔（现读 `grep -n "^| TV-DW-05 " docs/forensics/spec/drawings.md` 那一行末段），追加的是 `self-dw05-lock-veto.md`。
 - 同笔把该记录里 `grep -n "^- 用途" docs/forensics/l0/self-dw05-lock-veto.md` 现读到的那一行从 `用途：基线` 改成 `用途：规格`。
+- 同一笔还要给那份记录的「偏差」一节写**带日期追加更正（原句一字不删）**：那句「本片七个任务没有任何一步引用它」在 `87bd946d` 那一站是真话，但 `bb56c6a8` 已经把这一步补进了计划 ⇒ 现在它过时了，要按仓规追加而不是原地覆盖。同一节里若还留着「166 passed／1 failed, 165 passed」这类**门计数**读数，把它们改成 **rc 形状**（`rc=0`／`rc=1`）——条数会随后续任何一笔动作漂，计数写在被引用的文档里就是定时炸弹（见记忆「文档里的自指读数」）。
 - 改完复跑 `python -X utf8 tools/forensics_audit.py` 与 `python -X utf8 -m pytest tools/test_forensics_spec.py -q`（两枚都吃 `docs/forensics/`，这是本计划「改档案要复跑读档门」那条旧规矩的同一件事）。
 - **不许**先把 `用途` 翻过去再补引用（中间那一站分支是红的，违反本仓「每笔提交门全绿」）；也**不许**让它长期挂 `基线`——这份记录本来就是 TV-DW-05 后半个键的验收凭据，挂旁证是把地基记成附注。
 
@@ -2030,15 +2039,15 @@ tr -cd '\r' < 项目档案.md | wc -c   # 与改前 + 本节行数一致
 
 ```bash
 cd "E:/Vibe-Trading-main/Vibe-Trading-main"
-git add -f docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md
+git add -f docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md docs/forensics/l0/self-dw05-lock-veto.md
 git commit -s -m "$(cat <<'MSG'
-docs(matrix,spec): TV-DW-05 追加第②片读数，判态仍「部分」
+docs(matrix,spec,l0): TV-DW-05 追加第②片读数并给活体记录翻面
 
 后半个键落地、活体那笔账还掉；前半的收藏画线工具栏在本仓没有那枚控件，
 所以判态句写死成「只剩那一半没做」，不升态。Pine 的 lock:true 那个更正
-一并挂在这一格。
+一并挂在这一格。引用与 `用途：规格` 同笔——拆开任何一半都让孤证门红一站。
 MSG
-)" -- docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md
+)" -- docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md docs/forensics/l0/self-dw05-lock-veto.md
 git commit -s -m "$(cat <<'MSG'
 docs(archive): §7.26 L3 第②片——锁定的画线不可删
 
