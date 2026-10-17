@@ -1214,6 +1214,38 @@ describe("/pro-chart 锁定线的删除否决", () => {
     expect(screen.getByRole("button", { name: "撤销" }).getAttribute("title")).toBe("撤销最近一条画线");
     expect(screen.getByRole("button", { name: "清除" }).getAttribute("title")).toBe("清除当前标的与周期上的全部画线（含在等副图开启的）");
   });
+
+  it("批量入口的 title 数的是归属，不是行上的锁定态：Pine 那种锁定装饰不进计数", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1300 });
+    await flush();
+    const userId = h.overlays[0].id;
+    // Pine 装饰不在用户工具表里、落地就带 `lock: true` ⇒ 清单行上的 `locked` 也是 true，
+    // 但批量删除问的是归属，对它**不豁免**。于是图上两行都锁着、title 只该报 1 条。
+    // 把计数换成行上的裸 `locked` 会报 2——本仓纪律：判别力只能由变异供。
+    let pineId = "";
+    act(() => {
+      pineId = String(h.chart?.createOverlay({ name: "pineBg", points: [{ timestamp: START + 2 * DAY, value: 1310 }], lock: true }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${userId}` }));
+    await flush();
+    expect(screen.getByRole("button", { name: `锁定画线 ${pineId}` }).textContent).toBe("解锁");
+
+    expect(
+      screen.getByRole("button", { name: "撤销" }).getAttribute("title"),
+    ).toBe("撤销最近一条画线（图上有 1 条锁着的线会被跳过）");
+    expect(
+      screen.getByRole("button", { name: "清除" }).getAttribute("title"),
+    ).toBe("清除当前标的与周期上的全部画线（含在等副图开启的；1 条锁着的线会留下）");
+
+    // 那句数字得是真话：清除点下去只留下用户那一条，Pine 装饰照旧被删。
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([userId]);
+  });
 });
 
 /**
