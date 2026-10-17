@@ -466,17 +466,29 @@ export interface DrawingEvents {
    * only go out here (⑳).
    */
   onSettled?: () => void;
+  /**
+   * 「锁定的线允许不允许删」——**点击那一刻**读，不是创建时读（spec §5.1）。
+   * 必填：漏传只能二选一，恒拦（用户删不掉锁定线且无法关）或恒放（规则不存在）。
+   */
+  allowDeleteLocked: () => boolean;
 }
 
-/** Payload shape the library passes to the overlay event callbacks. */
+/**
+ * Payload shape the library passes to the overlay event callbacks.
+ * `preventDefault` only exists on the right-click path, where using it makes
+ * `OverlayView` skip its own `removeOverlay` call (dist 8779-8784) — it is the
+ * whole veto surface, and it is optional because the doubles and the other five
+ * callbacks never carry it.
+ */
 interface OverlayEventArg {
   overlay?: unknown;
+  preventDefault?: () => void;
 }
 
 export function makeDrawingEvents(
   hooks: DrawingEvents,
 ): Record<
-  "onDrawEnd" | "onRemoved" | "onPressedMoveEnd" | "onSelected" | "onDeselected",
+  "onDrawEnd" | "onRemoved" | "onPressedMoveEnd" | "onSelected" | "onDeselected" | "onRightClick",
   (e: OverlayEventArg) => void
 > {
   return {
@@ -500,6 +512,14 @@ export function makeDrawingEvents(
     },
     onSelected: (e) => hooks.onSelected?.(e?.overlay),
     onDeselected: (e) => hooks.onDeselected?.(e?.overlay),
+    // The library reads the veto off the instance at right-click time and only
+    // calls `removeOverlay` when `preventDefault` went unused (dist 8774-8789),
+    // so this is the delete-before-happens hook §7 said the library had all
+    // along. `?.` on `preventDefault` is load-bearing: a double that omits it
+    // degrades to "not prevented", i.e. exactly the 开关开＝现状 side of §3.3.
+    onRightClick: (e) => {
+      if (!canDeleteDrawing(isLockedUserDrawing(e?.overlay), hooks.allowDeleteLocked())) e?.preventDefault?.();
+    },
   };
 }
 
@@ -975,7 +995,8 @@ export function removeLatestDrawing(chart: OverlayHost): string | null {
  *
  * 走逐条 `{ id }` 而不是无参整体清，是因为那道整体清没有可插否决的地方；
  * `StoreImp.removeOverlay` 对被指名的实例会先 `onRemoved` 再 splice，且当它
- * `isDrawing()` 时顺手把 `_progressOverlayInfo` 置空（dist 14457-14475），
+ * `isDrawing()` 时顺手把 `_progressOverlayInfo` 置空（dist 14459-14477：函数头
+ * 14459、`onRemoved` 14467、那次 `paneOverlays.splice` 14477），
  * 所以画到一半那条也在这一趟里出清，不必先调 `cancelInProgress`。
  */
 export function removeDeletableDrawings(chart: OverlayHost, allowDeleteLocked: boolean): number {

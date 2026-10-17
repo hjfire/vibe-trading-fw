@@ -91,6 +91,7 @@ interface FakeOverlay {
   onPressedMoveEnd?: (e: unknown) => void;
   onSelected?: (e: unknown) => void;
   onDeselected?: (e: unknown) => void;
+  onRightClick?: (e: { overlay: FakeOverlay; preventDefault: () => void }) => void;
 }
 
 function overlay(patch: Partial<FakeOverlay> & { id: string }): FakeOverlay {
@@ -144,6 +145,7 @@ function fakeChart(overlays: FakeOverlay[] = []) {
         onPressedMoveEnd?: (e: unknown) => void;
         onSelected?: (e: unknown) => void;
         onDeselected?: (e: unknown) => void;
+        onRightClick?: (e: unknown) => void;
       };
       overlays.push(
         overlay({
@@ -162,6 +164,7 @@ function fakeChart(overlays: FakeOverlay[] = []) {
           onPressedMoveEnd: v.onPressedMoveEnd,
           onSelected: v.onSelected,
           onDeselected: v.onDeselected,
+          onRightClick: v.onRightClick,
         }),
       );
       return `o${overlays.length - 1}`;
@@ -420,6 +423,7 @@ describe("makeDrawingEvents", () => {
       onRemoved: (overlay) => {
         removed.push(overlay);
       },
+      allowDeleteLocked: () => false,
     });
 
     events.onDrawEnd({});
@@ -435,7 +439,7 @@ describe("makeDrawingEvents", () => {
 
   it("tolerates an event payload without an overlay", () => {
     const changes: Array<string | null> = [];
-    const events = makeDrawingEvents({ onChanged: (id) => { changes.push(id); } });
+    const events = makeDrawingEvents({ onChanged: (id) => { changes.push(id); }, allowDeleteLocked: () => false });
     expect(() => events.onRemoved({})).not.toThrow();
     expect(() => events.onRemoved(undefined as never)).not.toThrow();
     expect(changes).toEqual([null, null]);
@@ -449,6 +453,7 @@ describe("makeDrawingEvents", () => {
       onChanged: () => undefined,
       onSelected: (o) => picked.push(idOf(o)),
       onDeselected: (o) => picked.push(idOf(o)),
+      allowDeleteLocked: () => false,
     });
     events.onSelected({ overlay: { id: "a" } });
     events.onDeselected({ overlay: { id: "a" } });
@@ -481,7 +486,7 @@ describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
     // Otherwise only the lines made in this session stay in sync with storage:
     // delete a *restored* line and it is back after a reload.
     const chart = fakeChart([]);
-    const events = makeDrawingEvents({ onChanged: () => undefined });
+    const events = makeDrawingEvents({ onChanged: () => undefined, allowDeleteLocked: () => false });
     expect(restoreDrawings(chart as never, [stored[0]], events).applied.length).toBe(1);
     expect(chart.createOverlay.mock.calls[0][0]).toMatchObject({
       name: "segment",
@@ -1028,6 +1033,7 @@ describe("落点必须在真实存在的 K 线上", () => {
       onDrawEnd: () => order.push("drawEnd"),
       onAnchor: () => order.push("anchor"),
       onSettled: () => order.push("settle"),
+      allowDeleteLocked: () => false,
     });
     events.onDrawEnd({ overlay: { id: "a" } });
     expect(order).toEqual(["drawEnd", "anchor", "bank", "settle"]);
@@ -1039,7 +1045,7 @@ describe("落点必须在真实存在的 K 线上", () => {
 
   it("事件不带参数也不能炸（⑮ 起的裸调用）", () => {
     const anchor = vi.fn();
-    const events = makeDrawingEvents({ onChanged: () => undefined, onAnchor: anchor });
+    const events = makeDrawingEvents({ onChanged: () => undefined, onAnchor: anchor, allowDeleteLocked: () => false });
     expect(() => events.onDrawEnd({})).not.toThrow();
     expect(() => events.onPressedMoveEnd({})).not.toThrow();
     // Called with `undefined`, not with a fake overlay: the handler has to cope.
@@ -1455,8 +1461,9 @@ describe("锁定线的删除规则", () => {
   it("isLockedUserDrawing：只认「用户自己的工具 ＋ 锁着」，Pine 那种 lock:true 不算", () => {
     expect(isLockedUserDrawing(overlay({ id: "a", name: "priceLine", lock: true }))).toBe(true);
     expect(isLockedUserDrawing(overlay({ id: "b", name: "priceLine", lock: false }))).toBe(false);
-    // `pineDrawings.ts:374` 逐字交 `lock: true`，名字（`pineBg`，现读 `:40` 的 `NAME` 表）
-    // 又不在 `DRAW_TOOLS` 里 ⇒ 规则不许碰它。
+    // `pineDrawings.ts:374` 逐字交 `lock: true`，名字来自 `pineDrawings.ts:39` 的
+    // `NAME` 表（`pineBg` 是表里 `bg` 那一格，现读 `:40`），而表里的名字都不在
+    // `DRAW_TOOLS` 里 ⇒ 规则不许碰它。
     expect(isLockedUserDrawing(overlay({ id: "c", name: "pineBg", lock: true }))).toBe(false);
     // 存储条目形状（`StoredDrawing`）也吃：暂存桶那一摊就是它。
     expect(isLockedUserDrawing({ name: "priceLine", paneId: MAIN_PANE_ID, points: [], lock: true })).toBe(true);
@@ -1481,6 +1488,14 @@ describe("锁定线的删除规则", () => {
     // 空集合会造出真空通过（本仓记过的假绿形状），所以「非空输入也确实被分了」要单独钉。
     expect(partitionDeletable(rows, false, () => true)).toEqual({ deletable: [], kept: rows });
     expect(rows).toHaveLength(3);
+    // 上面每一处都拿 `rows` 自身当期望值，所以长度那条是唯一的守卫；它挡得住
+    // 增删，挡不住**原地重排**（`sort`/`reverse`/按下标写穿）——那些改完 `rows`
+    // 还是三枚，`toEqual(rows)` 两侧一起跟着变。逐字快照才读得出顺序被动过。
+    expect(rows).toEqual([
+      { id: "1", lock: true },
+      { id: "2", lock: false },
+      { id: "3", lock: true },
+    ]);
   });
 
   it("偏好键：读侧只有逐字 \"1\" 算允许，写侧 true/false 各写 \"1\"/\"0\"，两侧都不许抛", () => {
@@ -1502,5 +1517,86 @@ describe("锁定线的删除规则", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(boom);
     expect(() => saveAllowDeleteLocked(true)).not.toThrow();
     vi.restoreAllMocks();
+  });
+});
+
+describe("右键删除前的否决", () => {
+  it("锁着的用户画线：默认（不允许删锁定线）时守卫调用 preventDefault", () => {
+    let prevented = 0;
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => false });
+    events.onRightClick({
+      overlay: overlay({ id: "a", name: "priceLine", lock: true }),
+      preventDefault: () => { prevented += 1; },
+    });
+    expect(prevented).toBe(1);
+  });
+
+  it("开关打开＝现状：锁着的线也放行", () => {
+    let prevented = 0;
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => true });
+    events.onRightClick({
+      overlay: overlay({ id: "a", name: "priceLine", lock: true }),
+      preventDefault: () => { prevented += 1; },
+    });
+    expect(prevented).toBe(0);
+  });
+
+  it("没锁的线永远放行，与开关无关", () => {
+    for (const allow of [false, true]) {
+      let prevented = 0;
+      const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => allow });
+      events.onRightClick({
+        overlay: overlay({ id: "b", name: "priceLine", lock: false }),
+        preventDefault: () => { prevented += 1; },
+      });
+      expect(prevented).toBe(0);
+    }
+  });
+
+  it("Pine 那种 lock:true 不归规则管（归属针）", () => {
+    let prevented = 0;
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => false });
+    events.onRightClick({
+      overlay: overlay({ id: "c", name: "pineBg", lock: true }),
+      preventDefault: () => { prevented += 1; },
+    });
+    expect(prevented).toBe(0);
+  });
+
+  it("入参没有 preventDefault 时不许抛——降级落在「开关开＝现状」那一侧", () => {
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => false });
+    expect(() => events.onRightClick({ overlay: overlay({ id: "d", name: "priceLine", lock: true }) })).not.toThrow();
+  });
+
+  it("守卫读的是**点击那一刻**的开关：翻转后，早先创建的实例照样改口（spec §5.1）", () => {
+    const box = { allow: false };
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => box.allow });
+    const target = overlay({ id: "e", name: "priceLine", lock: true });
+    let prevented = 0;
+    const fire = () => events.onRightClick({ overlay: target, preventDefault: () => { prevented += 1; } });
+
+    fire();
+    expect(prevented).toBe(1); // 出厂默认：拦
+
+    box.allow = true;
+    prevented = 0;
+    fire();
+    expect(prevented).toBe(0); // 翻转之后：**同一枚 bundle、同一个实例**，放行
+
+    box.allow = false;
+    fire();
+    expect(prevented).toBe(1); // 再翻回去，拦（`prevented` 在上面清零过一次，所以这里还是 1 而不是 2）
+  });
+
+  it("事件包带的键就是那六枚，右键这一枚必须在内", () => {
+    const events = makeDrawingEvents({ onChanged: () => {}, allowDeleteLocked: () => false });
+    expect(Object.keys(events).sort()).toEqual([
+      "onDeselected",
+      "onDrawEnd",
+      "onPressedMoveEnd",
+      "onRemoved",
+      "onRightClick",
+      "onSelected",
+    ]);
   });
 });
