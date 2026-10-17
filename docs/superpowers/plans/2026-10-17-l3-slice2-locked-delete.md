@@ -452,14 +452,14 @@ python -X utf8 -m pytest tools/test_forensics_spec.py -q
 
 ```bash
 git add -f docs/forensics/l0/self-dw05-lock-veto.md
-git commit -s -- docs/forensics/l0/self-dw05-lock-veto.md -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 docs(forensics): L3② 活体右键删除否决三腿读数落 L0
 
 探针那笔欠账——`preventDefault` 拦住删除从没在活体上点过——由 TV-DW-05
 这一片的验收序第 1 步还掉。三腿对照（未挂回调／挂而不拦／挂且拦）是为了
 让「活下来」只有一个解释：否决，而不是「挂了回调」这件事本身。
 MSG
-)"
+)" -- docs/forensics/l0/self-dw05-lock-veto.md
 ```
 
 **报告要求**：状态、提交号、`veto.out` 的 A／B／C 三行原文、以及一句明确判决（否决成立／不成立／无判决力）。不成立时**不要**继续 Task 2。
@@ -683,22 +683,22 @@ npx tsc -b
 ```bash
 cd "E:/Vibe-Trading-main/Vibe-Trading-main"
 git add -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
-git commit -s -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 feat(frontend): 锁定线可否删除的规则本体与偏好键（L3 第②片）
 
 裁判是一枚四行真值表，批量入口共用一枚分拣，归属只问一处——
 `lock === true` 且名字在工具注册表里，因为 pineDrawings 交的就是
 lock:true，只问 lock 会让「清除」跳过脚本画的层。
 MSG
-)"
+)" -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
 git add -f docs/superpowers/specs/2026-10-16-l3-slice2-locked-delete-veto-design.md
-git commit -s -- docs/superpowers/specs/2026-10-16-l3-slice2-locked-delete-veto-design.md -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 docs(spec): 第②片 §3.2 那句「Pine 的 lock 结构上不会是 true」带日期更正
 
 原句一字不删。豁免仍成立，判据形状要收窄成「lock 且归属为用户工具」，
 后果与落点都写进同一段。
 MSG
-)"
+)" -- docs/superpowers/specs/2026-10-16-l3-slice2-locked-delete-veto-design.md
 ```
 
 ---
@@ -1027,22 +1027,22 @@ Task 3 结束时**三面都必须绿**：lib 单测面、页面单测面、`npx 
 
 ```bash
 git add -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
-git commit -s -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 feat(frontend): 右键删除前挂否决（onRightClick + 点击时读开关）（L3 第②片）
 
 守卫活在本仓这一侧：库在 `overlay.onRightClick` 没用 preventDefault 时才删
 （dist 8774-8789）。开关按「点击那一刻」读，所以真值走 ref——一条线的回调闭包
 生在它创建那天，捕获布尔的话翻转开关对图上已有的线一根手指都碰不到。
 MSG
-)"
+)" -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
 git add -- frontend/src/pages/__tests__/ProChartDrawings.test.tsx frontend/src/pages/ProChart.tsx
-git commit -s -- frontend/src/pages/__tests__/ProChartDrawings.test.tsx frontend/src/pages/ProChart.tsx -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 test(frontend): 页面替身的右键删除照抄库的否决顺序，缺目标改抛（L3 第②片）
 
 旧替身直接调 removeOverlay，绕过回调那一闸，「锁定线删不掉」在测试里结构性
 不可见；指名不存在的 id 原来静默 no-op，会把针让给空集合。
 MSG
-)"
+)" -- frontend/src/pages/__tests__/ProChartDrawings.test.tsx frontend/src/pages/ProChart.tsx
 ```
 
 ---
@@ -1524,22 +1524,22 @@ npx tsc -b
 
 ```bash
 git add -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
-git commit -s -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 feat(frontend): 撤销改为「最近一条可删的」，与清除共用同一枚分拣（L3 第②片）
 
 不另写一套挑选逻辑：撤销 = 分拣后取 deletable 的最后一条；面对全锁的摊
 返回 null，让页面上层有话可说。
 MSG
-)"
+)" -- frontend/src/lib/chartDrawings.ts frontend/src/lib/__tests__/chartDrawings.test.ts
 git add -- frontend/src/pages/ProChart.tsx frontend/src/pages/__tests__/ProChartDrawings.test.tsx
-git commit -s -- frontend/src/pages/ProChart.tsx frontend/src/pages/__tests__/ProChartDrawings.test.tsx -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 feat(frontend): 清单删除/清除/撤销/删除待恢复四个入口都删不动锁定线，加工具栏开关
 
 公开 API 上没有否决位，所以四路都在调用前自己判。开关默认关（锁定受保护），
 打开时四路与本片之前逐字同形。清单锁定按钮那句「右键仍可删」在默认态下是
 假话，一并改口。
 MSG
-)"
+)" -- frontend/src/pages/ProChart.tsx frontend/src/pages/__tests__/ProChartDrawings.test.tsx
 ```
 
 ---
@@ -2014,20 +2014,20 @@ tr -cd '\r' < 项目档案.md | wc -c   # 与改前 + 本节行数一致
 ```bash
 cd "E:/Vibe-Trading-main/Vibe-Trading-main"
 git add -f docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md
-git commit -s -- docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md -m "$(cat <<'MSG'
+git commit -s -m "$(cat <<'MSG'
 docs(matrix,spec): TV-DW-05 追加第②片读数，判态仍「部分」
 
 后半个键落地、活体那笔账还掉；前半的收藏画线工具栏在本仓没有那枚控件，
 所以判态句写死成「只剩那一半没做」，不升态。Pine 的 lock:true 那个更正
 一并挂在这一格。
 MSG
-)"
-git commit -s -- 项目档案.md -m "$(cat <<'MSG'
+)" -- docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md
+git commit -s -m "$(cat <<'MSG'
 docs(archive): §7.26 L3 第②片——锁定的画线不可删
 
 三腿活体对照、五入口与五豁免、一处对 spec 的带日期更正，都在这一节。
 MSG
-)"
+)" -- 项目档案.md
 ```
 
 （`项目档案.md` 已被跟踪，不需要 `-f`；`git status` 若在同一命令里显示别的未跟踪件，不要顺手 `git add -A`。）
