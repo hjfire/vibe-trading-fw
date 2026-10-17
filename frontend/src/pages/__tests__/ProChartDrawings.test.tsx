@@ -777,7 +777,7 @@ describe("/pro-chart 锁定线的删除否决", () => {
     const id = h.overlays[0].id;
 
     // 锁定它——锁定开关只长在清单行上，所以先开面板。那枚按钮两态都用同一个
-    // aria-label（现读 `ProChart.tsx:3183`，正文才是「锁定／解锁」），所以再点
+    // aria-label（清单行那枚「锁定画线 …」按钮，正文才是「锁定／解锁」），所以再点
     // 一次就是解锁。
     fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
     await flush();
@@ -801,8 +801,8 @@ describe("/pro-chart 锁定线的删除否决", () => {
     await flush();
     expect(h.overlays).toHaveLength(0);
     // 桶键整个消失而不是留一条空数组：`saveDrawings` 在 list 为空时 `delete`
-    // 掉这一格（现读 `chartDrawings.ts:1061`），本文件既有针也是这么钉的
-    // （现读 `:615`／`:691` 的 `toBeUndefined()`）。
+    // 掉这一格（`saveDrawings` 里 `list.length === 0` 那一支的 `delete buckets[key]`），
+    // 本文件「清除会连同存储一起清掉」那根针也是这么钉 `toBeUndefined()` 的。
     expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
   });
 
