@@ -1517,7 +1517,9 @@ describe("锁定线的删除规则", () => {
     // 「画到一半那条也在这一趟里出清，不必先调 cancelInProgress」，靠的是库里
     // `removeOverlay` 对 `isDrawing()` 的实例顺手置空 `_progressOverlayInfo`。
     // 这条主张此前在本仓测试面零证据：把循环那行改成 `if (o.id && !isInProgress(o))`
-    // 后全片测试照绿（存活变异）。这一枚钉的就是它——半成品必须随这趟一并摘掉。
+    // 后全片测试照绿（存活变异）。这一枚钉的是这条主张的前半截——我们的循环不许把
+    // 半成品漏掉。库侧那一半（`removeOverlay` 顺手置空 `_progressOverlayInfo`）本仓
+    // 的任何替身都没有建模，其证据仍然只是 doc 注释里引的 dist 行号。
     // 三形各一：已画完的没锁线（走删除）、半成品（`drawing:true` ⇒ isInProgress 真）、
     // 锁着的用户线（豁免、留下）；`allowDeleteLocked=false` 只该留下锁定那条。
     const chart = fakeChart([
