@@ -1511,6 +1511,25 @@ describe("锁定线的删除规则", () => {
     expect(chart.overlays.map((o) => o.id)).toEqual(["u0"]);
   });
 
+  it("清除：画到一半的那条也在这一趟里出清（doc 注释主张的现场针，终审 F1）", () => {
+    // `removeDeletableDrawings` 上方的 doc 注释（chartDrawings.ts:997-1005）主张
+    // 「画到一半那条也在这一趟里出清，不必先调 cancelInProgress」，靠的是库里
+    // `removeOverlay` 对 `isDrawing()` 的实例顺手置空 `_progressOverlayInfo`。
+    // 这条主张此前在本仓测试面零证据：把循环那行改成 `if (o.id && !isInProgress(o))`
+    // 后全片测试照绿（存活变异）。这一枚钉的就是它——半成品必须随这趟一并摘掉。
+    // 三形各一：已画完的没锁线（走删除）、半成品（`drawing:true` ⇒ isInProgress 真）、
+    // 锁着的用户线（豁免、留下）；`allowDeleteLocked=false` 只该留下锁定那条。
+    const chart = fakeChart([
+      overlay({ id: "done", name: "priceLine" }),
+      overlay({ id: "half", name: "priceLine", drawing: true }),
+      overlay({ id: "locked", name: "priceLine", lock: true }),
+    ]);
+    const skipped = removeDeletableDrawings(chart as never, false);
+    expect(skipped).toBe(1); // 只有那条锁定线被留下
+    // 关键判别：半成品 `half` 不许留在图上——变异（跳过半成品）会让这里读到 ["half","locked"] 而红。
+    expect(chart.overlays.map((o) => o.id)).toEqual(["locked"]);
+  });
+
   it("partitionDeletable：保持原序，开关开着时 kept 必为空，不改变入参", () => {
     const rows = [
       { id: "1", lock: true },
