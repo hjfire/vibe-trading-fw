@@ -44,6 +44,20 @@ Task 1 与 Task 6 正文里每一处 `http://localhost:5899/pro-chart`（探活�
 
 `bb56c6a8` 给 Step 2 加的「补引用＋翻 `用途`」两半同笔那条，落到 Step 5 的命令面上是**接不住的**：第一笔 pathspec 只有 `docs/forensics/gap-matrix.md docs/forensics/spec/drawings.md`，而 `用途` 那一行住在 `docs/forensics/l0/self-dw05-lock-veto.md`。带 pathspec 的提交（本仓规矩：脏树上禁用裸 `git commit`）会把改 `用途` 那行**永远留在工作树**，于是 `bb56c6a8` 自己禁的「长期挂 `基线`」照样成真。⇒ Step 5 第一笔的 `git add` 与 pathspec 都要加上那第三份文件；Task 7 简报按本节重抽。
 
+## 2026-10-17 控制席追加更正（四）：中间提交可以 tsc 红，但从本条起「改签名」与「改它的消费者」必须同笔（Task 4 评审席判定，控制席裁定）
+
+盘面事实（控制席自己 `git show` 双证，非席位自述）：`807a8b36` 那棵树 lib 已声明必填 `allowDeleteLocked: () => boolean` 而页面零命中该键；`4eee3cab` 那棵树 lib 的 `removeLatestDrawing` 已是两参而页面仍单参调用。两笔**单独 checkout 都过不了 `tsc -b`**；分支顶端绿（控制席现跑 `tsc -b` exit 0、两文件 186 passed、全量 2375）。成因是 Task 3/4 Step 8 明文要求的拆分（lib 一笔、页面一笔），不是执行席走偏。
+
+**裁定＝接受现状，不重写历史；规则即刻生效于 Task 5/6/7，不追溯已落笔。** 判据三条：① 今天可证的伤害为零——本仓没有任何按笔跑的关卡（`.github/**` 本片禁改，门只在分支顶端跑），也没有任何步骤 checkout 中间提交（Task 6 简报现读零处 `checkout`／`git show`，活体只打 HEAD 构建出来的 prod）；② 这四枚 SHA 已被三处文本与一枚评审包文件名当数据引用，squash 会当场造出本片最严禁的**陈旧引用面**；③ 双向代价不对称——现在就 squash 若判错，代价是一次便宜的重写（reflog 兜住）；若本条规则写错方向、后面继续拆，代价是整片 bisect 报废＋一次多笔重写。
+
+因此**未来的拆分规则**：面拆分只许用于**没有接口差**的东西（实现与它的针、码与文档）。一处改了导出函数的形参／返回形状／必填钩子，消费者必须进同一笔——哪怕那意味着一笔同时碰 `lib` 与 `pages`，也比留一棵编译不过的中间树便宜。红笔名单要点名进 Task 7 的档案面（`807a8b36`、`4eee3cab`），让将来真要 bisect 的人知道起点在哪。
+
+## 2026-10-17 控制席追加更正（五）：Task 4 的文案面漏了「归属」那一问 ⇒ 落进 Task 5 的 Step 5b（评审席 plan-mandated Important-1）
+
+Task 4 评审席判**规格 ✅／质量批准**，两条 Important 都带 plan-mandated 标签，第一条是本片自己的口径漏：简报 Step 3 立起来的那句「用行上的 `locked` 会把 Pine 那种 `lock:true` 的装饰也一并拦下」只落到了**拦截面**，删除按钮的 `title` 沿用行级 `locked`。控制席现读复核成立：`describeDrawing`（`chartDrawings.ts:905-910`）不按 `toolOf` 滤⇒Pine 四装饰在清单里有行且 `locked` 为 true，而 `removeDrawing` 问归属、点下去删得动 ⇒ 那句 `title` 对这几行是假话。⇒ 修一行＋一根针，写进 Task 5 Step 5b（Task 5 本来就在改同一枚测试文件，且它的 M2 变异正好是这根针的判别力来源）。
+
+第二条 Important（`bucket`／`disabled`／`reload` 在本文件被复制成第三份）**裁定为接受、不重构**：简报以 `noUnusedLocals` 为由要求 describe 内重声明，但把三枚 helper 上提到文件作用域同样不违规——那要改动三枚既有 describe 的体，diff 与本片无关且会把 Task 4/5 的针坐标全推走。登记为已知形状：本文件此后**同名 helper 有多份**，读针的人要先认准 describe。Step 5c 只收三处小账（本片自己写旧的引用行号改按名引用、`every()` 的空集合真空真补一条计数、`bucket()` 的 `?? []` 把「键没了」抹平那一档改强），不开修复席。
+
 ## 判态与交付边界（先说死，免得拿升态当判据）
 
 本片只落 TV-DW-05 那一格的「锁定线可否删除」这一半。**另一半（收藏画线工具栏可见性）的前提控件在本仓不存在**（本仓「收藏」只有标的 watchlist，见 `frontend/src/components/charts/WatchList.tsx:91`）。⇒ Task 7 写矩阵格时判态句必须是**「本格仍 `部分`，只剩收藏画线工具栏那一半没做」**，不许升 `已有`。
@@ -1565,9 +1579,10 @@ MSG
 ### Task 5：五条豁免线针 ＋ 四件变异自证 ＋ 六道门
 
 **Files:**
-- Test: `frontend/src/pages/__tests__/ProChartDrawings.test.tsx`（五根豁免针）
+- Test: `frontend/src/pages/__tests__/ProChartDrawings.test.tsx`（五根豁免针＋E6 的文案针＋Step 5c 三处收口）
 - Test: `frontend/src/lib/__tests__/chartDrawings.test.ts`（归属针的反面：Pine 被清除照删）
-- Modify: 无（针红就修实现，修不到就裁成缺陷登记）
+- Modify: `frontend/src/pages/ProChart.tsx`（**只** Step 5b 那一处 `title` 条件，一片一行）
+- Modify: 无其他——针红就修实现，修不到就裁成缺陷登记
 
 **Interfaces:**
 - Consumes: Task 2-4 的全部产出
@@ -1717,6 +1732,33 @@ lib 面写最省——不起页面，直接喂一条 Pine 形状的实例：
 （`pineBg` 这条走 `overlay()` 而不是手写对象字面量：lib 的 `FakeOverlay`（现读 `chartDrawings.test.ts:62-89`）没有 `groupId` 这一员，多写一个键在 `noUnusedLocals` 之外还要吃 excess-property 错误。）
 
 页面面若能把 Pine 装饰挂上去就再加一根同形针；**做不到就如实登记「lib 面已判，页面面未覆」**，不假造。
+
+- [ ] **Step 5b：E6 清单行删除按钮的 `title` 改问归属（Task 4 评审席的 plan-mandated 发现，控制席裁定落本片）**
+
+盘面事实（控制席现读，行号按 `6b6de129` 终态，你要照抄前先自己读一遍）：`describeDrawing` 只滤「无 id／半成品／无 name」（`chartDrawings.ts:905-910`）⇒ 它**不按 `toolOf` 滤**；`listDrawings` 遍历 `chart.getOverlays()` 全部（`:964-971`）；`refreshDrawCount` 把结果原样塞进 `drawRows`（`ProChart.tsx:732-735`）。而 Pine 那四种装饰的名字是 `pineBg`/`pineBar`/`pineLabel`/`pineLine`（`pineDrawings.ts:39-43`），一律带 `lock: true` 落地（`:374`），且**都不在用户工具表里** ⇒ 它们在清单里有行、行上的 `locked` 是 true，可点删除又删得动。删除按钮现在的 `title` 问的是**行上的** `row.locked`（`ProChart.tsx:3289-3293`），`removeDrawing` 问的是**实例级归属**（`:2422`）⇒ 对这几行文案说「这条线锁着，删不掉」而实际删得动，正是本片规则单点要避免的那种差（拦截面改了归属、文案面漏了）。
+
+改法一行，**不新增导出、不给 `DrawingRow` 加位**（那会把一次文案差扩成又一次「改签名＋改消费者」）：
+
+```tsx
+                  title={
+                    canDeleteDrawing(
+                      isLockedUserDrawing({ lock: row.locked, name: row.name }),
+                      allowDeleteLocked
+                    )
+                      ? "删除这条线"
+                      : "这条线锁着，删不掉——先「解锁」，或打开工具栏的「锁定线可删」"
+                  }
+```
+
+`isLockedUserDrawing` 的形参是 `unknown` 且只读 `.lock`／`.name`（`chartDrawings.ts:808-812`），`DrawingRow` 这两员都在（`locked` 声明 `:860`、赋值 `:951`；`name` 同函数返回体里）⇒ 复用的是同一枚判断点。**不许**写成 `row.locked && !allowDeleteLocked && toolOf(row.name)` 那种在页面重拼合取式的样子——那才是真的规则分叉。清单那行的**锁定按钮**三态 `title` 不动：它说的是「拖不动」，对 `lock: true` 的 Pine 装饰成立。
+
+针（页面面，一根）：清单里同时有一条用户锁定线与一条 Pine 形状的锁定条目时，前者的删除按钮 `title` 是拦下那句、后者逐字是「删除这条线」。Pine 那行怎么造由你当场定（把替身实例的 `name` 改成 `"pineBg"` 是最近的路，改完要确认 `drawRows` 里真有它、行也真带 `locked`）。**判别力必须靠 Step 6 的 M2 供**：M2 跑完这根针若不红，它就是恒绿的豁免型针，按缺陷登记而不是放行（本仓规则：豁免型针天生恒绿，判别力只能由变异给）。
+
+- [ ] **Step 5c：三处 Task 4 评审收口（都在测试文件里，改完再跑 Step 6，否则变异记账对不上）**
+
+1. **本片写进测试文件的三处引用行号已被本片自己推旧**（违反计划「引用行号一律现读」）：指向 `ProChart.tsx` 里 `setDrawNotice(null)` 那行的那处、指向既有三枚 helper 的那组「现读 `:1863`/`:1867`/`:1884`」、以及一枚**没带文件名**的裸 `:1214`。一律改成**按名引用**（「住在 `describe("/pro-chart 副图上的画线")` 回调体里的那三枚 helper」这种写法），不要把号改对了继续钉着——新针自己就会再把它推走。
+2. `expect(...removeOverlay.mock.calls.every((c) => c.length === 1 && !!c[0]?.id)).toBe(true)` 在**空调用数组上是真空真**（本仓有前科的形状）：同一根针里补一句 `calls.length` 的期望值，数字由你当场从替身记录里读，别照抄本计划的任何数。
+3. 暂存那根针末行用的是 `expect(bucket()).toHaveLength(0)`，而 `bucket()` 里那句 `?? []` 把「键整个消失」和「空数组」抹平了，同文件姊妹针用的是 `toBeUndefined()` ⇒ 这一档比姊妹针弱。改成能区分两者的判据（改完它仍要绿；不绿就说明桶其实还在，那是一条发现，如实登记）。
 
 - [ ] **Step 6：四件变异自证（spec §6 点名三件，本计划补第四件 E3）**
 
