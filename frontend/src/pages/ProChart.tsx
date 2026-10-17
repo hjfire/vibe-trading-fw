@@ -2593,6 +2593,20 @@ export function ProChart() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // 终审 F2（spec §6）：批量入口两枚按钮的 title 要在渲染期就说真话。默认态（保护）
+  // 下有锁着的用户线时，撤销会跳过图上那批、清除会留下图上＋暂存桶那批——不写进
+  // title，用户按了没反应会当成按钮坏了。放行态或压根没有锁定线时，两枚都保持今天
+  // 那句不带计数的话（别给无关状态也挂计数）。计数各按入口实际管辖的那一摊：撤销
+  // 只动图上，清除还动暂存桶（暂存条不在图上，撤销碰不到它）——两枚不许共用一个数字。
+  const lockedSkipsOnUndo = allowDeleteLocked
+    ? 0
+    : drawRows.reduce((n, row) => n + (isLockedUserDrawing({ lock: row.locked, name: row.name }) ? 1 : 0), 0);
+  const lockedKeepsOnClear =
+    lockedSkipsOnUndo +
+    (allowDeleteLocked
+      ? 0
+      : parked.reduce((n, d) => n + (isLockedUserDrawing(d) ? 1 : 0), 0));
+
   return (
     <div className="flex h-[calc(100vh-0px)] flex-col gap-3 p-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -2914,7 +2928,11 @@ export function ProChart() {
           </button>
           <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            title="撤销最近一条画线"
+            title={
+              lockedSkipsOnUndo > 0
+                ? `撤销最近一条画线（图上有 ${lockedSkipsOnUndo} 条锁着的线会被跳过）`
+                : "撤销最近一条画线"
+            }
             disabled={drawCount === 0 && drawTool === null}
             onClick={undoDraw}
           >
@@ -2922,7 +2940,11 @@ export function ProChart() {
           </button>
           <button
             className="rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            title="清除当前标的与周期上的全部画线（含在等副图开启的）"
+            title={
+              lockedKeepsOnClear > 0
+                ? `清除当前标的与周期上的全部画线（含在等副图开启的；${lockedKeepsOnClear} 条锁着的线会留下）`
+                : "清除当前标的与周期上的全部画线（含在等副图开启的）"
+            }
             disabled={drawCount === 0 && parkedCount === 0 && drawTool === null}
             onClick={clearDraw}
           >

@@ -1131,6 +1131,89 @@ describe("/pro-chart 锁定线的删除否决", () => {
     expect(h.overlays.map((o) => o.id)).toEqual([userId]);
     expect(h.overlays[0].lock).toBe(true);
   });
+
+  // §6（终审 F2）：批量入口两枚按钮的 title 要在渲染期就说真话。默认态（保护）下
+  // 有锁着的线时，撤销会跳过、清除会留下——不写进 title，用户按了没反应会当成按钮坏了。
+  // 逐字 `toBe`（本仓钉 title 的既有纪律）；撤销只数图上那批，清除数图上＋暂存桶那批，
+  // 两枚各用自己的计数——所以「清除」那格同时钉撤销仍是 `1`，共用数字的写法会红。
+  it("撤销按钮的 title：默认态有锁定线时把「图上会跳过 N 条」并进句子，没锁定时保持旧那句", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "水平线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1290 });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 2 * DAY, value: 1300 });
+    await flush();
+    const lockedId = h.overlays[1].id;
+    // 还没锁——不许给无关状态也加计数，先钉一句旧话。
+    expect(screen.getByRole("button", { name: "撤销" }).getAttribute("title")).toBe("撤销最近一条画线");
+
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lockedId}` }));
+    await flush();
+    expect(
+      screen.getByRole("button", { name: "撤销" }).getAttribute("title"),
+    ).toBe("撤销最近一条画线（图上有 1 条锁着的线会被跳过）");
+  });
+
+  it("清除按钮的 title：图上那条＋暂存桶那条一起数进句子，而撤销只数图上那条（两枚各自计数）", async () => {
+    // 暂存桶里先放一条锁着的用户线（paneId 不在当前挂载的副图上 ⇒ 落到 parked，不在图上）。
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          { name: "priceLine", paneId: "indicator_pane_1725507123456_4", points: [{ timestamp: START, value: 52874 }], lock: true },
+        ],
+      }),
+    );
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1300 });
+    await flush();
+    const lockedId = h.overlays[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lockedId}` }));
+    await flush();
+    // 图上 1 条 + 暂存桶 1 条 = 清除会留下 2 条；撤销碰不到暂存桶，仍只报图上的 1 条。
+    expect(
+      screen.getByRole("button", { name: "清除" }).getAttribute("title"),
+    ).toBe("清除当前标的与周期上的全部画线（含在等副图开启的；2 条锁着的线会留下）");
+    expect(
+      screen.getByRole("button", { name: "撤销" }).getAttribute("title"),
+    ).toBe("撤销最近一条画线（图上有 1 条锁着的线会被跳过）");
+  });
+
+  it("翻开「锁定线可删」后两枚 title 都回到旧那句（放行态不许再挂计数）", async () => {
+    localStorage.setItem(
+      DRAWING_KEY,
+      JSON.stringify({
+        "600519.SH|1D": [
+          { name: "priceLine", paneId: "indicator_pane_1725507123456_4", points: [{ timestamp: START, value: 52874 }], lock: true },
+        ],
+      }),
+    );
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + DAY, value: 1300 });
+    await flush();
+    const lockedId = h.overlays[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${lockedId}` }));
+    await flush();
+    // 放行前确实在说真话（图上有 1 条会跳过）。
+    expect(
+      screen.getByRole("button", { name: "撤销" }).getAttribute("title"),
+    ).toBe("撤销最近一条画线（图上有 1 条锁着的线会被跳过）");
+
+    fireEvent.click(screen.getByRole("button", { name: "锁定线可删" }));
+    await flush();
+    // 翻开＝放行：锁定线不再被跳过／留下，计数归零，两枚都回到不带计数的旧句子。
+    expect(screen.getByRole("button", { name: "撤销" }).getAttribute("title")).toBe("撤销最近一条画线");
+    expect(screen.getByRole("button", { name: "清除" }).getAttribute("title")).toBe("清除当前标的与周期上的全部画线（含在等副图开启的）");
+  });
 });
 
 /**
