@@ -980,11 +980,15 @@ export function cancelInProgress(chart: OverlayHost): number {
   return stuck.length;
 }
 
-/** Undo the most recent completed drawing. Returns its id, or null. */
-export function removeLatestDrawing(chart: OverlayHost): string | null {
-  const done = chart.getOverlays().filter((o) => !isInProgress(o));
-  const last = done[done.length - 1] as OverlayLike | undefined;
-  const id = last?.id;
+/**
+ * Undo the most recent drawing the user is **allowed** to delete. Returns its id,
+ * or null when nothing is deletable. §3.1 entry 4：撤销不另写一套挑选逻辑——
+ * 它从 `partitionDeletable` 的 `deletable` 里取最后一条，与「清除」共用分拣。
+ */
+export function removeLatestDrawing(chart: OverlayHost, allowDeleteLocked: boolean): string | null {
+  const done = chart.getOverlays().filter((o) => !isInProgress(o)) as OverlayLike[];
+  const { deletable } = partitionDeletable(done, allowDeleteLocked, isLockedUserDrawing);
+  const id = deletable[deletable.length - 1]?.id;
   if (!id) return null;
   chart.removeOverlay({ id });
   return id;

@@ -442,6 +442,10 @@ describe("makeDrawingEvents", () => {
     const events = makeDrawingEvents({ onChanged: (id) => { changes.push(id); }, allowDeleteLocked: () => false });
     expect(() => events.onRemoved({})).not.toThrow();
     expect(() => events.onRemoved(undefined as never)).not.toThrow();
+    // T3R-1：守卫那行的**第一枚** `e?.` 也照这一条钉住——payload 整个缺席时右键
+    // 不该把回调弄抛（库里那一刻读的是 `overlay.onRightClick`，抛出来等于把右键
+    // 整条通道弄哑，比"没拦住"更糟）。
+    expect(() => events.onRightClick(undefined as never)).not.toThrow();
     expect(changes).toEqual([null, null]);
   });
 
@@ -512,13 +516,32 @@ describe("restoreDrawings / cancelInProgress / removeLatestDrawing", () => {
       overlay({ id: "second", name: "segment" }),
       overlay({ id: "stuck", drawing: true, points: [] }),
     ]);
-    expect(removeLatestDrawing(chart as never)).toBe("second");
+    expect(removeLatestDrawing(chart as never, false)).toBe("second");
     expect(chart.overlays.map((o) => o.id)).toEqual(["first", "stuck"]);
     // Half-drawn overlays are not undo targets: with only those left there is
     // nothing to take back, and nothing gets removed.
-    expect(removeLatestDrawing(chart as never)).toBe("first");
-    expect(removeLatestDrawing(chart as never)).toBe(null);
+    expect(removeLatestDrawing(chart as never, false)).toBe("first");
+    expect(removeLatestDrawing(chart as never, false)).toBe(null);
     expect(chart.overlays.map((o) => o.id)).toEqual(["stuck"]);
+  });
+
+  it("撤销取最近一条**可删**的：锁定的那条被跳过，指针往后退一格", () => {
+    const a = overlay({ id: "o0", name: "priceLine" });
+    const b = overlay({ id: "o1", name: "priceLine", lock: true });
+    const chart = fakeChart([a, b]);
+    expect(removeLatestDrawing(chart as never, false)).toBe("o0"); // 最新的是锁着的 ⇒ 跳过它
+    expect(chart.overlays.map((o) => o.id)).toEqual(["o1"]);
+
+    // 开关打开 ⇒ 现状：取最新的这条，正是它。
+    const chart2 = fakeChart([overlay({ id: "p0", name: "priceLine" }), overlay({ id: "p1", name: "priceLine", lock: true })]);
+    expect(removeLatestDrawing(chart2 as never, true)).toBe("p1");
+  });
+
+  it("撤销面对「全被锁住」：返回 null，一根手指都不动（按钮不许装作删掉了什么）", () => {
+    const chart = fakeChart([overlay({ id: "q0", name: "priceLine", lock: true })]);
+    expect(removeLatestDrawing(chart as never, false)).toBeNull();
+    expect(chart.overlays.map((o) => o.id)).toEqual(["q0"]);
+    expect(chart.removeOverlay).not.toHaveBeenCalled();
   });
 });
 
