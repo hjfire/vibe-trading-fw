@@ -78,6 +78,10 @@ interface FakeOverlay {
   onPressedMoveEnd?: (e?: unknown) => void;
   onSelected?: (e: { overlay: FakeOverlay }) => void;
   onDeselected?: (e: { overlay: FakeOverlay }) => void;
+  // 第②片：库在右键这一路把 `{chart, overlay, figure, ...event, preventDefault}`
+  // 交给 `overlay.onRightClick`，只有回调没用 `preventDefault` 才继续删（dist
+  // 8774-8789）。没有这一枚，「锁定线删不掉」这条规则在测试里无法表达。
+  onRightClick?: (e: { overlay: FakeOverlay; preventDefault: () => void }) => void;
 }
 
 interface FakePane {
@@ -109,7 +113,7 @@ interface FakeChart {
 /** A drawing overlay's event bundle as the component passes it to the library. */
 type OverlayEvents = Pick<
   FakeOverlay,
-  "onDrawEnd" | "onRemoved" | "onPressedMoveEnd" | "onSelected" | "onDeselected"
+  "onDrawEnd" | "onRemoved" | "onPressedMoveEnd" | "onSelected" | "onDeselected" | "onRightClick"
 >;
 
 const DAY = 86_400_000;
@@ -180,9 +184,25 @@ function finishDrawing(at: { timestamp: number; value: number }) {
   });
 }
 
-/** Right-click delete: `onRemoved` fires while the overlay is still listed. */
+/**
+ * Right-click a line body. Mirrors `OverlayView._figureMouseRightClickEvent`
+ * (dist 8774-8789): the library hands `overlay.onRightClick` an event object
+ * carrying a `preventDefault` it owns, and only reaches
+ * `StoreImp.removeOverlay`—which fires `onRemoved` *before* splicing—when the
+ * callback did not use it. The old double skipped straight to the removal, so
+ * the veto was structurally untestable here.
+ *
+ * A missing id is an error, not a no-op: a pin that aims at an already-deleted
+ * overlay would otherwise pass on an empty target set (the empty-collection
+ * false green this repo has been bitten by before).
+ */
 function rightClickDelete(id: string): void {
   act(() => {
+    const overlay = h.overlays.find((o) => o.id === id);
+    if (!overlay) throw new Error(`no overlay ${id} to right-click`);
+    let prevented = false;
+    overlay.onRightClick?.({ overlay, preventDefault: () => { prevented = true; } });
+    if (prevented) return;
     void h.chart?.removeOverlay({ id });
   });
 }
@@ -299,6 +319,7 @@ vi.mock("klinecharts", () => ({
           extendData?: unknown;
           mode?: string;
           needDefaultPointFigure?: boolean;
+          onRightClick?: (e: { overlay: FakeOverlay; preventDefault: () => void }) => void;
         } & OverlayEvents;
         const placed = Array.isArray(v.points) && v.points.length > 0;
         const overlay = makeOverlay({
@@ -318,6 +339,7 @@ vi.mock("klinecharts", () => ({
           onPressedMoveEnd: v.onPressedMoveEnd,
           onSelected: v.onSelected,
           onDeselected: v.onDeselected,
+          onRightClick: v.onRightClick,
         });
         h.overlays.push(overlay);
         return overlay.id;
@@ -456,6 +478,8 @@ const STYLE_KEY = "pro-chart.drawStyle.v1";
 // The magnet preference (第③片 B): one key, `"1"`/`"0"`, and it must not exist
 // at all until the user turns it on.
 const MAGNET_KEY = "pro-chart.magnet.v1";
+// 第②片：锁定的线删不删得掉，一枚持久级布尔键，出厂不在盘上（默认＝保护）。
+const DELETE_LOCKED_KEY = "pro-chart.delete_locked.v1";
 const readBuckets = (): Record<string, unknown> =>
   JSON.parse(localStorage.getItem(DRAWING_KEY) ?? "{}");
 const readStylePref = (): Record<string, unknown> =>
@@ -713,6 +737,45 @@ describe("/pro-chart 画线的拖动与删除", () => {
     await flush();
     expect(h.overlays.length).toBe(0);
     expect(screen.getByRole("button", { name: "射线" }).className).not.toContain("ring-1");
+  });
+});
+
+describe("/pro-chart 锁定线的删除否决", () => {
+  it("锁着的线：右键点它删不掉，图与存储都不动；解锁后同一条右键照删（默认态两半）", async () => {
+    await mountChart();
+    fireEvent.click(screen.getByRole("button", { name: "价格线" }));
+    finishDrawing({ timestamp: START + 6 * DAY, value: 1302.5 });
+    await flush();
+    const id = h.overlays[0].id;
+
+    // 锁定它——锁定开关只长在清单行上，所以先开面板。那枚按钮两态都用同一个
+    // aria-label（现读 `ProChart.tsx:3183`，正文才是「锁定／解锁」），所以再点
+    // 一次就是解锁。
+    fireEvent.click(screen.getByRole("button", { name: "画线清单" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+    expect(h.overlays[0].lock).toBe(true);
+    expect(localStorage.getItem(DELETE_LOCKED_KEY)).toBeNull(); // 默认态不落盘
+
+    rightClickDelete(id);
+    await flush();
+    expect(h.overlays.map((o) => o.id)).toEqual([id]); // 右键拦下
+    expect((readBuckets()["600519.SH|1D"] as unknown[])).toHaveLength(1); // 存储也没动
+
+    // 成对另一半：同一入口、同一次运行，没锁的线照删。它证明拦下这条线的是
+    // `lock` 这一问，而不是替身或守卫把右键整条路弄哑了——只有前半的运行读不出
+    // 这两种的区别。
+    fireEvent.click(screen.getByRole("button", { name: `锁定画线 ${id}` }));
+    await flush();
+    expect(h.overlays[0].lock).toBe(false);
+    rightClickDelete(id);
+    await flush();
+    expect(h.overlays).toHaveLength(0);
+    // 桶键整个消失而不是留一条空数组：`saveDrawings` 在 list 为空时 `delete`
+    // 掉这一格（现读 `chartDrawings.ts:1061`），本文件既有针也是这么钉的
+    // （现读 `:615`／`:691` 的 `toBeUndefined()`）。
+    expect(readBuckets()["600519.SH|1D"]).toBeUndefined();
   });
 });
 

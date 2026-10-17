@@ -75,6 +75,7 @@ import {
   isRestorablePaneId,
   lastBarTimestamp,
   listDrawings,
+  loadAllowDeleteLocked,
   loadDrawingStyle,
   loadDrawings,
   loadMagnet,
@@ -586,6 +587,14 @@ export function ProChart() {
   // behaviour than the one the user is drawing with. Same reason as
   // `drawStyleRef` above.
   const magnetRef = useRef<MagnetMode>(magnet);
+  // 锁定的线删不删得掉（第②片）：默认关＝受保护。`allowDeleteLockedRef` 镜像的是
+  // 「点击那一刻」的真值——守卫活在**画线实例**上，一条线创建时捕获的闭包会一直
+  // 读到它出生那天，翻转开关就对该页已有的一切线无效（spec §5.1，Task 3 的翻转针
+  // 就是钉这一条）。同一个 task 里连点两次摊到同一份过期快照，理由同 `magnetRef`。
+  //  setter 不在本片出现：`noUnusedLocals` 会把它判成死码，Task 4 的开关按钮才是
+  //  它的唯一写者，那时连同 `saveAllowDeleteLocked` 一起接回来。
+  const [allowDeleteLocked] = useState(() => loadAllowDeleteLocked());
+  const allowDeleteLockedRef = useRef(allowDeleteLocked);
   // Legend (第③片 C): every value defaults to the library's own, so a user who
   // never opens the panel gets the pre-feature picture pixel for pixel.
   const [legend, setLegend] = useState<LegendPrefs>(() => loadLegendPrefs());
@@ -2045,6 +2054,7 @@ export function ProChart() {
       },
       onAnchor: anchorDrawing,
       onSettled: settleAnchorNote,
+      allowDeleteLocked: () => allowDeleteLockedRef.current,
     });
 
   /**
