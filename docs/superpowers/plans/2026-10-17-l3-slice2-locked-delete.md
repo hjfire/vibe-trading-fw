@@ -164,7 +164,7 @@ sed -n '1p' setup.out
 ```js
 // 原始 CDP 客户端：只用到 Node 24 自带的 fetch / WebSocket，不装任何依赖。
 const HTTP = "http://127.0.0.1:9222";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function connect(urlPart) {
   const list = await (await fetch(`${HTTP}/json/list`)).json();
