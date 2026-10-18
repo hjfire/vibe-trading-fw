@@ -146,8 +146,8 @@ vi.mock("klinecharts", () => ({
 }));
 
 // Only the transport is faked. `INTERVALS` / `periodToInterval` /
-// `intervalToPeriod` come from the real module, so a new period button cannot
-// be added to the toolbar without this file seeing it (a hand-copied one-entry
+// `intervalToPeriod` come from the real module, so a new period row cannot
+// be added to the directory without this file seeing it (a hand-copied one-entry
 // INTERVALS list is how a page-level test stops testing the page).
 vi.mock("@/lib/marketApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/marketApi")>();

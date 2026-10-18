@@ -22,7 +22,7 @@
  *    data, so anything that cannot serve minute bars cannot show it either. The
  *    wiring of the view itself lives in `ProChartTimeShare.test.tsx`; what lives
  *    here is the gate, so a fourth caller cannot drift from the first three.
- * 5. that 周线 / 月线 (㉜) are gated like 日线 and *not* like the minute buttons,
+ * 5. that 周线 / 月线 (㉜) are gated like 日线 and *not* like the minute rows,
  *    because the server folds them out of the same daily answer — and that
  *    clicking one really asks the route for `interval=1W`, so the candles on
  *    screen and the bars on the wire cannot be two different periods.
@@ -214,7 +214,7 @@ describe("readSession preserves the interval the symbol can actually serve", () 
 });
 
 describe("viewForSymbol / viewPeriod", () => {
-  it("moves the bars to 1-minute while the line is on, whatever the buttons say", () => {
+  it("moves the bars to 1-minute while the line is on, whatever the rows say", () => {
     expect(viewPeriod({ interval: "1D", timeShare: true })).toBe("1m");
     expect(viewPeriod({ interval: "1D", timeShare: false })).toBe("1D");
   });
@@ -227,7 +227,7 @@ describe("viewForSymbol / viewPeriod", () => {
     expect(viewForSymbol("AAPL.US", "5m", true)).toEqual({ interval: "5m", timeShare: true });
   });
 
-  it("uses one gate for the line and the 1分 button, because they are one rule", () => {
+  it("uses one gate for the line and the 1分 row, because they are one rule", () => {
     for (const symbol of ["600519.SH", "000001.SZ", "0700.HK", "AAPL.US", "BTC-USDT", "SHEL.L"]) {
       expect(viewForSymbol(symbol, "1D", true).timeShare).toBe(intervalAllowed(symbol, "1m"));
     }
@@ -327,7 +327,7 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
     expect(h.periods.at(-1)).toEqual({ type: "day", span: 1 });
   });
 
-  it("still greys out every minute button for BTC, so the refusal is visible", async () => {
+  it("still greys out every minute row for BTC, so the refusal is visible", async () => {
     seedSession("BTC-USDT", "1D");
     await mountChart();
     await openPeriodMenu();

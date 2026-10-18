@@ -571,7 +571,7 @@ describe("分时 never pages backwards", () => {
   });
 });
 
-describe("分时 and the period buttons are mutually exclusive", () => {
+describe("分时 and the period directory are mutually exclusive", () => {
   it("a period click ends 分时 and puts candles back", async () => {
     seedSession("0700.HK", "5m");
     await mountChart();

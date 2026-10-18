@@ -15,7 +15,7 @@ export function canMinuteBars(symbol: string): boolean {
 
 /** Can this period be used on this instrument at all? Daily and coarser always can.
  *
- * This is the *one* question four places ask: the interval buttons' disabled
+ * This is the *one* question four places ask: the period rows' disabled
  * state, the click handler, the repair on symbol switch, and session restore.
  * When it was spelled inline in each of them, relaxing one copy produced a
  * button that looked clickable and did nothing -- the guard in `pickInterval`
