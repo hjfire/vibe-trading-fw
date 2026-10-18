@@ -432,8 +432,14 @@ describe("脚本工作台页签的无障碍角色", () => {
       expect(t.getAttribute("aria-selected")).toBe("false");
     }
 
-    // 裁定二：页身选中才挂载 ⇒ 不发 aria-controls，否则五枚永远悬空。
-    expect(container.querySelectorAll("[aria-controls]")).toHaveLength(0);
+    // 裁定二只管 tab→panel 这一条线：本片不给六枚 tab 发 aria-controls，因为条件发它
+    // 需要同时给页身面板补上 id 与 aria-labelledby，那是另一片的范围（仓内两条形状都可达：
+    // PeriodPicker.tsx:65 的「open 才发 aria-controls」、WelcomeScreen.tsx:346 的
+    // 「只渲染选中页身 + role=tabpanel」）。针因此只逐枚钉六枚 tab，不数整棵抽屉——
+    // 否则六段页身将来任何一页正当加一枚可折叠区，都会为无关的事把这根针判红。
+    for (const t of tabs) {
+      expect(t.hasAttribute("aria-controls")).toBe(false);
+    }
 
     // m11 变异自证补针：搬家后的「N/M 已挂载」计数文本必须仍在树里可读。
     expect(screen.getByText(/已挂载/)).toBeTruthy();
@@ -447,5 +453,97 @@ describe("脚本工作台页签的无障碍角色", () => {
       .filter((t) => t.getAttribute("aria-selected") === "true");
     expect(selected).toHaveLength(1);
     expect(selected[0]).toHaveAccessibleName("脚本库");
+  });
+});
+
+/**
+ * `aria-modal="true"` 是一句承诺：声明它的代价是把焦点管起来。以下三枚针断的是
+ * 真 DOM 焦点（`document.activeElement`），不是 mock 调用记录。
+ */
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+describe("脚本工作台浮层的焦点管理", () => {
+  it("打开后 document.activeElement 就是关闭按钮（焦点进得来）", () => {
+    open();
+    const close = screen.getByRole("button", { name: "关闭脚本工作台" });
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("Tab 与 Shift+Tab 在抽屉首尾环回并吃掉默认动作（焦点出不去）", () => {
+    open();
+    const dialog = screen.getByRole("dialog", { name: /脚本工作台/ });
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+    expect(focusables.length).toBeGreaterThan(2);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    // 焦点在末枚上按 Tab ⇒ 环回首枚；fireEvent 返回 false 就是 preventDefault 被调的证据。
+    last.focus();
+    expect(document.activeElement).toBe(last);
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    // 焦点在首枚上 Shift+Tab ⇒ 环回末枚。
+    first.focus();
+    expect(document.activeElement).toBe(first);
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("关闭后焦点归还给打开前那枚元素，且中途重渲染不偷焦点（关完回到原处）", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    chart = fakeChart();
+    onChanged = vi.fn();
+    const props = (next: { open: boolean; onClose: () => void }) => (
+      <IndicatorEditor
+        open={next.open}
+        onClose={next.onClose}
+        getChart={() => chart as never}
+        onChartIndicatorsChanged={onChanged}
+      />
+    );
+    const view = render(props({ open: true, onClose: vi.fn() }));
+    const close = screen.getByRole("button", { name: "关闭脚本工作台" });
+    expect(document.activeElement).toBe(close);
+
+    // ProChart.tsx 那侧 `onClose={() => setIndPanelOpen(false)}` 每轮渲染都是新函数，
+    // 所以这里刻意换一枚 onClose 重渲染：归还焦点那步一旦被挂进依赖 onClose 的 effect，
+    // 这轮重渲染就会把它重放一遍，抽屉打字时焦点会被偷走。
+    view.rerender(props({ open: true, onClose: vi.fn() }));
+    expect(document.activeElement).toBe(close);
+
+    view.rerender(props({ open: false, onClose: vi.fn() }));
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
+  it("抽屉里打字时重渲染不偷焦点：记 focus 只跟 open 走，不跟 onClose 走", () => {
+    const view = open();
+    const close = screen.getByRole("button", { name: "关闭脚本工作台" });
+    // 先进关闭按钮这一笔，是为了让这枚针与「压根不管焦点」的旧形状分得开：
+    // 旧实现里焦点本来就待在 textarea 上，不这样起手就测不出偷焦点。
+    expect(document.activeElement).toBe(close);
+
+    const box = screen.getByPlaceholderText(/本地公式/) as HTMLTextAreaElement;
+    box.focus();
+    expect(document.activeElement).toBe(box);
+
+    // 宿主那侧 `onClose={() => setIndPanelOpen(false)}` 每次渲染都是新函数，这里照那个
+    // 形状换一枚 onClose 重渲染：归还/抓取焦点一旦被挂进依赖 onClose 的 effect，
+    // cleanup 与 effect 重放就会把焦点从 textarea 抢回关闭按钮。
+    view.rerender(
+      <IndicatorEditor
+        open
+        onClose={vi.fn()}
+        getChart={() => chart as never}
+        onChartIndicatorsChanged={onChanged}
+      />,
+    );
+    expect(document.activeElement).toBe(box);
   });
 });

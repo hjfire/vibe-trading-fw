@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Chart, Nullable } from "klinecharts";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -71,6 +71,10 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "alerts", label: "脚本告警" },
 ];
 
+/** 焦点陷阱按这份顺序数抽屉里的可聚焦元素，与 `common/ConfirmDialog.tsx` 同一把尺。 */
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export default function IndicatorEditor({
   open,
   onClose,
@@ -89,6 +93,28 @@ export default function IndicatorEditor({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ lines: string[]; bad: boolean } | null>(null);
   const [tab, setTab] = useState<TabKey>("editor");
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * `aria-modal="true"` 是一句承诺：声明了 modal 却不搬焦点，键盘用户 Tab 出抽屉后
+   * 就落进 AT 已经当成 inert 的内容里。这里兑现承诺的三件事——进抽屉时记下
+   * `document.activeElement` 并把焦点送给关闭按钮、Tab / Shift+Tab 在抽屉内首尾环回、
+   * 关闭（或卸载）时把焦点归还给记下的那枚元素。承诺只到这儿的理由见下面 `trapTab`。
+   *
+   * 依赖只放 `open`：本组件是 `if (!open) return null` 的形状，而宿主 `ProChart.tsx`
+   * 传下来的 `onClose={() => setIndPanelOpen(false)}` 每次渲染都是新函数。一旦把它
+   * 写进依赖，「记 focus → 抢焦点」每轮重渲染都重放一遍，正在抽屉里打字会被偷焦点。
+   */
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => {
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -246,18 +272,51 @@ export default function IndicatorEditor({
     return err;
   };
 
+  /**
+   * 焦点陷阱：Tab / Shift+Tab 在抽屉内首尾环回。处理器刻意挂在 `role="dialog"`
+   * 这枚 div 的 `onKeyDown` 上，不挂 `document`/`window`——抽屉不在树上的时候，
+   * 别人家的按键不该由这里接管。
+   *
+   * 明确不做 Escape，也别加它：抽屉里有 Pine 公式编辑页的 `<textarea>`，
+   * 全局 Escape→close 会让正在写公式的人在不自知的情况下丢草稿；这比少一枚快捷键
+   * 更实的伤害，所以本片的承诺只到「焦点进得来、出不去、关得掉、关完回到原处」。
+   */
+  const trapTab = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (focusable.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !dialog.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-40 bg-black/30" role="presentation" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="absolute right-0 top-0 flex h-full w-[34rem] max-w-full flex-col border-l bg-card shadow-xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="swb-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={trapTab}
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
           <span id="swb-title" className="text-sm font-semibold">ƒ 脚本工作台</span>
           <button
+            ref={closeRef}
             type="button"
             aria-label="关闭脚本工作台"
             onClick={onClose}
