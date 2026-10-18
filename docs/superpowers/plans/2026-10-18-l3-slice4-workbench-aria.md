@@ -303,17 +303,29 @@ role=tab 落地后按名查 button 的十处针必然红，故与实现同笔改
 - Consumes: Task 1／2 的全部针名与属性字串。
 - Produces: 一张「注入 → 哪枚针红」的实测表（Task 5 的矩阵说明与 Task 6 的档案 §7.28 引用它）。
 
+- [ ] **Step 0: 先探基线（否则「针没红」与「命令没跑成」分不开）**
+
+```bash
+cd /e/Vibe-Trading-main/Vibe-Trading-main/frontend
+npx vitest run src/components/charts/__tests__/ScriptWorkbench.test.tsx
+```
+
+Expected: 全绿，且 stdout 里有 `Tests  N passed` 那一行——**把这行的逐字形状记住**：Step 1 的脚本靠 `×` 与 `Tests ` 两种行判读，若基线跑不出这两种形状，那是取数形状的缺陷，先修脚本再谈变异。
+
 - [ ] **Step 1: 写探针脚本（内存副本还原法，不碰 git）**
 
 把 `IndicatorEditor.tsx` 的**原始字节**先读进内存留作还原源，每枚注入＝把 needle 换成 dead 后写盘、跑焦点套件、读 stdout，然后**只用那份内存副本**写回。脚本落在 `.superpowers/sdd/2026-10-18-l3-slice4-workbench-aria/mutate.py`（该目录未跟踪，不进仓）：
 
 ```python
-import subprocess, sys
+import subprocess
 from pathlib import Path
 
-SRC = Path("frontend/src/components/charts/IndicatorEditor.tsx")
+SRC = Path("frontend/src/components/charts/IndicatorEditor.tsx")   # 相对仓库根
+FRONTEND = "frontend"
 ORIG = SRC.read_bytes()                      # 还原源＝动手前的内存副本
-CMD = ["npx", "vitest", "run", "src/components/charts/__tests__/ScriptWorkbench.test.tsx"]
+# vitest 的配置在 frontend/ 下 ⇒ subprocess 必带 cwd；Windows 上 bare `npx` 找不着
+# （那是 npx.cmd，CreateProcess 不套 PATHEXT）⇒ 写死 npx.cmd。
+CMD = ["npx.cmd", "vitest", "run", "src/components/charts/__tests__/ScriptWorkbench.test.tsx"]
 
 # needle 一律**不带换行**：本文件工作树是 CRLF，`b'role="tab"\n'` 这种写法
 # 在这把尺上永远 count=0，注入根本没发生（不是「针没红」）。
@@ -342,7 +354,8 @@ for name, (needle, dead) in MUTS.items():
         continue
     SRC.write_bytes(ORIG.replace(needle, dead, 1))
     try:
-        p = subprocess.run(CMD, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        p = subprocess.run(CMD, cwd=FRONTEND, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
         print(f"{name}: rc={p.returncode}")
         for line in p.stdout.splitlines():
             if "×" in line or "Tests " in line:
