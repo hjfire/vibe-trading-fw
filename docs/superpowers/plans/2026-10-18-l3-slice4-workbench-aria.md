@@ -126,7 +126,7 @@ Expected: FAIL，两条新 it 都红；第一枚的报错应是 `Unable to find 
 - [ ] **Step 4: 跑测试确认绿，并复跑 CRLF 尺**
 
 Run: `cd frontend && npx vitest run src/components/charts/__tests__/ScriptWorkbench.test.tsx` → 全绿（含既有各 describe）。
-Run: `tr -cd '\r' < frontend/src/components/charts/IndicatorEditor.tsx | wc -c` 与 `wc -l < frontend/src/components/charts/IndicatorEditor.tsx` → **两把尺必须相等**（本步净加 3 行，故由 349 变 352；以当场读数为准，不引用本句的数字）。
+Run: `tr -cd '\r' < frontend/src/components/charts/IndicatorEditor.tsx | wc -c` 与 `wc -l < frontend/src/components/charts/IndicatorEditor.tsx` → **两把尺必须相等**（净加行数只给形状不给数：本步真正新增的是「抽屉三行属性 ＋ 关闭按钮的 aria-label 一行」＝**4 行**，`id` 加在标题 span 上是行内的、不加行。原稿这句写的是「本步净加 3 行，故由 349 变 352」，那半截算术在写下时就是错的（漏了 `aria-label` 那一行），2026-10-18 Task 1 执行席现读为 349→353 后按实改口；两把尺相等这条断言不动，行数一律由你当场测）。
 
 - [ ] **Step 5: 提交**
 
