@@ -32,6 +32,19 @@ const renderPicker = (props: Partial<PeriodPickerProps> = {}) => {
 const trigger = (): HTMLButtonElement =>
   screen.getByRole("button", { name: "日线" }) as HTMLButtonElement;
 
+/** 两根针要 RTL 的 `unmount`（一根卸载整个开着的目录，一根在两次渲染之间清场），
+ *  而 `renderPicker` 只回 onPick，所以这里把 render 的返回值原样交出去。 */
+const renderPickerHost = (props: Partial<PeriodPickerProps> = {}) =>
+  render(
+    <PeriodPicker
+      options={OPTIONS}
+      triggerLabel="日线"
+      active="1D"
+      onPick={vi.fn()}
+      {...props}
+    />,
+  );
+
 describe("PeriodPicker 的入口按钮自陈弹层", () => {
   it("入口按钮带 aria-haspopup=menu 与 aria-expanded=false", () => {
     renderPicker();
@@ -51,6 +64,26 @@ describe("PeriodPicker 的入口按钮自陈弹层", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     fireEvent.click(trigger());
     expect(screen.getByRole("listbox")).toBeTruthy();
+  });
+
+  it("入口的 aria-controls 逐字等于打开后目录元素的 id", () => {
+    renderPicker();
+    fireEvent.click(trigger());
+    const menu = screen.getByRole("listbox");
+    expect(trigger().getAttribute("aria-controls")).toBe(menu.id);
+    expect(document.getElementById(menu.id)).toBe(menu);
+  });
+
+  it("有档位时入口 title 逐字是「周期目录：当前 日线（点开换档）」", () => {
+    renderPicker();
+    expect(trigger().getAttribute("title")).toBe("周期目录：当前 日线（点开换档）");
+  });
+
+  it("分时态（active=null）入口 title 逐字交代画的是分时、档位仍是日线", () => {
+    renderPicker({ active: null });
+    expect(trigger().getAttribute("title")).toBe(
+      "周期目录：当前线上画的是分时，档位仍是 日线（点开换档）",
+    );
   });
 });
 
@@ -119,6 +152,21 @@ describe("PeriodPicker 的三条关闭通道", () => {
     expect(trigger().getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("按下顺序 mousedown→click 开目录，入口上的 mousedown 不会关掉它", () => {
+    renderPicker();
+    // 真实浏览器点一下按钮是 mousedown→mouseup→click；只测 click 就测不到 wrapRef
+    // 的包住范围——ref 一旦不再包住入口，目录会被自家 mousedown 当场关掉。
+    fireEvent.mouseDown(trigger());
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    fireEvent.mouseDown(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("listbox")).toBeTruthy();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("Escape 关闭目录并把焦点还给入口按钮", () => {
     renderPicker();
     fireEvent.click(trigger());
@@ -139,5 +187,25 @@ describe("PeriodPicker 的三条关闭通道", () => {
     fireEvent.click(trigger());
     const row = within(screen.getByRole("listbox")).getByRole("option", { name: "日线" });
     expect(row.className).toContain("bg-muted font-medium");
+  });
+});
+
+describe("PeriodPicker 入口自身的亮起与监听撤销", () => {
+  it("入口按钮只在 active 非 null 时亮起 bg-muted font-medium", () => {
+    const { unmount } = renderPickerHost();
+    expect(trigger().className).toContain("bg-muted font-medium");
+    unmount();
+    renderPickerHost({ active: null });
+    expect(trigger().className).not.toContain("bg-muted font-medium");
+  });
+
+  it("目录开着时卸载会摘掉 mousedown 与 keydown 两枚 document 监听", () => {
+    const removeEventListener = vi.spyOn(document, "removeEventListener");
+    const { unmount } = renderPickerHost();
+    fireEvent.click(trigger());
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    unmount();
+    expect(removeEventListener).toHaveBeenCalledWith("mousedown", expect.any(Function));
+    expect(removeEventListener).toHaveBeenCalledWith("keydown", expect.any(Function));
   });
 });
