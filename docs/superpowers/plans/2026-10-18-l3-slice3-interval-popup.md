@@ -6,7 +6,7 @@
 
 **Architecture:** 新增受展示组件 `frontend/src/components/charts/PeriodPicker.tsx`（不认识 store、不碰图表库，形状照 `ReplayBar.tsx`）；`ProChart.tsx` 把 `INTERVALS.map` 平铺块换成一行 `<PeriodPicker>`，档位文案与 `intervalAllowed` 门仍在页面侧算好再传下去。标记面三条通道：`aria-haspopup="menu"`＋`aria-expanded`＋`aria-controls` 在入口按钮，`role="listbox"`／`role="option"`＋`aria-selected` 在浮层，开合由组件自己的 `mousedown`／`Escape` 监听管。
 
-**Tech Stack:** React 18 ＋ TypeScript ＋ Vite ＋ Tailwind ＋ vitest ＋ @testing-library/react。
+**Tech Stack:** React 19 ＋ TypeScript ＋ Vite ＋ Tailwind ＋ vitest ＋ @testing-library/react。（2026-10-18 本席当场改口：原句作「React 18」，而 `frontend/package.json:28` 逐字 `"react": "^19.3.0"`、本机 `require("react/package.json").version`＝19.2.8。）
 
 **Spec:** `docs/superpowers/specs/2026-10-18-l3-slice3-interval-popup-design.md`（裁定一～四、排除项、判态口径都在那里；本计划是它的论证，不是它的替代）
 
@@ -57,7 +57,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { IntervalKey } from "@/lib/marketApi";
-import { PeriodPicker, type PeriodOption } from "../PeriodPicker";
+import { PeriodPicker, type PeriodOption, type PeriodPickerProps } from "../PeriodPicker";
 
 const KEYS: IntervalKey[] = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"];
 const LABELS = ["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"];
@@ -629,8 +629,13 @@ INJECTIONS = [
     ("M6 去掉选完关闭", FILES[0], b'                setOpen(false);\n                onPick(option.key);\n', b'                onPick(option.key);\n'),
     ("M7 active 不判分时", FILES[1], b'  const periodActiveKey: IntervalKey | null = timeShare ? null : interval;', b'  const periodActiveKey: IntervalKey | null = interval;'),
     ("M8 triggerLabel 加后缀", FILES[1], b'const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;', b'const periodTriggerLabel = (INTERVALS.find((i) => i.key === interval)?.label ?? interval) + " 周期";'),
+    ("M9 摘 aria-controls 与孤儿 id", FILES[0], b'        aria-controls="pro-chart-period-menu"\n', b''),
 ]
 ```
+
+（M9 是 Task 1 修复轮带回来的第 九 枚——评审席量出「摘掉 `aria-controls` 连同目录那一侧的 `id`，19 根针全绿」，修复轮补了名到名那一根（`aria-controls` 的值必须等于打开后浮层的 `id`），所以 M9 现在预期 `RED`。单摘 `aria-controls` 一根就够红，不必连 `id` 一起摘。）
+
+（M10 是收窄复评带回来的第 十 枚，形状与前九枚不同＝**一处注入要同时做两处替换**：把 `wrapRef` 从容器 `<div className="relative" ref={wrapRef}>` 上摘掉、改挂到入口按钮上（按钮已有 `ref={triggerRef}`，第二枚 ref 用回调 ref 一并交上去）。这一枚钉的是「容器到底包住谁」：`wrapRef` 只管浮层或只管按钮时，真实浏览器里在目录行上按下鼠标会先被判成「组件外」而关掉目录，随后的 `click` 打在已卸载的行上 ⇒ `onPick` 永不触发，而本计划给的针全部只用 `fireEvent.click`、不发 `mousedown`，结构上看不见它。复评已明写：`ref` 只挂按钮的那一枚反向变异**目前整套全绿**，所以本枚预期 `NEEDLE-MISS` 或 `HARNESS-BLIND` 都要按 Step 3 补针——要补的形状是「`mouseDown(行)` ＋ `click(行)` 之后 `onPick` 恰被调一次」，补完重跑本枚到 `RED`。）
 
 （八枚 needle 由执行席**按落地后文件里的逐字文本现读**再生成一遍——上面这组是按本计划代码块推的目标形状，行内缩进差一个字节就注不进去；注入前先断言 `BASE` 里那枚 needle 出现次数恰为 1，出现 0 次或 >1 次就停下改 needle，不许「注不上就算等价」。）
 
@@ -750,3 +755,10 @@ git commit -s -m "docs(forensics): L2 两格升态——TV-CI-03 与 TV-CI-02 �
 - spec §0～§9 每一节都有对应任务：§1 判态→Task 6；§2 四裁定→Task 1/2 的实现与 Task 6 的登记；§3.1→Task 1；§3.2→Task 2 Step 2-4；§3.3→Task 2 Step 5-6；§4 十一根针→Task 1 Step 1（组件级）＋Task 3（页面级）；§5 排除面→Task 1/2 的代码边界（不做两层 treegrid、不做 roving focus／typeahead、不动 `MultiChart`／`TVChart`、目录不持久化、不抄对方键值）；§6→Task 5/7；§7→Task 4；§8→Task 6/8；§9 风险表→Task 4 的注入面与 Task 7 Step 2 的层叠实测。
 - 计划里**没有**「实现席要去别处才知道的值」：文案、属性名、key 联合、helper 形状全部就地给出。
 - 已知三处「必须执行时定形」的东西已明写要现读：helper 组在本仓 jsdom／`act` 形状下是否逐字可用（Task 2 Step 7 的当场定形句）、八枚变异 needle 的逐字文本与缩进（Task 4 Step 1 括号）、矩阵两个新行号（Task 6 Step 1）。它们不是占位符，是「书面事实要真跑／当场读」那条纪律的正面处置。
+
+## 追加更正（2026-10-18，Task 1 执行与评审带回）
+
+1. **Task 1 Step 1 测试代码块的 import 那一行原本缺一枚类型**：正文用了 `Partial<PeriodPickerProps>` 而 import 只取了 `PeriodPicker, type PeriodOption`，`npx tsc -b` 在测试文件第 5 行报 `TS2304: Cannot find name 'PeriodPickerProps'`。已就地补 `type PeriodPickerProps`（上面代码块现为逐字定形）。这是「计划正文逐字照抄」这条纪律的第五型病灶之一：**代码块内部的自洽没人报警，只有编译器报**。
+2. **Tech Stack 那句「React 18」是错的**，见该行的当场改口子句。连带一条本机事实：`node_modules` 相对 `package.json` 是陈旧的（装的是 react 19.2.8／vitest 4.1.11／vite 8.2.2，声明的是 ^19.3.0／^5.0.2／^8.3.1，三个都不落在声明区间内）。本片的 RED／GREEN／门禁一律在**装着的**这一套上跑，不许为对齐声明去装或升级东西（那是全局工具链面，范围外）；Task 5 报告要把这组版本读数带上，别让人以为读数来自 ^5 的 vitest。
+3. **Task 4 的注入清单从八枚增到十枚**（M9 摘 `aria-controls`、M10 挪 `wrapRef`），来源是 Task 1 的评审席与收窄复评席各量出一处「摘掉生产代码而整套全绿」。M10 的形状与前九枚不同（一处变异要同时改两处），并且它暴露的是**本计划所有针只用 `fireEvent.click` 而不发 `mousedown`** 这一族盲区——真实浏览器的按下顺序是 mousedown→mouseup→click，浮层「点外面关掉」这类逻辑只有在针里发出 `mousedown` 才可能被钉住。Task 3 的页面级针若要读目录里的行，一律经 `openPeriodMenu()`／`pickPeriod()`，那两枚 helper 的定义里已经带了一次真实 `click`；**是否要在 helper 里补 `mouseDown`，由 Task 4 跑完 M10 之后当场定形并写进报告**，本席不在这里替它决定。
+4. **Global Constraints 那句主机红线的转述**在派发词里被我写严成了「不许出现 `tradingview` 这个词」，评审席按门原文纠正，本席随后自己读了 `tools/forensics_audit.py:650`／`:652`：这把尺量的是 `tradingview.com` 子串（大小写不敏感）与 `s3.tradingview` 计数，配一份**双向集合等式**的白名单，而「TradingView」这个普通词在本仓 `frontend/src` 下本来就有既存命中（评审席当场数 53 个文件，本席未复核该数）。执行席按**门原文**执行，既存命中一枚也不许顺手清；把转述写严是我的派发缺陷，不是约束。
