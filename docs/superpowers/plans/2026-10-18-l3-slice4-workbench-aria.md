@@ -21,7 +21,8 @@
 - `docs/` 被 `.gitignore` 忽略：改被跟踪的文档要 `git add -f` 或对该路径直接提交。
 - 两枚本机恒红门**不调阈值、不改门、不清白名单**：`tools/wiki_freshness_gate.sh`（页数超阈值）与 `tools/ci_grep_gates.sh` 的 `[gate b]`。只出「本片 0 贡献」的交集归属证据。
 - 面向用户的正文与总结用中文；代码、命令、属性名保留原文。
-- 六道门命令（逐字）：`npx tsc -b`／`npx vitest run`／`npx vite build`（三者在 `frontend/` 下跑）／`python -X utf8 tools/test_wiki_drift.py tools/test_wiki_qmind.py`（**双文件一起跑**，单跑一枚读数不同）／`python -X utf8 tools/forensics_audit.py`／`python -X utf8 tools/test_forensics_spec.py`（后三者在仓库根跑）。
+- 六道门命令（逐字）：`npx tsc -b`／`npx vitest run`／`npx vite build`（三者在 `frontend/` 下跑）／`python -X utf8 -m pytest tools/test_wiki_drift.py tools/test_wiki_qmind.py -q`（**双文件一起跑**，单跑一枚读数不同）／`python -X utf8 tools/forensics_audit.py`／`python -X utf8 -m pytest tools/test_forensics_spec.py -q`（后三者在仓库根跑）。
+  - 2026-10-18 就地修（Task 3 执行席证得、控制席复跑坐实）：G4／G6 原稿写的是 `python -X utf8 tools/test_wiki_drift.py tools/test_wiki_qmind.py` 与 `python -X utf8 tools/test_forensics_spec.py`——**去掉 `-m pytest` 的那两形是假绿**。三枚文件都没有 `__main__` 守卫（`grep -c '__name__'` 现读全 0），直接跑文件＝一条测试都不收集，读数 `rc=0` 且 stdout 一个字节也没有。控制席当场两形各跑一次：`-m pytest` 形 G4＝`256 passed in 109.84s`、G6＝`166 passed in 11.76s`；裸跑形两条都 rc=0 零输出。CI 那侧本来就是 `-m pytest` 形（`.github/workflows/repowiki-freshness.yml:85`）。`tools/forensics_audit.py` 有 `__main__` 守卫，裸跑是**对的**，不要一起改。凡引用那两形读数的地方一律走 `-m pytest`。
 
 ---
 
@@ -340,7 +341,10 @@ MUTS = {
     "m6-nomodal":  (b'aria-modal="true"',            b''),
     "m7-maskdlg":  (b'className="fixed inset-0 z-40 bg-black/30" role="presentation"',
                     b'className="fixed inset-0 z-40 bg-black/30" role="dialog"'),
-    "m8-nolabel":  (b'aria-label="关闭脚本工作台"',   b''),
+    # 2026-10-18 就地修：原稿这行写的是 b'aria-label="关闭脚本工作台"' ——**bytes 字面量装不下中文**，
+    # Python 3 编译期即 `SyntaxError: bytes can only contain ASCII literal characters`，脚本连跑都跑不起来
+    # （不是「注入没发生」那种静默失效，是整份脚本炸）。中文 needle 一律写 str 字面量再 `.encode()`。
+    "m8-nolabel":  ('aria-label="关闭脚本工作台"'.encode(), b''),
     # 往 tablist 里塞一枚真·非 tab 孩子（span 是它的兄弟，动兄弟判不动这条针）
     "m9-child":    (b'<div role="tablist" className="flex flex-wrap gap-1">',
                     b'<div role="tablist" className="flex flex-wrap gap-1"><span>x</span>'),
@@ -404,9 +408,9 @@ print("restored ok")
 cd /e/Vibe-Trading-main/Vibe-Trading-main/frontend
 npx tsc -b && npx vitest run && npx vite build
 cd /e/Vibe-Trading-main/Vibe-Trading-main
-python -X utf8 tools/test_wiki_drift.py tools/test_wiki_qmind.py
+python -X utf8 -m pytest tools/test_wiki_drift.py tools/test_wiki_qmind.py -q
 python -X utf8 tools/forensics_audit.py
-python -X utf8 tools/test_forensics_spec.py
+python -X utf8 -m pytest tools/test_forensics_spec.py -q
 bash tools/wiki_freshness_gate.sh; echo "gate g7 rc=$?"
 bash tools/ci_grep_gates.sh; echo "gate g8 rc=$?"
 ```
@@ -532,7 +536,7 @@ grep -n '^| TV-CI-0[45] ' docs/forensics/gap-matrix.md
 ```bash
 cd /e/Vibe-Trading-main/Vibe-Trading-main
 python -X utf8 tools/forensics_audit.py; echo "g5 rc=$?"
-python -X utf8 tools/test_forensics_spec.py; echo "g6 rc=$?"
+python -X utf8 -m pytest tools/test_forensics_spec.py -q; echo "g6 rc=$?"
 tr -cd '\r' < docs/forensics/gap-matrix.md | wc -c; wc -l < docs/forensics/gap-matrix.md
 ```
 
