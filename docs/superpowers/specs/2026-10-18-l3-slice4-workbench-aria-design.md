@@ -23,7 +23,7 @@
 
 **TV-CI-05 升 `已有`**：`role="tablist"` 一枚、`role="tab"` 六枚、`aria-selected` 恰一枚为 `true`。规格句那三条计数（`tablist:`＝1／`tab "`＝5／`[selected]`＝1）里，本仓对上的形状是 1／6／1——**枚数 6≠5 不是缺失**：本仓六页是自研脚本工作台页集合（含 Pine 告警桥与条件筛选两页对方没有的），对应方的 `Strategies`／`Profiles`／`Patterns`／`Options` 四页在 L0 里连内容都没读。本行判的是「顶层多页 tab ＋ selected 唯一暴露」这一形状，形状落满。
 
-**TV-CI-04 仍 `部分`，理由要改写**：本片落下 `role="dialog"` ＋ `aria-modal="true"` ＋ 关闭按钮可达名，把矩阵现文那句「没有 role=dialog 也没有 aria-modal」「它没有可达名」两条销掉；剩下的半是**顶层搜索框**与**列表区三级标题**。本席 2026-10-18 现读这两半的本仓形状：搜索面确实有，但既不在顶层、也不是 `searchbox` 角色——`frontend/src/components/charts/workbench/LibraryTab.tsx:49` 起那枚 `<input>`（`:52` 是它的 `placeholder` 行）**没有 `type` 属性**（默认 `type="text"` ⇒ a11y 角色是 `textbox`），且它在「脚本库」这一页里面，不在对话框顶层；列表区那枚 level-3 标题本仓没有对应物。这两半本片**不做**，因为做不出证据（见裁定四）也不属于本片的规格句范围。（顺手把 `type` 改 `"search"` 只能对上半的一半——角色变对、位置照旧，且会带进浏览器原生的清除按钮行为，属另一件事。）
+**TV-CI-04 仍 `部分`，理由要改写**：本片落下 `role="dialog"` ＋ `aria-modal="true"` ＋ 关闭按钮可达名，把矩阵现文那句「没有 role=dialog 也没有 aria-modal」「它没有可达名」两条销掉；剩下的半是**顶层搜索框**与**列表区三级标题**。本席 2026-10-18 现读这两半的本仓形状：搜索面确实有，但既不在顶层、也不是 `searchbox` 角色——`frontend/src/components/charts/workbench/LibraryTab.tsx:49` 起那枚 `<input>`（`:52` 是它的 `placeholder` 行）**没有 `type` 属性**（默认 `type="text"` ⇒ a11y 角色是 `textbox`），且它在「脚本库」这一页里面，不在对话框顶层；列表区那枚 level-3 标题本仓没有对应物。（**2026-10-18 执行期更正，原文不删**：「列表区那枚 level-3 标题本仓没有对应物」**写下时即为假**。本席现读 `frontend/src/components/charts/workbench/EditorTab.tsx:286`「我的指标（勾选 = 显示在图上）」与 `:332`「内置公式（本地语言，一行 return 即可）」两枚无条件 `<h3>`，正是列表区标题；活体复跑同一把尺 `[role="dialog"] h2, [role="dialog"] h3` 在「编辑器」页读到 3 枚、「导入导出」页 2 枚、其余四页各 0 枚。原句之所以读成「没有对应物」，是把「停在脚本库页那一瞬的零枚」当成了整个浮层的形状——页身按选中挂载，一把尺扫不出分布）。真缺的只剩**顶层搜索框**一件，判态 `部分` 不动。这两半本片**不做**，因为做不出证据（见裁定四）也不属于本片的规格句范围。（顺手把 `type` 改 `"search"` 只能对上半的一半——角色变对、位置照旧，且会带进浏览器原生的清除按钮行为，属另一件事。）
 
 **相邻的 TV-CI-01 不动、不顺手升。** 那一格要的是两层 treegrid（7 个 level=1 行＋32 个 level-2 行＋六类分组），与本片毫无交集。**TV-CI-06／07** 也不动。
 
@@ -44,7 +44,7 @@
 对应方那枚叫 `Close menu`（L0 `:109`）、对话框名与五个 tab 名全是英文——**一个字都不进 `frontend/src/**`**（禁抄对方档位名／键值的红线同样适用于控件名）。对话框的可达名走 `aria-labelledby` 指向 `:256` 那枚标题（正文逐字 `ƒ 脚本工作台`），不另造 `aria-label`，免得两份名字打架。为什么不用 `t()`：本文件全篇硬编中文（`:66-71` 的 TABS label、`:256` 的标题、`:281` 的「已挂载」），加一枚 locale 键等于在同一层里开第二套文案口径；九语言补齐属另一件事，不在本片范围。
 
 **裁定四：键盘 roving tabindex、Escape 关闭、焦点陷阱与焦点归还，本片全不做。**
-L0 那份记录 `:139` 明写**未派发 Escape、未切换 tab**，`completeness.status=incomplete`、`missing_sections` 含 `events` ⇒ 「按 Escape 会关」「左右键在 tab 间移动」这两件事在证据面上一片空白。给一片没有读数的行为写实现，等于替对方页面编造规格；且 CI-04／05 两条规格句里没有任何一条提到键鼠行为。（仓内确有现成对照：`frontend/src/components/chat/__tests__/PineScriptViewer.test.tsx:21` 那一族针钉的是 Escape 与焦点，那是**本仓自研对话框**的既有主张，不是从对方页取证来的，两者不要混谈。）
+L0 那份记录 `:139` 明写**未派发 Escape、未切换 tab**，`completeness.status=incomplete`、`missing_sections` 含 `events` ⇒ 「按 Escape 会关」「左右键在 tab 间移动」这两件事在证据面上一片空白。（**2026-10-18 执行期更正，原文不删**：引用的两件事逐字确在 L0，但**行号指错**——`:139` 讲的是对话框里有哪几页、哪些控件名，不含这句动作纪律；逐字在 `:8`「只打开，未往搜索框填任何东西、未切换 tab、未提交、未登录、未添加任何指标、未派发 Escape」，另有 `:30`／`:38`／`:56`／`:63`／`:70` 五枚 `action:` 全是 `goto_start`／`click`／`wait_for_timeout`、零枚 `press_key`。内容不动，只把坐标改对。本条裁定照旧成立。）给一片没有读数的行为写实现，等于替对方页面编造规格；且 CI-04／05 两条规格句里没有任何一条提到键鼠行为。（仓内确有现成对照：`frontend/src/components/chat/__tests__/PineScriptViewer.test.tsx:21` 那一族针钉的是 Escape 与焦点，那是**本仓自研对话框**的既有主张，不是从对方页取证来的，两者不要混谈。）
 
 ---
 
