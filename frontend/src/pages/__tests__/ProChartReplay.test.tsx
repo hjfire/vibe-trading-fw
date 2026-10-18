@@ -240,7 +240,43 @@ async function settle(limit = 40): Promise<void> {
 const buttonOf = (name: string): HTMLButtonElement =>
   screen.getByRole("button", { name }) as HTMLButtonElement;
 
+/** 目录是浮层。工具栏里唯一一枚自陈 haspopup=menu 的按钮就是周期入口——
+ *  按属性定位而不是按可达名，因为它的名字随当前档位变。 */
+const periodTrigger = (): HTMLElement => {
+  const candidates = screen
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-haspopup") === "menu");
+  expect(candidates).toHaveLength(1);
+  return candidates[0];
+};
+
+const optionOf = (label: string): HTMLButtonElement =>
+  screen.getByRole("option", { name: label }) as HTMLButtonElement;
+
+/** 幂等地把目录打开：已经开着就一步都不做。
+ *  写成无条件点入口的话，凡是「先开目录读一行、再选一行」的调用点都会在第二次点入口时
+ *  把目录关掉，于是 `optionOf` 数不到东西——那是 helper 自己的坑，不是被测实现的缺陷。 */
+async function openPeriodMenu(): Promise<void> {
+  if (periodTrigger().getAttribute("aria-expanded") === "true") return;
+  await act(async () => {
+    fireEvent.click(periodTrigger());
+  });
+}
+
+async function pickPeriod(label: string): Promise<void> {
+  await openPeriodMenu();
+  await act(async () => {
+    fireEvent.click(optionOf(label));
+  });
+}
+
+const periodLabels = new Set(["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"]);
+
 const click = async (name: string): Promise<void> => {
+  if (periodLabels.has(name)) {
+    await pickPeriod(name);
+    return;
+  }
   await act(async () => {
     fireEvent.click(buttonOf(name));
   });

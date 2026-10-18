@@ -39,6 +39,7 @@ import {
   type ReplaySpeed,
 } from "@/lib/barReplay";
 import { ReplayBar } from "@/components/charts/ReplayBar";
+import { PeriodPicker, type PeriodOption } from "@/components/charts/PeriodPicker";
 import {
   AVG_PRICE_NAME,
   DEFAULT_CANDLE_BAR_SPACE,
@@ -263,10 +264,11 @@ export function viewPeriod(view: ChartView): IntervalKey {
 }
 
 /**
- * The view a symbol can serve. One function for both buttons and both entry
- * points (symbol switch, session restore), because the minute-interval rule and
- * the 分时 rule are the same rule — 分时 is 1-minute data wearing a line — and
- * entry 46 in 项目档案.md is about what happens when that gets spelled twice.
+ * The view a symbol can serve. One function for the 分时 button and the period
+ * directory's rows, and for both entry points (symbol switch, session restore),
+ * because the minute-interval rule and the 分时 rule are the same rule — 分时 is
+ * 1-minute data wearing a line — and entry 46 in 项目档案.md is about what
+ * happens when that gets spelled twice.
  */
 export function viewForSymbol(
   symbol: string,
@@ -2576,9 +2578,34 @@ export function ProChart() {
   // first answer not in yet), which is why the badge takes the nullable type
   // instead of the JSX checking for it.
   const lineBadge = timeShareBadge(sessionInfo);
-  // Which period button is lit. `viewPeriod` would answer "1分" while the line
-  // is up, and that is the wrong claim: the bars differ, not only their shape.
-  const periodActive = (key: IntervalKey) => !timeShare && interval === key;
+  // The interval directory's rows: the copy and the gate stay here because they
+  // are the page's rules (`intervalAllowed` is asked by 分时 and by the repair on
+  // symbol switch too). `active` is null while 分时 is on — 分时 is not a period,
+  // so no directory row may claim to be the current one (㉖).
+  const periodOptions = useMemo<PeriodOption[]>(
+    () =>
+      INTERVALS.map((i) => {
+        // Greyed out only where no source can answer at all. Whether OpenD
+        // is up is not knowable from here, so HK/US stay enabled and the
+        // route's own error names the cause when the gateway sleeps.
+        const disabled = !intervalAllowed(symbol, i.key);
+        return {
+          key: i.key,
+          label: i.label,
+          disabled,
+          title: disabled
+            ? "分钟线需 FutuOpenD（支持 .SH/.SZ/.HK/.US）"
+            : isCalendarInterval(i.key)
+              ? "日线链：周线/月线把日线按自然周/自然月合并，复权口径与日线一致"
+              : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪",
+        };
+      }),
+    [symbol],
+  );
+  // `?? interval` is a typing necessity, not a fallback: every IntervalKey is in
+  // INTERVALS, so the find always answers.
+  const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;
+  const periodActiveKey: IntervalKey | null = timeShare ? null : interval;
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
   // highlight, or the chart keeps eating clicks waiting for the next point.
@@ -2653,9 +2680,10 @@ export function ProChart() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">
           {/* 分时 is a view, not a period (local custom ㉖): it takes the same
-              1-minute bars the minute buttons fetch and shows one trading
-              session of them as a line, so it sits with them and shares their
-              gate — see `intervalAllowed`, which both buttons ask. */}
+              1-minute bars the minute rows of the period directory fetch and
+              shows one trading session of them as a line, so it sits with them
+              and shares their gate — see `intervalAllowed`, which this button
+              and every directory row ask. */}
           <button
             disabled={!intervalAllowed(symbol, TIME_SHARE_INTERVAL)}
             title={
@@ -2798,32 +2826,12 @@ export function ProChart() {
               {cmpShown ? ` · 对 ${cmpSource}` : ""}
             </span>
           )}
-          {INTERVALS.map((i) => {
-            // Greyed out only where no source can answer at all. Whether OpenD
-            // is up is not knowable from here, so HK/US stay enabled and the
-            // route's own error names the cause when the gateway sleeps.
-            const disabled = !intervalAllowed(symbol, i.key);
-            return (
-              <button
-                key={i.key}
-                disabled={disabled}
-                title={
-                  disabled
-                    ? "分钟线需 FutuOpenD（支持 .SH/.SZ/.HK/.US）"
-                    : isCalendarInterval(i.key)
-                      ? "日线链：周线/月线把日线按自然周/自然月合并，复权口径与日线一致"
-                      : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪"
-                }
-                className={cn(
-                  "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
-                  periodActive(i.key) && "bg-muted font-medium",
-                )}
-                onClick={() => pickInterval(i.key)}
-              >
-                {i.label}
-              </button>
-            );
-          })}
+          <PeriodPicker
+            options={periodOptions}
+            triggerLabel={periodTriggerLabel}
+            active={periodActiveKey}
+            onPick={pickInterval}
+          />
         </div>
         <div className="mx-2 h-5 w-px bg-border" />
         <ReplayBar

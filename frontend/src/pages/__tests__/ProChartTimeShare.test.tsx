@@ -364,6 +364,36 @@ async function mountChart(): Promise<void> {
 const buttonOf = (name: string): HTMLButtonElement =>
   screen.getByRole("button", { name }) as HTMLButtonElement;
 
+/** 目录是浮层。工具栏里唯一一枚自陈 haspopup=menu 的按钮就是周期入口——
+ *  按属性定位而不是按可达名，因为它的名字随当前档位变。 */
+const periodTrigger = (): HTMLElement => {
+  const candidates = screen
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-haspopup") === "menu");
+  expect(candidates).toHaveLength(1);
+  return candidates[0];
+};
+
+const optionOf = (label: string): HTMLButtonElement =>
+  screen.getByRole("option", { name: label }) as HTMLButtonElement;
+
+/** 幂等地把目录打开：已经开着就一步都不做。
+ *  写成无条件点入口的话，凡是「先开目录读一行、再选一行」的调用点都会在第二次点入口时
+ *  把目录关掉，于是 `optionOf` 数不到东西——那是 helper 自己的坑，不是被测实现的缺陷。 */
+async function openPeriodMenu(): Promise<void> {
+  if (periodTrigger().getAttribute("aria-expanded") === "true") return;
+  await act(async () => {
+    fireEvent.click(periodTrigger());
+  });
+}
+
+async function pickPeriod(label: string): Promise<void> {
+  await openPeriodMenu();
+  await act(async () => {
+    fireEvent.click(optionOf(label));
+  });
+}
+
 /** The last `candle.type` the page pushed onto the chart. */
 function lastCandleType(): string | undefined {
   return h.styles.at(-1)?.candle?.type;
@@ -547,7 +577,7 @@ describe("分时 and the period buttons are mutually exclusive", () => {
     await mountChart();
     fireEvent.click(buttonOf("分时"));
     await settle();
-    fireEvent.click(buttonOf("日线"));
+    await pickPeriod("日线");
     await settle();
 
     expect(h.periods.at(-1)).toEqual({ type: "day", span: 1 });
@@ -555,13 +585,16 @@ describe("分时 and the period buttons are mutually exclusive", () => {
     expect(h.indicators).toContainEqual({ op: "remove", name: "AVG_PRICE" });
     expect(h.indicators).toContainEqual({ op: "create", name: "MA", paneId: "candle_pane" });
     expect(screen.queryByTestId("time-share-badge")).toBeNull();
-    // 分时 is not a period, so no period button may light up while it is on.
+    // 分时 is not a period, so no period row may light up while it is on.
     // `bg-muted font-medium` is the active marker; `bg-muted` alone is also in
-    // every button's `hover:bg-muted`.
+    // every row's `hover:bg-muted`.
     fireEvent.click(buttonOf("分时"));
     await settle();
+    await openPeriodMenu();
     for (const label of ["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"]) {
-      expect(buttonOf(label).className).not.toContain("bg-muted font-medium");
+      const row = optionOf(label);
+      expect(row.getAttribute("aria-selected")).toBe("false");
+      expect(row.className).not.toContain("bg-muted font-medium");
     }
     expect(buttonOf("分时").className).toContain("bg-muted font-medium");
   });
@@ -649,7 +682,7 @@ describe("周线 / 月线 ask the route for the interval they draw (㉜)", () =>
     await mountChart();
     const daily = candleRequests("1D").length;
 
-    fireEvent.click(buttonOf(label));
+    await pickPeriod(label);
     await settle();
 
     expect(h.periods.at(-1)).toEqual(period);
@@ -735,7 +768,7 @@ describe("the price pane carries one overlay, not one per click", () => {
     expect(mountedCount("MA")).toBe(1);
 
     for (const label of ["5分", "15分", "30分", "60分", "日线"]) {
-      fireEvent.click(buttonOf(label));
+      await pickPeriod(label);
       await settle();
     }
 
@@ -750,7 +783,7 @@ describe("the price pane carries one overlay, not one per click", () => {
     h.mounted.push({ id: "MA_stacked", name: "MA", paneId: "candle_pane" });
     expect(mountedCount("MA")).toBe(2);
 
-    fireEvent.click(buttonOf("5分"));
+    await pickPeriod("5分");
     await settle();
     expect(mountedCount("MA")).toBe(1);
   });
@@ -766,7 +799,7 @@ describe("the price pane carries one overlay, not one per click", () => {
       expect(mountedCount("PREV_CLOSE")).toBe(1);
       expect(mountedCount("MA")).toBe(0);
 
-      fireEvent.click(buttonOf("15分"));
+      await pickPeriod("15分");
       await settle();
       expect(mountedCount("MA")).toBe(1);
       expect(mountedCount("AVG_PRICE")).toBe(0);
@@ -894,7 +927,7 @@ describe("分时 fills the pane with the session", () => {
     await settle();
     expect(h.barSpace).toBe(1.56);
 
-    fireEvent.click(buttonOf("15分"));
+    await pickPeriod("15分");
     await settle();
     // Not 1.56: a K-line chart of 500 daily bars at 1.5px a bar is the same
     // complaint arriving on the other side of the toggle.
@@ -917,7 +950,7 @@ describe("分时 fills the pane with the session", () => {
     expect(h.barSpace).toBe(BAR_SPACE_LIMIT.max);
     expect(offsetRightPx()).toBeCloseTo(1270, 6);
 
-    fireEvent.click(buttonOf("15分"));
+    await pickPeriod("15分");
     await settle();
     expect(h.barSpace).toBe(8);
     expect(offsetRightPx()).toBe(42); // 5.25 bars, exactly what the candles had
@@ -945,7 +978,7 @@ describe("分时 fills the pane with the session", () => {
     await mountChart();
     expect(h.barSpace).toBe(1.56); // fitted for the restored session
 
-    fireEvent.click(buttonOf("15分"));
+    await pickPeriod("15分");
     await settle();
     expect(h.barSpace).toBe(DEFAULT_CANDLE_BAR_SPACE);
     expect(offsetRightPx()).toBe(DEFAULT_CANDLE_OFFSET_RIGHT); // the margin too

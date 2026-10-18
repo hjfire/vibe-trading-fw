@@ -90,6 +90,36 @@ function seedSession(symbol: string, interval: string): void {
   localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval }));
 }
 
+/** 目录是浮层。工具栏里唯一一枚自陈 haspopup=menu 的按钮就是周期入口——
+ *  按属性定位而不是按可达名，因为它的名字随当前档位变。 */
+const periodTrigger = (): HTMLElement => {
+  const candidates = screen
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-haspopup") === "menu");
+  expect(candidates).toHaveLength(1);
+  return candidates[0];
+};
+
+const optionOf = (label: string): HTMLButtonElement =>
+  screen.getByRole("option", { name: label }) as HTMLButtonElement;
+
+/** 幂等地把目录打开：已经开着就一步都不做。
+ *  写成无条件点入口的话，凡是「先开目录读一行、再选一行」的调用点都会在第二次点入口时
+ *  把目录关掉，于是 `optionOf` 数不到东西——那是 helper 自己的坑，不是被测实现的缺陷。 */
+async function openPeriodMenu(): Promise<void> {
+  if (periodTrigger().getAttribute("aria-expanded") === "true") return;
+  await act(async () => {
+    fireEvent.click(periodTrigger());
+  });
+}
+
+async function pickPeriod(label: string): Promise<void> {
+  await openPeriodMenu();
+  await act(async () => {
+    fireEvent.click(optionOf(label));
+  });
+}
+
 describe("canMinuteBars", () => {
   it.each(["600519.SH", "000001.SZ", "700.HK", "AAPL.US"])("serves %s", (symbol) => {
     expect(canMinuteBars(symbol)).toBe(true);
@@ -269,14 +299,14 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
     });
   }
 
-  const disabledOf = (name: string): boolean =>
-    (screen.getByRole("button", { name }) as HTMLButtonElement).disabled;
+  const disabledOf = (label: string): boolean => optionOf(label).disabled;
 
   it("clicking 5分 on 腾讯 pushes a 5-minute period onto the chart", async () => {
     seedSession("0700.HK", "1D");
     await mountChart();
+    await openPeriodMenu();
     expect(disabledOf("5分")).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "5分" }));
+    await pickPeriod("5分");
     expect(h.periods.at(-1)).toEqual({ type: "minute", span: 5 });
   });
 
@@ -299,6 +329,7 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
   it("still greys out every minute button for BTC, so the refusal is visible", async () => {
     seedSession("BTC-USDT", "1D");
     await mountChart();
+    await openPeriodMenu();
     for (const label of ["1分", "5分", "15分", "30分", "60分"]) {
       expect(disabledOf(label)).toBe(true);
     }
@@ -311,9 +342,9 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
   it("clicking 周线 pushes a weekly period onto the chart, not a daily one", async () => {
     seedSession("0700.HK", "1D");
     await mountChart();
-    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    await pickPeriod("周线");
     expect(h.periods.at(-1)).toEqual({ type: "week", span: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "月线" }));
+    await pickPeriod("月线");
     expect(h.periods.at(-1)).toEqual({ type: "month", span: 1 });
   });
 });

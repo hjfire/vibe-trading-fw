@@ -284,6 +284,36 @@ function typeCompare(symbol: string): void {
   fireEvent.change(field(), { target: { value: symbol } });
 }
 
+/** 目录是浮层。工具栏里唯一一枚自陈 haspopup=menu 的按钮就是周期入口——
+ *  按属性定位而不是按可达名，因为它的名字随当前档位变。 */
+const periodTrigger = (): HTMLElement => {
+  const candidates = screen
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-haspopup") === "menu");
+  expect(candidates).toHaveLength(1);
+  return candidates[0];
+};
+
+const optionOf = (label: string): HTMLButtonElement =>
+  screen.getByRole("option", { name: label }) as HTMLButtonElement;
+
+/** 幂等地把目录打开：已经开着就一步都不做。
+ *  写成无条件点入口的话，凡是「先开目录读一行、再选一行」的调用点都会在第二次点入口时
+ *  把目录关掉，于是 `optionOf` 数不到东西——那是 helper 自己的坑，不是被测实现的缺陷。 */
+async function openPeriodMenu(): Promise<void> {
+  if (periodTrigger().getAttribute("aria-expanded") === "true") return;
+  await act(async () => {
+    fireEvent.click(periodTrigger());
+  });
+}
+
+async function pickPeriod(label: string): Promise<void> {
+  await openPeriodMenu();
+  await act(async () => {
+    fireEvent.click(optionOf(label));
+  });
+}
+
 // 样式面的读数口**原样照第⑤片文件**搬过来：下面那四条真值边界件里的「样式面零影响」读的就是
 // 这几格，期望值一格都不许改，所以读法也不许改。`initStyles` 是建图那一次推送（`init` 的
 // `styles` 选项）唯一的出口，`styles` 是主题 effect 的 `setStyles` 录制，两个推送点各有各的钉子。
@@ -439,7 +469,7 @@ describe("/pro-chart 多标的叠加对比", () => {
       { timestamp: D(1), close: 10 },
       { timestamp: D(3), close: 12 },
     ];
-    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    await pickPeriod("周线");
     await flush();
     expect(cmpLive()).toHaveLength(1);
     // 「挂上之后 `calc` 交出的行里有非 null 值」这半条不在本文件判——页面替身的
@@ -603,7 +633,7 @@ describe("/pro-chart 多标的叠加对比", () => {
     // 前置：先把「开着且画得出线」读实，否则下面四句在任何一屏都绿（候选集交成空集那类假绿）。
     expect(button().getAttribute("aria-pressed")).toBe("true");
     h.mainError = "FutuOpenD 未应答";
-    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    await pickPeriod("周线");
     await flush();
     expect(button().getAttribute("aria-pressed")).toBe("false");
     expect(button().getAttribute("title")).toBe(
@@ -728,7 +758,7 @@ describe("/pro-chart 多标的叠加对比", () => {
     // 顺序是设计的一部分（§七）：把这一支挪到「已开」之后，这条针就永远绿——而那一格说的是
     // "把进行中说成已完成"的那句「画成折线」，图上此刻根本没有折线。
     h.cmpBars = [];
-    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    await pickPeriod("周线");
     await flush();
     expect(button().getAttribute("title")).toBe(
       "对比此刻画不出线：可视区间里没有可用的收盘价（对比侧结果为空，或主图还没有蜡烛）",
