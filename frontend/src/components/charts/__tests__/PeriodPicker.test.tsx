@@ -74,6 +74,15 @@ describe("PeriodPicker 的入口按钮自陈弹层", () => {
     expect(document.getElementById(menu.id)).toBe(menu);
   });
 
+  it("组件级：目录关着时入口按钮根本不带 aria-controls（不留悬空 IDREF）", () => {
+    // 浮层只在 open 为真时进 DOM，那枚 id 也跟着才存在。
+    // 入口若恒写 aria-controls，关着的时候就指向文档里不存在元素＝悬空 IDREF。
+    // 层级限定：这根钉的是 PeriodPicker 自己渲染的那一枚入口，不主张页面级唯一。
+    renderPicker();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(trigger().getAttribute("aria-controls")).toBeNull();
+  });
+
   it("有档位时入口 title 逐字是「周期目录：当前 日线（点开换档）」", () => {
     renderPicker();
     expect(trigger().getAttribute("title")).toBe("周期目录：当前 日线（点开换档）");

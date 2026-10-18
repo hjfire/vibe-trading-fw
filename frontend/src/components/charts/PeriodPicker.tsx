@@ -62,7 +62,7 @@ export function PeriodPicker({ options, triggerLabel, active, onPick }: PeriodPi
         onClick={() => setOpen((previous) => !previous)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls="pro-chart-period-menu"
+        aria-controls={open ? "pro-chart-period-menu" : undefined}
         title={
           active === null
             ? `周期目录：当前线上画的是分时，档位仍是 ${triggerLabel}（点开换档）`
