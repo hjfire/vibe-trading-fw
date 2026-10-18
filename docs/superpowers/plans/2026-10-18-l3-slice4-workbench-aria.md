@@ -429,7 +429,7 @@ bash tools/ci_grep_gates.sh; echo "gate g8 rc=$?"
 
 **Interfaces:**
 - Consumes: 本机 dev server（`frontend` → `npm run dev`，端口 5899；起服务前先按现读 PID 处理端口占用，**绝不按镜像名杀 `msedge.exe`**）。
-- Produces: 八步 DOM 读数（Task 5 矩阵说明与 Task 6 档案引用）＋ `docs/forensics/l0/self-ci0405-workbench-aria.md`（2026-10-19 控制席落地本节 `:670` 待落地面④：原句只到散文，没交代这八步读数要落一枚**跟踪面**的 L0 记录，下一片按字面走就会重复「读数只活在档案里」的形状。补记的三层咬合＝八步读数进 L0（`命令：` 与 `evidence_id` 同趟取）→ L1 两格 `L0 依据` 列接住它 → L2 第 92／93 行第三列按内容重钉；机械凭据＝`tools/forensics_audit.py` 里「`用途` 非 harness／基线／不可取证的 L0 必须被某枚 L1 引用」那条规则，本笔落完该门 rc＝0。旧文一字未删，本括注是追加）。
+- Produces: 八步 DOM 读数（Task 5 矩阵说明与 Task 6 档案引用）＋ `docs/forensics/l0/self-ci0405-workbench-aria.md`（2026-10-19 控制席落地本节 `:670` 待落地面④：原句只到散文，没交代这八步读数要落一枚**跟踪面**的 L0 记录，下一片按字面走就会重复「读数只活在档案里」的形状。补记的三层咬合＝八步读数进 L0（`命令：` 与 `evidence_id` 同趟取）→ L1 两格 `L0 依据` 列接住它 → L2 第 92／93 行第三列按内容重钉；机械凭据＝`tools/forensics_audit.py` 里「`用途` 非 harness／基线／不可取证的 L0 必须被某枚 L1 引用」那条规则，本笔落完该门 rc＝0。旧文除句末那一枚句号被本括注顺走到行尾外一字未删，本括注是追加）。
 
 - [ ] **Step 1: 起自家页**
 
