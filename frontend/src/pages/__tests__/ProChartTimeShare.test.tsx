@@ -599,6 +599,26 @@ describe("分时 and the period buttons are mutually exclusive", () => {
     expect(buttonOf("分时").className).toContain("bg-muted font-medium");
   });
 
+  it("分时态下入口按钮仍显示 underlying 档位，但目录里没有选中行", async () => {
+    seedSession("0700.HK", "15m");
+    await mountChart();
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(periodTrigger().textContent).toBe("15分");
+    await openPeriodMenu();
+    expect(optionOf("15分").getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("分时态下入口按钮自己是暗的，不是只把目录行的 selected 摘掉", async () => {
+    // 上面那圈只读了八枚行：入口的亮起来自它自己那一个表达式（active !== null &&
+    // "bg-muted font-medium"），行的类名改动不到它，页面级于是没人守着入口。
+    seedSession("0700.HK", "15m");
+    await mountChart();
+    fireEvent.click(buttonOf("分时"));
+    await settle();
+    expect(periodTrigger().className).not.toContain("bg-muted font-medium");
+  });
+
   it("leaves the user's own period alone, so turning 分时 off goes back to it", async () => {
     seedSession("AAPL.US", "15m");
     await mountChart();

@@ -5,18 +5,19 @@
  * Three things are pinned here, and the third is the one that already
  * regressed once:
  *
- * 1. which symbols get an enabled minute-interval button at all;
+ * 1. which symbols get an enabled minute-interval row in the directory at all;
  * 2. that session restore keeps a HK/US intraday interval instead of forcing it
  *    back to daily. Before the routing changed, `readSession` carried its own
  *    copy of the A-share-only rule, so a shared "Tencent, 5-minute" link
  *    rendered and then reloads as a daily chart with nothing on screen to say
  *    why.
- * 3. that **the click answers**. The rule is asked in four places (the buttons'
- *    disabled state, the click handler, the repair on symbol switch, session
+ * 3. that **the click answers**. The rule is asked in four places (the 目录行的
+ *    disabled, the click handler, the repair on symbol switch, session
  *    restore). Relaxing only the first produced a button that lit up and did
  *    nothing: `pickInterval` kept its own `/\.(SH|SZ)$/` guard, so every HK/US
  *    minute click was swallowed. A test that only reads the predicate cannot
- *    see that, so the block below mounts the page and clicks the real button.
+ *    see that, so the block below mounts the page and clicks a real row in
+ *    the directory.
  * 4. that 分时 (㉖) is the *same* rule, not a copy of it: the line is 1-minute
  *    data, so anything that cannot serve minute bars cannot show it either. The
  *    wiring of the view itself lives in `ProChartTimeShare.test.tsx`; what lives
@@ -346,6 +347,32 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
     expect(h.periods.at(-1)).toEqual({ type: "week", span: 1 });
     await pickPeriod("月线");
     expect(h.periods.at(-1)).toEqual({ type: "month", span: 1 });
+  });
+
+  it("入口按钮的可达名跟着当前档位走，换档后一起换", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    expect(periodTrigger().textContent).toBe("日线");
+    await pickPeriod("周线");
+    expect(periodTrigger().textContent).toBe("周线");
+  });
+
+  it("目录里选中行的可达名与入口按钮同名（TV-CI-02 那一半句的形状）", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    const name = periodTrigger().textContent;
+    await openPeriodMenu();
+    const row = optionOf("日线");
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(row.textContent).toBe(name);
+  });
+
+  it("点目录里的档位＝换档并且目录自己关闭", async () => {
+    seedSession("0700.HK", "1D");
+    await mountChart();
+    await pickPeriod("60分");
+    expect(h.periods.at(-1)).toEqual({ type: "minute", span: 60 });
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 });
 
