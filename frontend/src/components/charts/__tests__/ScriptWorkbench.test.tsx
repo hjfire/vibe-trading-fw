@@ -151,7 +151,7 @@ describe("脚本库 tab", () => {
     expect(strategy).toBeTruthy();
     open();
 
-    fireEvent.click(screen.getByRole("button", { name: "脚本库" }));
+    fireEvent.click(screen.getByRole("tab", { name: "脚本库" }));
     fireEvent.change(screen.getByPlaceholderText(/搜索名称/), { target: { value: strategy!.name } });
     expect(await screen.getByText(strategy!.description)).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "应用" }));
@@ -174,7 +174,7 @@ describe("脚本库 tab", () => {
     const entry = SCRIPT_LIBRARY[0];
     open();
     const pick = async () => {
-      fireEvent.click(screen.getByRole("button", { name: "脚本库" }));
+      fireEvent.click(screen.getByRole("tab", { name: "脚本库" }));
       fireEvent.change(screen.getByPlaceholderText(/搜索名称/), { target: { value: entry.name } });
       fireEvent.click(await screen.findByRole("button", { name: "应用" }));
     };
@@ -197,7 +197,7 @@ describe("导入导出 tab", () => {
       params: [7],
     };
     open();
-    fireEvent.click(screen.getByRole("button", { name: "导入导出" }));
+    fireEvent.click(screen.getByRole("tab", { name: "导入导出" }));
     fireEvent.change(screen.getByPlaceholderText(/粘贴/), { target: { value: toPineFile(card) } });
     fireEvent.click(screen.getByRole("button", { name: "导入" }));
 
@@ -206,7 +206,7 @@ describe("导入导出 tab", () => {
     expect(chart.createIndicator).not.toHaveBeenCalled();
     expect(stored()).toHaveLength(0);
     // …and the editor now holds the source with its stored parameters.
-    fireEvent.click(screen.getByRole("button", { name: "编辑器" }));
+    fireEvent.click(screen.getByRole("tab", { name: "编辑器" }));
     const box = screen.getByPlaceholderText(/本地公式/) as HTMLTextAreaElement;
     expect(box.value).toBe(FORM_SRC);
     expect(screen.getByDisplayValue("外部脚本")).toBeTruthy();
@@ -215,7 +215,7 @@ describe("导入导出 tab", () => {
 
   it("rejects a paste that is not a script", async () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: "导入导出" }));
+    fireEvent.click(screen.getByRole("tab", { name: "导入导出" }));
     fireEvent.change(screen.getByPlaceholderText(/粘贴/), { target: { value: "今天天气不错" } });
     fireEvent.click(screen.getByRole("button", { name: "导入" }));
     expect(await screen.findByText(/不是脚本代码/)).toBeTruthy();
@@ -238,19 +238,19 @@ describe("导入导出 tab", () => {
 describe("策略报告 tab", () => {
   it("says so when the chart holds no Pine script", async () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: "策略报告" }));
+    fireEvent.click(screen.getByRole("tab", { name: "策略报告" }));
     expect(await screen.findByText(/还没有 Pine 脚本/)).toBeTruthy();
   });
 
   it("reruns a saved script and keeps its report", async () => {
     const strategy = SCRIPT_LIBRARY.find((e) => e.category === "strategy")!;
     open();
-    fireEvent.click(screen.getByRole("button", { name: "脚本库" }));
+    fireEvent.click(screen.getByRole("tab", { name: "脚本库" }));
     fireEvent.change(screen.getByPlaceholderText(/搜索名称/), { target: { value: strategy.name } });
     fireEvent.click(await screen.findByRole("button", { name: "应用" }));
     await screen.findByText("净收益");
 
-    fireEvent.click(screen.getByRole("button", { name: "策略报告" }));
+    fireEvent.click(screen.getByRole("tab", { name: "策略报告" }));
     chart.createIndicator.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "重新回测" }));
     expect(await screen.findByText(/已按当前K线重新回测/)).toBeTruthy();
@@ -263,13 +263,13 @@ describe("策略报告 tab", () => {
     const strategy = SCRIPT_LIBRARY.find((e) => e.category === "strategy")!;
     open();
     const applyFromLibrary = async (name: string) => {
-      fireEvent.click(screen.getByRole("button", { name: "脚本库" }));
+      fireEvent.click(screen.getByRole("tab", { name: "脚本库" }));
       fireEvent.change(screen.getByPlaceholderText(/搜索名称/), { target: { value: name } });
       fireEvent.click(await screen.findByRole("button", { name: "应用" }));
     };
 
     await applyFromLibrary(drawn.name);
-    fireEvent.click(screen.getByRole("button", { name: "策略报告" }));
+    fireEvent.click(screen.getByRole("tab", { name: "策略报告" }));
     expect(await screen.findByText(/都是 indicator/)).toBeTruthy();
     expect(screen.queryByText("策略：")).toBeNull();
 
@@ -408,5 +408,41 @@ describe("脚本工作台浮层的无障碍角色", () => {
 
     fireEvent.click(btn);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("脚本工作台页签的无障碍角色", () => {
+  it("恰一枚 tablist、六枚 tab、selected 唯一且默认落在编辑器；tablist 的孩子全是 tab", () => {
+    const { container } = open();
+
+    expect(container.querySelectorAll('[role="tablist"]')).toHaveLength(1);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
+
+    // 「N/M 已挂载」那枚计数不属于页签，必须住在 tablist 之外。
+    const tablist = container.querySelector('[role="tablist"]') as HTMLElement;
+    for (const child of Array.from(tablist.children)) {
+      expect(child.getAttribute("role")).toBe("tab");
+    }
+
+    const tabs = screen.getAllByRole("tab");
+    const selected = tabs.filter((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toHaveAccessibleName("编辑器");
+    for (const t of tabs.filter((x) => x !== selected[0])) {
+      expect(t.getAttribute("aria-selected")).toBe("false");
+    }
+
+    // 裁定二：页身选中才挂载 ⇒ 不发 aria-controls，否则五枚永远悬空。
+    expect(container.querySelectorAll("[aria-controls]")).toHaveLength(0);
+  });
+
+  it("点另一页后 selected 跟着换页，且仍然恰一枚", () => {
+    open();
+    fireEvent.click(screen.getByRole("tab", { name: "脚本库" }));
+    const selected = screen
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toHaveAccessibleName("脚本库");
   });
 });

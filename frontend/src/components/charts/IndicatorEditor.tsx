@@ -268,19 +268,23 @@ export default function IndicatorEditor({
         </div>
 
         <div className="flex shrink-0 flex-wrap gap-1 border-b px-2 py-1.5">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={cn(
-                "rounded px-2 py-1 text-xs hover:bg-muted",
-                tab === t.key && "bg-primary/10 font-semibold text-primary",
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
+          <div role="tablist" className="flex flex-wrap gap-1">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.key}
+                onClick={() => setTab(t.key)}
+                className={cn(
+                  "rounded px-2 py-1 text-xs hover:bg-muted",
+                  tab === t.key && "bg-primary/10 font-semibold text-primary",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           <span className="ml-auto self-center text-[11px] text-muted-foreground">
             {items.filter((x) => x.enabled).length}/{items.length} 已挂载
           </span>
