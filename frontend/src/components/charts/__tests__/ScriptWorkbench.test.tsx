@@ -434,6 +434,9 @@ describe("脚本工作台页签的无障碍角色", () => {
 
     // 裁定二：页身选中才挂载 ⇒ 不发 aria-controls，否则五枚永远悬空。
     expect(container.querySelectorAll("[aria-controls]")).toHaveLength(0);
+
+    // m11 变异自证补针：搬家后的「N/M 已挂载」计数文本必须仍在树里可读。
+    expect(screen.getByText(/已挂载/)).toBeTruthy();
   });
 
   it("点另一页后 selected 跟着换页，且仍然恰一枚", () => {
