@@ -1959,9 +1959,9 @@ export function ProChart() {
   );
 
   const pickInterval = (iv: IntervalKey) => {
-    if (!intervalAllowed(symbol, iv)) return; // the button is disabled too
+    if (!intervalAllowed(symbol, iv)) return; // the directory row is disabled too
     setDrawNotice(null);
-    // Any period button also ends 分时: the two are alternative readings of the
+    // Any directory row also ends 分时: the two are alternative readings of the
     // same bars, and a lit 分时 button over a candle chart is a lie.
     setView({ interval: iv, timeShare: false }, true);
   };
