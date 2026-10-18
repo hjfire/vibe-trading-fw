@@ -182,7 +182,7 @@ describe("PeriodPicker 的三条关闭通道", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
-  it("行上的完整按下顺序 mousedown→click 仍只换档一次", () => {
+  it("行上的 mousedown 不算组件外：目录不关、换档恰一次", () => {
     // M10 的形状：容器 ref 一旦不包住目录行，行上的 mousedown 会被判成「组件外」，
     // 目录先卸载、随后 click 打在脱离文档的行上，onPick 一次都不发。
     // 所有既有针只发 click，看不见这个顺序，所以这里按下顺序走满并钉住恰一次。
