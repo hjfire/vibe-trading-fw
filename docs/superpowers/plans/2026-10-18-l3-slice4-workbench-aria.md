@@ -156,10 +156,12 @@ Run:
 
 ```bash
 cd /e/Vibe-Trading-main/Vibe-Trading-main/frontend
-grep -n -e 'button", { name: "编辑器' -e 'button", { name: "脚本库' -e 'button", { name: "导入导出' \
-       -e 'button", { name: "策略报告' -e 'button", { name: "条件筛选' -e 'button", { name: "脚本告警' \
-       src --include=*.tsx --include=*.ts
+grep -rn -e 'button", { name: "编辑器' -e 'button", { name: "脚本库' -e 'button", { name: "导入导出' \
+          -e 'button", { name: "策略报告' -e 'button", { name: "条件筛选' -e 'button", { name: "脚本告警' \
+          src --include=*.tsx --include=*.ts
 ```
+
+（2026-10-18 就地修：原稿这条写的是 `grep -n -e ...`，**少了 `-r`**——逐字照抄跑出来是 `grep: src: Is a directory`、exit 2，一把尺根本读不出数。加 `-r` 后实测 10 处命中，与下面那十行号相等。）
 
 Expected: 全部命中都在 `src/components/charts/__tests__/ScriptWorkbench.test.tsx`（2026-10-18 现读＝10 处，行号 154／177／200／209／218／241／248／253／266／272）。**把这把尺的当场输出逐字贴进报告**；若与上面那十行号不一致，以当场读为准并在报告里登记差异，不要回去引用计划里的号。
 
@@ -345,6 +347,10 @@ MUTS = {
     # 补发悬空 aria-controls（钉住裁定二那根零计数针）
     "m10-dangle":  (b'role="tab"',
                     b'role="tab" aria-controls="swb-panel-editor"'),
+    # 2026-10-18 追加（Task 2 评审 Minor-2）：搬家后的「N/M 已挂载」span 今天没有任何存活针。
+    # needle 取带前导空格的 ` 已挂载`——裸 `已挂载` 在本文件 count=2（`:152` 那句 say 文案也用它），
+    # 会被脚本判成 SKIP needle count!=1 而静默不注入。
+    "m11-span-text": (b' \xe5\xb7\xb2\xe6\x8c\x82\xe8\xbd\xbd', b''),
 }
 
 for name, (needle, dead) in MUTS.items():
@@ -370,6 +376,8 @@ print("restored ok")
 
 三点已知坑：① **任何一枚打出 `SKIP needle count=0` 都不算跑过**——那是注入没发生，必须换 needle 形状重跑，不许把「针没红」写成结论；② needle 里的中文按 UTF-8 字节匹配（Python 源文件字面量即 UTF-8，与本机控制台 cp936 无关；若报 `count=0`，单独验一次 `python -X utf8 -c "print(open('frontend/src/components/charts/IndicatorEditor.tsx','rb').read().count('关闭脚本工作台'.encode()))"`，别改编码路线）；③ 判针身份看 stdout 里的 `×` 行，**不要**只看 rc。
 
+第四点（2026-10-18 Task 2 执行席提出后补）：本机 `core.autocrlf=true` ⇒ **入库 blob 是 LF-only，CRLF 那把尺只对工作树成立**。注入源与还原源都必须来自 `Path.read_bytes()` 读到的工作树字节；谁也不许拿 `git show HEAD:frontend/...` 的输出当注入底本或去数它的 CR（那是 LF，needle 形状与行数都会读错）。
+
 - [ ] **Step 2: 逐条判读**
 
 预期（把实测与预期不符的逐条记成 HARNESS-BLIND 并定因，不许含糊过）：
@@ -386,6 +394,7 @@ print("restored ok")
 | m8-nolabel | 关闭按钮可达名查不到 |
 | m9-child | 「tablist 的孩子全是 tab」那一半红（children 里第一枚的 role 是 null）——**这是「span 迁出 tablist」的唯一可注入判据**，动兄弟判不动它 |
 | m10-dangle | 「`[aria-controls]` 零计数」那根针红（读到 6）——钉住裁定二 |
+| m11-span-text | **预期谁都别红**（这是故意摆出来的盲区，不是缺陷漏网）：Task 2 把「N/M 已挂载」那枚 span 搬出 tablist，全套件里没有任何针读它的文本或存在性（2026-10-18 Task 2 评审席现读：`grep -rn "已挂载" frontend/src` 的测试侧命中只有 `ScriptWorkbench.test.tsx:421` 的一句注释）。m11 跑出「全绿」⇒ 盲区证毕 ⇒ Step 3 补一根文本针 `expect(screen.getByText(/已挂载/)).toBeTruthy();`（摆进「恰一枚 tablist」那枚 `it` 的末尾），补完**只重跑 m11** 确认它由绿转红，再还原确认由红转绿。这条补针就是它的 RED 证据来源——不补针而直接在干净树上写它，会当场绿，违反红-first。 |
 
 跑完必须确认还原干净：`git status --porcelain` 只剩 `?? .superpowers/`，且 `git diff --stat` 为空。
 
