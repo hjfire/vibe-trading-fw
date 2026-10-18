@@ -373,6 +373,9 @@ describe("the toolbar answers the click (the rule used to be spelled four times)
     await pickPeriod("60分");
     expect(h.periods.at(-1)).toEqual({ type: "minute", span: 60 });
     expect(screen.queryByRole("listbox")).toBeNull();
+    // 收紧（Task 3 评审）：listbox 数不到也可能是目录的 role 被改名，
+    // 关闭的另一半证据是入口自己说 expanded=false。原 promise 一字未删，只加这一根。
+    expect(periodTrigger().getAttribute("aria-expanded")).toBe("false");
   });
 });
 
