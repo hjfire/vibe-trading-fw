@@ -457,8 +457,8 @@ describe("脚本工作台页签的无障碍角色", () => {
 });
 
 /**
- * `aria-modal="true"` 是一句承诺：声明它的代价是把焦点管起来。以下三枚针断的是
- * 真 DOM 焦点（`document.activeElement`），不是 mock 调用记录。
+ * `aria-modal="true"` 是一句承诺：声明它的代价是把焦点管起来。本 describe 里那几枚针断的是
+ * 真 DOM 焦点（`document.activeElement`），不是 mock 调用记录；枚数刻意不写，写了就成了下一枚针要顺带维护的自指读数。
  */
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
