@@ -247,15 +247,19 @@ export default function IndicatorEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-40 bg-black/30" role="presentation" onClick={onClose}>
       <div
         className="absolute right-0 top-0 flex h-full w-[34rem] max-w-full flex-col border-l bg-card shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="swb-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-sm font-semibold">ƒ 脚本工作台</span>
+          <span id="swb-title" className="text-sm font-semibold">ƒ 脚本工作台</span>
           <button
             type="button"
+            aria-label="关闭脚本工作台"
             onClick={onClose}
             className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >

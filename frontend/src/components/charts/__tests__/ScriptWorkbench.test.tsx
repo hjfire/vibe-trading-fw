@@ -377,3 +377,36 @@ describe("条件筛选 tab", () => {
     expect(await screen.findByText("扫描完成：1 只，命中 1 只。")).toBeTruthy();
   });
 });
+
+describe("脚本工作台浮层的无障碍角色", () => {
+  it("抽屉自陈 role=dialog＋aria-modal，可达名由标题节点解析；遮罩只是 presentation", () => {
+    const { container } = open();
+
+    const dialog = screen.getByRole("dialog", { name: /脚本工作台/ });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    const labelledBy = dialog.getAttribute("aria-labelledby");
+    expect(labelledBy).toBeTruthy();
+    const title = document.getElementById(labelledBy as string);
+    expect(title).not.toBeNull();
+    expect((title as HTMLElement).textContent).toBe("ƒ 脚本工作台");
+
+    // 整棵树只有这一枚 dialog，且它不是那层整屏遮罩。
+    expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(container.querySelector(".fixed.inset-0")).toHaveAttribute("role", "presentation");
+  });
+
+  it("关闭按钮有本仓中文可达名（纯 CJK 形状），点它真的调 onClose", () => {
+    const onClose = vi.fn();
+    open({ onClose });
+
+    const btn = screen.getByRole("button", { name: "关闭脚本工作台" });
+    expect(screen.getAllByRole("button", { name: "关闭脚本工作台" })).toHaveLength(1);
+    expect(btn.getAttribute("aria-label")).toBe("关闭脚本工作台");
+    // 本仓可达名一律中文：抄进任何英文控件名，这把尺直接判红。
+    expect(btn.getAttribute("aria-label")).toMatch(/^[一-鿿]+$/);
+
+    fireEvent.click(btn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
