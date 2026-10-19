@@ -68,6 +68,10 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 of next year」；本片把同一个理由接到乘数上。`1W`／`1M` 是 k=1 的退化情形，**必须与今天逐字同形**——这条由
 「摘掉乘数分支后既有 `test_market_kline_coarse.py` 全绿」来判，而不是靠新针。
 
+> **2026-10-19 计划落笔时裁定**：本节引用的 `_calendar_group_key` docstring（原文
+> `market_routes.py:472-486`）随折叠面迁入 `agent/src/api/interval_spec.py`，逐字同行；
+> `market_routes` 里那份已不存在，不留别名。
+
 ## 3. 接口与落点
 
 新增一个纯模块 `agent/src/api/interval_spec.py`：

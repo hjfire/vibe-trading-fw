@@ -45,6 +45,8 @@ import pandas as pd
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse, Response
 
+from src.api import interval_spec
+
 logger = logging.getLogger(__name__)
 
 AuthDep = Callable[..., Awaitable[Any] | Any]
@@ -468,52 +470,31 @@ def _fetch_daily(symbol: str, count: int, before: int | None) -> tuple[list[dict
     return bars[-count:], "backtest:loader_fallback_chain"
 
 
-def _calendar_group_key(ts_ms: int, unit: str) -> tuple[int, int]:
-    """Which natural week / month one daily bar belongs to.
-
-    Daily bars arrive stamped with the epoch of **midnight UTC of their
-    trading-day label** (`_bars_from_frame` leaves ``wall_clock_zone`` as
-    ``None`` precisely so that a US session's date does not walk back a day), so
-    the calendar date is read straight off the number with no zone table — and
-    it stays the same however far from Greenwich the server sits. Grouping on
-    the *viewer's* calendar instead is what splits a US week in half, the same
-    failure `timeShare.ts` records for the 分时 cut.
-
-    ISO week numbering rather than ``strftime("%W")``: the trading week that
-    straddles New Year (Mon 29 Dec – Fri 2 Jan) is one bar on every broker's
-    chart, and an (iso-year, iso-week) pair keeps it that way across the year
-    boundary, where a bare week number would collide with week 1 of next year.
-    """
-    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-    if unit == "week":
-        iso = day.isocalendar()
-        return (int(iso[0]), int(iso[1]))
-    return (day.year, day.month)
-
-
-def _merge_to_calendar(bars: list[dict[str, Any]], unit: str) -> list[dict[str, Any]]:
-    """Collapse ascending daily bars into natural-week / natural-month bars.
+def _merge_to_calendar(
+    bars: list[dict[str, Any]], unit: str, k: int = 1
+) -> list[dict[str, Any]]:
+    """Collapse ascending daily bars into natural-week / natural-month bars — or a
+    multiple of them.
 
     OHLC follows what every broker does: open from the group's first day, close
-    from its last, the high/low across the whole group, volume summed. The
-    merged bar keeps the **first** day's timestamp, which is what makes paging
-    exact — `before` is then always a group boundary, so a page can never split
-    one week into two stubs (see :func:`_fetch_calendar_bars`).
+    from its last, the high/low across the whole group, volume summed. The merged
+    bar keeps the **first** day's timestamp, which is what makes paging exact —
+    `before` is then always a group boundary, so a page can never split one week
+    into two stubs (see :func:`_fetch_calendar_bars`).
+
+    ``k`` says how many natural groups to weld into one served bar. The anchor is
+    the group's **absolute** ordinal (weeks since the ISO epoch, months since year 1
+    of the Common Era), never its index in the page this request happened to fetch:
+    two pages of the same symbol have to disagree about where the data starts, not
+    about which days belong to which bar. ``k == 1`` is the merge this function has
+    always done.
+
+    It goes through :func:`interval_spec.calendar_fold_spec`, not ``fold_spec``: the
+    latter hands back a ``native`` spec at ``k == 1`` (that is what ``1W`` means to the
+    parser), and ``fold_bars`` answers a native spec by returning the base bars
+    untouched — which would silently turn every existing weekly call into a daily one.
     """
-    merged: list[dict[str, Any]] = []
-    group: tuple[int, int] | None = None
-    for bar in sorted(bars, key=lambda b: int(b["timestamp"])):
-        key = _calendar_group_key(int(bar["timestamp"]), unit)
-        if key != group:
-            group = key
-            merged.append(dict(bar))
-            continue
-        held = merged[-1]
-        held["high"] = max(float(held["high"]), float(bar["high"]))
-        held["low"] = min(float(held["low"]), float(bar["low"]))
-        held["close"] = float(bar["close"])
-        held["volume"] = float(held["volume"] or 0.0) + float(bar["volume"] or 0.0)
-    return merged
+    return interval_spec.fold_bars(bars, interval_spec.calendar_fold_spec(unit, k))
 
 
 def _fetch_calendar_bars(

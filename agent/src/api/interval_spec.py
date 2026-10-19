@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
 
 #: Minute bars a source can be asked for directly, in market spelling.
 MINUTE_BASES: tuple[str, ...] = ("1m", "5m", "15m", "30m", "60m")
@@ -176,3 +179,156 @@ def bar_seconds(spec: IntervalSpec) -> int:
     if spec.base == DAILY_BASE:
         return DAY_SECONDS * spec.k
     raise ValueError(f"no bar width for base {spec.base!r}")
+
+
+#: First Monday the ISO week numbering can name: 1970-01-05. Anchoring on its
+#: ordinal turns an ``(iso_year, iso_week)`` pair into one monotonic integer, which
+#: is what a multiplier needs — ``iso_week // k`` collides across a year boundary.
+_ISO_EPOCH_ORDINAL = date(1970, 1, 5).toordinal()
+_WEEK_MS = 7 * DAY_MS
+
+
+def calendar_group_key(ts_ms: int, unit: str) -> tuple[int, int]:
+    """Which natural week / month one daily bar belongs to.
+
+    Daily bars arrive stamped with the epoch of **midnight UTC of their
+    trading-day label** (``market_routes._bars_from_frame`` leaves ``wall_clock_zone``
+    as ``None`` precisely so that a US session's date does not walk back a day), so
+    the calendar date is read straight off the number with no zone table — and it
+    stays the same however far from Greenwich the server sits. Grouping on the
+    *viewer's* calendar instead is what splits a US week in half, the same failure
+    ``timeShare.ts`` records for the 分时 cut.
+
+    ISO week numbering rather than ``strftime("%W")``: the trading week that
+    straddles New Year (Mon 29 Dec – Fri 2 Jan) is one bar on every broker's chart,
+    and an (iso-year, iso-week) pair keeps it that way across the year boundary,
+    where a bare week number would collide with week 1 of next year.
+    """
+    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    if unit == "week":
+        iso = day.isocalendar()
+        return (int(iso[0]), int(iso[1]))
+    return (day.year, day.month)
+
+
+def calendar_group_ordinal(group_key: tuple[int, int], unit: str) -> int:
+    """One key from :func:`calendar_group_key` as a single monotonic integer.
+
+    Division by ``k`` needs one number, not a pair: ``(2026, 1) // 2`` and
+    ``(2025, 53) // 2`` say nothing about whether those weeks are neighbours. A week
+    becomes whole weeks since the ISO epoch's first Monday, a month becomes
+    ``year * 12 + (month - 1)``. Both are bijections onto the pair they replace, so
+    ``k == 1`` groups exactly the bars it always grouped.
+    """
+    year, index = group_key
+    if unit == "week":
+        return (date.fromisocalendar(year, index, 1).toordinal() - _ISO_EPOCH_ORDINAL) // 7
+    return year * 12 + (index - 1)
+
+
+def _day_ordinal(ts_ms: int) -> int:
+    """Trading-day label as a whole number of days since the epoch.
+
+    Daily bars are midnight UTC of their label, so this division *is* the label —
+    no zone table, no viewer's calendar. That is what makes a ``2D`` page land the
+    same way however the request was cut.
+    """
+    return int(ts_ms) // DAY_MS
+
+
+def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> list[tuple[str, int]]:
+    """``(session date, position-within-session // k)`` for ascending bars.
+
+    The anchor is a bar's index **inside its own trading session**, so a fold can
+    never cross a session: an A-share day holds four 60-minute bars closing at
+    10:30 / 11:30 / 14:00 / 15:00, and a floor of UTC minutes would happily weld
+    11:30 to 14:00 into a bar spanning the lunch break. Counting within the session
+    gives [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws.
+
+    Stateful by design and safe for paging: the count only ever walks forward, so a
+    fold of a prefix is a prefix of the fold.
+    """
+    zone_info = ZoneInfo(zone)
+    counts: dict[str, int] = {}
+    keys: list[tuple[str, int]] = []
+    for bar in bars:
+        stamp = datetime.fromtimestamp(int(bar["timestamp"]) / 1000, tz=zone_info)
+        day = stamp.date().isoformat()
+        position = counts.get(day, 0)
+        counts[day] = position + 1
+        keys.append((day, position // k))
+    return keys
+
+
+def fold_by_keys(ordered_bars: list[dict[str, Any]], keys: list[Any]) -> list[dict[str, Any]]:
+    """Collapse ascending bars by a parallel list of group keys.
+
+    The OHLCV rule is the one the weekly merge has always used, and the two lists
+    must already be ascending and the same length — sorting here is what a caller
+    that computed its keys from a different order would silently get wrong.
+
+    Open from the group's first bar, close from its last, high/low across the whole
+    group, volume summed. The served bar keeps the **first** bar's timestamp, which
+    is what makes paging exact: ``before`` is then always a group boundary, so a
+    page can never split one group into two stubs.
+    """
+    if len(ordered_bars) != len(keys):
+        raise ValueError(f"fold keys off the bar list: {len(ordered_bars)} bars, {len(keys)} keys")
+    merged: list[dict[str, Any]] = []
+    group: Any = None
+    for bar, key in zip(ordered_bars, keys):
+        if key != group:
+            group = key
+            merged.append(dict(bar))
+            continue
+        held = merged[-1]
+        held["high"] = max(float(held["high"]), float(bar["high"]))
+        held["low"] = min(float(held["low"]), float(bar["low"]))
+        held["close"] = float(bar["close"])
+        held["volume"] = float(held["volume"] or 0.0) + float(bar["volume"] or 0.0)
+    return merged
+
+
+def fold_bars(
+    bars: list[dict[str, Any]], spec: IntervalSpec, zone: str | None = None
+) -> list[dict[str, Any]]:
+    """Base bars in, served bars out. Pure, no IO, ascending on the way in and out.
+
+    ``zone`` is required for a minute fold (the session anchor) and ignored
+    otherwise — the caller knows the symbol's suffix, this module must not grow a
+    second copy of ``_MINUTE_WALL_CLOCK_ZONE`` to find out.
+    """
+    ordered = sorted(bars, key=lambda b: int(b["timestamp"]))
+    if spec.kind == "native":
+        return ordered
+    if spec.kind == "minute-fold":
+        if not zone:
+            raise ValueError(
+                f"{spec.interval} bars are folded {spec.k} {spec.base} ones inside a "
+                "trading session, which needs the symbol's exchange clock"
+            )
+        return fold_by_keys(ordered, _session_position_keys(ordered, spec.k, zone))
+    if spec.kind == "daily-fold":
+        return fold_by_keys(ordered, [_day_ordinal(b["timestamp"]) // spec.k for b in ordered])
+    return fold_by_keys(
+        ordered,
+        [
+            calendar_group_ordinal(calendar_group_key(int(b["timestamp"]), spec.unit), spec.unit)
+            // spec.k
+            for b in ordered
+        ],
+    )
+
+
+def calendar_fold_spec(unit: str, k: int) -> IntervalSpec:
+    """A calendar grouping that always groups — ``k == 1`` included.
+
+    ``fold_spec("1W", 1)`` is deliberately ``native``: that is the shape
+    ``parse_interval("1W")`` gives, and the two must agree or the same request would
+    fold differently through the two doors. The merge function needs the *opposite*
+    default. Its ``k`` has always defaulted to one, and one natural week welded at a
+    time still is a week bar — so a caller that means "group by calendar" says so
+    here, instead of asking ``fold_spec`` for a shape it then has to un-degrade.
+    """
+    base = "1W" if unit == "week" else "1M"
+    return IntervalSpec("calendar-fold", base, k, unit)

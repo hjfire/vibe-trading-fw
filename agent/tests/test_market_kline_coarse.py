@@ -10,6 +10,9 @@ bar must be timestamped where the ``before`` cursor can land, which is its first
 day).
 
 No test here opens a socket, calls akshare, or touches a loader.
+
+Grouping keys moved to ``src.api.interval_spec`` with the fold that now needs
+multipliers; the pairs asserted in ``TestGroupKey`` are unchanged.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from src.api import interval_spec
 from src.api import market_routes
 
 DAY_MS = 86_400_000
@@ -59,12 +63,12 @@ class TestGroupKey:
     """One natural week = one bar, on the exchange's calendar, not the viewer's."""
 
     def test_five_weekdays_are_one_week(self):
-        keys = {market_routes._calendar_group_key(_day_ms(d), "week") for d in _weekdays("2026-06-01", 5)}
+        keys = {interval_spec.calendar_group_key(_day_ms(d), "week") for d in _weekdays("2026-06-01", 5)}
         assert len(keys) == 1
 
     def test_two_weeks_are_two_keys(self):
-        a = market_routes._calendar_group_key(_day_ms("2026-06-01"), "week")
-        b = market_routes._calendar_group_key(_day_ms("2026-06-08"), "week")
+        a = interval_spec.calendar_group_key(_day_ms("2026-06-01"), "week")
+        b = interval_spec.calendar_group_key(_day_ms("2026-06-08"), "week")
         assert a != b
 
     def test_the_new_year_week_stays_one_bar(self):
@@ -74,13 +78,13 @@ class TestGroupKey:
         2025-12-29's week 53, splitting the week in two; ISO numbering carries
         the year with the week.
         """
-        assert market_routes._calendar_group_key(_day_ms("2025-12-29"), "week") == (
-            market_routes._calendar_group_key(_day_ms("2026-01-02"), "week")
+        assert interval_spec.calendar_group_key(_day_ms("2025-12-29"), "week") == (
+            interval_spec.calendar_group_key(_day_ms("2026-01-02"), "week")
         )
 
     def test_months_split_on_the_calendar_month(self):
-        june = market_routes._calendar_group_key(_day_ms("2026-06-30"), "month")
-        july = market_routes._calendar_group_key(_day_ms("2026-07-01"), "month")
+        june = interval_spec.calendar_group_key(_day_ms("2026-06-30"), "month")
+        july = interval_spec.calendar_group_key(_day_ms("2026-07-01"), "month")
         assert june == (2026, 6)
         assert july == (2026, 7)
 
@@ -89,7 +93,7 @@ class TestGroupKey:
         stamp = _day_ms("2026-07-03")
         as_utc_midnight = pd.Timestamp(stamp, unit="ms", tz="UTC")
         assert as_utc_midnight.hour == 0
-        assert market_routes._calendar_group_key(stamp, "week") == (2026, 27)
+        assert interval_spec.calendar_group_key(stamp, "week") == (2026, 27)
 
 
 class TestMerge:
