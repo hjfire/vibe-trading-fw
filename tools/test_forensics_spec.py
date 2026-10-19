@@ -92,8 +92,8 @@ def _mk(base: Path, rel: str, text: str) -> Path:
 
 
 def _forensics(tmp_path: Path) -> Path:
-    """docs/forensics/ inside a throwaway repo root, plus the probe fixture it hashes."""
-    root = tmp_path / "docs" / "forensics"
+    """forensics/ inside a throwaway repo root, plus the probe fixture it hashes."""
+    root = tmp_path / "forensics"
     _mk(root, "l0/probe-skeleton.md", L0_BODY)
     app_dir = tmp_path / "tools" / "rea_probe_site"
     app_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +250,7 @@ def test_meta_keys_and_fence_helper_are_public(tmp_path):
 
 
 def test_missing_forensics_root_is_named(tmp_path):
-    problems = audit_forensics(tmp_path / "docs" / "forensics", tmp_path)
+    problems = audit_forensics(tmp_path / "forensics", tmp_path)
     assert any("不存在：取证骨架还没建" in x for x in problems), problems
 
 
@@ -274,7 +274,7 @@ SPEC_TABLE = f"""# 规格：画线面
 
 
 def _with_spec(tmp_path: Path, text: str = SPEC_TABLE) -> tuple[Path, Path]:
-    """(spec/drawings.md, the docs/forensics root that holds it)."""
+    """(spec/drawings.md, the forensics root that holds it)."""
     root = _forensics(tmp_path)
     return _mk(root, "spec/drawings.md", text), root
 
@@ -685,7 +685,7 @@ def test_whole_tree_is_clean(tmp_path):
 def test_every_spec_id_needs_exactly_one_matrix_row(tmp_path):
     root = _tree(tmp_path, matrix=None)
     problems = audit_forensics(root, tmp_path)
-    assert any("有 1 条规格条目但 docs/forensics/gap-matrix.md 不存在" in x for x in problems), problems
+    assert any("有 1 条规格条目但 forensics/gap-matrix.md 不存在" in x for x in problems), problems
 
 
 def test_matrix_without_a_header_row_is_named(tmp_path):
@@ -938,7 +938,7 @@ def test_coordinate_must_point_inside_the_repo(tmp_path, kind):
     assert not any("坐标" in x and "文件不存在" in x for x in problems), problems
 
 
-@pytest.mark.parametrize("cell", ["docs/forensics/gap-matrix.md:1", "docs/forensics/l0/probe-skeleton.md:1"])
+@pytest.mark.parametrize("cell", ["forensics/gap-matrix.md:1", "forensics/l0/probe-skeleton.md:1"])
 def test_coordinate_cannot_certify_a_funnel_document(tmp_path, cell):
     """F2：漏斗产物不能自证——矩阵给自己发「已有」（或指着 L0 记录）都不是本仓实现。"""
     problems = audit_forensics(
@@ -1073,7 +1073,7 @@ def test_missing_frontend_src_is_named(tmp_path):
 def test_main_runs_both_audits(tmp_path, capsys):
     """main() 的替换体：两支审计都要跑，打印的就是违规行本身（每支各验一个红方向）。
 
-    夹具全是既有的，四段各钉一条边：``_tree()`` 造一棵合规的 docs/forensics，它的
+    夹具全是既有的，四段各钉一条边：``_tree()`` 造一棵合规的 forensics，它的
     frontend/src 只有不含 tradingview.com 的 chartDrawings.ts ⇒ 第一段的红只能来自主机
     侧（实测：main 漏掉 audit_tv_host_allowlist 时这里红）；``_fake_tv_tree()`` 把主机
     侧补齐成今天的形状 ⇒ 第二段两支都绿；第三段只把规格表的判据类型改坏、主机侧保持
@@ -1209,10 +1209,10 @@ def test_mixed_case_s3_host_is_still_counted_outside_the_widget_file(tmp_path):
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LIVE_FORENSICS = REPO_ROOT / "docs" / "forensics"
+LIVE_FORENSICS = REPO_ROOT / "forensics"
 live_forensics = pytest.mark.skipif(
     not LIVE_FORENSICS.is_dir(),
-    reason="docs/forensics/ 还没建（Task 5 之前这是真状态）——大声 skip，不是通过",
+    reason="forensics/ 还没建（Task 5 之前这是真状态）——大声 skip，不是通过",
 )
 
 

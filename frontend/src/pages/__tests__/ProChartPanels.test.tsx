@@ -16,7 +16,7 @@ import { ProChart } from "../ProChart";
  * 从那枚键上取，以及开与关都从同一个合成写点回去 —— 包括工作台被遮罩 `onClose` 关掉、
  * 而不是被工具条那枚开关翻转掉的那条路径。
  *
- * T3 再补两件：四个打开动作对 URL 的净变化为零（`docs/forensics/gap-matrix.md` TV-CI-06
+ * T3 再补两件：四个打开动作对 URL 的净变化为零（`forensics/gap-matrix.md` TV-CI-06
  * 缺的就是「没有任何测试针钉这件事」），以及 `?s=` 分享链接对盘上初值的优先权 —— 后者
  * 是唯一一条由 URL 反向驱动面板的路径，写点必须比读点晚一步。
  */

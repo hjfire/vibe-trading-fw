@@ -1,4 +1,4 @@
-"""Enforce the REA forensics funnel contract under ``docs/forensics/``.
+"""Enforce the REA forensics funnel contract under ``forensics/``.
 
 The funnel only holds if every level's artefact is machine-checkable: an L0
 record without an ``evidence_id`` is a memory, a spec entry without a verdict is
@@ -12,7 +12,7 @@ record. The
 runtime-dependency half of that red line is not carried here: it lives in
 ``audit_tv_host_allowlist`` below.
 
-Stdlib only. A missing ``docs/forensics/`` is reported as a violation here; it
+Stdlib only. A missing ``forensics/`` is reported as a violation here; it
 is the *test* that decides to skip instead (see tools/test_forensics_spec.py).
 
 Run with::
@@ -386,7 +386,7 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
         )
     counts: dict[str, int] = {}
     root_dir = repo_root.resolve()  # 「本仓坐标」的落点域：仓库根之内
-    funnel = path.parent.resolve()  # 矩阵住在漏斗根 ⇒ path.parent 就是 docs/forensics/
+    funnel = path.parent.resolve()  # 矩阵住在漏斗根 ⇒ path.parent 就是 forensics/
     for eid, status, coord, prio, note in rows:
         tag = f"{rel} 条目 {eid or '(空)'}"
         if not ENTRY_ID.fullmatch(eid):
@@ -414,9 +414,9 @@ def _audit_matrix(path: Path, rel: str, repo_root: Path, spec_ids: dict[str, str
                 v.append(f"{tag}: 坐标 {coord} 解析到 {hit}，在仓库根之外，不是本仓的文件")
                 continue
             if funnel in hit.parents:
-                # 漏斗产物不能自证：矩阵给 `docs/forensics/**` 里的自己或 L0 记录发「已有」，
+                # 漏斗产物不能自证：矩阵给 `forensics/**` 里的自己或 L0 记录发「已有」，
                 # 是把「我写了这句话」当成「本仓有这段实现」。
-                v.append(f"{tag}: 坐标 {coord} 指的是取证漏斗自己的文档（docs/forensics/**），不能自证")
+                v.append(f"{tag}: 坐标 {coord} 指的是取证漏斗自己的文档（forensics/**），不能自证")
                 continue
             if not hit.is_file():
                 v.append(f"{tag}: 坐标 {coord} 的文件不存在")
@@ -465,7 +465,7 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
         if not p.is_file() and p.name not in L0_EXEMPT:
             v.append(f"l0/{p.name}: 是目录不是文件——L0 记录得是一份 markdown 文件，这一份没被审计")
     if not l0_files:
-        v.append("docs/forensics/l0/ 下没有任何证据文件（骨架不等于取证）")
+        v.append("forensics/l0/ 下没有任何证据文件（骨架不等于取证）")
     purposes: dict[str, str | None] = {}
     by_evidence: dict[str, list[str]] = {}
     for p in l0_files:
@@ -523,7 +523,7 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     # 不在这里叠加（那棵树上「没规格」不是新信息）。
     if l0_files and not spec_ids:
         v.append(
-            "docs/forensics/spec/ 里没解析出任何规格条目（骨架不等于规格："
+            "forensics/spec/ 里没解析出任何规格条目（骨架不等于规格："
             "取证了却不写规格就是 prose，L1 空层不能让孤证与矩阵两道门沉默）"
         )
 
@@ -545,7 +545,7 @@ def audit_forensics(forensics_root: Path, repo_root: Path) -> list[str]:
     if matrix.is_file():
         v += _audit_matrix(matrix, "gap-matrix.md", repo_root, spec_ids)
     elif spec_ids:
-        v.append(f"有 {len(spec_ids)} 条规格条目但 docs/forensics/gap-matrix.md 不存在")
+        v.append(f"有 {len(spec_ids)} 条规格条目但 forensics/gap-matrix.md 不存在")
     return v
 
 
@@ -698,7 +698,7 @@ def audit_tv_host_allowlist(repo_root: Path) -> list[str]:
 def main(repo_root: Path) -> int:
     try:
         problems = (
-            audit_forensics(repo_root / "docs" / "forensics", repo_root)
+            audit_forensics(repo_root / "forensics", repo_root)
             + audit_tv_host_allowlist(repo_root)
         )
     except Exception as exc:  # 评审 A 的 I3③：回溯穿出 main() 就把已收集的违规全吞了——炸了也算一条违规

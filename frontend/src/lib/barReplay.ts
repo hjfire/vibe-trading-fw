@@ -2,7 +2,7 @@
  * Bar Replay 的游标算术（纯函数）。
  *
  * 回放的设计判据是"图表物理上不存在游标之后的 bar"（见
- * docs/superpowers/specs/2026-10-06-bar-replay-design.md 第三节），所以这里没有一个函数
+ * superpowers/specs/2026-10-06-bar-replay-design.md 第三节），所以这里没有一个函数
  * 需要 chart 实例：它们只做一件事——把"已加载的 bar + 一个时间戳"折成"该显示哪一段"。
  *
  * 游标的身份是 timestamp 而不是下标。下标在这张图上会被换周期（自然周月折叠）、改副图

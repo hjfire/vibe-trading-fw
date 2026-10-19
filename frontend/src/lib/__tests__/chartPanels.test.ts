@@ -11,7 +11,7 @@ import {
 
 /**
  * Panel visibility (L3 第①片). The spec boundary travels with this file:
- * `docs/forensics/spec/drawings.md` TV-DW-05 only proves the counterpart's
+ * `forensics/spec/drawings.md` TV-DW-05 only proves the counterpart's
  * visibility key name sits in its `session_storage_keys` line — the behaviour
  * (survives a reload, dies with the tab) is ours. So what is being guarded here
  * is *our* rule: one session key, deviation-only encoding, strict `=== true`.

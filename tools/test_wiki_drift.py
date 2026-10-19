@@ -1596,11 +1596,14 @@ GATE_B_SUFFIXES = {".md", ".html", ".json", ".py"}
 
 
 def tracked_artifact_paths(repo: Path) -> list[str]:
-    """The files upstream's gate (b) *would* read, minus the two exemptions it grants.
+    """The files upstream's gate (b) *would* read, minus the exemption it grants.
 
-    `docs/` is excluded by the gate itself (internal planning prose about the policy)
-    and `tools/ci_grep_gates.sh` necessarily carries the pattern string it greps for —
-    upstream owns that file, so its exemption is not ours to widen.
+    `tools/ci_grep_gates.sh` necessarily carries the pattern string it greps for —
+    upstream owns that file, so its exemption is not ours to widen. The gate also
+    passes `--exclude-dir=docs`; nothing of ours has lived under `docs/` since the
+    2026-10-19 forensics migration, so that arm shields no tracked file here and is
+    deliberately NOT mirrored — an exemption with nothing to exempt is a silent
+    widening of this guard's blind spot.
     """
     try:
         proc = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True)
@@ -1615,7 +1618,7 @@ def tracked_artifact_paths(repo: Path) -> list[str]:
         posix = raw.decode("utf-8")
         if Path(posix).suffix.lower() not in GATE_B_SUFFIXES:
             continue
-        if posix.startswith("docs/") or posix == "tools/ci_grep_gates.sh":
+        if posix == "tools/ci_grep_gates.sh":
             continue
         paths.append(posix)
     return sorted(paths)
@@ -1628,9 +1631,11 @@ def test_tracked_artifacts_are_trademark_clean():
     那个脚本路径，它的命中就被整行吃掉。于是「门报的命中全在未跟踪 scratch」这句
     **不等于**「跟踪面干净」——本针判的是后一件事，判据是逐枚文件的命中集合为空，
     不是门报了几条（条数会随本地 scratch 漂移，且被那层 `grep -v` 系统性改小）。
-    摘掉本函数的 `TM_RE.search` ⇒ 本针失去判别力；摘掉上面两条豁免中任一条 ⇒ 本针立刻红
-    （脚本自身与被排除的 `docs/**` 都带这个字面量，现读即可复算），所以那两条豁免是
-    **门自己的排除表的镜像**，不是本针的宽恕面。
+    摘掉本函数的 `TM_RE.search` ⇒ 本针失去判别力；摘掉上面那条豁免 ⇒ 本针立刻红
+    （`tools/ci_grep_gates.sh` 自己就带着这个字面量，现读即可复算），所以它是
+    **门自己的排除表的镜像**，不是本针的宽恕面。门体里上游的 `--exclude-dir=docs` 一字未动，
+    但本仓自 2026-10-19 起没有任何跟踪件住在 `docs/` 下，那一臂不再遮蔽任何东西，本针也就不再
+    替它保留豁免——迁移把这 69 枚档案推进了门的执法面，本针必须同步看见同一批文件。
     """
     paths = tracked_artifact_paths(REAL_REPO)
     assert len(paths) > 100, f"扫描集只有 {len(paths)} 枚——这条守卫会在近空集合上真空通过"
@@ -2853,9 +2858,9 @@ def test_reanchor_apply_takes_back_a_stale_full_vouch(repo_wired):
 #
 # which makes `.gitignore`, `tools/ci_grep_gates.sh`, `.github/workflows/test.yml`
 # and `wiki/**` (42 files) theirs, and `tools/wiki_drift.py`, `tools/test_wiki_drift.py`,
-# `项目档案.md`, `repowiki/**` and `docs/**` ours. The predicate below is the only
-# thing standing between a convenience edit and that conflict, so it has to be able
-# to say *yes* — see the canary.
+# `项目档案.md`, `repowiki/**`, `forensics/**` and `superpowers/**` ours. The predicate
+# below is the only thing standing between a convenience edit and that conflict, so it
+# has to be able to say *yes* — see the canary.
 
 UPSTREAM_OWNED = re.compile(
     r"^(\.gitignore|tools/ci_grep_gates\.sh|\.github/workflows/test\.yml|wiki/)"
@@ -2884,7 +2889,7 @@ def test_protected_path_predicate_flags_known_owned_paths():
     for path in (".gitignore", "tools/ci_grep_gates.sh", ".github/workflows/test.yml",
                  "wiki/home/index.html"):
         assert UPSTREAM_OWNED.match(path), path
-    for path in ("tools/wiki_drift.py", "repowiki/README.md", "docs/x/y.md",
+    for path in ("tools/wiki_drift.py", "repowiki/README.md", "forensics/x/y.md",
                  "agent/src/x.py", "repowiki/topics/前端应用/页.md"):
         assert not UPSTREAM_OWNED.match(path), path
 

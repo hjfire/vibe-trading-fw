@@ -1,8 +1,8 @@
 /**
  * Which of the four chart-panel switches are open — one session-scoped key.
  *
- * The spec is `docs/forensics/spec/drawings.md` TV-DW-05 plus
- * `docs/forensics/spec/chart-interaction.md` TV-CI-06, and the boundary stated
+ * The spec is `forensics/spec/drawings.md` TV-DW-05 plus
+ * `forensics/spec/chart-interaction.md` TV-CI-06, and the boundary stated
  * there is load-bearing for this file: the L1 reading only puts the counterpart's
  * visibility *key name* on its `session_storage_keys` line (that entry's own
  * 2026-10-14 correction says key name → behaviour is an inference, the value side
