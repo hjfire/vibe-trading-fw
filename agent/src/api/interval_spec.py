@@ -238,9 +238,11 @@ def _day_ordinal(ts_ms: int) -> int:
 def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> list[tuple[str, int]]:
     """``(session date, position-within-session // k)`` for ascending bars.
 
-    The anchor is a bar's index **inside its own trading session**, so a fold can never
-    cross a *day or session boundary*: an A-share day holds four 60-minute bars closing
-    at 10:30 / 11:30 / 14:00 / 15:00, and counting within the session gives
+    The anchor is a bar's index **inside its own trading day** — *session* here is the
+    whole trading day, morning and afternoon blocks together, and a block is not a
+    boundary this anchor knows about. So the one thing the anchor guarantees is that a
+    group **never crosses a trading-day boundary**: an A-share day holds four 60-minute
+    bars closing at 10:30 / 11:30 / 14:00 / 15:00, and counting within the day gives
     [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws. A floor of UTC
     minutes serves the same two bars on this clock (+8 = 480 minutes, 480 % 120 == 0
     lines its buckets up with the session boundary) and serves three on a +5:30 one;

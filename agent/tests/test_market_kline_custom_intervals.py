@@ -243,8 +243,9 @@ class TestMinuteSessionAnchor:
         and an A-share day holds eight 30-minute bars (10:00 / 10:30 / 11:00 / 11:30,
         then 13:30 / 14:00 / 14:30 / 15:00), so positions 3-5 weld into one served bar:
         the 11:30, the 13:30 and the 14:00 bar. That group spans the lunch break — the
-        guarantee the anchor actually gives is *never crossing a day or session
-        boundary*, not never crossing the midday gap, and
+        guarantee the anchor actually gives is *never crossing a trading-day boundary*
+        (``session`` there means the trading day, not one of its two blocks), not never
+        crossing the midday gap, and
         ``interval_spec._session_position_keys``'s docstring now says exactly that.
         Refusing a ``k`` that does not divide the morning block would need an exchange
         session table this repo holds no forensic basis for, so the straddle is served,
@@ -272,6 +273,52 @@ class TestMinuteSessionAnchor:
         assert straddle["open"] == 4.0 and straddle["close"] == 6.5  # 11:30 opens, 14:00 closes
         assert straddle["high"] == 7.0 and straddle["low"] == 0.5
         assert straddle["volume"] == 30.0  # three base bars, the midday gap between them
+
+    def test_a_forty_five_minute_fold_welds_the_morning_tail_to_the_afternoon_opener(self):
+        """``45m`` = 15m × 3, pinned whole: the straddle is 11:15 / 11:30 / **13:15**.
+
+        The same shape as the ``90m`` pin above, for the other multiplier that does not
+        divide the morning block. An A-share day holds sixteen 15-minute bars — 09:45 …
+        11:30 then 13:15 … 15:00 — and the anchor counts *bars inside the trading day*,
+        so positions 6, 7 and 8 weld: the two last morning closes plus the afternoon's
+        first bar. :func:`interval_spec._session_position_keys`'s docstring has named
+        this member in prose only; the vector below is the arithmetic behind that
+        sentence, recomputed by hand — open from 11:15 (7.0), close from 13:15 (9.5),
+        high = max(8, 9, 10) = 10.0, low stays the fixture's flat 0.5, volume 10 × 3.
+        The whole-bar leg is what earns its place: a gap-aware anchor would restart the
+        count at 13:15 and serve 11:15 out of two bars only (measured — volume 20.0,
+        close 8.5, high 9.0), and an anchor flooring calendar minutes instead of counting
+        session positions cuts the day elsewhere (measured — 09:45, 10:15, 11:00, 13:15,
+        14:00, 14:45: every served open from the second onward). Neither survives this
+        assertion.
+        """
+        closes = ("09:45", "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30",
+                  "13:15", "13:30", "13:45", "14:00", "14:15", "14:30", "14:45", "15:00")
+        bars = [
+            {
+                "timestamp": _minute_label("2026-06-01", hhmm),
+                "open": 1.0 + i,
+                "high": 2.0 + i,
+                "low": 0.5,
+                "close": 1.5 + i,
+                "volume": 10.0,
+            }
+            for i, hhmm in enumerate(closes)
+        ]
+        assert (parse_interval("45m").base, parse_interval("45m").k) == ("15m", 3)
+        folded = fold_bars(bars, parse_interval("45m"), SH)
+        assert [b["timestamp"] for b in folded] == [
+            _minute_label("2026-06-01", t)
+            for t in ("09:45", "10:30", "11:15", "13:30", "14:15", "15:00")
+        ]
+        assert folded[2] == {
+            "timestamp": _minute_label("2026-06-01", "11:15"),
+            "open": 7.0,      # 11:15 opens the group (position 6)
+            "high": 10.0,     # the afternoon bar 13:15 carries the tallest high
+            "low": 0.5,
+            "close": 9.5,     # 13:15 closes it — across the midday gap, by design
+            "volume": 30.0,   # three 10-unit base bars
+        }
 
 
 class TestFoldByKeysLengthGuard:
@@ -490,9 +537,31 @@ class TestRouteServesFolds:
         The stub honours `before` the way every real channel does (drop the bars at
         or after the cursor, then take the tail), so page two really is a different
         slice of the same chain. Grouping by "the Nth bar I happened to fetch" would
-        pass a single-page test and then redraw the chart on the first scroll — this
-        is the only pin that can see that, and it is why the fold keys on an
-        absolute ordinal.
+        pass a single-page test and then redraw the chart on the first scroll — which
+        is why the fold keys on an absolute ordinal.
+
+        The two overlap legs alone do **not** prove that. Both hold under the page
+        anchor too, and the reason is the stub's own arithmetic: the ask (72 dailies)
+        exceeds this 40-bar chain, so both pages fetch from the *same left edge* and a
+        counter started there pairs bars 0-1, 2-3 … identically on the shared prefix —
+        page two agrees with page one without the anchor having consulted a calendar.
+        Measured: with the daily fold re-anchored on list position, this pin's two
+        overlap legs still pass — at chain lengths 40, 90 and 120 both legs hold with
+        five bars actually shared, and every route-level assertion of the delivered
+        file stayed green under that mutation (its only red was the module-level
+        Monday pin; all 68 `test_interval_spec.py` pins were green too).
+        The literal vector below is the leg that bites: it names which *dates* page one
+        must serve, and only the calendar's parity can answer that — 2026-04-13 is epoch
+        day 20556, even, so a 2D group is the day pair {2n, 2n+1}: {13,14}, {15,16},
+        {21,22} and {23,24} weld, while {17,18} loses its Saturday partner and {19,20}
+        its Sunday one. The served opens are therefore 13, 15, 17, 20, 21, 23. An index
+        anchor serves 04-09, 04-13, 04-15, 04-17, 04-21, 04-23 for the same slice: a
+        different tape, one the overlap legs cannot see. That is what this leg adds —
+        the route-level witness. Before it, page-anchor code survived every assertion on
+        the route surface; now this class fails twice under the mutation (here and in
+        `test_a_page_that_cannot_be_filled_comes_back_short_and_says_so`), and without a
+        date-level claim anywhere on that surface the two anchors would again be
+        indistinguishable from here.
         """
         days = _weekdays("2026-03-02", 40)
         chain = _daily_series(days)
@@ -506,6 +575,10 @@ class TestRouteServesFolds:
         page_two = market_routes._kline_sync(
             "600519.SH", "2D", 6, "qfq", before=page_one[-1]["timestamp"]
         )["bars"]
+        assert [b["timestamp"] for b in page_one] == [
+            _day_ms(d) for d in ("2026-04-13", "2026-04-15", "2026-04-17",
+                                 "2026-04-20", "2026-04-21", "2026-04-23")
+        ]  # the calendar's parity, not the fetch's
         assert page_two[-1]["timestamp"] < page_one[-1]["timestamp"]
         shared = [b for b in page_two if b["timestamp"] >= page_one[0]["timestamp"]]
         assert shared == page_one[: len(shared)]
@@ -541,8 +614,11 @@ class TestRouteServesFolds:
         closes per trading day at 10:30 / 11:30 / 14:00 / 15:00 — because the anchor
         being tested is the session, and a stub that ran bars straight through the
         night would fold into groups no exchange ever produces. 101 = 25 whole days
-        plus one orphan bar, so the fold has 51 groups and the leftover-orphan tail
-        is what `count` then trims.
+        plus one orphan bar, so the fold has 51 groups: 50 whole-day ones plus the
+        orphan's own single-bar group, and that orphan is **served** — `count` never
+        trims it. The page still lands on 50, but through the other leg: the window
+        came back full, so the left-edge guard drops the first group (51 → 50) and
+        `[-50:]` is then a no-op.
         """
         seen: list[tuple[str, int]] = []
         session_close_times = ("10:30", "11:30", "14:00", "15:00")
@@ -578,7 +654,15 @@ class TestRouteServesFolds:
 
         monkeypatch.setattr(market_routes, "_fetch_daily", fake)
         out = market_routes._kline_sync("600519.SH", "2D", 10, "qfq")
-        assert len(out["bars"]) < 10
+        # Measured, not estimated: Mon 2026-06-01 is epoch day 20605 (odd, its Sunday
+        # partner has no bar), Tue+Wed 20606/20607 weld, Thu 20608 waits for a Friday
+        # that was never fetched — so three bars is the whole honest page. `len < 10`
+        # would also accept a page padded out to nine, and padding is the sin this pin
+        # exists for.
+        assert len(out["bars"]) == 3
+        assert [b["timestamp"] for b in out["bars"]] == [
+            _day_ms(d) for d in ("2026-06-01", "2026-06-02", "2026-06-04")
+        ]
         assert out["source"] == "backtest:test_chain+2D"
 
     def test_the_full_window_drops_the_leftover_group_like_the_weekly_merge_does(self, monkeypatch):
@@ -635,6 +719,54 @@ class TestRouteRefusals:
         for base in ("1D", "1W", "1M"):
             assert base in body, body
         assert "multiplier" in body, body
+
+
+class TestRefusalReachesTheAlertsConsumer:
+    """The one caller outside the route that hands `_kline_sync` an unvalidated spelling.
+
+    `src/alerts/service.py:91` (`_default_bars`) passes `rule.interval` straight in, and
+    :func:`src.alerts.models.validate_rule` never looks at that field — a `2.5m` rule is
+    storeable. Before this slice such a rule fell through `_kline_sync`'s old `else` and
+    measured **daily** bars without saying so; the route now raises, and the alert pass
+    catches that per rule (`service.py:321`), records it (`:329`), and lets the verdict
+    carry it (`conditions.py:467` → `engine.py:211`, ACTION_ERROR). This pin is the
+    witness that the user gets the refusal, not a quiet daily chart.
+    """
+
+    def test_an_alert_on_an_unserviceable_interval_reports_the_refusal(
+        self, tmp_path, monkeypatch
+    ):
+        from src.alerts import service as alerts_service
+        from src.alerts.models import AlertRule
+        from src.alerts.store import AlertStore
+
+        asked: list[int] = []
+
+        def fake(symbol, count, before):
+            asked.append(count)
+            return _daily_series(_weekdays("2026-06-01", count)), "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        rule = AlertRule(
+            id="unserviceable-wiggle",
+            symbol="600519.SH",
+            title="茅台突破 1700",
+            interval="2.5m",
+            condition={"op": "crossUp", "lhs": "close", "value": 1700},
+        )
+        service = alerts_service.AlertService(
+            AlertStore(directory=tmp_path / "alerts"),
+            bars=alerts_service._default_bars,  # the real seam, not a stand-in
+            portfolio=lambda: ([], []),
+            quote=lambda symbol: {},
+        )
+        ctx = service.collect_contexts([rule])[rule.id]
+        assert ctx.bars == []
+        assert asked == []  # the daily walk never ran: no silent daily fallback
+        assert any("'2.5m'" in e for e in ctx.errors), ctx.errors
+        assert any("multiplier" in e for e in ctx.errors), ctx.errors
+        verdict = service.measure(rule, ctx)
+        assert verdict.error and "2.5m" in verdict.error, verdict
 
 
 class TestRouteDoc:
