@@ -1834,6 +1834,35 @@ EOF
 )"
 ```
 
+> **2026-10-20 执行期 amend（Task 5 落地时发现的四处计划缺陷；读数由实现席取、控制席逐条复算确认）**
+>
+> （一）**Step 5 的 bytes 配方会把整篇 CRLF 的档案插坏。** 锚点串以 `\n` 起头，`raw.index(anchor)` 回的那枚 `\n`
+> 属于**上一行**的行尾，于是 `raw[:i] + section + raw[i:]` 在插入点留下「上一行的 `\r` ＋ section ＋ 下一行的 `\n`」
+> ＝一枚裸 CR 加一枚裸 LF。落地形状＝插到 `i + 1`，并带两条不变量断言（插入前后 `CR == LF == CRLF`、裸 CR 与裸 LF 各 0）。
+> 复算读数：`项目档案.md` 现读 `CRLF 2212 / CR 2212 / LF 2212 / 裸CR 0 / 裸LF 0`。
+> `Why:` 该文件整篇 CRLF 且本仓无 `.gitattributes`，一枚裸字节就让 git 放弃行尾归一化，diff 退化成整文件重写。
+>
+> （二）**Step 1 的 `echo "server_pid=$!"` 回的不是 python 的 PID。** 后台那条是复合命令，`$!` 是 bash 子 shell 的 pid，
+> 监听进程是它的子代；照 `$!` 去 `kill` 杀错对象、端口不释放，接下来一条 `curl: (7)` 就会被读成「服务没起」。
+> 停机判据只能用**端口属主**：`netstat -ano | grep ":<port>"` 取第 5 列的 Windows PID（本趟实跑：监听属主 34804、
+> bash 侧 251、子 shell 249；`kill 251` 后该行消失、`/api/udf/time` 回 `000` 且 rc=7）。
+> 连带一条：`LOG=<目录> && nohup … &` 会把整条复合命令推进后台子 shell，外层 shell 里 `$LOG` 是空的，
+> `tee $LOG/…` 因此报 `Permission denied`——重定向要么写在子 shell 内部，要么一律用绝对路径。
+>
+> （三）**Task 6 Step 1 的门命令不能照 `python <路径>` 跑。** `tools/test_wiki_drift.py` 与
+> `tools/test_forensics_spec.py` 都没有 `__main__`（现读 `grep -c "__main__"` 各为 0），裸 python 执行 **rc=0 且零输出**
+> ＝一个断言都没跑的假绿。两条命令已就地改成 `python -m pytest <路径> -q`，真读数当场取：
+> `232 passed, rc=0` 与 `166 passed, rc=0`。`tools/forensics_audit.py` 有 `__main__`（现读 1），保持 `python <路径>`。
+> 判据不是「有没有 rc=0」，而是**尾行有没有条数**。
+>
+> （四）**Step 5 模板里写死的日期会被当成读数来历。** 模板那行标的是「2026-10-19」，而读数属于跑它的那天
+> ⇒ 落地按 `date +%F` 当场取（本趟＝2026-10-20）；分支名、基座 `748bec8d`、「开工 2026-10-19」是历史事实，原样保留。
+>
+> （五）**每条钟点括注都要用同一条换算命令当场取。** 实现席把 `1791772200000` 括注成「2026-10-12 01:30Z＝09:30 CST」，
+> 而 `datetime.fromtimestamp(1791772200, timezone.utc)` 现读 `2026-10-12T02:30:00+00:00`（＝10:30 CST）——括注与它紧跟的
+> epoch 不同源。控制席按同批换算逐条复算，其余四条（2D 首尾、1D 首尾、120m 尾根）属实，只有这一处偏一小时，已纠回（`3df646e6`）。
+> 服务面读数本身（`bars=12`、逐根时间戳在 02:30Z／06:00Z 交替）是从 `kline-120m.json` 现读的，未受影响。
+
 ---
 
 ## Task 6: 八道门＋L2 带日期登记＋记忆更正
@@ -1856,9 +1885,9 @@ mkdir -p $LOG
 ( cd frontend && npx tsc -b ) > $LOG/g1-tsc.log 2>&1; echo "G1-tsc rc=$?"
 ( cd frontend && npx vitest run ) > $LOG/g2-vitest.log 2>&1; echo "G2-vitest rc=$?"
 ( cd frontend && npx vite build ) > $LOG/g3-build.log 2>&1; echo "G3-build rc=$?"
-( cd agent && python ../tools/test_wiki_drift.py ) > $LOG/g4-wiki.log 2>&1; echo "G4-wiki-drift rc=$?"
+python -m pytest tools/test_wiki_drift.py -q > $LOG/g4-wiki.log 2>&1; echo "G4-wiki-drift rc=$?"
 python tools/forensics_audit.py > $LOG/g5-forensics.log 2>&1; echo "G5-forensics-audit rc=$?"
-python tools/test_forensics_spec.py > $LOG/g6-spec.log 2>&1; echo "G6-forensics-spec rc=$?"
+python -m pytest tools/test_forensics_spec.py -q > $LOG/g6-spec.log 2>&1; echo "G6-forensics-spec rc=$?"
 bash tools/wiki_freshness_gate.sh > $LOG/g7-water.log 2>&1; echo "G7-water rc=$?"
 bash tools/ci_grep_gates.sh > $LOG/g8-grep.log 2>&1; echo "G8-grep rc=$?"
 cd agent && python -m pytest tests/test_interval_spec.py tests/test_market_kline_custom_intervals.py tests/test_market_kline_coarse.py tests/test_udf_routes.py -q > $LOG/backend-suites.log 2>&1; echo "BACKEND rc=$?"
