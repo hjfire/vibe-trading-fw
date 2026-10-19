@@ -498,9 +498,14 @@ def _merge_to_calendar(
 
 
 def _fetch_calendar_bars(
-    symbol: str, interval: str, count: int, before: int | None
+    symbol: str,
+    interval: str,
+    count: int,
+    before: int | None,
+    k: int = 1,
+    label: str = "",
 ) -> tuple[list[dict[str, Any]], str]:
-    """Weekly / monthly bars for one symbol, merged out of the daily chain.
+    """Weekly / monthly / daily bars, merged out of the daily chain — k at a time.
 
     Not asking the source for weekly bars is a decision with three reasons:
 
@@ -516,14 +521,27 @@ def _fetch_calendar_bars(
       `before` cursor is a group boundary and the daily contract in
       :func:`_fetch_daily` needs no coarse variant.
 
-    The daily walk is sized to actually fill the request; ``count`` itself is
-    capped by the route, and :data:`_AGG_DAILY_CAP` keeps that bounded.
+    ``k`` welds that many natural groups into one served bar (``k == 1`` is what
+    ``1W`` / ``1M`` have always done); ``label`` is the spelling the caller asked
+    for, which the status line has to print because ``interval`` is only the base.
+    The daily walk scales with both, and :data:`_AGG_DAILY_CAP` still bounds it —
+    no ceiling is raised here, so a big multiplier comes back short and says so.
     """
+    per_bar = _AGG_DAILY_PER_BAR.get(interval, 1)  # a daily fold welds one day each
     dailies = min(
-        count * _AGG_DAILY_PER_BAR[interval] + _AGG_DAILY_MARGIN, _AGG_DAILY_CAP
+        count * per_bar * k + _AGG_DAILY_MARGIN * k, _AGG_DAILY_CAP
     )
     bars, source = _fetch_daily(symbol, dailies, before)
-    merged = _merge_to_calendar(bars, "week" if interval == "1W" else "month")
+    if interval == interval_spec.DAILY_BASE:
+        # A daily fold welds *days*, so it does not go through the calendar merge:
+        # that function's `unit` has always been week / month, and inventing a third
+        # token for it would make `_merge_to_calendar` mean two different groupings
+        # depending on a string nobody validates.
+        merged = interval_spec.fold_bars(bars, interval_spec.fold_spec(interval, k))
+    else:
+        merged = _merge_to_calendar(
+            bars, "week" if interval == "1W" else "month", k
+        )
     if len(bars) >= dailies and len(merged) > 1:
         # The window came back full, so its left edge landed somewhere inside a
         # group whose earlier days are outside the fetch. Keeping that stub would
@@ -542,7 +560,7 @@ def _fetch_calendar_bars(
     # Label the merge on the source the chart shows in its status line: these
     # bars did not come from a source that speaks "weekly", and "this is daily
     # data, folded" is information rather than noise.
-    return merged[-count:], f"{source}+{interval}"
+    return merged[-count:], f"{source}+{label or interval}"
 
 
 def _fetch_minute_a_share(
@@ -609,23 +627,59 @@ def _split_latest_session(
     return bars[start:], last.isoformat(), prev_close
 
 
+def _unsupported_interval_message(interval: str) -> str:
+    """Name the rule, not a closed list: the set is now base × a whole number of times."""
+    return (
+        f"unsupported interval {interval!r} (known: {'/'.join(_MINUTE_PERIODS)} / 1D / "
+        f"{'/'.join(_AGG_DAILY_PER_BAR)}, or any of those bases taken a whole number of "
+        f"times (a multiplier) — e.g. 120m is two 60-minute bars)"
+    )
+
+
 def _kline_sync(
     symbol: str, interval: str, count: int, adjust: str, before: int | None = None,
     session: str = "",
 ) -> dict[str, Any]:
     if session not in {"", "latest"}:
         raise ValueError(f"unsupported session {session!r} (only 'latest' is defined)")
+    spec = interval_spec.parse_interval(interval)
+    if spec is None:
+        raise ValueError(_unsupported_interval_message(interval))
+    if session == "latest" and spec.k > 1:
+        # 分时是「一个交易日里的那一段」，折叠根跨天——这句必须点名折叠，不能借用
+        # 下面那句「daily bars already are one day each」对 2D 说一句假话。
+        raise ValueError(
+            f"session=latest narrows one trading day out of minute bars; {interval} bars "
+            f"are folded {spec.k} {spec.base} ones and a fold can span days"
+        )
     bars: list[dict[str, Any]]
-    if interval in _MINUTE_PERIODS:
-        bars = _futu_minute_bars(symbol, interval, count, adjust, before)
+    if spec.base in interval_spec.MINUTE_BASES:
+        # One extra base bar per served bar: the weld drops the group the window's
+        # left edge lands inside, and `count` served bars still have to come back.
+        ask = min(count * spec.k + spec.k - 1, _MAX_BARS)
+        bars = _futu_minute_bars(symbol, spec.base, ask, adjust, before)
         source = "futu:opend"
         if bars is None:
             # Fall through to the public path, which reaches A-shares only.
             # Everything else has no source left and is told so *by cause*.
             if symbol.rsplit(".", 1)[-1] not in {"SH", "SZ"}:
                 raise ValueError(_minute_no_source_reason(symbol, adjust))
-            bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[interval], count, adjust, before)
+            bars = _fetch_minute_a_share(symbol, _MINUTE_PERIODS[spec.base], ask, adjust, before)
             source = "akshare:sina_stock_zh_a_minute"
+        if spec.k > 1:
+            zone = _MINUTE_WALL_CLOCK_ZONE.get(symbol.rsplit(".", 1)[-1])
+            if zone is None:
+                raise ValueError(f"{interval} bars cannot be folded: {symbol} has no exchange clock")
+            folded = interval_spec.fold_bars(bars, spec, zone)
+            if len(bars) >= ask and len(folded) > 1:
+                folded = folded[1:]
+            bars, source = folded[-count:], f"{source}+{interval}"
+    elif spec.kind in {"daily-fold", "calendar-fold"}:
+        # `session == "latest"` never reaches here: a fold has k > 1 and was refused
+        # above, so this branch has no session handling of its own to write.
+        bars, source = _fetch_calendar_bars(
+            symbol, spec.base, count, before, spec.k, interval
+        )
     elif interval in _AGG_DAILY_PER_BAR:
         if session == "latest":
             raise ValueError(
@@ -744,7 +798,14 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     @app.get("/market/kline", dependencies=[Depends(require_auth)])
     async def market_kline(
         symbol: str = Query(..., min_length=1, max_length=32, description="e.g. 600519.SH / AAPL / BTC-USDT"),
-        interval: str = Query("1D", description="1m/5m/15m/30m/60m, 1D, or 1W/1M (merged from daily bars)"),
+        interval: str = Query(
+            "1D",
+            description=(
+                "1m/5m/15m/30m/60m, 1D, or 1W/1M (merged from daily bars) — and any of "
+                "those bases taken a whole number of times (a multiplier), folded here: "
+                "120m is two 60m bars, 2D two daily ones, 3M three monthly ones"
+            ),
+        ),
         count: int = Query(500, ge=10, le=_MAX_BARS),
         adjust: str = Query("qfq", description="none/qfq/hfq — minute bars only"),
         before: int | None = Query(None, ge=0, description="epoch milliseconds — load bars strictly older than this (scroll-back paging)"),
@@ -752,14 +813,10 @@ def register_market_routes(app: FastAPI, require_auth: AuthDep | None = None) ->
     ) -> Response:
         """OHLCV bars for the pro-chart page; envelope mirrors the other routes."""
         key = symbol.strip().upper()
-        if interval not in _MINUTE_PERIODS and interval not in _AGG_DAILY_PER_BAR and interval != "1D":
+        if interval_spec.parse_interval(interval) is None:
             return JSONResponse(
                 status_code=400,
-                content={
-                    "status": "error",
-                    "error": f"unsupported interval {interval!r} "
-                    f"(known: {'/'.join(_MINUTE_PERIODS)}/1D/{'/'.join(_AGG_DAILY_PER_BAR)})",
-                },
+                content={"status": "error", "error": _unsupported_interval_message(interval)},
             )
         if adjust not in _ADJUSTS:
             return JSONResponse(

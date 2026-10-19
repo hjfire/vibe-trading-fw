@@ -238,11 +238,25 @@ def _day_ordinal(ts_ms: int) -> int:
 def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> list[tuple[str, int]]:
     """``(session date, position-within-session // k)`` for ascending bars.
 
-    The anchor is a bar's index **inside its own trading session**, so a fold can
-    never cross a session: an A-share day holds four 60-minute bars closing at
-    10:30 / 11:30 / 14:00 / 15:00, and a floor of UTC minutes would happily weld
-    11:30 to 14:00 into a bar spanning the lunch break. Counting within the session
-    gives [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws.
+    The anchor is a bar's index **inside its own trading session**, so a fold can never
+    cross a *day or session boundary*: an A-share day holds four 60-minute bars closing
+    at 10:30 / 11:30 / 14:00 / 15:00, and counting within the session gives
+    [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws. A floor of UTC
+    minutes serves the same two bars on this clock (+8 = 480 minutes, 480 % 120 == 0
+    lines its buckets up with the session boundary) and serves three on a +5:30 one;
+    the anchor is the spec because its answer does not depend on which clock the server
+    sits on, not because the floor always draws the tape wrong.
+
+    What the anchor does **not** promise is a group that stays inside one trading block.
+    It counts *bars* within the session, so a ``k`` that does not divide the morning
+    block leaves a group running across the midday gap: ``90m`` (= 30m × 3) welds the
+    11:30, 13:30 and 14:00 bars into one served bar, and ``45m`` (= 15m × 3) welds
+    11:15, 11:30 and the afternoon's first bar (13:15). Both spellings are reachable
+    through :func:`parse_interval` today. This is known behaviour, not an accident —
+    pinned by ``test_a_ninety_minute_fold_welds_across_the_midday_gap_by_design`` —
+    because a gap-aware anchor would need this module to hold an exchange session table
+    it has no evidence for, and refusing those multipliers would be a rule nobody asked
+    for.
 
     Stateful by design and safe for paging: the count only ever walks forward, so a
     fold of a prefix is a prefix of the fold.

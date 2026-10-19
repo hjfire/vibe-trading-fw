@@ -39,6 +39,7 @@ from src.api.interval_spec import (
     bar_seconds,
     calendar_fold_spec,
     fold_bars,
+    fold_by_keys,
     fold_spec,
     parse_interval,
 )
@@ -234,6 +235,53 @@ class TestMinuteSessionAnchor:
         with pytest.raises(ValueError, match="exchange clock"):
             fold_bars(self._sixty("2026-06-01"), IntervalSpec("minute-fold", "60m", 2, ""))
 
+    def test_a_ninety_minute_fold_welds_across_the_midday_gap_by_design(self):
+        """Known behaviour, pinned so nobody later reads it as an accident.
+
+        ``90m`` is ``30m`` × 3 and both spellings are reachable through
+        :func:`parse_interval` today. The anchor groups by *position inside the day*,
+        and an A-share day holds eight 30-minute bars (10:00 / 10:30 / 11:00 / 11:30,
+        then 13:30 / 14:00 / 14:30 / 15:00), so positions 3-5 weld into one served bar:
+        the 11:30, the 13:30 and the 14:00 bar. That group spans the lunch break — the
+        guarantee the anchor actually gives is *never crossing a day or session
+        boundary*, not never crossing the midday gap, and
+        ``interval_spec._session_position_keys``'s docstring now says exactly that.
+        Refusing a ``k`` that does not divide the morning block would need an exchange
+        session table this repo holds no forensic basis for, so the straddle is served,
+        named, and pinned here.
+        """
+        closes = ("10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00")
+        bars = [
+            {
+                "timestamp": _minute_label("2026-06-01", hhmm),
+                "open": 1.0 + i,
+                "high": 2.0 + i,
+                "low": 0.5,
+                "close": 1.5 + i,
+                "volume": 10.0,
+            }
+            for i, hhmm in enumerate(closes)
+        ]
+        assert (parse_interval("90m").base, parse_interval("90m").k) == ("30m", 3)
+        folded = fold_bars(bars, parse_interval("90m"), SH)
+        assert len(folded) == 3
+        assert [b["timestamp"] for b in folded] == [
+            _minute_label("2026-06-01", t) for t in ("10:00", "11:30", "14:30")
+        ]
+        straddle = folded[1]
+        assert straddle["open"] == 4.0 and straddle["close"] == 6.5  # 11:30 opens, 14:00 closes
+        assert straddle["high"] == 7.0 and straddle["low"] == 0.5
+        assert straddle["volume"] == 30.0  # three base bars, the midday gap between them
+
+
+class TestFoldByKeysLengthGuard:
+    """`fold_by_keys` takes two lists it cannot verify against each other — so it checks."""
+
+    def test_a_key_list_that_is_not_the_bar_list_raises_instead_of_truncating(self):
+        bars = _daily_series(_weekdays("2026-06-01", 3))
+        with pytest.raises(ValueError, match="fold keys off the bar list"):
+            fold_by_keys(bars, [0, 1])
+
 
 class TestPrefixInvariant:
     """A fold never uses a bar to its right — the future-function probe on the data path."""
@@ -410,3 +458,198 @@ class TestServedBarWidth:
         """
         assert bar_seconds(calendar_fold_spec("week", 2)) == 2 * WEEK_SECONDS
         assert bar_seconds(calendar_fold_spec("month", 2)) == 2 * MONTH_SECONDS
+
+
+def _client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    market_routes.register_market_routes(app, require_auth=lambda: None)
+    return TestClient(app)
+
+
+class TestRouteServesFolds:
+    def test_a_two_day_request_is_the_fold_of_the_daily_chain(self, monkeypatch):
+        days = _weekdays("2026-06-01", 40)
+        bars_in = _daily_series(days)
+
+        def fake(symbol, count, before):
+            return bars_in[-count:], "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        out = market_routes._kline_sync("600519.SH", "2D", 10, "qfq")
+        assert out["interval"] == "2D"
+        assert out["source"] == "backtest:test_chain+2D"
+        assert out["bars"] == fold_bars(bars_in, fold_spec("1D", 2))[-10:]
+        assert set(out) == {"status", "symbol", "interval", "source", "bars"}
+
+    def test_two_pages_cut_at_different_before_agree_where_they_overlap(self, monkeypatch):
+        """Design §4.2's paging leg: the anchor is the calendar's, never the page's.
+
+        The stub honours `before` the way every real channel does (drop the bars at
+        or after the cursor, then take the tail), so page two really is a different
+        slice of the same chain. Grouping by "the Nth bar I happened to fetch" would
+        pass a single-page test and then redraw the chart on the first scroll — this
+        is the only pin that can see that, and it is why the fold keys on an
+        absolute ordinal.
+        """
+        days = _weekdays("2026-03-02", 40)
+        chain = _daily_series(days)
+
+        def fake(symbol, count, before):
+            pool = [b for b in chain if before is None or b["timestamp"] < before]
+            return pool[-count:], "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        page_one = market_routes._kline_sync("600519.SH", "2D", 6, "qfq")["bars"]
+        page_two = market_routes._kline_sync(
+            "600519.SH", "2D", 6, "qfq", before=page_one[-1]["timestamp"]
+        )["bars"]
+        assert page_two[-1]["timestamp"] < page_one[-1]["timestamp"]
+        shared = [b for b in page_two if b["timestamp"] >= page_one[0]["timestamp"]]
+        assert shared == page_one[: len(shared)]
+
+    def test_the_daily_walk_is_scaled_by_the_multiplier(self, monkeypatch):
+        asked: list[int] = []
+
+        def fake(symbol, count, before):
+            asked.append(count)
+            return _daily_series(_weekdays("2020-01-01", count)), "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        market_routes._kline_sync("600519.SH", "3W", 20, "qfq")
+        assert asked == [20 * 8 * 3 + 30 * 3]  # per_bar 8, one margin per folded bar
+        market_routes._kline_sync("600519.SH", "1W", 20, "qfq")
+        assert asked[-1] == 20 * 8 + 30  # k = 1 is the old sizing, verbatim
+
+    def test_the_daily_fold_asks_for_k_daily_bars_plus_the_leftover(self, monkeypatch):
+        asked: list[int] = []
+
+        def fake(symbol, count, before):
+            asked.append(count)
+            return _daily_series(_weekdays("2024-01-01", count)), "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        market_routes._kline_sync("600519.SH", "2D", 30, "qfq")
+        assert asked == [30 * 1 * 2 + 30 * 2]  # per_bar 1 for a daily base, margin × k too
+
+    def test_a_minute_fold_asks_the_base_channel_for_k_times_the_bars(self, monkeypatch):
+        """50 served bars of 120m asks the 60-minute channel for 101 base bars.
+
+        The stub lays the base bars out the way an A-share tape really is — four 60m
+        closes per trading day at 10:30 / 11:30 / 14:00 / 15:00 — because the anchor
+        being tested is the session, and a stub that ran bars straight through the
+        night would fold into groups no exchange ever produces. 101 = 25 whole days
+        plus one orphan bar, so the fold has 51 groups and the leftover-orphan tail
+        is what `count` then trims.
+        """
+        seen: list[tuple[str, int]] = []
+        session_close_times = ("10:30", "11:30", "14:00", "15:00")
+
+        def fake_minute(symbol, interval, count, adjust, before):
+            seen.append((interval, count))
+            days = _weekdays("2026-06-01", -(-count // 4))
+            return [
+                {
+                    "timestamp": _minute_label(days[i // 4], session_close_times[i % 4]),
+                    "open": 1.0 + i,
+                    "high": 2.0 + i,
+                    "low": 0.5,
+                    "close": 1.5 + i,
+                    "volume": 10.0,
+                }
+                for i in range(count)
+            ]
+
+        monkeypatch.setattr(market_routes, "_futu_minute_bars", fake_minute)
+        out = market_routes._kline_sync("600519.SH", "120m", 50, "qfq")
+        assert seen == [("60m", 50 * 2 + 2 - 1)]
+        assert out["interval"] == "120m"
+        assert out["source"].endswith("+120m")
+        assert len(out["bars"]) == 50
+
+    def test_a_page_that_cannot_be_filled_comes_back_short_and_says_so(self, monkeypatch):
+        """设计 §6 那条「如实少返」的判据：不补根，靠 bars 与 source 自己说话。"""
+        only = _daily_series(_weekdays("2026-06-01", 4))
+
+        def fake(symbol, count, before):
+            return only, "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        out = market_routes._kline_sync("600519.SH", "2D", 10, "qfq")
+        assert len(out["bars"]) < 10
+        assert out["source"] == "backtest:test_chain+2D"
+
+    def test_the_full_window_drops_the_leftover_group_like_the_weekly_merge_does(self, monkeypatch):
+        """An exactly-satisfied ask means the chain ran further left, so the first fold is a stub.
+
+        Same rule `_fetch_calendar_bars` already applies to weekly bars, carried to the
+        multiplier — and the stub is built to *hit* it: `len(bars) == dailies`, which is
+        how the pin knows the drop branch is the one that ran.
+        """
+        dailies = 40 * 2 + 30 * 2  # count * per_bar * k + margin * k
+        chain = _daily_series(_weekdays("2026-06-01", dailies))
+
+        def fake(symbol, count, before):
+            assert count == dailies, count
+            return chain, "backtest:test_chain"
+
+        monkeypatch.setattr(market_routes, "_fetch_daily", fake)
+        out = market_routes._kline_sync("600519.SH", "2D", 40, "qfq")
+        assert out["bars"] == fold_bars(chain, fold_spec("1D", 2))[1:][-40:]
+
+
+class TestRouteRefusals:
+    def test_a_fold_with_session_latest_names_the_fold_not_the_day(self, monkeypatch):
+        monkeypatch.setattr(market_routes, "_fetch_daily", lambda *a, **k: ([], "x"))
+        with pytest.raises(ValueError, match="folded") as exc:
+            market_routes._kline_sync("600519.SH", "2D", 100, "qfq", session="latest")
+        assert "already are one day each" not in str(exc.value)
+
+    def test_a_minute_fold_with_session_latest_is_refused_the_same_way(self, monkeypatch):
+        monkeypatch.setattr(
+            market_routes, "_futu_minute_bars",
+            lambda symbol, interval, count, adjust, before: [
+                {"timestamp": _minute_label("2026-06-01", "10:30") + i * 3_600_000,
+                 "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 1.0}
+                for i in range(count)
+            ],
+        )
+        with pytest.raises(ValueError, match="folded"):
+            market_routes._kline_sync("600519.SH", "120m", 10, "qfq", session="latest")
+
+    def test_the_native_refusals_still_say_what_they_said(self, monkeypatch):
+        """设计 §2.1：那两句既有文案一字不改，因为它俩说的是真话。"""
+        monkeypatch.setattr(market_routes, "_fetch_daily", lambda *a, **k: ([], "x"))
+        with pytest.raises(ValueError, match="1W bars are merged from daily"):
+            market_routes._kline_sync("600519.SH", "1W", 100, "qfq", session="latest")
+        with pytest.raises(ValueError, match="daily bars already are one day each"):
+            market_routes._kline_sync("600519.SH", "1D", 100, "qfq", session="latest")
+
+    def test_an_unserviceable_interval_names_the_rule_and_the_bases(self):
+        res = _client().get("/market/kline?symbol=600519.SH&interval=2.5m")
+        assert res.status_code == 400
+        body = res.json()["error"]
+        assert "'2.5m'" in body
+        for base in ("1D", "1W", "1M"):
+            assert base in body, body
+        assert "multiplier" in body, body
+
+
+class TestRouteDoc:
+    def _interval_description(self) -> str:
+        client = _client()
+        schema = client.app.openapi()
+        params = schema["paths"]["/market/kline"]["get"]["parameters"]
+        return [p for p in params if p["name"] == "interval"][0]["description"]
+
+    def test_the_route_doc_describes_a_rule_not_a_dead_list(self):
+        """Carries the judgment: the old text was a closed list of eight literals.
+
+        The eight base spellings still appear (they are the bases), so only the two
+        assertions below actually separate the new copy from the old.
+        """
+        description = self._interval_description()
+        assert "multiplier" in description, description
+        assert "120m" in description, description
