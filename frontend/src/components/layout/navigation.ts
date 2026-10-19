@@ -1,4 +1,4 @@
-import { Activity, BarChart3, BellRing, BookOpen, Bot, CalendarClock, CandlestickChart, Database, FileText, Grid2x2, Layers, Settings, TrendingUp, WalletCards } from "lucide-react";
+import { Activity, BarChart3, BellRing, BookOpen, Bot, Building2, CalendarClock, CandlestickChart, Database, FileText, Grid2x2, Layers, Settings, TrendingUp, WalletCards } from "lucide-react";
 
 export const NAVIGATION_GROUPS = [
   { id: "research", items: [
@@ -17,6 +17,7 @@ export const NAVIGATION_GROUPS = [
     { id: "multiChart", to: "/multi-chart", icon: Grid2x2 },
   ] },
   { id: "automation", items: [
+    { id: "pixelOffice", to: "/pixel-office", icon: Building2 },
     { id: "scheduled", to: "/scheduled", icon: CalendarClock },
     { id: "runtime", to: "/runtime", icon: Activity },
     // Local custom ㉑/㊱/㉔: alerting, the local bar warehouse, and the manual.

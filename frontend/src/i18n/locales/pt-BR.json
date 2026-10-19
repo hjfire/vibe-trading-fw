@@ -27,6 +27,7 @@
       "scheduled": "Repita uma pesquisa em horários definidos.",
       "runtime": "Confira conexões de corretoras e o estado de execução das operações.",
       "settings": "Configure modelos, fontes de dados e conexões de corretoras.",
+      "pixelOffice": "Planeje e atribua tarefas de pesquisa. A atribuição não inicia a execução; os cargos são rótulos e não concedem permissões de negociação.",
       "proChart": "Um símbolo no gráfico profissional: ferramentas de desenho, indicadores, Heikin-Ashi, perfil de volume e replay de barras.",
       "multiChart": "Quatro períodos de um símbolo lado a lado, com cursor e janela de tempo vinculados.",
       "alerts": "Condições de preço, posição e conta que avisam você no canal que já usa.",
@@ -42,6 +43,7 @@
       "scheduled": "Informe a instrução de pesquisa, escolha a frequência e salve. O agendador local deve estar habilitado para executar tarefas; a entrega também requer um canal configurado.",
       "runtime": "Primeiro configure uma conexão de corretora em Configurações ou Carteira. As operações disponíveis dependem dos recursos da corretora e da sua autorização.",
       "settings": "Configure um modelo para começar. Adicione dados ou conexões de corretoras conforme necessário; pesquisas com dados públicos de mercado não exigem conta em corretora.",
+      "pixelOffice": "Planeje e atribua tarefas de pesquisa. A atribuição não inicia a execução; os cargos são rótulos e não concedem permissões de negociação.",
       "proChart": "Escolha símbolo e período e use a barra de ferramentas para desenhar, trocar indicadores ou reproduzir barra a barra.",
       "multiChart": "Selecione os quatro períodos; com o vínculo ativo, o cursor e a janela se movem juntos em todas as células.",
       "alerts": "Crie a regra e ative o agendador local — ela só é avaliada enquanto estiver ativo. O envio também exige um canal configurado.",
@@ -77,6 +79,7 @@
     "mainNavigation": "Navegação principal",
     "about": "Sobre",
     "sessionsLoadFailed": "Não foi possível carregar as conversas.",
+    "pixelOffice": "Escritório pixel",
     "proChart": "Gráfico Pro",
     "multiChart": "Gráfico múltiplo",
     "alerts": "Alertas",
@@ -86,8 +89,8 @@
   "runtime": {
     "monitorBadge": "Monitor de Runtime",
     "title": "Status do Runtime ao vivo / simulado",
-    "subtitlePre": "Status somente leitura de",
-    "subtitlePost": ". Esta página não autoriza conectores, iniciar ou interromper executores, enviar ou cancelar ordens, nem alterar mandatos.",
+    "subtitlePre": "Consulte o estado dos conectores, os mandatos de negociação e a atividade do executor.",
+    "subtitlePost": " É possível editar a frequência das decisões do modelo e os limites de gastos enquanto o executor estiver parado.",
     "refresh": "Atualizar",
     "unavailableTitle": "Status do runtime indisponível",
     "unavailableHint": "Trate o runtime do conector como indisponível até que o backend forneça um instantâneo do status atual.",
@@ -127,7 +130,7 @@
     "riskHalted": "risco interrompido",
     "riskHaltedDesc": "O kill switch está acionado para este perfil. Trate o runtime do conector como interrompido até que o status seja liberado.",
     "riskActive": "runtime ativo",
-    "riskActiveDesc": "O executor está ativo e há um mandato não expirado. Esta página continua sendo somente de status e leitura.",
+    "riskActiveDesc": "O executor está ativo e seu mandato de negociação ainda é válido.",
     "riskIdle": "pronto, mas ocioso",
     "riskIdleDesc": "A autorização e o mandato estão presentes, mas o executor não está ativo.",
     "riskDormant": "inativo",
@@ -411,7 +414,10 @@
       "shadowDeltaPrompt": "Execute um backtest de sombra nos últimos 90 dias e analise onde meu PnL divergiu da sombra (violações de regras, saídas antecipadas, sinais perdidos)",
       "shadowReport": "Gerar relatório de sombra",
       "shadowReportDesc": "Relatório compartilhável em oito partes: curva da conta, retorno ajustado ao risco e origem de cada ganho",
-      "shadowReportPrompt": "Renderize o relatório sombra e me forneça o URL – comece com o delta você-vs-sombra"
+      "shadowReportPrompt": "Renderize o relatório sombra e me forneça o URL – comece com o delta você-vs-sombra",
+      "adaptStrategy": "Adaptar estratégia cadastrada",
+      "adaptStrategyDesc": "Manter o sinal e testar outro universo",
+      "adaptStrategyPrompt": "Ajude-me a adaptar uma estratégia cadastrada a outro universo e período. Primeiro liste as estratégias e confira as evidências da original; pergunte pelo ID, ativos, datas e tamanho das posições que faltarem. Preserve o sinal, gere o código da derivada, execute o backtest e relate apenas as evidências atualizadas da própria derivada."
     },
     "taskSubtitle": "Pergunte sobre uma ação, uma estratégia ou seu portfólio — extrairei os dados, analisarei os números e mostrarei cada etapa.",
     "quickActions": "Ações rápidas",
@@ -458,8 +464,10 @@
     "reasoningEffortLow": "Baixo",
     "reasoningEffortMedium": "Médio",
     "reasoningEffortHigh": "Alto",
+    "reasoningEffortXhigh": "Muito alto",
     "reasoningEffortMax": "Máx.",
     "reasoningEffortDesc": "Controla a profundidade do raciocínio nos modelos suportados. Níveis mais elevados podem melhorar análises complexas, mas podem demorar mais; provedores não suportados podem ignorar esta configuração. Nenhum (explícito) envia o campo com o raciocínio desabilitado — alguns modelos OpenAI precisam disso para usar ferramentas.",
+    "reasoningEffortReset": "O modelo selecionado não suporta {{level}}; redefinido para o padrão do provedor.",
     "useDefaultModel": "Usar modelo padrão",
     "useDefaultUrl": "Usar URL padrão",
     "dataSourcesDesc": "Configure fontes de dados externas para o mecanismo de backtesting.",
@@ -1064,7 +1072,7 @@
       "noMarkets": "Nenhuma fonte de dados de mercado está registrada.",
       "howItWorksTitle": "Como funciona",
       "howItWorks": "Para símbolos detectados automaticamente, as fontes são testadas de cima para baixo; uma fonte que falha passa para a próxima. O salvamento é aplicado imediatamente – não é necessário reiniciar.",
-      "caliberCaveat": "Advertência sobre o calibre: as fontes diferem na base de ajuste – por ex. O Yahoo atende OHLC bruto (não ajustado), enquanto o Tencent/Eastmoney/Tushare/BaoStock atende preços ajustados – portanto, uma cadeia reordenada pode alterar os números de backtest.",
+      "caliberCaveat": "Os ajustes de preços podem variar entre fontes. Confira os ajustes, a origem dos dados e os avisos do relatório; mudar a ordem pode alterar os resultados do backtest.",
       "markets": {
         "a_share": "Ações A (China)",
         "us_equity": "Ações dos EUA",
@@ -1074,6 +1082,7 @@
         "ca_equity": "Ações do Canadá",
         "vietnam_equity": "Ações do Vietnã",
         "ar_equity": "Ações da Argentina",
+        "br_equity": "Ações do Brasil (B3)",
         "uk_equity": "Ações do Reino Unido",
         "index": "Índices",
         "crypto": "Criptografia",
@@ -1119,7 +1128,7 @@
     "authentication": "Autenticação",
     "apiKey": "Chave de API",
     "tushareTokenDesc": "Usado para ações A da China, futuros, fundos e dados macro. Se não for definido, o projeto volta para o AKShare, quando disponível.",
-    "gildataTokenDesc": "Fonte opcional do Gildata (Hundsun Juyuan) para ações A da China. Quando configurada, entra no final da cadeia de fallback de ações A com candles diários ajustados."
+    "gildataTokenDesc": "Dados opcionais da Gildata: preços diários ajustados de ações A, preços brutos de Hong Kong e índices, valores patrimoniais de fundos não negociados em bolsa e ferramentas de macroeconomia, comunicados e pesquisa da China."
   },
   "qveris": {
     "title": "Mercado de ferramentas QVeris",
@@ -1239,7 +1248,10 @@
     "resumeConnector": "Retomar conector",
     "resumeConnectorTitle": "Limpe o kill switch e reative a atividade do conector",
     "connectorResumed": "Conector retomado",
-    "failedToResumeConnector": "Falha ao retomar o conector."
+    "failedToResumeConnector": "Falha ao retomar o conector.",
+    "tokenUsage": {
+      "live": "tokens"
+    }
   },
   "runDetail": {
     "title": "Detalhes da execução",
@@ -1372,6 +1384,19 @@
     "ddNotRecovered": "Não recuperado",
     "ddDays": "{{count}}d",
     "dashboard": "Painel de pesquisa",
+    "llmUsage": {
+      "tab": "Uso de tokens",
+      "provider": "Provedor",
+      "model": "Modelo",
+      "inputTokens": "Tokens de entrada",
+      "outputTokens": "Tokens de saída",
+      "totalTokens": "Tokens totais",
+      "calls": "Chamadas",
+      "cacheRead": "Tokens de leitura de cache",
+      "cacheCreation": "Tokens de criação de cache",
+      "perIteration": "Detalhe por iteração",
+      "iteration": "Iteração"
+    },
     "positions": {
       "tab": "Posições",
       "weightDistribution": "Distribuição de peso",
@@ -1404,6 +1429,7 @@
         "futures": "Futuros",
         "forex": "Forex",
         "ar_equity": "Ações da Argentina",
+        "br_equity": "Ações do Brasil",
         "uk_equity": "Ações do Reino Unido",
         "vietnam_equity": "Ações do Vietnã",
         "other": "Outro"
@@ -1843,7 +1869,10 @@
     "output": "Saída",
     "waitingForEvents": "Aguardando eventos do agente...",
     "teamStarting": "A equipe está girando – primeiras atualizações em alguns segundos…",
-    "detailsUnavailable": "detalhes indisponíveis"
+    "detailsUnavailable": "detalhes indisponíveis",
+    "tokens": "↑{{input}} ↓{{output}} tokens",
+    "estimated": "estimados",
+    "tokenSourceUnlabeled": "fonte sem rótulo"
   },
   "mandate": {
     "runtimeMandate": "Mandato de runtime do conector",
@@ -2142,7 +2171,7 @@
       "badge": "Somente leitura local · Várias contas",
       "title": "Portfólio",
       "subtitle": "Uma avaliação nas conexões somente leitura habilitadas. Uma conta que não pode ser lida é relatada como um erro e deixada de fora dos totais.",
-      "fxFresh": "USD/CNY {{rate}} · taxa ao vivo",
+      "fxFresh": "USD/CNY {{rate}} · taxa de referência",
       "fxCached": "USD/CNY {{rate}} · taxa em cache",
       "manageAccounts": "Gerenciar contas",
       "exportCsv": "Exportar CSV",
@@ -2307,6 +2336,30 @@
       "accountDeactivated": " · desativada",
       "accountSave": "Usar esta conta",
       "accountSaved": "Conta salva."
+    },
+    "imports": {
+      "title": "Importar extraETF Investments",
+      "hint": "Apenas posições, sem caixa ou preços em tempo real. A data do arquivo não é a data de observação do preço; os ISINs não têm mercado de negociação definido.",
+      "file": "CSV de Investments",
+      "count": "Número esperado de posições (confirme no extraETF)",
+      "age": "Idade máxima do arquivo (dias)",
+      "overlap": "Selecione fontes sem sobreposição. A visão do extraETF pode incluir contas já conectadas aqui.",
+      "import": "Importar arquivo",
+      "importing": "Importando…",
+      "success": "Importado. Adicione esta exportação pelas fontes disponíveis acima, salve e atualize.",
+      "source": "Importação de arquivo",
+      "mtime": "Arquivo modificado: {{time}}",
+      "expires": "Validade: {{time}}",
+      "tooLarge": "O limite de importação é de 4 MiB."
+    },
+    "rebalance": {
+      "title": "Proposta de alocação",
+      "hint": "Informe percentuais-alvo que somem 100%. As alterações são valores para revisão; não são calculadas ordens, quantidades, impostos ou taxas.",
+      "target": "Meta de {{id}} (%)",
+      "generate": "Calcular proposta",
+      "current": "Valor atual",
+      "targetValue": "Valor-alvo",
+      "change": "Alteração de valor"
     }
   },
   "analysis": {
@@ -2356,5 +2409,97 @@
     "selectedFactor": "Fator selecionado: {{id}}. Apenas este fator será avaliado.",
     "fundamentalsRequirement": "Fatores fundamentalistas exigem demonstrações SEC sem dados futuros e um universo de ações dos EUA (S&P 500).",
     "noEvaluableFactors": "Nenhum fator pôde ser avaliado. Amplie o histórico e verifique os campos necessários e o universo de ações."
+  },
+  "customProviders": {
+    "loadFailed": "Não foi possível carregar os provedores personalizados",
+    "testPassed": "Teste do provedor aprovado",
+    "testFailed": "Falha no teste do provedor",
+    "saved": "Provedor salvo no cofre local de credenciais",
+    "saveFailed": "Falha ao salvar o provedor",
+    "activationFailed": "Falha ao ativar o provedor",
+    "title": "Provedores personalizados compatíveis com OpenAI",
+    "description": "Adicione um provedor com API compatível de conclusão de chat. O teste envia uma solicitação curta ao modelo; após o sucesso, a chave é guardada no cofre de credenciais do sistema.",
+    "keyPrivate": "A chave nunca é exibida",
+    "active": "Ativo",
+    "keyStored": "Chave salva",
+    "activate": "Ativar",
+    "empty": "Ainda não há provedores personalizados. Adicione um abaixo e teste antes de salvar.",
+    "add": "Adicionar provedor",
+    "id": "ID do provedor",
+    "idHint": "Letras minúsculas, números, pontos, hífens ou sublinhados.",
+    "label": "Nome de exibição",
+    "labelPlaceholder": "Meu provedor",
+    "baseUrl": "URL base da API",
+    "urlHint": "Use a raiz da API. Não inclua a chave de API na URL.",
+    "model": "Modelo",
+    "key": "Chave de API",
+    "keyPlaceholder": "Insira a chave para este teste",
+    "testing": "Testando…",
+    "test": "Testar conexão",
+    "saving": "Salvando…",
+    "save": "Salvar provedor testado",
+    "saveHint": "Só é possível salvar após um teste bem-sucedido. A ativação exige confirmação separada.",
+    "confirm": "Ativar {{label}} para novas solicitações do agente?",
+    "activated": "{{label}} está ativo",
+    "preview": "Teste aprovado: {{preview}}",
+    "error": "Falha no teste do provedor: {{error}}",
+    "waiting": "O provedor está demorando mais que o normal ({{seconds}} s). A solicitação continuará até o tempo limite do servidor."
+  },
+  "pixelOffice": {
+    "title": "Escritório pixel",
+    "description": "Planeje e atribua tarefas de pesquisa. A atribuição não inicia a execução; os cargos são rótulos e não concedem permissões de negociação.",
+    "refresh": "Atualizar",
+    "loading": "Carregando escritório…",
+    "unavailable": "Escritório indisponível. Tente atualizar.",
+    "floor": "Área do escritório",
+    "taskCount": "Tarefas pendentes: {{count}}",
+    "board": "Quadro de tarefas",
+    "empty": "Ainda não há tarefas.",
+    "assignee": "Responsável",
+    "unassigned": "Sem responsável",
+    "result": "Resultado da conclusão",
+    "complete": "Registrar conclusão",
+    "create": "Criar tarefa",
+    "taskTitle": "Título da tarefa",
+    "instructions": "Instruções",
+    "priority": "Prioridade",
+    "ranksTitle": "Cargos organizacionais",
+    "priorities": {
+      "low": "Baixa",
+      "normal": "Normal",
+      "high": "Alta"
+    },
+    "statuses": {
+      "queued": "Na fila",
+      "assigned": "Atribuída",
+      "completed": "Concluída"
+    },
+    "ranks": {
+      "Operator": "Membro",
+      "Senior": "Sênior",
+      "Lead": "Líder"
+    }
+  },
+  "runnerBudget": {
+    "unavailable": "Estado de custos do modelo indisponível.",
+    "warning": "Chamadas ao modelo custam dinheiro mesmo sem operações.",
+    "summary": "A cada {{minutes}} minutos; até {{turns}} decisões e {{tokens}} tokens por dia UTC.",
+    "dailySummary": "Diariamente às {{time}} ({{timezone}}); substitui o intervalo.",
+    "usage": "Hoje: {{turns}} decisões · {{tokens}} tokens · estimativa {{cost}}.",
+    "estimateUnknown": "São necessários preços e uso medido para estimar o custo diário.",
+    "estimate": "Custo diário projetado: cerca de ${{cost}}, conforme o uso medido.",
+    "configure": "Agenda e limites de gastos do modelo",
+    "interval_seconds": "Intervalo de decisão (segundos)",
+    "max_daily_turns": "Máximo de decisões por dia UTC",
+    "max_daily_tokens": "Máximo de tokens por dia UTC",
+    "max_daily_cost_usd": "Limite diário estimado em USD (opcional)",
+    "input_usd_per_million": "USD por milhão de tokens de entrada (opcional)",
+    "output_usd_per_million": "USD por milhão de tokens de saída (opcional)",
+    "daily_at": "Horário diário (opcional)",
+    "timezone": "Fuso horário",
+    "save": "Salvar configurações",
+    "limitsNote": "Cada decisão usa uma nova conversa. Os limites são verificados após a resposta e podem exceder pelo valor dessa resposta. Uso desconhecido ou excesso aciona a parada de emergência existente.",
+    "pricesNote": "Os preços são estimativas do operador. Use a maior tarifa de entrada/gravação em cache; descontos de cache e chamadas auxiliares não estão incluídos.",
+    "stopToEdit": "Pare o executor antes de alterar as configurações."
   }
 }

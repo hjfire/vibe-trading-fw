@@ -22,6 +22,7 @@
       "scheduled": "リサーチを指定した周期で繰り返します。",
       "runtime": "ブローカーの接続と取引の稼働状況を確認します。",
       "settings": "モデル、データソース、ブローカー接続を設定します。",
+      "pixelOffice": "調査タスクを計画・割り当てます。割り当てでは実行は始まりません。役職はラベルであり、取引権限を付与しません。",
       "proChart": "1銘柄を専門チャートで：描画ツール、指標、Heikin-Ashi、出来高分布、バーリプレイ。",
       "multiChart": "同一銘柄の4期間を並べ、十字カーソルと時間窓を連動させます。",
       "alerts": "価格・ポジション・口座の条件を、普段読んでいるチャネルに通知します。",
@@ -37,6 +38,7 @@
       "scheduled": "リサーチ指示と周期を入力して保存します。実行にはローカルのスケジューラーを有効にする必要があり、配信にはチャネル設定も必要です。",
       "runtime": "先に設定または保有資産ページでブローカーを接続します。利用できる取引操作はブローカーの機能とあなたの許可に依存します。",
       "settings": "まずモデルを設定します。必要に応じてデータソースやブローカー接続を追加します。公開市場のリサーチにはブローカー口座は不要です。",
+      "pixelOffice": "調査タスクを計画・割り当てます。割り当てでは実行は始まりません。役職はラベルであり、取引権限を付与しません。",
       "proChart": "銘柄と期間を選び、ツールバーで描画・指標の切替・バー単位の再生を行えます。",
       "multiChart": "4期間を選択し、連動をONにするとカーソルと表示窓が全セルで同時に動きます。",
       "alerts": "ルールを作成後にローカルスケジューラを有効化してください。稼働中のみ評価され、配信にはチャネル設定も必要です。",
@@ -72,6 +74,7 @@
     "mainNavigation": "メインナビゲーション",
     "about": "概要",
     "sessionsLoadFailed": "会話を読み込めません。",
+    "pixelOffice": "ピクセルオフィス",
     "proChart": "プロチャート",
     "multiChart": "マルチタイムフレーム",
     "alerts": "アラート",
@@ -81,8 +84,8 @@
   "runtime": {
     "monitorBadge": "取引モニター",
     "title": "ライブ / ペーパー稼働状況",
-    "subtitlePre": "次からの読み取り専用状態:",
-    "subtitlePost": "。このページではコネクタの認可、Runner の起動/停止、注文の送信/取消、mandate の変更は行いません。",
+    "subtitlePre": "コネクタの接続状態、取引マンデート、ランナーの稼働状況を確認できます。",
+    "subtitlePost": "ランナー停止中は、モデルの判断間隔と利用上限を変更できます。",
     "refresh": "更新",
     "unavailableTitle": "稼働状況を取得できません",
     "unavailableHint": "バックエンドが現在の状態スナップショットを提供するまで、コネクタは利用不可として扱ってください。",
@@ -122,7 +125,7 @@
     "riskHalted": "リスク停止",
     "riskHaltedDesc": "このプロファイルではキルスイッチが作動しています。状態がクリアされるまでコネクタは停止中として扱ってください。",
     "riskActive": "稼働中",
-    "riskActiveDesc": "ランナーが稼働中で、有効期限内のマンデートが存在します。このページは引き続き読み取り専用です。",
+    "riskActiveDesc": "ランナーが稼働中で、取引マンデートは有効期限内です。",
     "riskIdle": "準備完了(アイドル)",
     "riskIdleDesc": "認可とマンデートは存在しますが、ランナーは稼働していません。",
     "riskDormant": "休止状態",
@@ -406,7 +409,10 @@
       "quoteTrendPrompt": "選択したトレーディングコネクタで 600519.SH のクォートと30日足バーを取得し、現在のクォートを最近のトレンドと比較して要約。読み取り専用に保つ。",
       "trainShadowPrompt": "アップロードしたトレードジャーナルからシャドウアカウントを学習 — 抽出されたルールを表示し、自分の行動に合っているか確認",
       "shadowDeltaPrompt": "過去90日間のシャドウバックテストを実行し、実際のPnLとシャドウが乖離した箇所 (ルール違反、早期退出、シグナル見逃し) を詳細に分析",
-      "shadowReportPrompt": "シャドウレポートをレンダリングしてURLを渡す — あなた vs シャドウのデルタを先頭に表示"
+      "shadowReportPrompt": "シャドウレポートをレンダリングしてURLを渡す — あなた vs シャドウのデルタを先頭に表示",
+      "adaptStrategy": "登録済み戦略を適応",
+      "adaptStrategyDesc": "シグナルを維持して新しい銘柄群で検証",
+      "adaptStrategyPrompt": "登録済み戦略を新しい銘柄群と期間に適応してください。まず戦略一覧と親戦略の根拠を確認し、ID・銘柄・期間・配分が不足していれば質問してください。シグナルを維持して子戦略のコードを生成し、バックテスト後は子戦略自身の更新済み根拠のみを報告してください。"
     },
     "taskSubtitle": "銘柄・戦略・ポートフォリオについて聞いてください。データ取得から計算まで、すべての手順をお見せします。",
     "quickActions": "クイックアクション",
@@ -469,8 +475,10 @@
     "reasoningEffortLow": "低",
     "reasoningEffortMedium": "中",
     "reasoningEffortHigh": "高",
+    "reasoningEffortXhigh": "超高",
     "reasoningEffortMax": "最大",
     "reasoningEffortDesc": "対応モデルの推論の深さを調整します。高いほど複雑な分析に有効な場合がありますが、時間がかかります。未対応のプロバイダーでは無視されることがあります。「なし（明示）」は推論を無効にしたままフィールドを明示送信し、一部の OpenAI モデルはツール利用時にこれが必要です。",
+    "reasoningEffortReset": "選択したモデルは {{level}} に対応していないため、プロバイダーのデフォルトに戻しました。",
     "localApiAccess": "ローカル API アクセス",
     "localApiAccessDesc": "リモートまたはプライベート Web UI デプロイメントの場合、ブラウザにサーバー API キーを一度入力してください。ローカルホストは空欄のままで構いません。",
     "serverApiKey": "サーバー API キー",
@@ -1059,7 +1067,7 @@
       "noMarkets": "登録された市場データソースがありません。",
       "howItWorksTitle": "動作のしくみ",
       "howItWorks": "自動検出されたシンボルでは、上から順にソースが試行され、失敗したソースは次へフォールスルーします。保存すると再起動なしで即時反映されます。",
-      "caliberCaveat": "留意点:データソースごとに調整基準が異なります — 例えば Yahoo は未調整の OHLC を、Tencent/Eastmoney/Tushare は調整後価格を返します — 順序を変えるとバックテスト結果が変わる可能性があります。",
+      "caliberCaveat": "データソースによって価格調整が異なる場合があります。返却された調整・出典情報と実行カードの警告を確認してください。順序の変更でバックテスト結果が変わる可能性があります。",
       "markets": {
         "a_share": "中国A株",
         "us_equity": "米国株",
@@ -1069,6 +1077,7 @@
         "ca_equity": "カナダ株",
         "vietnam_equity": "ベトナム株",
         "ar_equity": "アルゼンチン株",
+        "br_equity": "ブラジル株",
         "uk_equity": "英国株",
         "index": "指数",
         "crypto": "暗号資産",
@@ -1114,7 +1123,7 @@
     "authentication": "認証",
     "apiKey": "APIキー",
     "tushareTokenDesc": "中国A株・先物・ファンド・マクロデータに使用します。未設定の場合、利用可能なところではAKShareにフォールバックします。",
-    "gildataTokenDesc": "オプションの恒生聚源（Gildata）中国A株データソース。設定すると、日足（前調整）でA株フォールバックチェーンの末尾に加わります。"
+    "gildataTokenDesc": "任意の Gildata データ：A株の調整済み日足、香港株・指数の未調整価格、店頭投資信託の基準価額、中国のマクロ経済・公告・調査レポートツール。"
   },
   "qveris": {
     "title": "QVeris ツールマーケットプレイス",
@@ -1234,7 +1243,10 @@
     "resumeConnector": "コネクタを再開",
     "resumeConnectorTitle": "キルスイッチを解除してコネクタ活動を再開",
     "connectorResumed": "コネクタを再開しました",
-    "failedToResumeConnector": "コネクタの再開に失敗しました。"
+    "failedToResumeConnector": "コネクタの再開に失敗しました。",
+    "tokenUsage": {
+      "live": "トークン"
+    }
   },
   "runDetail": {
     "title": "実行詳細",
@@ -1367,6 +1379,19 @@
     "ddNotRecovered": "未回復",
     "ddDays": "{{count}}日",
     "dashboard": "リサーチダッシュボード",
+    "llmUsage": {
+      "tab": "トークン使用量",
+      "provider": "プロバイダー",
+      "model": "モデル",
+      "inputTokens": "入力トークン",
+      "outputTokens": "出力トークン",
+      "totalTokens": "合計トークン",
+      "calls": "呼び出し回数",
+      "cacheRead": "キャッシュ読み込みトークン",
+      "cacheCreation": "キャッシュ作成トークン",
+      "perIteration": "イテレーション別明細",
+      "iteration": "イテレーション"
+    },
     "positions": {
       "tab": "ポジション",
       "weightDistribution": "ウェイト分布",
@@ -1399,6 +1424,7 @@
         "futures": "先物",
         "forex": "外国為替",
         "ar_equity": "アルゼンチン株",
+        "br_equity": "ブラジル株",
         "uk_equity": "英国株",
         "vietnam_equity": "ベトナム株",
         "other": "その他"
@@ -1838,7 +1864,10 @@
     "output": "出力",
     "waitingForEvents": "エージェントイベントを待機中...",
     "teamStarting": "チームを起動中です。数秒で最初の進捗が届きます…",
-    "detailsUnavailable": "詳細は利用できません"
+    "detailsUnavailable": "詳細は利用できません",
+    "tokens": "↑{{input}} ↓{{output}} トークン",
+    "estimated": "推定",
+    "tokenSourceUnlabeled": "出典未表記"
   },
   "mandate": {
     "runtimeMandate": "コネクタマンデート",
@@ -2142,7 +2171,7 @@
       "badge": "ローカル読み取り専用 · 複数口座",
       "title": "ポートフォリオ",
       "subtitle": "有効な読み取り専用接続をまとめて 1 つの評価にします。読み取れなかった口座はエラーとして表示され、合計には含まれません。",
-      "fxFresh": "USD/CNY {{rate}} · 最新レート",
+      "fxFresh": "USD/CNY {{rate}} · 参考為替レート",
       "fxCached": "USD/CNY {{rate}} · キャッシュされたレート",
       "manageAccounts": "口座を管理",
       "exportCsv": "CSV を書き出す",
@@ -2307,6 +2336,30 @@
       "accountDeactivated": "・無効化済み",
       "accountSave": "この口座を使う",
       "accountSaved": "口座を保存しました。"
+    },
+    "imports": {
+      "title": "extraETF Investments をインポート",
+      "hint": "現金やリアルタイム価格を含まない保有明細です。ファイル更新時刻は価格の観測時刻ではなく、ISIN の取引市場も未解決です。",
+      "file": "Investments CSV",
+      "count": "保有行数（extraETF で確認）",
+      "age": "ファイルの最大経過日数",
+      "overlap": "重複しないソースを選択してください。extraETF に、ここで接続済みの口座が含まれる場合があります。",
+      "import": "ファイルをインポート",
+      "importing": "インポート中…",
+      "success": "インポートしました。上の利用可能なソースから追加し、保存して更新してください。",
+      "source": "ファイルインポート",
+      "mtime": "ファイル更新日時：{{time}}",
+      "expires": "有効期限：{{time}}",
+      "tooLarge": "インポートの上限は 4 MiB です。"
+    },
+    "rebalance": {
+      "title": "配分変更案",
+      "hint": "合計 100% の目標比率を入力してください。変更額は確認用です。注文、数量、税金、手数料は計算しません。",
+      "target": "{{id}} の目標（%）",
+      "generate": "変更案を計算",
+      "current": "現在の評価額",
+      "targetValue": "目標額",
+      "change": "変更額"
     }
   },
   "analysis": {
@@ -2356,5 +2409,97 @@
     "selectedFactor": "選択した因子：{{id}}。この因子のみ評価します。",
     "fundamentalsRequirement": "基本面因子にはPIT安全なSEC財務情報と米国株ユニバース（S&P 500）が必要です。",
     "noEvaluableFactors": "評価できる因子がありません。期間を延ばし、必要なデータ項目と株式ユニバースを確認してください。"
+  },
+  "customProviders": {
+    "loadFailed": "カスタムプロバイダーを読み込めませんでした",
+    "testPassed": "プロバイダーテストに成功しました",
+    "testFailed": "プロバイダーテストに失敗しました",
+    "saved": "ローカルの資格情報保管庫に保存しました",
+    "saveFailed": "プロバイダーの保存に失敗しました",
+    "activationFailed": "プロバイダーの有効化に失敗しました",
+    "title": "カスタム OpenAI 互換プロバイダー",
+    "description": "チャット補完 API に互換性のあるプロバイダーを追加します。テストでは短いモデルリクエストを送信し、成功後にキーを OS の資格情報保管庫へ保存します。",
+    "keyPrivate": "キーは表示されません",
+    "active": "有効",
+    "keyStored": "キー保存済み",
+    "activate": "有効にする",
+    "empty": "カスタムプロバイダーはまだありません。追加してテストしてから保存してください。",
+    "add": "プロバイダーを追加",
+    "id": "プロバイダー ID",
+    "idHint": "小文字、数字、ピリオド、ハイフン、アンダースコアを使用します。",
+    "label": "表示名",
+    "labelPlaceholder": "マイプロバイダー",
+    "baseUrl": "API ベース URL",
+    "urlHint": "API のルート URL を指定してください。URL に API キーを含めないでください。",
+    "model": "モデル",
+    "key": "API キー",
+    "keyPlaceholder": "今回のテスト用のキーを入力",
+    "testing": "テスト中…",
+    "test": "接続をテスト",
+    "saving": "保存中…",
+    "save": "テスト済みプロバイダーを保存",
+    "saveHint": "テスト成功後に保存できます。有効化には別途確認が必要です。",
+    "confirm": "今後のエージェントリクエストに {{label}} を使用しますか？",
+    "activated": "{{label}} が有効になりました",
+    "preview": "テスト成功：{{preview}}",
+    "error": "プロバイダーテスト失敗：{{error}}",
+    "waiting": "プロバイダーの応答に時間がかかっています（{{seconds}} 秒）。サーバーがタイムアウトするまで待機します。"
+  },
+  "pixelOffice": {
+    "title": "ピクセルオフィス",
+    "description": "調査タスクを計画・割り当てます。割り当てでは実行は始まりません。役職はラベルであり、取引権限を付与しません。",
+    "refresh": "更新",
+    "loading": "オフィスを読み込み中…",
+    "unavailable": "オフィスを利用できません。再読み込みしてください。",
+    "floor": "オフィスフロア",
+    "taskCount": "未完了タスク：{{count}}",
+    "board": "タスクボード",
+    "empty": "タスクはまだありません。",
+    "assignee": "担当者",
+    "unassigned": "未割り当て",
+    "result": "完了結果",
+    "complete": "完了を記録",
+    "create": "タスクを作成",
+    "taskTitle": "タスク名",
+    "instructions": "指示",
+    "priority": "優先度",
+    "ranksTitle": "組織上の役職",
+    "priorities": {
+      "low": "低",
+      "normal": "通常",
+      "high": "高"
+    },
+    "statuses": {
+      "queued": "待機中",
+      "assigned": "割り当て済み",
+      "completed": "完了"
+    },
+    "ranks": {
+      "Operator": "担当者",
+      "Senior": "シニア",
+      "Lead": "リーダー"
+    }
+  },
+  "runnerBudget": {
+    "unavailable": "モデル費用の状態を取得できません。",
+    "warning": "取引がなくてもモデル呼び出しには費用がかかります。",
+    "summary": "{{minutes}} 分間隔。UTC 日ごとに最大 {{turns}} 回、{{tokens}} トークン。",
+    "dailySummary": "毎日 {{time}}（{{timezone}}）に実行し、間隔設定を置き換えます。",
+    "usage": "今日：{{turns}} 回 · {{tokens}} トークン · 推定 {{cost}}。",
+    "estimateUnknown": "料金と実測使用量が揃うまで日額を推定できません。",
+    "estimate": "実測使用量に基づく日額：約 ${{cost}}。",
+    "configure": "モデルの実行予定と費用上限",
+    "interval_seconds": "判断間隔（秒）",
+    "max_daily_turns": "UTC 日ごとの判断回数上限",
+    "max_daily_tokens": "UTC 日ごとのトークン上限",
+    "max_daily_cost_usd": "推定日額上限 USD（任意）",
+    "input_usd_per_million": "入力100万トークンの USD 料金（任意）",
+    "output_usd_per_million": "出力100万トークンの USD 料金（任意）",
+    "daily_at": "毎日の実行時刻（任意）",
+    "timezone": "実行タイムゾーン",
+    "save": "設定を保存",
+    "limitsNote": "判断ごとに新しい会話を使います。応答後に上限を確認するため、その応答分を超過する場合があります。使用量不明や超過時は既存の停止スイッチが作動します。",
+    "pricesNote": "料金は利用者が設定する推定値です。入力・キャッシュ書込の最高料金を使ってください。キャッシュ割引と補助モデル呼び出しは推定に含みません。",
+    "stopToEdit": "変更する前にランナーを停止してください。"
   }
 }

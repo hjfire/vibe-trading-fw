@@ -64,6 +64,7 @@ _LOADER_MODULES: tuple[str, ...] = (
     "backtest.loaders.longbridge",
     "backtest.loaders.mt5_loader",
     "backtest.loaders.tickerall_loader",
+    "backtest.loaders.b3_cotahist_loader",
     "backtest.loaders.local_loader",
     "backtest.warehouse.loader",
 )
@@ -102,6 +103,7 @@ VALID_SOURCES: set[str] = {
     "longbridge",
     "mt5",
     "tickerall",
+    "b3_cotahist",
     "local",
     "warehouse",  # the user's own stored bars (backtest.warehouse), opt-in
     "auto",
@@ -165,7 +167,7 @@ def _ensure_registered() -> None:
 # as if it were Toman — a caliber error of about six orders of magnitude, not a
 # missing-data error. An unreachable Iranian endpoint must be visible.
 _NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset(
-    {"local", "qveris", "tickerall", "fmp", "nobitex", "wallex", "warehouse"}
+    {"local", "qveris", "tickerall", "fmp", "nobitex", "wallex", "b3_cotahist", "warehouse"}
 )  # QVERIS-INTEGRATION
 
 # ``warehouse`` is also deliberately absent from every FALLBACK_CHAINS entry. Two
@@ -266,6 +268,9 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
         "yfinance",
         "tushare",
         "longbridge",
+        # Key-gated commercial vendor, same tail-of-chain rationale as the
+        # a_share chain (paid quota only spent when free sources cannot serve).
+        "gildata",
         "local",
     ],
     "india_equity": ["yahoo", "yfinance", "india_broker", "local"],
@@ -274,6 +279,10 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
     "ca_equity": ["yahoo", "yfinance", "local"],
     # Argentina (BYMA .BA): Yahoo public chart first, yfinance fallback.
     "ar_equity": ["yahoo", "yfinance", "local"],
+    # Brazil (B3 .SA): Yahoo public chart (adjusted) first, yfinance second,
+    # then the official B3 COTAHIST files (unadjusted, daily, every listed
+    # instrument) synced by ``vibe-trading br-data sync``.
+    "br_equity": ["yahoo", "yfinance", "b3_cotahist", "local"],
     # UK (LSE .L): direct Yahoo first, SDK fallback second.
     "uk_equity": ["yahoo", "yfinance", "local"],
     # Vietnam (.VN): Yahoo lists HOSE only — HNX and UPCOM are unsupported,
@@ -295,7 +304,7 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
     "forex": ["mt5", "akshare", "yfinance", "local"],
     # Yahoo index symbols (^SPX, ^NDX, ^FTSE, ^VIX, ...): served verbatim by
     # the public chart endpoint, same as the =F/=X conventions.
-    "index": ["yahoo", "yfinance", "local"],
+    "index": ["yahoo", "yfinance", "gildata", "local"],
 }
 
 
@@ -337,6 +346,7 @@ PRICE_CALIBER_BY_SOURCE: dict[str, str] = {
     "sina": "raw",
     "alphavantage": "raw",  # TIME_SERIES_DAILY, not the _ADJUSTED endpoint
     "longbridge": "raw",  # pins AdjustType.NoAdjust
+    "b3_cotahist": "raw",  # B3 COTAHIST files carry traded prices only
 }
 
 #: Per-(source, market) exceptions to the per-source table.
@@ -358,6 +368,9 @@ PRICE_CALIBER_BY_SOURCE_MARKET: dict[tuple[str, str], str] = {
     # and US series are not measured and keep the per-source label.
     ("eastmoney", "a_share"): "split_dividend_additive",
     ("akshare", "a_share"): "split_dividend_additive",
+    # Gildata's HKStockDailyQuotes serves raw traded prices (befadj/aftadj
+    # closes are separate fields, ignored) — measured on 00700.HK.
+    ("gildata", "hk_equity"): "raw",
 }
 
 #: Markets with no corporate-action adjustment concept. Their sources stamp
