@@ -92,9 +92,10 @@ def test_config_does_not_offer_a_resolution_the_feed_refuses(
 ):
     """``supported_resolutions`` is an offer, so nothing in it may 400.
 
-    The mirror case is what makes this worth pinning: ``2D`` is absent from the
-    table *and* rejected by ``/history`` — a widget that offered it anyway would
-    show the user an empty chart with no reason.
+    The mirror case is what makes this worth pinning: ``1Q`` is absent from the
+    offer *and* rejected by ``/history`` — a widget that offered it anyway would
+    show the user an empty chart with no reason. (``2D`` used to be that mirror;
+    it is served now, so it could no longer say anything.)
     """
     cfg = client.get("/api/udf/config").json()
     for resolution in cfg["supported_resolutions"]:
@@ -599,41 +600,8 @@ def test_api_server_mounts_the_protocol():
 
 
 # --------------------------------------------------------------------------- #
-# custom multiplier resolutions (local ㊞ slice 5): the tables are derived now
+# custom multiplier resolutions (local ㊞ slice 5): the route serves a fold
 # --------------------------------------------------------------------------- #
-
-def test_the_native_table_lost_not_a_single_spelling():
-    """Whole-dict equality: dropping one of the twelve spellings is the failure mode.
-
-    The table used to be twelve hand-written entries; it is now built from
-    ``interval_spec``. A hand-deleted key here would make a real widget's `1H` or
-    `1D` request 400 while `/config` still looks fine, so the comparison is against
-    the literals, not against the module.
-    """
-    assert {
-        r: interval_spec.parse_resolution(r).interval
-        for r in ("1", "5", "15", "30", "60", "1H", "1D", "D", "1W", "W", "1M", "M")
-    } == {
-        "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "60m", "1H": "60m",
-        "1D": "1D", "D": "1D", "1W": "1W", "W": "1W", "1M": "1M", "M": "1M",
-    }
-
-
-def test_the_bar_width_table_still_reads_the_old_numbers():
-    """The old twelve-row width table, now a comprehension over ``bar_seconds``.
-
-    Whole-dict equality against the literals is the point: if one derived width
-    drifted, ``_bar_count`` and the window filter would size history differently
-    with nothing on the wire to say so — and a month stays 31 days (the long one).
-    """
-    assert {
-        r: interval_spec.bar_seconds(interval_spec.parse_resolution(r))
-        for r in ("1", "5", "15", "30", "60", "1H", "D", "1D", "W", "1W", "M", "1M")
-    } == {
-        "1": 60, "5": 300, "15": 900, "30": 1800, "60": 3600, "1H": 3600,
-        "D": 86400, "1D": 86400, "W": 604800, "1W": 604800, "M": 2678400, "1M": 2678400,
-    }
-
 
 def test_config_advertises_exactly_the_eight_canonical_spellings():
     """The pin above (`cfg[...] == list(SUPPORTED_RESOLUTIONS)`) cannot fail; this one can.
@@ -657,10 +625,10 @@ def test_every_advertised_resolution_is_answerable(
     allowed to be empty for one spelling or another; what is not allowed is the
     `unsupported resolution` answer.
 
-    Both feed fixtures are wired (裁定五): the six minute spellings run through
-    ``_futu_minute_bars`` and the six calendar ones through ``_fetch_daily`` — a
-    real widget never reaches the network here, and a fetch outage must not be
-    recorded as a refused-by-name semantics failure.
+    Both fixtures are wired (裁定五): the minute spellings run ``_futu_minute_bars``,
+    the calendar ones ``_fetch_daily``, so a fetch outage is never recorded as a
+    refused-by-name semantics failure. None of these legs prove a fold: only ``120`` /
+    ``7`` / ``1440`` reach ``fold_bars``, and that is the multiplier pin's business.
     """
     body = client.get(
         "/api/udf/history",
@@ -679,9 +647,12 @@ def test_multiplier_resolutions_are_served_not_rejected(
 ):
     """`/config` never lists these; the protocol still lets a widget ask for them.
 
-    ``daily_feed`` is wired too (裁定五): ``2D`` / ``2W`` / ``3M`` fold off the
-    daily chain, and leaving that chain unstubbed would let the request fall
-    through into a real ``import akshare`` instead of proving it is served.
+    ``daily_feed`` is wired too (裁定五): ``2D`` / ``2W`` / ``3M`` fold off the daily
+    chain, and leaving it unstubbed would let the request fall through into a real
+    ``import akshare`` instead of proving it is served. The `ok` / `no_data` verdicts
+    are not a folding proof either: only ``120`` / ``7`` / ``1440`` pass through
+    ``fold_bars``, and the calendar multipliers land inside ``_fetch_calendar_bars``,
+    whose fold arithmetic Task 3 closed and this pin does not re-open.
     """
     asked: list[tuple[str, int]] = []
 
@@ -703,6 +674,13 @@ def test_multiplier_resolutions_are_served_not_rejected(
     ).json()
     assert body.get("s") in ("ok", "no_data"), body
     assert "unsupported" not in str(body.get("errmsg", ""))
+    # The `asked` list is recorded above, so it has to be read here: a multiplier
+    # must be taken as k base bars of *this* base, not as some other spelling.
+    spec = interval_spec.parse_resolution(resolution)
+    if spec.base in interval_spec.MINUTE_BASES:  # 120→60m, 7→1m, 1440→60m
+        assert [i for i, _ in asked] == [spec.base], (resolution, asked)
+    else:  # 2D / 2W / 3M go down the daily chain
+        assert asked == [] and daily_feed["seen"], (resolution, asked, daily_feed["seen"])
 
 
 @pytest.mark.parametrize(
@@ -738,7 +716,13 @@ def test_the_history_window_uses_the_fold_width_not_a_day(client, daily_feed, mo
     20 folded bars over a 15-day window: with the old default the estimate sized
     itself as if each bar were a day (a factor-of-12 error), and the overlap filter
     then let bars through that never reach the window.
+
+    The bar count is asserted as well as the overlap, because 12 stub bars answer
+    identically whether the estimate asked for 463 base bars or for 45 — the
+    returned shape cannot tell the two apart, only the ask can.
     """
+    asked_count: list[int] = []
+
     def sixty_minute_bars(symbol, interval, count, adjust, before):
         # Four 60-minute bars closing 10:30/11:30/14:00/15:00 Shanghai (= 02:30,
         # 03:30, 06:00, 07:00 UTC) on each of three trading days. The 2x fold lands
@@ -747,6 +731,7 @@ def test_the_history_window_uses_the_fold_width_not_a_day(client, daily_feed, mo
         # 86400 fallback cannot pass.
         days = [_day_ts(2026, 8, 31), _day_ts(2026, 9, 1), _day_ts(2026, 9, 2)]
         offsets = [2 * 3600 + 1800, 3 * 3600 + 1800, 6 * 3600, 7 * 3600]
+        asked_count.append(count)
         return [
             {"timestamp": (day + off) * 1000, "open": 1.0, "high": 2.0, "low": 0.5,
              "close": 1.5, "volume": 10.0}
@@ -764,4 +749,9 @@ def test_the_history_window_uses_the_fold_width_not_a_day(client, daily_feed, mo
     ).json()
     assert body["s"] == "ok", body
     assert interval_spec.bar_seconds(interval_spec.parse_resolution("120")) == 7200
+    # The ask, measured with a ruler the window itself supplies: `120` is two
+    # 7200-second bars, so a 15-day window must be asked for at least that many
+    # base bars. Sized off a day (the deleted fallback) this ask comes out at 45
+    # for a window needing 458 — and the 12 stub bars would still look identical.
+    assert asked_count and asked_count[0] >= (to - frm) // 7200 * 2, (asked_count, frm, to)
     assert all(to > t >= frm - 7200 for t in body["t"]), body["t"]

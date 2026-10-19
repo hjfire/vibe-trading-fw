@@ -96,12 +96,12 @@ UDF_PREFIX = "/api/udf"
 #: base — ``2.5``, ``0`` — because a silent round to the nearest neighbour would
 #: draw monthly bars on a ``3M`` request and look like data.
 #:
-#: Which spelling means which bar is no longer restated beside this offer.
-#: ``/history`` parses every request through
-#: :func:`src.api.interval_spec.parse_resolution` — the one place that knows what
-#: a bar is — and sizes the fold with ``bar_seconds(spec)``. A hand-maintained
-#: spelling table living next to that parser is exactly how the two drift apart,
-#: so this list is only the offer, never a second vocabulary.
+#: What this offer deliberately does not carry is a copy of each spelling's width
+#: and market interval: ``/history`` parses every request through
+#: :func:`src.api.interval_spec.parse_resolution` — the one place that knows what a
+#: bar is — and sizes the fold with ``bar_seconds(spec)``. Two hand-written width
+#: tables living beside that parser are exactly how the two drifted apart (each one
+#: carried its own ``86400`` guess), so this list stays the offer and nothing more.
 SUPPORTED_RESOLUTIONS: tuple[str, ...] = ("1", "5", "15", "30", "60", "D", "W", "M")
 
 #: Venue code per market suffix, as ``/search`` and ``/symbols`` report the

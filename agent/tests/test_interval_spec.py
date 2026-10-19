@@ -125,8 +125,8 @@ class TestBarSeconds:
          ("D", 86400), ("1D", 86400), ("W", 604800), ("1W", 604800),
          ("M", 2678400), ("1M", 2678400)],
     )
-    def test_native_widths_are_what_the_udf_table_already_said(self, resolution, seconds):
-        """The table this replaces is *derived* now, so its old readings are pinned.
+    def test_native_widths_are_the_ones_udf_history_needs(self, resolution, seconds):
+        """The bar width belongs to ``interval_spec``; both doors read it from here.
 
         ``bar_seconds`` feeds a bar-count estimate and a window filter; if a
         derived value drifted, the chart would fetch a different amount of history
