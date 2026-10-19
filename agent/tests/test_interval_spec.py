@@ -128,7 +128,7 @@ class TestBarSeconds:
     def test_native_widths_are_what_the_udf_table_already_said(self, resolution, seconds):
         """The table this replaces is *derived* now, so its old readings are pinned.
 
-        ``_RESOLUTION_SECONDS`` feeds a bar-count estimate and a window filter; if a
+        ``bar_seconds`` feeds a bar-count estimate and a window filter; if a
         derived value drifted, the chart would fetch a different amount of history
         with nothing on the wire to say so. A month stays 31 days (the long one) so
         the estimate can only ever over-include.

@@ -21,7 +21,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api import market_routes, udf_routes
+from src.api import interval_spec, market_routes, udf_routes
 
 DAY = 86400
 
@@ -213,8 +213,12 @@ def test_history_countback_beats_from_and_returns_the_requested_length(client, d
 
 
 def test_history_unknown_resolution_is_an_error_naming_the_known_ones(client, daily_feed):
+    # ``3M`` became a served multiplier in slice 5, so the refused exemplar moves
+    # to a spelling no rule admits; the claim (a refusal names the known ones) is
+    # unchanged. ``1Q`` is refused because ``Q`` is not a served unit — ``3`` would
+    # NOT work, since a bare number parses as ``1m`` taken three times.
     body = client.get(
-        "/api/udf/history", params={"symbol": "600519.SH", "resolution": "3M"}
+        "/api/udf/history", params={"symbol": "600519.SH", "resolution": "1Q"}
     ).json()
     assert body["s"] == "error"
     assert "unsupported resolution" in body["errmsg"]
@@ -592,3 +596,172 @@ def test_api_server_mounts_the_protocol():
     paths = {getattr(route, "path", "") for route in api_server.app.routes}
     assert f"{udf_routes.UDF_PREFIX}/history" in paths
     assert f"{udf_routes.UDF_PREFIX}/config" in paths
+
+
+# --------------------------------------------------------------------------- #
+# custom multiplier resolutions (local ㊞ slice 5): the tables are derived now
+# --------------------------------------------------------------------------- #
+
+def test_the_native_table_lost_not_a_single_spelling():
+    """Whole-dict equality: dropping one of the twelve spellings is the failure mode.
+
+    The table used to be twelve hand-written entries; it is now built from
+    ``interval_spec``. A hand-deleted key here would make a real widget's `1H` or
+    `1D` request 400 while `/config` still looks fine, so the comparison is against
+    the literals, not against the module.
+    """
+    assert {
+        r: interval_spec.parse_resolution(r).interval
+        for r in ("1", "5", "15", "30", "60", "1H", "1D", "D", "1W", "W", "1M", "M")
+    } == {
+        "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "60m", "1H": "60m",
+        "1D": "1D", "D": "1D", "1W": "1W", "W": "1W", "1M": "1M", "M": "1M",
+    }
+
+
+def test_the_bar_width_table_still_reads_the_old_numbers():
+    """The old twelve-row width table, now a comprehension over ``bar_seconds``.
+
+    Whole-dict equality against the literals is the point: if one derived width
+    drifted, ``_bar_count`` and the window filter would size history differently
+    with nothing on the wire to say so — and a month stays 31 days (the long one).
+    """
+    assert {
+        r: interval_spec.bar_seconds(interval_spec.parse_resolution(r))
+        for r in ("1", "5", "15", "30", "60", "1H", "D", "1D", "W", "1W", "M", "1M")
+    } == {
+        "1": 60, "5": 300, "15": 900, "30": 1800, "60": 3600, "1H": 3600,
+        "D": 86400, "1D": 86400, "W": 604800, "1W": 604800, "M": 2678400, "1M": 2678400,
+    }
+
+
+def test_config_advertises_exactly_the_eight_canonical_spellings():
+    """The pin above (`cfg[...] == list(SUPPORTED_RESOLUTIONS)`) cannot fail; this one can.
+
+    `1H` / `1D` / `1W` / `1M` are accepted by `/history` but must not be offered: a
+    chart that is handed a second spelling of one interval will draw two buttons.
+    """
+    assert udf_routes.SUPPORTED_RESOLUTIONS == ("1", "5", "15", "30", "60", "D", "W", "M")
+
+
+@pytest.mark.parametrize(
+    "resolution",
+    ["1", "5", "15", "30", "60", "1H", "1D", "D", "1W", "W", "1M", "M"],
+)
+def test_every_advertised_resolution_is_answerable(
+    resolution, client, daily_feed, minute_feed
+):
+    """报价等式：`/config` 报出去的每一个拼写，`/history` 必须答得出。
+
+    Asserting `s != "error"` rather than `== "ok"` because the fixture window is
+    allowed to be empty for one spelling or another; what is not allowed is the
+    `unsupported resolution` answer.
+
+    Both feed fixtures are wired (裁定五): the six minute spellings run through
+    ``_futu_minute_bars`` and the six calendar ones through ``_fetch_daily`` — a
+    real widget never reaches the network here, and a fetch outage must not be
+    recorded as a refused-by-name semantics failure.
+    """
+    body = client.get(
+        "/api/udf/history",
+        params={"symbol": "600519.SH", "resolution": resolution, "from": 1_750_000_000,
+                "to": 1_760_000_000},
+    ).json()
+    assert body.get("s") != "error", body
+    assert "unsupported" not in str(body.get("errmsg", ""))
+
+
+@pytest.mark.parametrize(
+    "resolution", ["120", "7", "1440", "2D", "2W", "3M"],
+)
+def test_multiplier_resolutions_are_served_not_rejected(
+    resolution, client, daily_feed, monkeypatch
+):
+    """`/config` never lists these; the protocol still lets a widget ask for them.
+
+    ``daily_feed`` is wired too (裁定五): ``2D`` / ``2W`` / ``3M`` fold off the
+    daily chain, and leaving that chain unstubbed would let the request fall
+    through into a real ``import akshare`` instead of proving it is served.
+    """
+    asked: list[tuple[str, int]] = []
+
+    def fake_minute(symbol, interval, count, adjust, before):
+        asked.append((interval, count))
+        step = {"1m": 60_000, "60m": 3_600_000}[interval]
+        start = 1_760_000_000_000
+        return [
+            {"timestamp": start + i * step, "open": 1.0, "high": 2.0, "low": 0.5,
+             "close": 1.5, "volume": 10.0}
+            for i in range(count)
+        ]
+
+    monkeypatch.setattr(market_routes, "_futu_minute_bars", fake_minute)
+    body = client.get(
+        "/api/udf/history",
+        params={"symbol": "600519.SH", "resolution": resolution,
+                "from": 1_750_000_000, "to": 1_770_000_000},
+    ).json()
+    assert body.get("s") in ("ok", "no_data"), body
+    assert "unsupported" not in str(body.get("errmsg", ""))
+
+
+@pytest.mark.parametrize(
+    "resolution", ["1", "5", "15", "30", "60", "1H", "1D", "D", "1W", "W", "1M", "M",
+                   "120", "7", "2D", "2W", "3M"],
+)
+def test_every_served_resolution_has_a_real_bar_width(resolution):
+    """设计 §4 第 4 步：不 grep 源码，而是断言那两枚 86400 兜底已经没有对象可兜。
+
+    `_bar_count` and the window filter now both take `bar_seconds(spec)`, which is
+    total over `IntervalSpec`. A spelling that has no width cannot produce a spec at
+    all, so it is refused by name before either site is reached.
+    """
+    parsed = interval_spec.parse_resolution(resolution)
+    assert parsed is not None, resolution
+    assert interval_spec.bar_seconds(parsed) > 0, resolution
+
+
+def test_a_resolution_that_is_not_a_spelling_is_refused_by_name(client):
+    body = client.get(
+        "/api/udf/history",
+        params={"symbol": "600519.SH", "resolution": "2.5", "from": 1_750_000_000,
+                "to": 1_760_000_000},
+    ).json()
+    assert body["s"] == "error"
+    assert "'2.5'" in body["errmsg"]
+    assert "multiplier" in body["errmsg"], body["errmsg"]
+
+
+def test_the_history_window_uses_the_fold_width_not_a_day(client, daily_feed, monkeypatch):
+    """`120` must not borrow `86400`: that would widen the window to a day per bar.
+
+    20 folded bars over a 15-day window: with the old default the estimate sized
+    itself as if each bar were a day (a factor-of-12 error), and the overlap filter
+    then let bars through that never reach the window.
+    """
+    def sixty_minute_bars(symbol, interval, count, adjust, before):
+        # Four 60-minute bars closing 10:30/11:30/14:00/15:00 Shanghai (= 02:30,
+        # 03:30, 06:00, 07:00 UTC) on each of three trading days. The 2x fold lands
+        # a served bar inside the window and two just *before* it — and those two
+        # are what a day-wide window wrongly lets back in, so this is the pin the
+        # 86400 fallback cannot pass.
+        days = [_day_ts(2026, 8, 31), _day_ts(2026, 9, 1), _day_ts(2026, 9, 2)]
+        offsets = [2 * 3600 + 1800, 3 * 3600 + 1800, 6 * 3600, 7 * 3600]
+        return [
+            {"timestamp": (day + off) * 1000, "open": 1.0, "high": 2.0, "low": 0.5,
+             "close": 1.5, "volume": 10.0}
+            for day in days
+            for off in offsets
+        ]
+
+    monkeypatch.setattr(market_routes, "_futu_minute_bars", sixty_minute_bars)
+    bars = daily_feed["bars"]
+    frm = int(bars[0]["timestamp"]) // 1000
+    to = int(bars[19]["timestamp"]) // 1000 + 7200
+    body = client.get(
+        "/api/udf/history",
+        params={"symbol": "600519.SH", "resolution": "120", "from": frm, "to": to},
+    ).json()
+    assert body["s"] == "ok", body
+    assert interval_spec.bar_seconds(interval_spec.parse_resolution("120")) == 7200
+    assert all(to > t >= frm - 7200 for t in body["t"]), body["t"]

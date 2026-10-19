@@ -71,7 +71,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from src.api import market_routes
+from src.api import interval_spec, market_routes
 
 logger = logging.getLogger(__name__)
 
@@ -83,52 +83,26 @@ AuthDep = Callable[..., Awaitable[Any] | Any]
 #: with ``index.html`` (see :mod:`src.api.spa`).
 UDF_PREFIX = "/api/udf"
 
-#: UDF resolution spellings -> ``market_routes`` interval tokens.
+#: What ``/config`` advertises. The canonical spellings only: a chart that offers
+#: a resolution the feed does not name is an offer the feed has to keep.
 #:
 #: The protocol names intraday bars by bare minutes (``"1"``, ``"60"``) and
 #: calendar bars by a unit letter, with the ``"1D"`` form also accepted because
-#: both spellings appear in the wild and in our own toolbar. ``"2D"`` / ``"3M"``
-#: style multipliers are **not** here: the route has no such interval, and the
-#: honest answer to an interval we cannot serve is an error naming the ones we
-#: can — a silent round to the nearest neighbour would draw monthly bars on a
-#: ``3M`` request and look like data.
-_RESOLUTION_TO_INTERVAL: dict[str, str] = {
-    "1": "1m",
-    "5": "5m",
-    "15": "15m",
-    "30": "30m",
-    "60": "60m",
-    "1H": "60m",
-    "1D": "1D",
-    "D": "1D",
-    "1W": "1W",
-    "W": "1W",
-    "1M": "1M",
-    "M": "1M",
-}
-
-#: What ``/config`` advertises. The canonical spellings only: a chart that offers
-#: a resolution the feed does not name is an offer the feed has to keep.
+#: both spellings appear in the wild and in our own toolbar. A multiplier
+#: (``"120"``, ``"2D"``, ``"3M"``) is **served but not advertised**: the library
+#: composes those requests itself from the bases it is shown, and a list of every
+#: product would be a catalogue to maintain rather than a capability to discover.
+#: What stays refused is the spelling that is not a whole multiple of a served
+#: base — ``2.5``, ``0`` — because a silent round to the nearest neighbour would
+#: draw monthly bars on a ``3M`` request and look like data.
+#:
+#: Which spelling means which bar is no longer restated beside this offer.
+#: ``/history`` parses every request through
+#: :func:`src.api.interval_spec.parse_resolution` — the one place that knows what
+#: a bar is — and sizes the fold with ``bar_seconds(spec)``. A hand-maintained
+#: spelling table living next to that parser is exactly how the two drift apart,
+#: so this list is only the offer, never a second vocabulary.
 SUPPORTED_RESOLUTIONS: tuple[str, ...] = ("1", "5", "15", "30", "60", "D", "W", "M")
-
-#: Approximate seconds per resolution, used only to size a bar count from a
-#: ``[from, to)`` window when the library does not send ``countback``. Monthly is
-#: 31 days (the long month), so the count can only ever come out too large and
-#: be trimmed by the response — never too small, which would clip the window.
-_RESOLUTION_SECONDS: dict[str, int] = {
-    "1": 60,
-    "5": 300,
-    "15": 900,
-    "30": 1800,
-    "60": 3600,
-    "1H": 3600,
-    "D": 86400,
-    "1D": 86400,
-    "W": 604800,
-    "1W": 604800,
-    "M": 2678400,
-    "1M": 2678400,
-}
 
 #: Venue code per market suffix, as ``/search`` and ``/symbols`` report the
 #: exchange. These strings are what the library shows in its symbol dialog and
@@ -458,7 +432,7 @@ def _columns(bars: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _bar_count(resolution: str, frm: int, to: int, countback: int | None) -> int:
+def _bar_count(spec: interval_spec.IntervalSpec, frm: int, to: int, countback: int | None) -> int:
     """How many bars to ask the loader for to cover ``[from, to)``.
 
     ``countback`` wins when the library sends it (it means "``countback`` bars
@@ -469,13 +443,25 @@ def _bar_count(resolution: str, frm: int, to: int, countback: int | None) -> int
     quietly answering 10 would return bars the caller did not ask for. This
     module calls :func:`market_routes._kline_sync` directly, so that route's
     query model never sees the number.
+
+    ``spec`` is the parsed resolution, so the width is the fold's own — a bar sized
+    as a day for a 120-minute request would ask for an order of magnitude too few.
     """
     if countback and countback > 0:
         return max(1, min(int(countback), market_routes._MAX_BARS))
-    per_bar = _RESOLUTION_SECONDS.get(resolution, 86400)
+    per_bar = interval_spec.bar_seconds(spec)
     span = max(int(to) - int(frm), 0)
     estimated = math.ceil(span / per_bar) + 2 if span else market_routes._MAX_BARS
     return max(1, min(estimated, market_routes._MAX_BARS))
+
+
+def _unsupported_resolution(resolution: str) -> str:
+    """Name the rule and the bases; the old text could only list eight literals."""
+    return (
+        f"unsupported resolution {resolution!r} (known: {'/'.join(SUPPORTED_RESOLUTIONS)} "
+        f"native spellings, or any served base taken a whole number of times as a "
+        f"multiplier — 120 is two 60-minute bars)"
+    )
 
 
 def history_payload(
@@ -506,14 +492,10 @@ def history_payload(
     time", and inventing one out of the future would page the chart the wrong
     way with a timestamp it was never asked for.
     """
-    interval = _RESOLUTION_TO_INTERVAL.get(resolution)
-    if interval is None:
-        return {
-            "s": _S_ERROR,
-            "errmsg": (
-                f"unsupported resolution {resolution!r} (known: {'/'.join(SUPPORTED_RESOLUTIONS)})"
-            ),
-        }
+    parsed = interval_spec.parse_resolution(resolution)
+    if parsed is None:
+        return {"s": _S_ERROR, "errmsg": _unsupported_resolution(resolution)}
+    interval = parsed.interval
     if adjust not in market_routes._ADJUSTS:
         return {
             "s": _S_ERROR,
@@ -527,7 +509,7 @@ def history_payload(
 
     to_s = int(to) if to else server_time_seconds()
     frm_s = int(frm) if frm else 0
-    count = _bar_count(resolution, frm_s, to_s, countback)
+    count = _bar_count(parsed, frm_s, to_s, countback)
     try:
         payload = market_routes._kline_sync(
             symbol.strip().upper(), interval, count, adjust, before=to_s * 1000, session=session
@@ -557,15 +539,15 @@ def history_payload(
     # day (Sep 1), so a window opening mid-month (``from`` = Sep 3) contains none
     # of its own bar's timestamps and the widget would answer "no data" about a
     # month that has one — a hole at the left edge that looks like a thin
-    # history. ``_RESOLUTION_SECONDS`` is the generous approximation of a bar's
-    # width (31 days for a month), which can only ever over-include a bar that
-    # really does reach the window, never drop one.
+    # history. ``bar_seconds`` is the generous approximation of **this** bar's
+    # width (31 days for a month, ``k`` days for a ``2D``), which can only ever
+    # over-include a bar that really does reach the window, never drop one.
     #
     # ``countback`` short-circuits the filter entirely, because the protocol says
     # so ("If countback is set, from should be ignored"): the caller has asked for
     # N bars ending at ``to``, and applying a stale ``from`` on top would return
     # fewer bars than were requested for a window the caller no longer means.
-    span = _RESOLUTION_SECONDS.get(resolution, 86400)
+    span = interval_spec.bar_seconds(parsed)
     starts = [int(b["timestamp"]) // 1000 for b in bars]
     if countback and countback > 0:
         in_window = bars
