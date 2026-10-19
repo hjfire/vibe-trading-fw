@@ -1670,6 +1670,46 @@ EOF
 > 只做纯增量插句。连带一处既存针 `test_udf_history_unknown_resolution_is_an_error_naming_the_known_ones`
 > 的反例从 `3M` 换成 `1Q`：`3M` 被本片放开是**故意的行为变更**，而那枚针的 claim（被拒的拼写要点名已知的那些）
 > 在换掉的反例上原样成立；`"3"` 不能用，它解析成 `1m`×3。
+>
+> **2026-10-20 执行期 amend 第二批（修复轮 1＋2 落地后由控制席自己复测；三枚注入一律走仓库外 pytest 插件，
+> 跟踪文件零写入。同一对套件 `tests/test_udf_routes.py ＋ tests/test_interval_spec.py` 的未注入基线＝
+> `142 passed, rc=0`，下面四条读数共用这个分母）**
+>
+> （四）**控制席在裁定里写过两句假话，落地时已被修复轮改口成盘面真相。**
+> 一句是「宽度由两扇门共同从 `interval_spec` 读」：`grep -rn bar_seconds agent/src` 现读的读者只有
+> `udf_routes.py:452` 与 `:550` 两处，`market_routes.py` 一次没调用——`/market/kline` 吃的是 `spec.base`
+> 与 `spec.k`，宽度不经 `bar_seconds`。于是 `agent/tests/test_interval_spec.py:128-129` 从「两张表已由本模块派生」
+> 改成单扇门的说法，逐字现为 `test_native_widths_are_the_ones_udf_history_needs` /
+> `"""The bar width belongs to ``interval_spec``; ``/history`` reads it from here.`（1 行换 1 行，`:122-136` 行数守恒）。
+> 另一句是「只有 `120`／`7`／`1440` 三枚走到 `fold_bars`」：现读三个调用点 `market_routes.py:497`／`:540`／`:673`，
+> 日历腿与 `1D` 同样到达、`k=1` 也过 ⇒ `agent/tests/test_udf_routes.py:652-655` 改口为「六枚腿都到 `fold_bars`，
+> 但『到得了』是路由而不是折叠证明，折叠算术由 Task 3 钉」。
+> 两句同因：把「本片新开的倍数面」当成了「那张表的全部来电」，落笔前没现读调用点。给下一个执行者的纪律：
+> 裁定里凡说「谁读了 X」，先 `grep -rn` 再写。
+>
+> （五）**被删的两枚整字典针，claim 由继任者分担，且本席当场验过继任者有牙。**
+> 摘掉 `udf_routes.py:105` 的 `"M"` ⇒ `1 failed, 141 passed`，红的正是
+> `test_udf_routes.py:606 test_config_advertises_exactly_the_eight_canonical_spellings`（断言在 `:612`）。
+> 摘掉 `interval_spec.py:58` 的 `"1H": "60m"` ⇒ `5 failed, 137 passed`：
+> `test_every_advertised_resolution_is_answerable[1H]`（`:619`）、
+> `test_every_served_resolution_has_a_real_bar_width[1H]`（`:692`），加 `test_interval_spec.py` 的
+> `TestParseResolution::test_the_h_letter_and_the_bare_unit_letters_are_aliases`、
+> `TestParseResolution::test_every_served_resolution_round_trips_through_the_market_grammar[1H]`、
+> `TestBarSeconds::test_native_widths_are_the_ones_udf_history_needs[1H-3600]`。
+> 最后一枚以 `interval_spec.py:172` 的 `AttributeError` 形状红（`None` 喂进 `bar_seconds`）而不是断言失败——
+> 形状难看但确实红，正是裁定预告并接受的代价。
+> `Why:` 手删一枚拼写时该红的不是「那张字典少一个键」，而是「报价与应答不再相等」与「这枚拼写没有宽度」；
+> 继任者把这两条分别接在 HTTP 应答面、宽度面、别名面与往返面上。
+>
+> （六）**根数腿起初无针，是本片自造出来又当场治掉的读数病灶。**
+> `_bar_count`（`udf_routes.py:435`）算出的根数在修复轮 1 之前没有任何东西接住：窗口针的替身不看 `count`
+> 参数、恒回固定根数，于是「把 `per_bar` 换成 `86400`」在树上全绿——一条写了却没被任何针读到的算术，
+> 而档案若据此写「两枚 `86400` 兜底已消失」就是假话。落地形状：替身记下收到的 `ask`，用窗口自己算出的尺断言
+> （`test_udf_routes.py:758`，逐字 `assert asked_count and asked_count[0] >= (to - frm) // 7200 * 2, (asked_count, frm, to)`），
+> 尺由窗口导出、不是手抄魔数。终态注入读数（本席自跑）：**`3 failed, 139 passed`**，红的三条腿＝
+> `test_multiplier_resolutions_are_served_not_rejected[120]`、`[7]`、
+> `test_the_history_window_uses_the_fold_width_not_a_day`。`1440` 那枚腿在注入下不红，原因如实记在这儿：
+> 它自己的真宽度就是 `86400`，注入对它是恒等操作，不是针瞎。
 
 ---
 
