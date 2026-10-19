@@ -1648,6 +1648,29 @@ EOF
 )"
 ```
 
+> **2026-10-20 执行期 amend（Task 4 的三条正文缺陷，由控制席当场复测后裁定，落地形状以 `5b0c5595` 为准）**
+>
+> （一）**Interfaces 那句「名字保持 `_RESOLUTION_TO_INTERVAL` 与 `_RESOLUTION_SECONDS`（改成派生）」作废，两张表删除。**
+> 开工前 `grep -rn "_RESOLUTION_SECONDS|_RESOLUTION_TO_INTERVAL|_bar_count" src/ tests/ --include=*.py` 现读：
+> 前者的唯一读者是 `udf_routes.py:509`，后者的两枚读者是 `:475` 与 `:568`——三处都在本任务的 Step 4 里换成
+> `parse_resolution`／`bar_seconds(spec)`，于是两张表**读者归零**。Step 2 又要求整字典钉它们，那就是一张没人读的
+> 字典外加一枚专供测试的针，与本计划在 `alerts_routes.py:51` 照出来的同一种病（词表长在别处、解析器说另一套）。
+> 设计 §3 那段的用途自述是「两枚 `86400` 静默兜底」，兜底消失即用途满足；两枚针的 claim 逐字留在测试里，
+> 等号左边从「读 src 的表」改成「当场对 `interval_spec` 求值」，字面量仍整字典对账。
+>
+> （二）**Step 2 三枚新针的 fixture 接线是计划缺陷。** 本文件自己写的 `minute_feed` docstring
+> （`agent/tests/test_udf_routes.py:322-325`）就点名「只钉日链会让日内测试真去 `import akshare`」，而
+> `test_every_advertised_resolution_is_answerable` 与 `test_the_history_window_uses_the_fold_width_not_a_day`
+> 只挂 `daily_feed` 却请求分钟族，`test_multiplier_resolutions_are_served_not_rejected` 只钉分钟链却把
+> `2D`／`2W`／`3M` 交给日链。补钉是纯增量：断言、参数化条目、docstring 的 claim 一字不动——让它们在未钉的通道上红，
+> 等于把一次网络故障记成语义失败。
+>
+> （三）**Step 4.4 的 `_unsupported_resolution` 文案与 Step 2 的针互斥**：针要求 `"multiplier" in body["errmsg"]`，
+> 交付文案只说「taken a whole number of times」。裁定形与 Task 1 F3／Task 3 F1 同——**针是需求，文案是过期那一半**，
+> 只做纯增量插句。连带一处既存针 `test_udf_history_unknown_resolution_is_an_error_naming_the_known_ones`
+> 的反例从 `3M` 换成 `1Q`：`3M` 被本片放开是**故意的行为变更**，而那枚针的 claim（被拒的拼写要点名已知的那些）
+> 在换掉的反例上原样成立；`"3"` 不能用，它解析成 `1m`×3。
+
 ---
 
 ## Task 5: 活体探真进程（不起 TestClient 交差）
