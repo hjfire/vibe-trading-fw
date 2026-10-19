@@ -99,9 +99,9 @@ UDF_PREFIX = "/api/udf"
 #: What this offer deliberately does not carry is a copy of each spelling's width
 #: and market interval: ``/history`` parses every request through
 #: :func:`src.api.interval_spec.parse_resolution` — the one place that knows what a
-#: bar is — and sizes the fold with ``bar_seconds(spec)``. Two hand-written width
-#: tables living beside that parser are exactly how the two drifted apart (each one
-#: carried its own ``86400`` guess), so this list stays the offer and nothing more.
+#: bar is — and sizes the fold with ``bar_seconds(spec)``. A vocabulary restated
+#: beside the parser is how the two drift apart, so neither the old width table
+#: nor the ``86400`` per-spelling default survives here; this list is only the offer.
 SUPPORTED_RESOLUTIONS: tuple[str, ...] = ("1", "5", "15", "30", "60", "D", "W", "M")
 
 #: Venue code per market suffix, as ``/search`` and ``/symbols`` report the
