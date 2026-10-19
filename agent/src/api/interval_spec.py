@@ -160,15 +160,19 @@ def fold_spec(base: str, k: int) -> IntervalSpec:
 def bar_seconds(spec: IntervalSpec) -> int:
     """Approximate width of one served bar, generous.
 
-    Total by construction: it takes an ``IntervalSpec``, which only exists for a
-    request this module can serve. That is the point — the two ``.get(..., 86400)``
-    defaults in ``udf_routes`` silently read *every* unknown spelling as a day, and
-    a fold must never be sized off a guess.
+    Total for every spec this module can produce, and it is ``base`` alone that
+    decides the width: an ``IntervalSpec`` hand-built around a base outside this
+    module's vocabulary raises rather than being sized off a guess. That is the
+    point — the two ``.get(..., 86400)`` defaults in ``udf_routes`` silently read
+    *every* unknown spelling as a day, and a fold must never be sized off a guess.
     """
     if spec.base in _MINUTE_SECONDS:
         return _MINUTE_SECONDS[spec.base] * spec.k
-    if spec.unit == "week":
+    unit = _unit_of(spec.base)
+    if unit == "week":
         return WEEK_SECONDS * spec.k
-    if spec.unit == "month":
+    if unit == "month":
         return MONTH_SECONDS * spec.k
-    return DAY_SECONDS * spec.k
+    if spec.base == DAILY_BASE:
+        return DAY_SECONDS * spec.k
+    raise ValueError(f"no bar width for base {spec.base!r}")

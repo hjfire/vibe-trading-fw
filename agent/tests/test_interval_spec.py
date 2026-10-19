@@ -73,7 +73,7 @@ class TestParseInterval:
         a second refusal axis, and the only thing it could protect is a URL nobody
         builds.
         """
-        assert parse_interval("01D") == parse_interval("1D")
+        assert parse_interval("01D") == IntervalSpec("native", "1D", 1, "")
 
 
 class TestParseResolution:
@@ -149,6 +149,23 @@ class TestFoldSpec:
         assert fold_spec("1M", 1) == parse_interval("1M")
         assert fold_spec("1D", 2) == parse_interval("2D")
         assert fold_spec("1D", 1) == parse_interval("1D")
+        assert fold_spec("1m", 7) == parse_interval("7m")
+        assert fold_spec("60m", 2) == parse_interval("120m")
+
+    def test_the_width_is_the_base_not_a_fall_through_to_a_day(self):
+        """A base outside the vocabulary is refused; it is never read as a day.
+
+        ``fold_spec`` takes ``base`` on trust, so a hand-built ``2m`` spec can reach
+        ``bar_seconds``. Its last line used to be ``return DAY_SECONDS * spec.k``,
+        which answered that request with three days — the very silent ``86400``
+        default this module exists to abolish. Both shapes of the bug are pinned: an
+        unknown base raises, and a week built without its ``unit`` field still comes
+        out two weeks wide, because width is a function of ``base`` and never of
+        ``unit``.
+        """
+        with pytest.raises(ValueError):
+            bar_seconds(fold_spec("2m", 3))
+        assert bar_seconds(IntervalSpec("calendar-fold", "1W", 2)) == 2 * 604800
 
     def test_the_minute_bases_and_the_minute_period_table_say_the_same_five(self):
         """Two spellings of one fact must not be allowed to drift apart.
