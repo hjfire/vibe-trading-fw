@@ -126,7 +126,7 @@ class TestBarSeconds:
          ("M", 2678400), ("1M", 2678400)],
     )
     def test_native_widths_are_the_ones_udf_history_needs(self, resolution, seconds):
-        """The bar width belongs to ``interval_spec``; both doors read it from here.
+        """The bar width belongs to ``interval_spec``; ``/history`` reads it from here.
 
         ``bar_seconds`` feeds a bar-count estimate and a window filter; if a
         derived value drifted, the chart would fetch a different amount of history

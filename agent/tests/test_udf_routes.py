@@ -627,8 +627,8 @@ def test_every_advertised_resolution_is_answerable(
 
     Both fixtures are wired (裁定五): the minute spellings run ``_futu_minute_bars``,
     the calendar ones ``_fetch_daily``, so a fetch outage is never recorded as a
-    refused-by-name semantics failure. None of these legs prove a fold: only ``120`` /
-    ``7`` / ``1440`` reach ``fold_bars``, and that is the multiplier pin's business.
+    refused-by-name semantics failure. Answering is all this pin proves: ``1W`` / ``W`` /
+    ``1M`` / ``M`` reach ``fold_bars`` at k=1 too; Task 3 pinned the fold arithmetic.
     """
     body = client.get(
         "/api/udf/history",
@@ -649,10 +649,10 @@ def test_multiplier_resolutions_are_served_not_rejected(
 
     ``daily_feed`` is wired too (裁定五): ``2D`` / ``2W`` / ``3M`` fold off the daily
     chain, and leaving it unstubbed would let the request fall through into a real
-    ``import akshare`` instead of proving it is served. The `ok` / `no_data` verdicts
-    are not a folding proof either: only ``120`` / ``7`` / ``1440`` pass through
-    ``fold_bars``, and the calendar multipliers land inside ``_fetch_calendar_bars``,
-    whose fold arithmetic Task 3 closed and this pin does not re-open.
+    ``import akshare`` instead of proving it is served. All six legs do reach
+    ``fold_bars`` (minutes at market_routes.py:673, ``1D`` at :540, week/month at
+    :497), but arriving there is routing, not a folding proof: the fold arithmetic
+    itself was pinned by Task 3 and this pin does not re-open it.
     """
     asked: list[tuple[str, int]] = []
 
@@ -676,9 +676,11 @@ def test_multiplier_resolutions_are_served_not_rejected(
     assert "unsupported" not in str(body.get("errmsg", ""))
     # The `asked` list is recorded above, so it has to be read here: a multiplier
     # must be taken as k base bars of *this* base, not as some other spelling.
+    # And a ~231-day window needs more base bars than one page, so the ask clamps.
     spec = interval_spec.parse_resolution(resolution)
     if spec.base in interval_spec.MINUTE_BASES:  # 120→60m, 7→1m, 1440→60m
         assert [i for i, _ in asked] == [spec.base], (resolution, asked)
+        assert asked[0][1] == market_routes._MAX_BARS, (resolution, asked)
     else:  # 2D / 2W / 3M go down the daily chain
         assert asked == [] and daily_feed["seen"], (resolution, asked, daily_feed["seen"])
 
