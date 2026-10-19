@@ -485,9 +485,9 @@ def _merge_to_calendar(
     ``k`` says how many natural groups to weld into one served bar. The anchor is
     the group's **absolute** ordinal (weeks since the ISO epoch, months since year 1
     of the Common Era), never its index in the page this request happened to fetch:
-    two pages of the same symbol have to disagree about where the data starts, not
-    about which days belong to which bar. ``k == 1`` is the merge this function has
-    always done.
+    two pages of the same symbol may disagree about where the data starts, but they
+    must agree about which days belong to which bar. ``k == 1`` is the merge this
+    function has always done.
 
     It goes through :func:`interval_spec.calendar_fold_spec`, not ``fold_spec``: the
     latter hands back a ``native`` spec at ``k == 1`` (that is what ``1W`` means to the

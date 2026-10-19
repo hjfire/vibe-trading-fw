@@ -185,7 +185,6 @@ def bar_seconds(spec: IntervalSpec) -> int:
 #: ordinal turns an ``(iso_year, iso_week)`` pair into one monotonic integer, which
 #: is what a multiplier needs — ``iso_week // k`` collides across a year boundary.
 _ISO_EPOCH_ORDINAL = date(1970, 1, 5).toordinal()
-_WEEK_MS = 7 * DAY_MS
 
 
 def calendar_group_key(ts_ms: int, unit: str) -> tuple[int, int]:

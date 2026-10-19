@@ -13,13 +13,19 @@ implementation's own expression. The four shapes worth the ink:
 * a fold of a prefix equals the prefix of the fold — the same invariant that makes
   an indicator free of lookahead, applied to the data path itself.
 
+The `k == 1` shape pins referee themselves against `_legacy_merge_reference` below —
+a frozen copy of the merge as it ran before the fold existed — because the live
+`_merge_to_calendar` is now a one-line delegation to `fold_bars`, and a wrapper can
+never refute the expression it delegates to.
+
 Nothing here opens a socket. The daily/minute channels are fed literal bars.
 """
 
 from __future__ import annotations
 
 import zoneinfo
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -27,7 +33,10 @@ import pytest
 from src.api import interval_spec as spec_mod
 from src.api import market_routes
 from src.api.interval_spec import (
+    MONTH_SECONDS,
+    WEEK_SECONDS,
     IntervalSpec,
+    bar_seconds,
     calendar_fold_spec,
     fold_bars,
     fold_spec,
@@ -66,6 +75,41 @@ def _minute_label(label: str, hhmm: str, zone: str = SH) -> int:
     """Epoch ms of an exchange wall-clock minute, stamped the way `_bars_from_frame` does."""
     naive = datetime.strptime(f"{label} {hhmm}", "%Y-%m-%d %H:%M")
     return int(naive.replace(tzinfo=zoneinfo.ZoneInfo(zone)).timestamp() * 1000)
+
+
+#: Frozen oracle, lifted from `agent/src/api/market_routes.py` as it stood at
+#: `41c75b0c` (`_calendar_group_key` at `:471-491`, `_merge_to_calendar` at `:494-516`),
+#: read out with `git show 41c75b0c:agent/src/api/market_routes.py`. Every executable
+#: statement below is byte-identical to that text; the only edits are the two names —
+#: the key function is suffixed `_legacy_` and called under that name, so this copy
+#: cannot accidentally referee the live one — and the docstring prose, which lives in
+#: the archive. It exists because the task's headline judgement is 「k=1 与既有折叠逐字
+#: 同形」, and the only witness to a fold that must not be vacuous is the code that ran
+#: before it. Test-only on purpose: production keeps one merge, the delegating
+#: `_merge_to_calendar`, never a second copy the tests could keep alive.
+def _legacy_calendar_group_key(ts_ms: int, unit: str) -> tuple[int, int]:
+    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    if unit == "week":
+        iso = day.isocalendar()
+        return (int(iso[0]), int(iso[1]))
+    return (day.year, day.month)
+
+
+def _legacy_merge_reference(bars: list[dict], unit: str) -> list[dict]:
+    merged: list[dict[str, Any]] = []
+    group: tuple[int, int] | None = None
+    for bar in sorted(bars, key=lambda b: int(b["timestamp"])):
+        key = _legacy_calendar_group_key(int(bar["timestamp"]), unit)
+        if key != group:
+            group = key
+            merged.append(dict(bar))
+            continue
+        held = merged[-1]
+        held["high"] = max(float(held["high"]), float(bar["high"]))
+        held["low"] = min(float(held["low"]), float(bar["low"]))
+        held["close"] = float(bar["close"])
+        held["volume"] = float(held["volume"] or 0.0) + float(bar["volume"] or 0.0)
+    return merged
 
 
 class TestHandComputedVector:
@@ -109,12 +153,12 @@ class TestHandComputedVector:
 class TestMinuteSessionAnchor:
     """The 120-minute fold of an A-share day is two bars, not one stitched across lunch."""
 
-    def _sixty(self, label: str) -> list[dict]:
+    def _sixty(self, label: str, zone: str = SH) -> list[dict]:
         # 60-minute bars close at 10:30 / 11:30 / 14:00 / 15:00 (the shape this repo's
         # own 分时 path records; the reason is in the design doc §2.1).
         out = []
         for i, hhmm in enumerate(("10:30", "11:30", "14:00", "15:00")):
-            stamp = _minute_label(label, hhmm)
+            stamp = _minute_label(label, hhmm, zone)
             out.append(
                 {
                     "timestamp": stamp,
@@ -135,9 +179,40 @@ class TestMinuteSessionAnchor:
         assert folded[0]["open"] == 10.0 and folded[0]["close"] == 11.5
         assert folded[0]["high"] == 12.0 and folded[0]["low"] == 9.0
         assert folded[1]["open"] == 12.0 and folded[1]["close"] == 13.5
-        # The stitched bar would have this number; asserting it is NOT there is the
-        # whole point of the pin — a UTC-minute floor produces exactly that shape.
+        # What this proves: the two served bars are not the two halves of one
+        # continuous 120-minute chain — the second does not open where the first
+        # closed, so the lunch gap stays *between* bars instead of inside one.
+        # What it does NOT prove: any separation of the session anchor from a
+        # UTC-minute floor. Asia/Shanghai is +8 = 480 minutes, an exact multiple of
+        # this fold's 120-minute width, so the floor's buckets land on the session
+        # boundary and return byte-identical bars here. The floor is refuted by the
+        # offset-clock pin below, which is the one that can tell them apart.
         assert folded[0]["close"] != folded[1]["open"]
+
+    def test_a_utc_minute_floor_would_split_the_morning_pair_on_an_offset_clock(self):
+        """The same four bars on a +5:30 clock: session anchor serves 2, floor serves 3.
+
+        The anchor arithmetic Shanghai cannot test. `Asia/Kolkata` is UTC+5:30 — 330
+        minutes — and 330 % (2 × 60) = 90, so a `ts_ms // (k * base_ms)` floor no
+        longer lines its buckets up with the session boundary: 10:30 and 11:30 fall in
+        different buckets, the first served bar closes at 10.5 with volume 100, and the
+        fold returns three bars. The delivered anchor counts positions *inside* the
+        session, so the offset changes nothing — [10:30, 11:30] and [14:00, 15:00],
+        the same two bars it serves on every clock.
+
+        `Asia/Kolkata` here is a witness for the offset remainder, not a market this
+        repo routes: `_MINUTE_WALL_CLOCK_ZONE` carries no India entry, and the four
+        closing labels are this repo's A-share shape read off a +5:30 clock.
+        """
+        bars = self._sixty("2026-06-01", "Asia/Kolkata")
+        folded = fold_bars(bars, IntervalSpec("minute-fold", "60m", 2, ""), "Asia/Kolkata")
+        assert len(folded) == 2  # the floor of the same width returns 3
+        assert [b["timestamp"] for b in folded] == [bars[0]["timestamp"], bars[2]["timestamp"]]
+        assert folded[0]["open"] == 10.0 and folded[0]["close"] == 11.5  # floor: 10.5
+        assert folded[0]["high"] == 12.0 and folded[0]["low"] == 9.0
+        assert folded[0]["volume"] == 201.0  # 100 + 101; the floor would say 100.0
+        assert folded[1]["open"] == 12.0 and folded[1]["close"] == 13.5
+        assert folded[1]["volume"] == 205.0  # 102 + 103
 
     def test_the_fold_drops_across_sessions_rather_than_spanning_them(self):
         bars = self._sixty("2026-06-01") + self._sixty("2026-06-02")
@@ -168,11 +243,19 @@ class TestPrefixInvariant:
         bars = _daily_series(days)
         for spec in (fold_spec("1D", 2), fold_spec("1D", 5), fold_spec("1W", 2), fold_spec("1M", 3)):
             full = fold_bars(bars, spec)
-            for cut in (30, 77, 120):
+            for cut in (30, 31, 77, 120):
                 # Every group but the last is complete on both sides; the tail group is
                 # the only one a cut can leave short, so it drops out of the comparison
                 # instead of being excused by a comment. This is the future-function
                 # probe on the fold: nothing to the right of bar `cut` can move a bar.
+                # 31 is the one that earns its place: this 130-weekday set ends on ISO
+                # week ordinal 2842, and cuts 30 / 77 / 120 each end on an *even*
+                # newest week (2822 / 2832 / 2840), so pairing those weeks from the
+                # newest one backwards — a pure lookahead — lands on exactly the same
+                # pairs as the absolute ordinal and stays green. Bar 31 ends on Monday
+                # 2024-02-12, week ordinal 2823, odd, and that is where right- and
+                # left-pairing split. (The monthly leg already bites at 77: month
+                # ordinal 24291 versus the full window's 24293 is not a multiple of 3.)
                 head = fold_bars(bars[:cut], spec)
                 assert head[:-1] == full[: len(head) - 1], (spec, cut)
 
@@ -244,20 +327,33 @@ class TestCalendarOrdinals:
         group at a time, which is the merge that has always run. So the merge asks for
         a grouping spec directly, and this pin is the bar-for-bar proof that a
         multiplier-less fold still collapses (裁定四).
+
+        The equality goes to ``_legacy_merge_reference``, the frozen pre-fold merge —
+        not to ``_merge_to_calendar``, which since this task is a one-line delegation to
+        the very call being tested and could not fail however the fold were written.
         """
         days = _weekdays("2024-06-05", 120)
         bars = _daily_series(days)
         for unit, base in (("week", "1W"), ("month", "1M")):
             folded = fold_bars(bars, calendar_fold_spec(unit, 1))
             assert len(folded) < len(bars), unit
-            assert folded == market_routes._merge_to_calendar(bars, unit), unit
+            assert folded == _legacy_merge_reference(bars, unit), unit
 
     def test_the_default_multiplier_is_the_same_call_as_saying_one(self):
+        """The merge's default ``k`` is still 1, pinned against the frozen merge.
+
+        ``_merge_to_calendar(bars, unit) == _merge_to_calendar(bars, unit, 1)`` is the
+        wrapper equalled with itself and carries no information either, so each form is
+        pinned against ``_legacy_merge_reference``: a default that drifted to 2 would
+        weld two natural groups where the old merge welded one, and the explicit-1 call
+        would keep answering correctly — which is exactly the drift this pair catches.
+        """
         days = _weekdays("2026-06-01", 10)
         bars = _daily_series(days)
-        assert market_routes._merge_to_calendar(bars, "week") == market_routes._merge_to_calendar(
-            bars, "week", 1
-        )
+        for unit in ("week", "month"):
+            reference = _legacy_merge_reference(bars, unit)
+            assert market_routes._merge_to_calendar(bars, unit) == reference, unit
+            assert market_routes._merge_to_calendar(bars, unit, 1) == reference, unit
 
     def test_the_two_spellings_of_one_week_request_disagree_only_in_kind(self):
         """``1W`` is native to the parser and a grouping fold to the merge.
@@ -282,8 +378,35 @@ class TestCalendarOrdinals:
 
 class TestMergeToCalendarStillAnswersTheOldCall:
     def test_the_two_argument_form_is_the_native_merge(self):
+        """Every caller that never mentions `k` still gets the old merge.
+
+        Again against the frozen copy: `_merge_to_calendar(bars, "week")` folded through
+        the new spec has to come back the bar-for-bar merge of `41c75b0c`, or every
+        weekly chart in the repo changed shape without anyone asking.
+        """
         days = _weekdays("2026-06-01", 10)
         bars = _daily_series(days)
-        assert market_routes._merge_to_calendar(bars, "week") == fold_bars(
-            bars, calendar_fold_spec("week", 1)
+        assert market_routes._merge_to_calendar(bars, "week") == _legacy_merge_reference(
+            bars, "week"
         )
+        assert market_routes._merge_to_calendar(bars, "month") == _legacy_merge_reference(
+            bars, "month"
+        )
+
+
+class TestServedBarWidth:
+    """The specs this task hands the router must size the fetch they imply."""
+
+    def test_a_calendar_multiplier_widens_the_served_bar_by_exactly_that_multiple(self):
+        """`2W` is two weeks of bars and `2M` two months — off the spec's own base.
+
+        Task 1's fix round made :func:`bar_seconds` derive the width from ``spec.base``
+        alone and raise for anything outside ``NATIVE_INTERVALS``. Nothing here asks it
+        to bend: ``calendar_fold_spec`` writes a real ``1W`` / ``1M`` base into the spec,
+        so the multiplier lands on top of a width the guard already knows. A month is
+        priced at its **widest** (31 days) for the same reason ``udf_routes`` priced it
+        that way — a window sized from it can only overshoot and be trimmed, never clip
+        a page short.
+        """
+        assert bar_seconds(calendar_fold_spec("week", 2)) == 2 * WEEK_SECONDS
+        assert bar_seconds(calendar_fold_spec("month", 2)) == 2 * MONTH_SECONDS

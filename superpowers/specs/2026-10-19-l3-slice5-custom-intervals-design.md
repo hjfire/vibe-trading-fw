@@ -52,6 +52,48 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 可得深度不由本片放宽：基档分钟历史受 `_MINUTE_WINDOW_CAP_DAYS = 12`（`:101`）约束，所以 `k` 越大，一页能填
 的折叠根越少。请求 500 根 120 分而基档只有 12 天，返回的根数就少于 500——**如实少返**，不许用重复根或插值补齐。
 
+> **2026-10-20 修复轮坐标复测（Task 2 落地造成的漂移）**：本条只更新坐标与引用，上文任何一句判断都不改。
+>
+> （一）本节末「OHLCV 规则逐字沿用 `_merge_to_calendar`（`:494`）那四条」现在指错了地方。那四条规则
+> （开＝组内首根开、收＝组内末根收、高／低＝组内极值、量＝求和，时间戳取组内首根）自 Task 2 起住在
+> `agent/src/api/interval_spec.py:284-287`（`fold_by_keys` 函数体），而 `market_routes.py:494` 已经落进
+> `_merge_to_calendar` 委托语句之上的 docstring 里——那里是转述，不是规则本体。委托那一行现在在
+> `market_routes.py:497`。指错行的引用同样是缺陷，即使散文说得对，所以在此改口。
+>
+> （二）Task 2 在 `market_routes.py:48` 插了一行 import，又删掉 `_calendar_group_key` 那 21 行、把合并循环
+> 换成一行委托（`market_routes.py:497`），于是本文其余 `market_routes.py` 坐标整体漂移。评审给的概览是
+> 「`:48` 以下 +2、旧合并区之后 −19」，本席没有照这个加减法抄，而是逐格 `grep -n` 在改动后的树上现读——
+> 于是抓到概览盖不住的一格：`_merge_to_calendar` 自己从 `:494` 落到 `:473`，是 **−21** 不是 −19，因为它的
+> def 就站在被删掉的那段里。下列每一格都是现读值：
+>
+> | 符号 | 原文坐标 | 现读坐标 |
+> | --- | --- | --- |
+> | `_MAX_BARS` | `:52` | `:54` |
+> | `_MINUTE_PERIODS` | `:54` | `:56` |
+> | `_AGG_DAILY_PER_BAR` | `:68` | `:70` |
+> | `_FUTU_MINUTE_SUFFIXES` | `:92` | `:94` |
+> | `_MINUTE_WINDOW_CAP_DAYS` | `:101` | `:103` |
+> | `_MINUTE_WALL_CLOCK_ZONE` | `:144` | `:146` |
+> | `_merge_to_calendar` | `:494` | `:473`（委托语句 `:497`；规则本体已迁至 `interval_spec.py:284-287`） |
+> | `_fetch_calendar_bars` | `:519` | `:500` |
+> | `{source}+{interval}` 那枚 source 后缀 | `:564` | `:545` |
+> | `_split_latest_session` | `:597` | `:578` |
+> | `_kline_sync` | `:631` | `:612` |
+> | `session=latest` 拒绝第一句（合并自周月） | `:649` | `:630` |
+> | `session=latest` 拒绝第二句（`already are one day each`） | `:656` | `:637` |
+> | 返回体 `payload` 三键区 | `:662-668` | `:643-649` |
+> | `interval` 的 `Query(description=...)` | `:766` | `:747` |
+> | 档位不合法那支 400（`if interval not in …`） | `:774` | `:755` |
+>
+> （三）Task 3 的四处靶子按现读坐标重述一遍，免得上文的历史行号被当成待改坐标：if/elif/else 那条分派链起于
+> `_kline_sync`（`:612`，三分支分别在 `:619`／`:629`／`:636`）；`session=latest` × 折叠族的拒绝要扩的那一对
+> 是 `:630` 与 `:637`；放开档位要动的 400 分支在 `:755`；OpenAPI 说明书那枚 `interval` 的
+> `Query(description=...)` 在 `:747`。本文其余坐标不吃这次漂移：所有 `udf_routes.py` 与 `test_udf_routes.py`
+> 的引用（`:481`／`:95`／`:118`／`:475`／`:568`／`:514`／`:86-94`／`:205`／`:309`／`:333`，以及测试里的
+> `:525`／`:555-562`）——Task 2 没碰那两个文件（`git diff --name-only 41c75b0c..69c57c5c` 现读只有五枚：
+> `interval_spec.py`／`market_routes.py`／两枚测试／本文），所以此处只声明「未被本次改动波及」，它们自身是否
+> 仍准由 Task 4 复测。
+
 ### 2.2 日线乘数（`2D`／`3D`…）
 
 按**交易日标签的绝对日序**（`ts_ms // 86_400_000`，日线戳本来就是「交易日标签的 UTC 零点」，所以这一除直接
