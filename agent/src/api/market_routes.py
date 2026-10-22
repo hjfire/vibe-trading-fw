@@ -654,9 +654,37 @@ def _kline_sync(
         )
     bars: list[dict[str, Any]]
     if spec.base in interval_spec.MINUTE_BASES:
-        # One extra base bar per served bar: the weld drops the group the window's
-        # left edge lands inside, and `count` served bars still have to come back.
-        ask = min(count * spec.k + spec.k - 1, _MAX_BARS)
+        # The size is the load-bearing half. `count` folded bars cost at most
+        # `count * k + k - 1` base bars, and the ask reserves a whole
+        # `_MINUTE_BARS_PER_DAY[spec.base]` above that cost. The window still opens
+        # wherever the fetch cut it — possibly mid-session — and `fold_bars` does draw
+        # that session's groups from there; what keeps them off the page is the surplus,
+        # which is never narrower than the one session a fetch can cut, so `[-count:]`
+        # below always discards it. The served page is then a suffix of the grid a
+        # whole-session fetch of the same days draws
+        # (`interval_spec._session_position_keys` counts from the head of the list it is
+        # handed, so the left edge is the caller's duty and the size is how the caller
+        # pays it — there is no second pass that drops the cut session; it never reaches
+        # the page in the first place).
+        #
+        # `_MINUTE_BARS_PER_DAY` is sized by the widest session this repo can fold — US
+        # regular hours, 26 quarter-hour bars against an A-share day's 16 — so the Asian
+        # venues get over-asked. Over-asking is the safe direction: `[-count:]` trims
+        # the surplus, while under-asking clips a page.
+        #
+        # The slack is bought only where it is spent. A `k == 1` minute request has no
+        # fold to re-seat and both minute channels already tail at `count`, so a wider
+        # ask there would answer with more bars than the caller named — pinned by
+        # `tests/test_market_kline_minute_routing.py`'s window-sizing class.
+        #
+        # Residual limit, registered rather than fixed: when the source runs out before
+        # the ask (a shallow history, `_MINUTE_WINDOW_CAP_DAYS`), the window comes back
+        # short, its leftmost base bar really is the Nth bar of a session the pool cut
+        # open, and that session's grid sits off the whole-session one. No pin of this
+        # slice covers that shape; the last paragraph of
+        # `interval_spec._session_position_keys` states it in full.
+        slack = _MINUTE_BARS_PER_DAY[spec.base] if spec.k > 1 else 0
+        ask = min(count * spec.k + spec.k - 1 + slack, _MAX_BARS)
         bars = _futu_minute_bars(symbol, spec.base, ask, adjust, before)
         source = "futu:opend"
         if bars is None:
@@ -671,8 +699,6 @@ def _kline_sync(
             if zone is None:
                 raise ValueError(f"{interval} bars cannot be folded: {symbol} has no exchange clock")
             folded = interval_spec.fold_bars(bars, spec, zone)
-            if len(bars) >= ask and len(folded) > 1:
-                folded = folded[1:]
             bars, source = folded[-count:], f"{source}+{interval}"
     elif spec.kind in {"daily-fold", "calendar-fold"}:
         # `session == "latest"` never reaches here: a fold has k > 1 and was refused

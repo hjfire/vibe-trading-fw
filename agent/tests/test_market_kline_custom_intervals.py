@@ -78,6 +78,70 @@ def _minute_label(label: str, hhmm: str, zone: str = SH) -> int:
     return int(naive.replace(tzinfo=zoneinfo.ZoneInfo(zone)).timestamp() * 1000)
 
 
+#: One A-share 15-minute session, labelled the way this repo's minute channels label a
+#: bar (the bar's own start minute): morning 09:30 … 11:15, then afternoon 13:00 …
+#: 14:45 — sixteen bars in two blocks. The blocks are the point: a stub that ran bars
+#: straight through the midday gap would fold into groups no exchange produces.
+_MORNING_15M = ("09:30", "09:45", "10:00", "10:15", "10:30", "10:45", "11:00", "11:15")
+_AFTERNOON_15M = ("13:00", "13:15", "13:30", "13:45", "14:00", "14:15", "14:30", "14:45")
+
+#: What a whole session folds to at 15m × k=3 (a `45m` request): the group starts are
+#: base positions 0, 3, 6, 9, 12, 15 of the sixteen bars above. Counted off those two
+#: tuples by hand — position 8 is `13:00`, the afternoon's first bar, so 9 is `13:15`
+#: and 12 is `14:00` — not read out of `fold_bars`.
+_GRID_45M = ("09:30", "10:15", "11:00", "13:15", "14:00", "14:45")
+
+
+def _session_15m_bars(days: list[str]) -> list[dict]:
+    bars: list[dict] = []
+    for i, day in enumerate(days):
+        for hhmm in (*_MORNING_15M, *_AFTERNOON_15M):
+            bars.append(
+                {
+                    "timestamp": _minute_label(day, hhmm),
+                    "open": 1.0 + i,
+                    "high": 2.0 + i,
+                    "low": 0.5,
+                    "close": 1.5 + i,
+                    "volume": 10.0 + len(bars),
+                }
+            )
+    return bars
+
+
+class _TailSlicingMinuteChannel:
+    """A minute channel shaped like the two real ones: whole sessions, then filter, then tail.
+
+    Both real legs end in ``bars[-count:]`` — the Futu one and the Sina one — so what
+    a route hands the fold is a *tail slice* of the history, never a window that
+    happens to start at a session head. That slice is where the paging defect lives,
+    which is why this stub deliberately does not hand back a tidy whole-session page.
+    ``volume`` is unique per bar, so an equality between two pages is bar-for-bar.
+    """
+
+    def __init__(self, days: list[str]) -> None:
+        self.bars = _session_15m_bars(days)
+        self.asked: list[tuple[str, int]] = []
+        self.window: list[dict] = []
+
+    def __call__(self, symbol, interval, count, adjust, before):
+        self.asked.append((interval, count))
+        pool = [b for b in self.bars if before is None or b["timestamp"] < before]
+        self.window = pool[-count:]
+        return self.window
+
+
+def _clock(bars: list[dict], zone: str = SH) -> list[str]:
+    """Served timestamps read back as exchange wall clock, so a page is legible."""
+    zone_info = zoneinfo.ZoneInfo(zone)
+    return [
+        datetime.fromtimestamp(int(b["timestamp"]) / 1000, tz=zone_info).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        for b in bars
+    ]
+
+
 #: Frozen oracle, lifted from `agent/src/api/market_routes.py` as it stood at
 #: `41c75b0c` (`_calendar_group_key` at `:471-491`, `_merge_to_calendar` at `:494-516`),
 #: read out with `git show 41c75b0c:agent/src/api/market_routes.py`. Every executable
@@ -583,6 +647,143 @@ class TestRouteServesFolds:
         shared = [b for b in page_two if b["timestamp"] >= page_one[0]["timestamp"]]
         assert shared == page_one[: len(shared)]
 
+    def test_two_minute_pages_cut_at_different_before_agree_where_they_overlap(self, monkeypatch):
+        """I-1, minute family: the same paging leg for the fold that counts inside a session.
+
+        The daily twin above keys on an absolute epoch-day ordinal and cannot regress.
+        This one keys on a *session position*, and until this pin the counter started
+        at the head of whatever tail slice the route handed it (`bars[-count:]` in both
+        minute channels), so each page drew its own grid. Measured on a 15m base taken
+        three times (`45m`) over a real 16-bar A-share session:
+
+        * the whole session — the truth grid — folds to
+          `09:30 10:15 11:00 13:15 14:00 14:45` (`_GRID_45M`, counted off the bar
+          tuples, not off `fold_bars`);
+        * the window the *old* sizing asked for (`4 * 3 + 3 - 1 = 14` tail bars),
+          folded and then left-edge-dropped, served `10:45 13:00 13:45 14:30`: not one
+          served bar on the truth grid;
+        * the two-page seam put `10-19 09:30 / 10:15` next to `10:45` — the same
+          symbol, one chart, two grids, which is exactly what design §2.2 rules out for
+          the daily family (「否则同一支标的两次分页会给出两套分组，翻页时图会重绘」) and
+          what §4.2 lists as an acceptance leg.
+
+        Leg (ii) is the one that bites, for the same reason the daily pin's docstring
+        says its own overlap legs do not: a served bar is stamped with its group's
+        *first* base bar, so `before = page_one[0]` cuts page two entirely to the left
+        of page one and the overlap in leg (i) is empty by construction — it can only
+        ever fail loudly, never discriminate quietly. Leg (iii) is the non-vacuous
+        cross-page claim: the two pages joined are a single fetch of `2 * count`, i.e.
+        no session split, no group split, no re-pairing at the seam.
+
+        `count = 4` is chosen, not convenient: four served bars against the slack ask
+        of `4 * 3 + 3 - 1 + 26 = 40` base bars is the window the controller probed, and
+        the page it lands on is a *suffix* of the day grid — the shape that makes the
+        left-edge session visible. (`count = 6` was tried first here and went **green**
+        against the defect: the old sizing happened to serve 06-03 whole, which is the
+        lesson that a page starting at a session head proves nothing on its own.)
+        """
+        channel = _TailSlicingMinuteChannel(_weekdays("2026-06-01", 3))
+        monkeypatch.setattr(market_routes, "_futu_minute_bars", channel)
+        page_one = market_routes._kline_sync("600519.SH", "45m", 4, "qfq")["bars"]
+        page_two = market_routes._kline_sync(
+            "600519.SH", "45m", 4, "qfq", before=page_one[0]["timestamp"]
+        )["bars"]
+
+        # (i) the overlap agrees bar-for-bar (empty for a head-stamped fold, by design).
+        assert page_two[-1]["timestamp"] < page_one[0]["timestamp"]
+        shared = [b for b in page_two if b["timestamp"] >= page_one[0]["timestamp"]]
+        assert shared == page_one[: len(shared)]
+
+        # (ii) the day-anchored grid, by name. Page one serves the tail of the newest
+        # session (Wed 2026-06-03), which is a suffix of `_GRID_45M`; page two ends
+        # inside Tuesday and hands back the two grid bars just before Wednesday's.
+        assert _clock(page_one) == [
+            "2026-06-03 11:00", "2026-06-03 13:15",
+            "2026-06-03 14:00", "2026-06-03 14:45",
+        ], _clock(page_one)
+        assert _clock(page_two) == [
+            "2026-06-02 14:00", "2026-06-02 14:45",
+            "2026-06-03 09:30", "2026-06-03 10:15",
+        ], _clock(page_two)
+
+        # (iii) the seam: two pages joined are one fetch of twice the page.
+        whole = market_routes._kline_sync("600519.SH", "45m", 8, "qfq")["bars"]
+        assert page_two + page_one == whole
+
+    def test_a_full_minute_window_serves_a_suffix_of_the_whole_session_grid(self, monkeypatch):
+        """Sizing leg: a window that comes back full is served off the day grid.
+
+        Four whole sessions in the pool (64 base bars) and an ask of exactly
+        `12 * 3 + 3 - 1 + 26 = 64` — the pool's full height — so the fold is handed a
+        window that opens mid-history and the page it returns has to be *proved* to sit
+        on the grid a whole-session fetch draws, not on one re-counted from wherever the
+        cut landed. Three legs:
+
+        * the window really is full — the premise the size pays on (a short window is
+          the next pin's territory);
+        * the page, bar for bar, is the tail of that grid, assembled from `_GRID_45M`
+          and the pool's own calendar instead of being written down as literals;
+        * the oldest served bar is a session's first bar, and *which* session follows
+          from the grid above rather than from a date typed twice.
+
+        Disclosed limits of this pin, measured rather than asserted. It is
+        **not** load-bearing for the slack: with `M-slack` (the
+        `_MINUTE_BARS_PER_DAY` term taken out of the ask) this pool's window opens at
+        `2026-06-02 13:30`, its six bars fold into two groups, and `[-12:]` discards
+        exactly those two — the same two the slack discards by keeping them out of
+        reach. The arithmetic is structural, not luck: for a day-aligned page
+        (`count` a multiple of a session's group count) the pre-slack ask
+        `count * k + k - 1` leaves exactly as many surplus groups as the cut session
+        draws, so this shape cannot tell the two sizings apart. `M-trim` (putting the
+        old `folded[1:]` heuristic back) is invisible here for the same reason — the
+        fold yields 24 groups and the page wants 12, so dropping the oldest group
+        cannot move the tail. Both readings are in the fix report; the pin that
+        *does* answer to the slack is
+        `test_two_minute_pages_cut_at_different_before_agree_where_they_overlap`
+        above, whose `count = 4` page is not day-aligned.
+        """
+        days = _weekdays("2026-06-01", 4)
+        channel = _TailSlicingMinuteChannel(days)
+        monkeypatch.setattr(market_routes, "_futu_minute_bars", channel)
+        page = market_routes._kline_sync("600519.SH", "45m", 12, "qfq")["bars"]
+        served = _clock(page)
+
+        assert len(channel.window) == channel.asked[0][1]  # a *full* window: the premise
+
+        truth = [f"{day} {start}" for day in days for start in _GRID_45M]
+        assert served == truth[-12:]  # the grid's own tail, not a re-count of the cut
+
+        oldest_day = truth[-12:][0][:10]  # which session the page opens in, by arithmetic
+        assert served[0] == f"{oldest_day} {_GRID_45M[0]}", served
+        assert page[0]["timestamp"] == _minute_label(oldest_day, _MORNING_15M[0])
+
+    def test_a_short_minute_window_drops_nothing_and_keeps_its_first_session_head(
+        self, monkeypatch
+    ):
+        """The other half of the size: a source that ran out is served as it is.
+
+        One session on disk (16 base bars) against an ask of `6 * 3 + 3 - 1 + 26 = 46`:
+        the channel could not fill the ask, so what the fold is handed starts at the
+        pool's own head — a real session head — and nothing is due for the left edge.
+        The page is the whole day's grid, six bars, and the ask stays the wide (slack)
+        number: the pin exists so the slack is never paid for by clipping a short page
+        or by padding one.
+
+        This is the pin that answers to the slack itself: taking
+        `_MINUTE_BARS_PER_DAY[spec.base]` out of the ask turns it red on its first leg,
+        measured in the closing fix round as `assert [('15m', 20)] == [('15m', 46)]`.
+        Its last two legs are not reached in that run — pytest stops at the first
+        failing assert — so the report carries no reading for them, and the page shape
+        under the shortened ask is *not* claimed here.
+        """
+        channel = _TailSlicingMinuteChannel(_weekdays("2026-06-01", 1))
+        monkeypatch.setattr(market_routes, "_futu_minute_bars", channel)
+        page = market_routes._kline_sync("600519.SH", "45m", 6, "qfq")["bars"]
+
+        assert channel.asked == [("15m", 6 * 3 + 3 - 1 + 26)]
+        assert len(channel.window) == 16 < channel.asked[0][1]
+        assert _clock(page) == [f"2026-06-01 {t}" for t in _GRID_45M]
+
     def test_the_daily_walk_is_scaled_by_the_multiplier(self, monkeypatch):
         asked: list[int] = []
 
@@ -608,17 +809,27 @@ class TestRouteServesFolds:
         assert asked == [30 * 1 * 2 + 30 * 2]  # per_bar 1 for a daily base, margin × k too
 
     def test_a_minute_fold_asks_the_base_channel_for_k_times_the_bars(self, monkeypatch):
-        """50 served bars of 120m asks the 60-minute channel for 101 base bars.
+        """50 served bars of 120m asks the 60-minute channel for 108 base bars.
 
-        The stub lays the base bars out the way an A-share tape really is — four 60m
-        closes per trading day at 10:30 / 11:30 / 14:00 / 15:00 — because the anchor
-        being tested is the session, and a stub that ran bars straight through the
-        night would fold into groups no exchange ever produces. 101 = 25 whole days
-        plus one orphan bar, so the fold has 51 groups: 50 whole-day ones plus the
-        orphan's own single-bar group, and that orphan is **served** — `count` never
-        trims it. The page still lands on 50, but through the other leg: the window
-        came back full, so the left-edge guard drops the first group (51 → 50) and
-        `[-50:]` is then a no-op.
+        108 = ``count * k`` (100) ``+ k - 1`` (1) ``+ _MINUTE_BARS_PER_DAY["60m"]`` (7)
+        — the page plus the slack that keeps the session a fetch cuts open off the
+        served tail (``market_routes._kline_sync``'s comment says how, and the last
+        paragraph of ``interval_spec._session_position_keys`` says what it does not
+        buy). The stub lays base bars out the way an A-share tape really is (four 60m
+        closes per trading day at 10:30 / 11:30 / 14:00 / 15:00) and hands back exactly
+        108 of them, which is 27 whole sessions: the fold makes 54 groups, ``[-50:]``
+        serves the newest 50, and four groups are discarded as surplus. So this pin's
+        bite is its ``seen`` leg — a size claim the served bars cannot show — and
+        over-asking is the safe half: ``[-count:]`` trims a surplus, an under-sized ask
+        clips a page.
+
+        Measured in the closing fix round: red when the slack comes out of the ask
+        (``assert [('60m', 101)] == [('60m', 108)]``), green when the pre-fix
+        ``folded[1:]`` heuristic is put back. The second reading is not an accident of
+        this pool: a full window with a day of slack always folds at least one group
+        more than the page takes (here, 54 against 50), so trimming the oldest group can
+        never reach the served tail — which is exactly why the slice deleted that
+        heuristic instead of keeping it.
         """
         seen: list[tuple[str, int]] = []
         session_close_times = ("10:30", "11:30", "14:00", "15:00")
@@ -640,7 +851,7 @@ class TestRouteServesFolds:
 
         monkeypatch.setattr(market_routes, "_futu_minute_bars", fake_minute)
         out = market_routes._kline_sync("600519.SH", "120m", 50, "qfq")
-        assert seen == [("60m", 50 * 2 + 2 - 1)]
+        assert seen == [("60m", 50 * 2 + 2 - 1 + 7)]
         assert out["interval"] == "120m"
         assert out["source"].endswith("+120m")
         assert len(out["bars"]) == 50

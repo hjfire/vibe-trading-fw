@@ -235,6 +235,17 @@ def _day_ordinal(ts_ms: int) -> int:
     return int(ts_ms) // DAY_MS
 
 
+def _session_date(ts_ms: int, zone_info: ZoneInfo) -> str:
+    """The trading day one minute bar belongs to, in the exchange's own calendar.
+
+    One rule, one consumer: :func:`_session_position_keys` groups on this label.
+    Naming it anyway is the point — writing the date twice inside that grouping would
+    be growing a second calendar inside a module whose standing constraint is that it
+    holds no venue hours nobody gave it evidence for.
+    """
+    return datetime.fromtimestamp(int(ts_ms) / 1000, tz=zone_info).date().isoformat()
+
+
 def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> list[tuple[str, int]]:
     """``(session date, position-within-session // k)`` for ascending bars.
 
@@ -243,7 +254,12 @@ def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> lis
     boundary this anchor knows about. So the one thing the anchor guarantees is that a
     group **never crosses a trading-day boundary**: an A-share day holds four 60-minute
     bars closing at 10:30 / 11:30 / 14:00 / 15:00, and counting within the day gives
-    [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws. A floor of UTC
+    [10:30, 11:30] and [14:00, 15:00] — the two bars every broker draws, for exactly two
+    reasons: the window started at that day's head, and both the broker and this counter
+    read the same clock. Hand the counter a window that opens in the middle of that day
+    and it serves [13:00, 14:00] and [14:30] instead — the drawing rule is the anchor's,
+    the left edge is the caller's, and the paragraph at the end of this docstring is what
+    the caller owes it. A floor of UTC
     minutes serves the same two bars on this clock (+8 = 480 minutes, 480 % 120 == 0
     lines its buckets up with the session boundary) and serves three on a +5:30 one;
     the anchor is the spec because its answer does not depend on which clock the server
@@ -260,15 +276,43 @@ def _session_position_keys(bars: list[dict[str, Any]], k: int, zone: str) -> lis
     it has no evidence for, and refusing those multipliers would be a rule nobody asked
     for.
 
-    Stateful by design and safe for paging: the count only ever walks forward, so a
-    fold of a prefix is a prefix of the fold.
+    Stateful by design — but read that as a claim about **one list**, not about two
+    requests. The count only ever walks forward, so a fold of a *prefix of the list this
+    call was handed* is a prefix of the fold of that list: that is the guarantee, and it
+    is what makes the fold free of lookahead. It says nothing about a *different slice* of
+    the same history, because the positions are counted from the head of **the list that
+    was handed in** — two pages of one symbol, cut at different ``before``, each count
+    their own positions and draw two grids. So agreement across pages is not something
+    this function can hand out: it is a property of the caller's fetch size.
+    ``market_routes._kline_sync`` buys it by asking its minute channel a whole
+    ``_MINUTE_BARS_PER_DAY`` wider than the folded page needs — the cut leading session
+    still gets folded here, from wherever the window opens, and the page then takes
+    ``folded[-count:]``. The surplus is what makes that safe: the newest ``count`` groups
+    cost at most ``count * k + k - 1`` base bars, and everything above that cost is
+    reserved — one ``_MINUTE_BARS_PER_DAY[base]``, the widest session this repo folds —
+    and no session a fetch can cut open is wider than that. So the groups the cut
+    session draws are always on the discarded side of the trim, never on the page. What a
+    reader sees served is therefore a suffix of the grid a whole-session fetch draws
+    (pinned at the route by
+    ``test_two_minute_pages_cut_at_different_before_agree_where_they_overlap`` and
+    ``test_a_full_minute_window_serves_a_suffix_of_the_whole_session_grid``).
+
+    The limit that size does **not** buy, and no pin of this slice covers: a window that
+    came back narrower than the ask — the source ran out at its own depth — opens
+    wherever the source's history opens, and when that is the middle of a session the
+    leftmost served bar really is that session's Nth group, so its grid sits off the
+    whole-session one. Registered boundary, stated rather than fixed: a short window is
+    not a suspect left edge (the route's
+    ``test_a_short_minute_window_drops_nothing_and_keeps_its_first_session_head`` pins
+    what it does guarantee — nothing is dropped and nothing is clipped), and shrinking
+    the ask to make the window short is never the answer, since that is how a page gets
+    clipped.
     """
     zone_info = ZoneInfo(zone)
     counts: dict[str, int] = {}
     keys: list[tuple[str, int]] = []
     for bar in bars:
-        stamp = datetime.fromtimestamp(int(bar["timestamp"]) / 1000, tz=zone_info)
-        day = stamp.date().isoformat()
+        day = _session_date(bar["timestamp"], zone_info)
         position = counts.get(day, 0)
         counts[day] = position + 1
         keys.append((day, position // k))
