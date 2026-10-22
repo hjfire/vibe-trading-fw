@@ -97,7 +97,7 @@ describe("换算", () => {
     expect(specPeriodShape("3M")).toEqual({ type: "month", span: 3 });
     expect(specPeriodShape("")).toBeNull();
   });
-  it("isCustomSpec：文法合法且不是内置八档才算自定义档", () => {
+  it("isCustomSpec：文法合法、不是内置八档、且折算后的跨度不越界才算自定义档", () => {
     expect(isCustomSpec("120m")).toBe(true);
     expect(isCustomSpec("2D")).toBe(true);
     for (const text of BUILTIN) expect(isCustomSpec(text), text).toBe(false);
@@ -105,10 +105,12 @@ describe("换算", () => {
     expect(isCustomSpec("2h")).toBe(false);
   });
   it("isCustomSpec 也管本仓自己的数值边界：越界的合法文法串不算合法自定义档", () => {
-    // 这五枚钉的是「对话框的加入按钮与 URL／会话那道门共用一把尺」：谓词委托
-    // validateDraft，所以 1..999 与日／周／月倍数上限只在一处拼写，这里不重抄数。
+    // 这五枚钉的是「对话框的加入按钮与 URL／会话那道门共用一把尺」——共用的是**跨度**
+    // 那把尺（`durationOk` 的一处拼写），不是手打数那把：门侧收到的串里已经没有单位
+    // 这一层，串中那个数就是折算后的跨度，所以 `1000m`（小时档 n=17 折算出来的）合法。
+    // N-1（2026-10-22）撤销了「委托 validateDraft」的写法，这枚针的 `1000m` 因此翻面。
     expect(isCustomSpec("999m"), "999m 还在界内").toBe(true);
-    expect(isCustomSpec("1000m"), "1000m 越过数值上限").toBe(false);
+    expect(isCustomSpec("1000m"), "1000m 是小时档折算出来的合法跨度，门按跨度判它").toBe(true);
     expect(isCustomSpec("366D"), "366D 还在日历倍数界内").toBe(true);
     expect(isCustomSpec("367D"), "367D 越过日历倍数上限").toBe(false);
     expect(isCustomSpec("9999m"), "9999m 文法合法但本仓不收").toBe(false);
@@ -135,5 +137,24 @@ describe("加入按钮的 enabled 判据（本仓规则，不是对面的初态�
   it("合法草案给出 spec 串", () => {
     expect(validateDraft({ unit: "hour", n: 2 })).toEqual({ ok: true, spec: "120m" });
     expect(validateDraft({ unit: "week", n: 2 })).toEqual({ ok: true, spec: "2W" });
+  });
+  it("往返：对话框发得出的串，门（isCustomSpec）一律收得下（N-1 的往返针）", () => {
+    // 钉的是性质，不是那八枚串的名字：五枚单位 × n 1..999 全遍历，凡 `validateDraft`
+    // 判 ok:true 造出来的 spec 都必须被 `isCustomSpec` 认。ok:false 的草案直接跳过，
+    // 不进断言分母——那是「手打数」那把尺的合法拒收，不是洞。
+    const emitted: string[] = [];
+    for (const { unit } of CUSTOM_UNITS) {
+      for (let n = 1; n <= 999; n += 1) {
+        const verdict = validateDraft({ unit, n });
+        if (!verdict.ok) continue;
+        emitted.push(verdict.spec);
+        expect(isCustomSpec(verdict.spec), `${unit}/${n} → ${verdict.spec}`).toBe(true);
+      }
+    }
+    // 最后两枚是这枚针的判别力所在：只断性质的话，把跨度尺收紧到 `MAX_COUNT` 会让
+    // ok:true 的集合自己缩小，性质照样成立、针照样绿（豁免型针天生恒绿那一族）。
+    // 这里钉的是「小时档确实发得出 1000 分钟以上的跨度」——正是 N-1 那个洞的形状。
+    expect(emitted, "小时档 n=17 折算出来的跨度发得出，门也就得收得下").toContain("1020m");
+    expect(emitted, "小时档 n=24 顶到一天，仍在界内").toContain("1440m");
   });
 });

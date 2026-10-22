@@ -10,7 +10,9 @@
  * 不设上限，只按 `_MAX_BARS` 少返，一个 `500m` 名义合法却只会拿到远少于请求根数的
  * 图。这里把它挡住是为了不让用户按一个必败的按钮，**不是**对面也这么判。同一把尺
  * 现在也管从 URL／会话读进来的串（`normalizeInterval` 经 `isCustomSpec` 走它），
- * 对话框拒收的数，门也不收——两扇门共用下面 `validateDraft` 那一处拼写。
+ * 对话框拒收的跨度，门也不收。两把尺各判一件事（N-1，2026-10-22）：`MAX_COUNT` 只
+ * 管**用户手打的那个数**，只有 `validateDraft` 收得到它；折算后的跨度只由下面
+ * `durationOk` 那一处拼写判，对话框与门都按它判——串里那个数就已经是跨度。
  */
 
 export type IntervalUnit = "minute" | "hour" | "day" | "week" | "month";
@@ -51,16 +53,37 @@ export function parseSpec(text: string): { unit: SpecUnit; n: number } | null {
   return { unit: m[2] as SpecUnit, n };
 }
 
+/** 折算后的跨度上限——对话框（`validateDraft`，先过 `mintedShape`）与门（`isCustomSpec`，
+ *  串里那个数就已经是跨度）共用这一处拼写。N-1（2026-10-22）：两侧各写一遍就会漏出
+ *  「对话框发得出、门收不下」的串，那串在会话里被静默退成 `1D`。 */
+function durationOk(minted: { unit: SpecUnit; n: number }): boolean {
+  return minted.unit === "m" ? minted.n <= MINUTES_PER_DAY : minted.n <= MAX_CALENDAR_MULTIPLE;
+}
+
+/** 草案 → 折算后的串形状。`draftToSpec` 用它拼字面量，`validateDraft` 用它判跨度。 */
+function mintedShape(draft: { unit: IntervalUnit; n: number }): { unit: SpecUnit; n: number } {
+  if (draft.unit === "hour") return { unit: "m", n: draft.n * 60 };
+  if (draft.unit === "minute") return { unit: "m", n: draft.n };
+  return { unit: draft.unit === "day" ? "D" : draft.unit === "week" ? "W" : "M", n: draft.n };
+}
+
 export function isCustomSpec(text: string): boolean {
-  const shape = specPeriodShape(text);
-  return shape !== null && validateDraft({ unit: shape.type, n: shape.span }).ok;
+  // 门侧不委托 `validateDraft`（那是 Task 2 修复轮的写法，N-1 已撤销这枚委托）：
+  // 传进来的串里没有「单位」这一层，委托等于把手打数上限 `MAX_COUNT` 套到跨度上，
+  // 于是小时档折算出来的 `1020m…1440m` 会「对话框发得出、门收不下」。三步：文法、
+  // 非内置、跨度。文法由 `parseSpec` 管（它已拒 `0m` 与坏拼法），跨度只问 `durationOk`。
+  const parsed = parseSpec(text);
+  if (parsed === null) return false;
+  // 「非内置」按折算后的拼写查，不按 raw 查：`parseSpec` 会 trim，拿带空白的 raw 查表
+  // 会让 `" 1m"` 绕过内置判定被当成自定义档（撤销委托前的写法经 `draftToSpec` 拼回规范串，
+  // 行为就是这样，这里不许顺手放宽）。
+  if (BUILTIN_SPECS.has(`${parsed.n}${parsed.unit}`)) return false;
+  return durationOk(parsed);
 }
 
 export function draftToSpec(draft: { unit: IntervalUnit; n: number }): string {
-  if (draft.unit === "hour") return `${draft.n * 60}m`;
-  if (draft.unit === "minute") return `${draft.n}m`;
-  const unit: SpecUnit = draft.unit === "day" ? "D" : draft.unit === "week" ? "W" : "M";
-  return `${draft.n}${unit}`;
+  const minted = mintedShape(draft);
+  return `${minted.n}${minted.unit}`;
 }
 
 export function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: string } | { ok: false; reason: string } {
@@ -69,10 +92,14 @@ export function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: str
   if (!Number.isInteger(n)) return { ok: false, reason: "数值只能是整数" };
   if (n < 1) return { ok: false, reason: "数值至少是 1" };
   if (n > MAX_COUNT) return { ok: false, reason: `数值最多 ${MAX_COUNT}` };
-  const minutes = draft.unit === "hour" ? n * 60 : draft.unit === "minute" ? n : 0;
-  if (minutes > MINUTES_PER_DAY) return { ok: false, reason: "分钟档的一档不能跨过多于一天" };
-  if (draft.unit !== "minute" && draft.unit !== "hour" && n > MAX_CALENDAR_MULTIPLE) {
-    return { ok: false, reason: `日／周／月的倍数最多 ${MAX_CALENDAR_MULTIPLE}` };
+  // 跨度只判这一次：先折算，再问那唯一一处拼写；原因文案按**折算后的单位**分岔，
+  // 不按草案的单位——小时档越界时用户看到的是一句「跨过多于一天」，因为它的跨度就是分钟。
+  const minted = mintedShape({ unit: draft.unit, n });
+  if (!durationOk(minted)) {
+    return {
+      ok: false,
+      reason: minted.unit === "m" ? "分钟档的一档不能跨过多于一天" : `日／周／月的倍数最多 ${MAX_CALENDAR_MULTIPLE}`,
+    };
   }
   const spec = draftToSpec({ unit: draft.unit, n });
   if (BUILTIN_SPECS.has(spec)) return { ok: false, reason: "这一档目录里已经有了（它就是内置档）" };
