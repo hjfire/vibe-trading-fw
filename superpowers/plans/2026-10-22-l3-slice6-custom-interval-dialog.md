@@ -359,6 +359,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
 - Modify: `frontend/src/lib/chartView.ts:1,34-40`
 - Modify: `frontend/src/lib/indicatorLang.ts:1102-1122`
 - Modify: `forensics/gap-matrix.md:100`（TV-CI-11 那行把 `chartView.ts:34` 的**整行原文逐字**当证据引着；本片既换掉那行的参数类型、又可能因为往 doc 注释里加一句而使函数往下漂一两行 ⇒ 坐标与引文两处都要按落地后的盘面重钉。判态 `部分` 与其余文字一字不动，Task 7 才动判态。）
+- Modify: `forensics/gap-matrix.md` 第 90 行（TV-CI-01）与第 91 行（TV-CI-02）的**说明列**（2026-10-22 执行期补：本笔在 `marketApi.ts` 头部加了一枚 import、又在 `IntervalKey` 之后新开了一个 `AnyInterval` 声明块，这两处插入把该文件里所有被按号引用的行都推走了——动手前现读 `git show HEAD:frontend/src/lib/marketApi.ts | grep -n ""` 的三枚号是 `:18`（`export type IntervalKey`）／`:20`（`export const INTERVALS`）／`:26`（`{ label: "日线", key: "1D" }` 那一行），矩阵第 90 行引前两枚、第 91 行引第三枚，第 73 行那条第①片 T6 的「不漂清单」也把 `marketApi.ts:18`／`:20` 记在案。落地后**逐枚按内容重钉**：姿势＝`grep -n -F '<文档引用的那句逐字文本>' frontend/src/lib/marketApi.ts` 取新号，再 `sed -n '<新号>p'` 读出原文与引用句核对；**号一律你自己现取，别抄任何消息里写好的数字**（第①片那条「不漂」说的是「那一片的 diff 没碰这个文件」，不是「这个文件的号永远不动」——本笔就是碰了，所以那两枚号今天必须搬，这是同一套口径的延续，不是改写历史）。第 90 行那格的说明列末尾要落一句**带日期、落在原地**的追加，交代三件事：其一，新号与旧号各是什么、为什么搬（一枚 import ＋一个声明块）；其二，第 73 行那条「不漂清单」里 `marketApi.ts` 那两枚号自此对本文件失效（照第①片 ④ 那条的规矩：追加声明，不原地覆盖它）；其三，第 109 行那条 2026-10-14 的说明举例写着 `marketApi.ts:20`，它讲的是「这枚号只住在说明列、不在坐标列」这个**归属**，不是行号读数，所以那一行一个字都不改，只在本笔追加里交代它今天读作新号。**行数守恒**：`forensics/gap-matrix.md` 本文件动手前后 `wc -l` 必须同值（第 91／92／98／100 行是被 Task 4 与本笔按**行号**点名的，插一行就把它们全推走）；只许在既有行内改号与追加句子。EOL 照该文件原象（CRLF）守，改完复数 `CR == LF == 行数`、裸 CR／裸 LF 为 0。
 - Modify: `frontend/src/pages/__tests__/MultiChart.test.tsx:59,766`（2026-10-22 执行期补，这是「消费者同笔」在**测试面**的落点：`:766` 那行 `type IntervalKey = Parameters<typeof intervalToPeriod>[0];` 是把「入参类型」当窄类型用，`intervalToPeriod` 一加宽它就变成 `string`，于是 `:936,937,939` 三处把 `IntervalKey[]` 递给 `intervalsForSymbol(…, readonly IntervalKey[])` 当场 TS2345。改法＝**删掉那行派生别名**，把 `type IntervalKey` 并进 `:59` 已有的那枚 `import { intervalToPeriod } from "@/lib/marketApi"`，其余一字不动。别给别名加 casts、也别把 `intervalsForSymbol` 换宽。）
 - Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）
 - 不许动：`frontend/src/lib/__tests__/udfTransport.test.ts:113`、`frontend/src/lib/__tests__/marketApiPeriods.test.ts:43,50-64`
@@ -501,7 +502,8 @@ export function isCalendarInterval(key: AnyInterval): boolean {
 ```
 
 2. `intervalToPeriod(key: AnyInterval): Period`：先按旧逻辑判内置（`CALENDAR_PERIODS.find` ＋ `parseInt`），不落在内置时用 `specPeriodShape`；`specPeriodShape` 给 null（坏串）时退回 `{ type: "day", span: 1 }`，与本文件既有的「degrade to the one period every instrument can serve」同调。
-3. `periodToInterval(period: Period): AnyInterval`：`minute` 道先查旧 `map`，`span > 60` 或不在表里 ⇒ `f"{span}m"`；calendar 三型把 `span` 带进串（`span === 1` 时仍产 `1D`/`1W`/`1M`，与 `marketApiPeriods.test.ts:43` 的往返钉一致）；`second`/`hour`/`year` 照旧 `"1D"`。
+3. `periodToInterval(period: Period): AnyInterval`：`minute` 道先查旧 `map`，**只留一条** `return map[period.span] ?? \`${period.span}m\`;`——不在表里的那些（`7`，以及所有 `span > 60` 的倍数档如 `120`）都由 `??` 这一支拼出来。calendar 三型把 `span` 带进串（`span === 1` 时仍产 `1D`/`1W`/`1M`，与 `marketApiPeriods.test.ts:43` 的往返钉一致）；`second`/`hour`/`year` 照旧 `"1D"`。
+   （2026-10-22 执行期改口：本条旧文写的是「`span > 60` **或**不在表里 ⇒ `f"{span}m"`」，第 2 席据此落成两条语句，多出的那枚 `if (period.span > 60) return \`${period.span}m\`;` 是一根**摘掉必然等价**的死枝——`map` 那五枚键最大就是 `60`，凡 `> 60` 者必不在表里，`??` 已经接住。本仓的判据见「冗余双守卫 ⇒ 单点摘除必然等价」那条：Task 6 的变异席若在这行注入，得到的「测不出红」不是 HARNESS-BLIND，而是那段码根本没有可达语义，白占一枚名额。注释两行照留，只需把「`span > 60`」从「另有一条语句拦它」的口气改成「`??` 也负责 `> 60` 的倍数档」。这一处改口是**行数 −1**（少一条语句），而 `marketApi.ts` 里被文档按号引用的三枚号（`:19`／`:24`／`:30`，见 Files）全在这条之前 ⇒ 不会把 Files 那批号再推走。）
 4. `fetchKline` 的 `interval` 参数类型换成 `AnyInterval`，`:239` 换成 `q.set("resolution", resolutionOf(params.interval))`；新导出 `resolutionOf`／`intervalMsOf`／`normalizeInterval`：
 
 ```ts
@@ -562,6 +564,8 @@ git status --porcelain && git commit -s -m "feat(l3-slice6): marketApi/chartView
 ```
 
 若全量 vitest 里有页面测试（`ProChart`／`ChartCell`）因签名加宽而红，**不许**顺手改页面逻辑：那是类型位置的可赋值性变化，报错应是 TS 的而非断言的；断言红就停下报告，别改期望值迁就。
+
+提交前还要取两枚守恒读数并写进报告：其一 `wc -l forensics/gap-matrix.md` 动手前后同值（上面 Files 那条行数守恒的判据）；其二把 `marketApi.ts` 里那三枚被引用号的新号（用 `grep -n -F` 现取）与矩阵第 90／91 行改完后写进去的号**并排读一遍**，两两相等才算重钉成立——门只判行号在文件行数范围内，门绿不代表那一行写着它该写的东西。
 
 ---
 
