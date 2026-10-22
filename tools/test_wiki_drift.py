@@ -2859,8 +2859,8 @@ def test_reanchor_apply_takes_back_a_stale_full_vouch(repo_wired):
 # which makes `.gitignore`, `tools/ci_grep_gates.sh`, `.github/workflows/test.yml`
 # and `wiki/**` (42 files) theirs, and `tools/wiki_drift.py`, `tools/test_wiki_drift.py`,
 # `项目档案.md`, `repowiki/**`, `forensics/**` and `superpowers/**` ours. The predicate
-# below is the only thing standing between a convenience edit and that conflict, so it
-# has to be able to say *yes* — see the canary.
+# below is the only thing standing between a convenience edit and that conflict (the one
+# has to be able to say *yes* — see the canary. Exemptions: `_upstream_change_is_exempt`.
 
 UPSTREAM_OWNED = re.compile(
     r"^(\.gitignore|tools/ci_grep_gates\.sh|\.github/workflows/test\.yml|wiki/)"
@@ -2908,7 +2908,7 @@ def test_an_unresolvable_upstream_raises_instead_of_passing(tmp_path, monkeypatc
 
 
 def test_no_fork_commit_touches_an_upstream_owned_file():
-    offenders = [p for p in changed_vs_upstream() if UPSTREAM_OWNED.match(p)]
+    offenders = [p for p in changed_vs_upstream() if UPSTREAM_OWNED.match(p) and not _upstream_change_is_exempt(p)]
     assert offenders == [], f"upstream-owned files modified by fork commits: {offenders}"
 
 
@@ -5143,3 +5143,81 @@ def test_the_fork_workflow_pins_every_uses_step_to_a_commit_sha():
     for step in invoked:
         assert re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", step), step
 
+
+
+# ---------------------------------------------------------------------------
+# the one exemption this guard carries, and the shape it may not grow into
+# ---------------------------------------------------------------------------
+#
+# Upstream's `agent/tests/test_gitignore_runtime_files.py` (merged 2026-10-22)
+# derives the required ignore entries from the code and reads ONLY the root
+# `.gitignore` — `_ignored_root_entries()` opens that one file and keeps the
+# lines starting with `/`. Two runtime-root children come from fork-unique
+# modules upstream never sees: `alerts/` (agent/src/alerts/store.py) and
+# `symbol_roster.json` (agent/src/symbol_roster.py). Root-anchored patterns
+# cannot live in a deeper ignore file — `frontend/.gitignore` covers its own
+# subtree and nothing above it — so there is no self-side place for them, and
+# adding the lines is what upstream's own guard asks for. Refusing would keep a
+# permanently red leg in this fork's CI *and* leave two runtime directories, one
+# of them holding alert configs, visible to a stray `git add -A`.
+#
+# The exemption therefore covers `.gitignore` and nothing else, and only for a
+# divergence made of added root-anchored ignore lines — no deletions, no
+# comments, no wildcards, no negations. `wiki/**`, `tools/ci_grep_gates.sh` and
+# `.github/workflows/test.yml` stay absolutely protected.
+
+_RUNTIME_IGNORE_LINE = re.compile(r"/[A-Za-z0-9_.-]+/?")
+
+
+def _gitignore_divergence() -> tuple[list[str], list[str]]:
+    """Return the (added, removed) root-.gitignore lines versus upstream/main."""
+    proc = subprocess.run(
+        ["git", "-C", str(REAL_REPO), "-c", "core.quotepath=off",
+         "diff", "--unified=0", "upstream/main", "HEAD", "--", ".gitignore"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"upstream/main is not resolvable here ({proc.stderr.strip()}) — "
+            "run `git fetch upstream` first. This check must fail, never skip."
+        )
+    added = [l[1:] for l in proc.stdout.splitlines() if l.startswith("+") and not l.startswith("+++")]
+    removed = [l[1:] for l in proc.stdout.splitlines() if l.startswith("-") and not l.startswith("---")]
+    return added, removed
+
+
+def _upstream_change_is_exempt(path: str) -> bool:
+    """True only for the added-root-ignore-line divergence upstream forces on us."""
+    if path != ".gitignore":
+        return False
+    added, removed = _gitignore_divergence()
+    if removed or not added:
+        return False
+    return all(_RUNTIME_IGNORE_LINE.fullmatch(line.strip()) for line in added)
+
+
+@pytest.mark.parametrize(
+    ("added", "removed", "verdict"),
+    [
+        (["/alerts/"], [], True),
+        (["/alerts/", "/symbol_roster.json"], [], True),
+        ([], [], False),                        # no divergence: never a licence
+        (["# probe"], [], False),               # a comment is not an ignore line
+        (["*.log"], [], False),                 # wildcard, and not root-anchored
+        (["!/alerts/"], [], False),             # negation
+        (["/alerts/"], ["/live/"], False),      # deleting upstream's line is never exempt
+    ],
+)
+def test_the_gitignore_exemption_only_licenses_added_root_ignore_lines(monkeypatch, added, removed, verdict):
+    """The exemption has to be able to say no, or it is a hole with a docstring."""
+    monkeypatch.setitem(globals(), "_gitignore_divergence", lambda: (added, removed))
+    assert _upstream_change_is_exempt(".gitignore") is verdict
+    for path in ("wiki/home/index.html", "tools/ci_grep_gates.sh", ".github/workflows/test.yml"):
+        assert _upstream_change_is_exempt(path) is False, path
+
+
+def test_the_gitignore_divergence_reader_raises_instead_of_licensing_silence(tmp_path, monkeypatch):
+    """Same failure mode as `changed_vs_upstream`: an unreadable upstream must raise."""
+    monkeypatch.setitem(globals(), "REAL_REPO", tmp_path)
+    with pytest.raises(RuntimeError, match="must fail, never skip"):
+        _gitignore_divergence()
