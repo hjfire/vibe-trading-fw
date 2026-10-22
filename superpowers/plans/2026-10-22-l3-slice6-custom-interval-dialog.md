@@ -833,7 +833,7 @@ git commit -s -m "feat(l3-slice6): 周期目录支持自定义档行（移除按
 ```bash
 cd frontend && npx tsc -b
 cd frontend && npx vitest run          # 全量。会话 schema 多一个键会打破整对象比对：`ProChartMinuteBars.test.tsx` 从 `../ProChart` 直接 import `readSession`（:37），三处整对象 `toEqual` 在 :156／:197／:202，随本片连带改口。`MultiChart.test.tsx` 的 `readSession` 是 `../MultiChart` 自己的函数，不受影响，别去改它
-git add -- frontend/src/pages/ProChart.tsx frontend/src/pages/__tests__/ProChartCustomInterval.test.tsx frontend/src/pages/__tests__/ProChartMinuteBars.test.tsx
+git add -- frontend/src/pages/ProChart.tsx frontend/src/components/charts/PeriodPicker.tsx frontend/src/pages/__tests__/ProChartCustomInterval.test.tsx frontend/src/pages/__tests__/ProChartMinuteBars.test.tsx frontend/src/components/charts/__tests__/PeriodPicker.test.tsx
 git status --porcelain && git commit -s -m "feat(l3-slice6): ProChart 接线——自定义档进目录、会话持久化、分时互斥"
 ```
 
