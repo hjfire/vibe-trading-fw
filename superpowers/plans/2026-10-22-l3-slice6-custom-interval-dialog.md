@@ -784,6 +784,7 @@ git commit -s -m "feat(l3-slice6): 周期目录支持自定义档行（移除按
 6. `:810` 写会话时带上 `customIntervals`。
 7. 分时互斥：分时按钮的 `disabled` 条件加 `|| !isBuiltinInterval(interval)`，`title` 在自定义档时逐字给 `分时只画当日 1 分钟线；当前档位 ${interval} 是折叠档，分时不能与折叠档同时（服务端会拒绝 session=latest）`（这句就是 Step 1 那枚针 `stringContaining("分时不能与折叠档同时")` 的落点，两处必须同串）；`pickTimeShare()` 里同条件早退。
 8. 对话框渲染：`{customDialogOpen && <CustomIntervalDialog existing={[...INTERVALS.map(i => i.key), ...customIntervals]} onCancel={close} onAdd={addCustomInterval} />}`，与目录**同时**存在与否的裁定：打开对话框时把目录 `open` 关掉（目录那层浮层与对话框叠两层浮层没有凭据，也没有可用形状），但**目录组件本身不卸载**——C-3 那枚针在组件层钉的是这个。这条要在代码注释里写明是「自家裁定，对面的证据只到共存为止」。
+   - **叠层监听器的落地细则（2026-10-22 第 3 轮评审补，Task 3 的 M-5）**：`CustomIntervalDialog` 在 `document` 上挂了 `mousedown`／`keydown` 两枚监听（`CustomIntervalDialog.tsx:63-78`），`PeriodPicker` 的浮层也在 `document` 上挂自己的外点／Escape。页面接线时按「对话框开 ⇒ 目录的 `open` 先关」这一条走，就能保证同一趟里 `document` 上只有一套监听在关东西；**针摆在这里**（D 组补一枚）：目录开着时点「添加自定义周期…」⇒ 一趟点击之后对话框是开着的（不是「开了又被目录的外点监听在同一趟里关掉」），且此后按一次 Escape 只关对话框、焦点回到周期按钮。若页面实现改成两套浮层真同时挂着，这枚针就是那条歧路的报警器。
 9. MTF：Task 2 已在 `indicatorLang` 侧挡住；页面里 `:1283` `periodToInterval(period)` 的返回值已是 `AnyInterval`，透传给 `fetchKline` 即可。
 
 - [ ] **Step 3：绿＋提交**
