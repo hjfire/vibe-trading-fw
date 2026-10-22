@@ -34,6 +34,11 @@ describe("自定义档走同一条出入口", () => {
     expect(resolutionOf("2D")).toBe("2D");
     expect(resolutionOf("3W")).toBe("3W");
   });
+  it("intervalMsOf 对自定义串真的在按倍数算——既不查那八枚的表，也不悄悄退成 1D", () => {
+    // 右边是手算的字面量：拿 `specMs("120m")` 当期望值等于让被测函数自己给自己出题。
+    expect(intervalMsOf("120m")).toBe(120 * 60_000);
+    expect(intervalMsOf("2D")).toBe(2 * 86_400_000);
+  });
   it("Period 带 span——图上的时间轴标签跟真实倍数一致", () => {
     expect(intervalToPeriod("120m")).toEqual({ type: "minute", span: 120 });
     expect(intervalToPeriod("2D")).toEqual({ type: "day", span: 2 });
@@ -78,9 +83,19 @@ describe("车道判定与坏串", () => {
   it("normalizeInterval：内置原样、自定义原样、坏串退 1D，绝不静默接受", () => {
     expect(normalizeInterval("1D")).toBe("1D");
     expect(normalizeInterval("2W")).toBe("2W");
+    // 越界串：文法合法但超出本仓自己的数值边界（`1..999`、日／周／月倍数上限），
+    // 对话框那把尺拒收，URL／会话这道门也必须拒收——放过去就是一条空图。
+    expect(normalizeInterval("9999m"), "9999m 越界").toBe("1D");
+    expect(normalizeInterval("5000D"), "5000D 越界").toBe("1D");
     for (const bad of ["", "2d", "1tick", "0m", "2.5m", null, undefined, 42, {}]) {
       expect(normalizeInterval(bad), String(bad)).toBe("1D");
     }
+  });
+  it("坏串在两枚退化出口落在文档承诺的档：1D 的跨度与 day/1 的 Period", () => {
+    // `2d` 的错只在大小写：文法认的是 m/D/W/M。它两把 helper 都走退化出口，
+    // 这两枚是 `marketApi.ts` 里那两枝（`?? INTERVAL_MS["1D"]`／`return { type: "day", span: 1 }`）唯一的针。
+    expect(intervalMsOf("2d")).toBe(INTERVAL_MS["1D"]);
+    expect(intervalToPeriod("2d")).toEqual({ type: "day", span: 1 });
   });
   it("isBuiltinInterval 只对八档为真", () => {
     for (const key of BUILTIN) expect(isBuiltinInterval(key), key).toBe(true);

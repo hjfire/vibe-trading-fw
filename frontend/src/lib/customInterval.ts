@@ -8,7 +8,9 @@
  *
  * 边界（`1..999`、分钟侧封顶一天、日历侧封顶一年）是本仓自己的规则：服务端对 `k`
  * 不设上限，只按 `_MAX_BARS` 少返，一个 `500m` 名义合法却只会拿到远少于请求根数的
- * 图。这里把它挡住是为了不让用户按一个必败的按钮，**不是**对面也这么判。
+ * 图。这里把它挡住是为了不让用户按一个必败的按钮，**不是**对面也这么判。同一把尺
+ * 现在也管从 URL／会话读进来的串（`normalizeInterval` 经 `isCustomSpec` 走它），
+ * 对话框拒收的数，门也不收——两扇门共用下面 `validateDraft` 那一处拼写。
  */
 
 export type IntervalUnit = "minute" | "hour" | "day" | "week" | "month";
@@ -50,8 +52,8 @@ export function parseSpec(text: string): { unit: SpecUnit; n: number } | null {
 }
 
 export function isCustomSpec(text: string): boolean {
-  const parsed = parseSpec(text);
-  return parsed !== null && !BUILTIN_SPECS.has(`${parsed.n}${parsed.unit}`);
+  const shape = specPeriodShape(text);
+  return shape !== null && validateDraft({ unit: shape.type, n: shape.span }).ok;
 }
 
 export function draftToSpec(draft: { unit: IntervalUnit; n: number }): string {

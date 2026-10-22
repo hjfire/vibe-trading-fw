@@ -104,6 +104,15 @@ describe("换算", () => {
     expect(isCustomSpec("0m")).toBe(false);
     expect(isCustomSpec("2h")).toBe(false);
   });
+  it("isCustomSpec 也管本仓自己的数值边界：越界的合法文法串不算合法自定义档", () => {
+    // 这五枚钉的是「对话框的加入按钮与 URL／会话那道门共用一把尺」：谓词委托
+    // validateDraft，所以 1..999 与日／周／月倍数上限只在一处拼写，这里不重抄数。
+    expect(isCustomSpec("999m"), "999m 还在界内").toBe(true);
+    expect(isCustomSpec("1000m"), "1000m 越过数值上限").toBe(false);
+    expect(isCustomSpec("366D"), "366D 还在日历倍数界内").toBe(true);
+    expect(isCustomSpec("367D"), "367D 越过日历倍数上限").toBe(false);
+    expect(isCustomSpec("9999m"), "9999m 文法合法但本仓不收").toBe(false);
+  });
 });
 
 describe("加入按钮的 enabled 判据（本仓规则，不是对面的初态）", () => {
