@@ -41,7 +41,7 @@
   - `function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: string } | { ok: false; reason: string }`
   - `function draftToSpec(draft: CustomIntervalDraft & { n: number }): string`（2026-10-22 预检改口：原写 `Exclude<CustomIntervalDraft, { n: null }>`，`CustomIntervalDraft` 是单一对象类型不是联合，`Exclude` 分配后原样返回、`null` 剥不掉，strict 下实现体编不过）
   - `function parseSpec(text: string): { unit: "m" | "D" | "W" | "M"; n: number } | null`
-  - `function isCustomSpec(text: string): boolean`（文法合法**且**不是内置八档之一）
+  - `function isCustomSpec(text: string): boolean`（合法**自定义**档＝文法合法 ∧ 非内置八档 ∧ 过 `validateDraft` 那把边界尺。2026-10-22 Task 2 修复轮改口：原写「文法合法**且**不是内置八档之一」，那把尺里没有 `1..999`／分钟≤`1440`／日周月≤`366`，于是 `normalizeInterval("9999m")` 放行、对话框的「加入」却拒收同一枚数 ⇒ 边界改由委托 `validateDraft` 取得，只此一处拼写；下方代码块同批改。既存五枚针（`120m`／`2D` 真、八枚内置假、`0m`／`2h` 假）逐枚推演仍绿，执行席必须当场跑过）
   - `function specLabel(text: string): string | null`
   - `function specMs(text: string): number | null`
   - `function specPeriodShape(text: string): { type: "minute" | "day" | "week" | "month"; span: number } | null`
@@ -282,8 +282,8 @@ export function parseSpec(text: string): { unit: SpecUnit; n: number } | null {
 }
 
 export function isCustomSpec(text: string): boolean {
-  const parsed = parseSpec(text);
-  return parsed !== null && !BUILTIN_SPECS.has(`${parsed.n}${parsed.unit}`);
+  const shape = specPeriodShape(text);
+  return shape !== null && validateDraft({ unit: shape.type, n: shape.span }).ok;
 }
 
 export function draftToSpec(draft: { unit: IntervalUnit; n: number }): string {
@@ -361,7 +361,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
 - Modify: `forensics/gap-matrix.md:100`（TV-CI-11 那行把 `chartView.ts:34` 的**整行原文逐字**当证据引着；本片既换掉那行的参数类型、又可能因为往 doc 注释里加一句而使函数往下漂一两行 ⇒ 坐标与引文两处都要按落地后的盘面重钉。判态 `部分` 与其余文字一字不动，Task 7 才动判态。）
 - Modify: `forensics/gap-matrix.md` 第 90 行（TV-CI-01）与第 91 行（TV-CI-02）的**说明列**（2026-10-22 执行期补：本笔在 `marketApi.ts` 头部加了一枚 import、又在 `IntervalKey` 之后新开了一个 `AnyInterval` 声明块，这两处插入把该文件里所有被按号引用的行都推走了——动手前现读 `git show HEAD:frontend/src/lib/marketApi.ts | grep -n ""` 的三枚号是 `:18`（`export type IntervalKey`）／`:20`（`export const INTERVALS`）／`:26`（`{ label: "日线", key: "1D" }` 那一行），矩阵第 90 行引前两枚、第 91 行引第三枚，第 73 行那条第①片 T6 的「不漂清单」也把 `marketApi.ts:18`／`:20` 记在案。落地后**逐枚按内容重钉**：姿势＝`grep -n -F '<文档引用的那句逐字文本>' frontend/src/lib/marketApi.ts` 取新号，再 `sed -n '<新号>p'` 读出原文与引用句核对；**号一律你自己现取，别抄任何消息里写好的数字**（第①片那条「不漂」说的是「那一片的 diff 没碰这个文件」，不是「这个文件的号永远不动」——本笔就是碰了，所以那两枚号今天必须搬，这是同一套口径的延续，不是改写历史）。第 90 行那格的说明列末尾要落一句**带日期、落在原地**的追加，交代三件事：其一，新号与旧号各是什么、为什么搬（一枚 import ＋一个声明块）；其二，第 73 行那条「不漂清单」里 `marketApi.ts` 那两枚号自此对本文件失效（照第①片 ④ 那条的规矩：追加声明，不原地覆盖它）；其三，第 109 行那条 2026-10-14 的说明举例写着 `marketApi.ts:20`，它讲的是「这枚号只住在说明列、不在坐标列」这个**归属**，不是行号读数，所以那一行一个字都不改，只在本笔追加里交代它今天读作新号。**行数守恒**：`forensics/gap-matrix.md` 本文件动手前后 `wc -l` 必须同值（第 91／92／98／100 行是被 Task 4 与本笔按**行号**点名的，插一行就把它们全推走）；只许在既有行内改号与追加句子。EOL 照该文件原象（CRLF）守，改完复数 `CR == LF == 行数`、裸 CR／裸 LF 为 0。
 - Modify: `frontend/src/pages/__tests__/MultiChart.test.tsx:59,766`（2026-10-22 执行期补，这是「消费者同笔」在**测试面**的落点：`:766` 那行 `type IntervalKey = Parameters<typeof intervalToPeriod>[0];` 是把「入参类型」当窄类型用，`intervalToPeriod` 一加宽它就变成 `string`，于是 `:936,937,939` 三处把 `IntervalKey[]` 递给 `intervalsForSymbol(…, readonly IntervalKey[])` 当场 TS2345。改法＝**删掉那行派生别名**，把 `type IntervalKey` 并进 `:59` 已有的那枚 `import { intervalToPeriod } from "@/lib/marketApi"`，其余一字不动。别给别名加 casts、也别把 `intervalsForSymbol` 换宽。）
-- Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）
+- Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）＋ 2026-10-22 Task 2 修复轮连带面（评审席两枚 Important，控制席裁定现做，见台账裁定二／三）：**其一（I-2）** Modify `frontend/src/lib/customInterval.ts`——把 `isCustomSpec` 的函数体换成委托 `validateDraft`（正文与上面 Task 1 代码块逐字同形、行数守恒＝四行不动其它行），文件头那段边界注释里「这里把它挡住是为了不让用户按一个必败的按钮」要补一句：同一把尺现在也管 URL／会话读进来的串（`normalizeInterval` 走它），对话框拒收的数门也不收；`MAX_COUNT`／`MINUTES_PER_DAY`／`MAX_CALENDAR_MULTIPLE` 三枚数**一处不重抄**。**`frontend/src/lib/marketApi.ts` 本笔一字不动**——`:155` 那行调的还是同名谓词，这样上一笔刚按内容重钉的矩阵三枚说明列号（`:19`／`:24`／`:30`）不会二次漂移；若发现 `marketApi.ts` 非改不可，先停下报告，别顺手插行。`customInterval.test.ts` 补越界针：`isCustomSpec("999m")` 真／`("1000m")` 假／`("366D")` 真／`("367D")` 假／`("9999m")` 假，外加 `marketApiCustom.test.ts` 里 `normalizeInterval("9999m")` 与 `("5000D")` 各退 `"1D"`。Task 1 那五枚既存针（`customInterval.test.ts:100-105`）改完必须逐枚仍绿——它们红说明委托把内置判定或 `0m`／`2h` 那两半弄坏了，不许改针迁就实现。**其二（I-1）** `marketApiCustom.test.ts` 补四枚退化出口针，让第 6 片的变异探针有处可红：`intervalMsOf("120m")`／`("2D")` 断自定义侧真的在算（左边写手算的字面量 `120 * 60_000`／`2 * 86_400_000`，**不许**拿 `specMs(...)` 当右边——被测函数自己算出的期望值是一枚天生恒绿的针），`intervalMsOf("2d")` 退 `INTERVAL_MS["1D"]`、`intervalToPeriod("2d")` 退 `{ type: "day", span: 1 }` 断坏串侧那两枝（`marketApi.ts:149`／`:86`）确实落在文档说的退化档上。**提交仍一笔带 pathspec**（`customInterval.ts`＋两枚测试文件＋本计划），EOL 照各文件原象（`customInterval.ts`／测试＝CRLF，本计划＝LF），三门（focused 两套＋`tsc -b`）＋全量 vitest 读数按原样贴、不许删那 3 行 `__dirname` 告警。
 - 不许动：`frontend/src/lib/__tests__/udfTransport.test.ts:113`、`frontend/src/lib/__tests__/marketApiPeriods.test.ts:43,50-64`
 
 **Interfaces:**
