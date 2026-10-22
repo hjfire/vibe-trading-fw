@@ -358,6 +358,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
 - Modify: `frontend/src/lib/marketApi.ts`（286 行；动 `:18` 之后、`:52`、`:57`、`:81`、`:101`、`:126-141`、`:197-207`、`:226-240`）
 - Modify: `frontend/src/lib/chartView.ts:1,34-40`
 - Modify: `frontend/src/lib/indicatorLang.ts:1102-1122`
+- Modify: `forensics/gap-matrix.md:100`（TV-CI-11 那行把 `chartView.ts:34` 的**整行原文逐字**当证据引着；本片既换掉那行的参数类型、又可能因为往 doc 注释里加一句而使函数往下漂一两行 ⇒ 坐标与引文两处都要按落地后的盘面重钉。判态 `部分` 与其余文字一字不动，Task 7 才动判态。）
 - Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）
 - 不许动：`frontend/src/lib/__tests__/udfTransport.test.ts:113`、`frontend/src/lib/__tests__/marketApiPeriods.test.ts:43,50-64`
 
@@ -369,7 +370,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
   - `function intervalMsOf(interval: AnyInterval): number`
   - `function normalizeInterval(text: unknown): AnyInterval`（坏串 → `"1D"`）
   - `intervalToPeriod(key: AnyInterval): Period`、`periodToInterval(period: Period): AnyInterval`、`isCalendarInterval(key: AnyInterval): boolean`、`fetchKline({ interval: AnyInterval … })`
-  - `chartView.intervalAllowed(symbol: string, interval: AnyInterval): boolean`、`repairInterval(symbol, interval: AnyInterval): AnyInterval`
+  - `chartView.intervalAllowed(symbol: string, interval: AnyInterval): boolean`、`repairInterval<T extends AnyInterval>(symbol: string, interval: T): T | "1D"`（2026-10-22 预检改口：原来写的 `…(interval: AnyInterval): AnyInterval` 会把 `ProChart.tsx` 的 `ChartView.interval`、`PeriodPicker` 的 `active`／`onPick`、`MultiChart` 的 `IntervalKey[]` 全部拖红，而那些加宽属于 Task 4／Task 5 的范围，不是「消费者同笔」；泛型让**拿着窄类型 `IntervalKey` 的调用方（`MultiChart`、screener，靠八档穷举）零改动**，让 `ProChart` 在 Task 5 把状态换宽时自动接上。全局约束要求 `IntervalKey` 那八枚不动，这个签名就是用来保它的——`MultiChart.tsx:123,147,373` 三处把 `repairInterval` 的结果塞进 `IntervalKey[]`，`screener.ts:74,192,208,259` 的 `interval` 也仍是窄类型。）
 
 - [ ] **Step 1：写红的针**
 
@@ -439,6 +440,10 @@ describe("车道判定与坏串", () => {
     expect(isCalendarInterval("3W")).toBe(true);
     expect(isCalendarInterval("12M")).toBe(true);
     expect(isCalendarInterval("120m")).toBe(false);
+    // 坏串不许自称日历道（2026-10-22 预检加：原写法 `parseSpec(key)?.unit !== "m"` 对
+    // null 读成 undefined !== "m" ＝ true，这两枚就是拦它的面包屑，缺了它 Step 2 的改文没有针）
+    expect(isCalendarInterval("2d"), "大小写错了就是坏串").toBe(false);
+    expect(isCalendarInterval(""), "空串").toBe(false);
     for (const key of BUILTIN) expect(isCalendarInterval(key), key).toBe(key === "1D" || key === "1W" || key === "1M");
   });
   it("BTC 这类没有分钟源的标的：日倍数可答、分钟倍数不可答", () => {
@@ -466,22 +471,31 @@ Expected: FAIL —— `resolutionOf` 等尚未导出（`does not provide an expo
 
 - [ ] **Step 2：加宽 `marketApi.ts`**
 
-在 `:18` 的 `IntervalKey` 之后追加，并保留 `RESOLUTION_BY_INTERVAL`／`INTERVAL_MS` 两张表**原样不动**（`:113` 那枚 exhaustive 钉靠它们活着）：
+`AnyInterval` 那两行贴在 `:18` 的 `IntervalKey` 之后，`isBuiltinInterval` 那三行贴在 `INTERVALS`（`:20-29`）之后，并保留 `RESOLUTION_BY_INTERVAL`／`INTERVAL_MS` 两张表**原样不动**（`:113` 那枚 exhaustive 钉靠它们活着）：
 
 ```ts
 /** 目录里可能出现的所有周期拼写：八档内置 ∪ 合法自定义串。 */
 export type AnyInterval = string;
 
-const BUILTIN_KEYS = new Set<string>(["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"]);
-
 export function isBuiltinInterval(value: string): value is IntervalKey {
-  return BUILTIN_KEYS.has(value);
+  return INTERVALS.some((item) => item.key === value);
 }
 ```
 
+守卫必须**从 `INTERVALS` 那张建表派生**（放在 `INTERVALS` 之后，不在它之前——`const` 初始化按求值顺序跑），2026-10-22 预检改口：原写法在这里再硬抄一遍八枚串，就成了本仓第五份内置表，而 `INTERVALS` 自己就是那八枚的所在地；派生之后「谁漂了」这个问题在这条线上不存在，八档穷举仍由 `INTERVALS` 单一持有。
+
 四处改口（每处都要留一句「为什么不是查表」）：
 
-1. `isCalendarInterval(key: AnyInterval)`：`CALENDAR_PERIODS.some(...)` 之后接 `|| parseSpecCustom(key)?.unit !== "m"` 形状的判定——**实现用** `customInterval` 的 `parseSpec`，`D`/`W`/`M` 归日历道，分钟道为 false；内置串走原表。
+1. `isCalendarInterval(key: AnyInterval)`：**内置串走原表，非内置只有「单位是 `D`/`W`/`M`」才算日历道**。落点逐字如下（2026-10-22 预检修文——原写法 `parseSpec(key)?.unit !== "m"` 让一枚坏串（`parseSpec` 给 null）读成 `undefined !== "m"` ＝ true，于是垃圾串自称不需要分钟源，正是 TV-CI-11 那行红线要拦的形状）：
+
+```ts
+export function isCalendarInterval(key: AnyInterval): boolean {
+  if (isBuiltinInterval(key)) return CALENDAR_PERIODS.some((c) => c.key === key);
+  const shape = specPeriodShape(key);
+  return shape !== null && shape.type !== "minute";
+}
+```
+
 2. `intervalToPeriod(key: AnyInterval): Period`：先按旧逻辑判内置（`CALENDAR_PERIODS.find` ＋ `parseInt`），不落在内置时用 `specPeriodShape`；`specPeriodShape` 给 null（坏串）时退回 `{ type: "day", span: 1 }`，与本文件既有的「degrade to the one period every instrument can serve」同调。
 3. `periodToInterval(period: Period): AnyInterval`：`minute` 道先查旧 `map`，`span > 60` 或不在表里 ⇒ `f"{span}m"`；calendar 三型把 `span` 带进串（`span === 1` 时仍产 `1D`/`1W`/`1M`，与 `marketApiPeriods.test.ts:43` 的往返钉一致）；`second`/`hour`/`year` 照旧 `"1D"`。
 4. `fetchKline` 的 `interval` 参数类型换成 `AnyInterval`，`:239` 换成 `q.set("resolution", resolutionOf(params.interval))`；新导出 `resolutionOf`／`intervalMsOf`／`normalizeInterval`：
@@ -510,17 +524,28 @@ export function normalizeInterval(value: unknown): AnyInterval {
 
 - [ ] **Step 3：`chartView.ts` 与 `indicatorLang.ts` 的消费者同笔改口**
 
-`chartView.ts:1` 的 import 换成 `isCalendarInterval, type AnyInterval`；`:34`／`:39` 两个函数的 `interval` 参数换成 `AnyInterval`，并在注释里补一句「自定义档按它的单位落车道：`m` 要分钟源，`D`/`W`/`M` 不需要——这条判据的来源是 `interval_spec` 的折叠基档，不是任何 disabled 标记」。**这一句就是 TV-CI-11 红线在码里的落点**，Task 6 有针指着它。
+`chartView.ts:1` 的 import 换成 `isCalendarInterval, type AnyInterval`（`type IntervalKey` 要一起摘掉——换完它在这份文件里再无消费者，`noUnusedLocals` 会当场红）；`:34` 的 `intervalAllowed(symbol, interval: AnyInterval): boolean` 只换参数，`:39` 的 `repairInterval` 按上面 Produces 那枚泛型签名落成：
 
-`indicatorLang.ts:1102` 之后（`:1105` 之前）插入守卫并把 `:1111` 的 `INTERVAL_MS[lowerIv]` 换成 `intervalMsOf(lowerIv)`：
+```ts
+export function repairInterval<T extends AnyInterval>(symbol: string, interval: T): T | "1D" {
+  return intervalAllowed(symbol, interval) ? interval : "1D";
+}
+```
+
+`intervalAllowed` 那段既有 doc 注释里再补一句：「自定义档按它的单位落车道：`m` 要分钟源，`D`/`W`/`M` 不需要——这条判据的来源是 `interval_spec` 的折叠基档，不是任何 disabled 标记」。**这一句就是 TV-CI-11 红线在码里的落点**，Task 6 有针指着它。加这句会让 `intervalAllowed` 与 `repairInterval` 各往下漂（漂几行＝你加了几行），所以 Files 里那条 `forensics/gap-matrix.md:100` 必须同笔重钉：坐标号改成漂后的那一号，引文改成新行的**逐字**内容。
+
+`indicatorLang.ts:1102` 之后（`:1105` 之前）插入守卫并把 `:1111` 的 `INTERVAL_MS[lowerIv]` 换成 `intervalMsOf(lowerIv)`。
+
+**插入形状（2026-10-22 预检钉死）**：`:1102` 那一行**本来就是** `const chartIv = periodToInterval(period);`，已经在位。要新落的只有下面这四行——把「注释三行＋`if` 一枚」插在 `:1102` 与「A single lowerBars series…」那两行注释之间。整段照抄下面这份会**重复声明 `chartIv`**（TS2451），类型门当场红：
 
 ```ts
   // 自定义周期时 MTF 不挑下层档：`pickLowerInterval` 只在内置八档之间选，
   // 拿「最近的内置细档」冒充会让脚本画的不是它请求的那条时间轴。走早已存在
   // 的降级路径——不传 lowerBars，builtin 退化成空数组。
-  const chartIv = periodToInterval(period);
   if (!isBuiltinInterval(chartIv)) return;
 ```
+
+`feedLowerBars` 的返回类型是 `Promise<void>`，早退写成裸 `return;` 即成立；`isBuiltinInterval` 是类型谓词，`chartIv` 在这行之后窄回 `IntervalKey`，`:1105` 的 `pickLowerInterval(chartIv, …)` 才继续编译得过——这一枚早退就是「消费者同笔」的全部内容，页面文件一枚都不许动。
 
 - [ ] **Step 4：全绿＋提交**
 
@@ -528,7 +553,7 @@ export function normalizeInterval(value: unknown): AnyInterval {
 cd frontend && npx vitest run src/lib/__tests__/marketApiCustom.test.ts src/lib/__tests__/marketApiPeriods.test.ts src/lib/__tests__/udfTransport.test.ts
 # 期望：三套全绿，后两枚一枚针都没改
 cd frontend && npx tsc -b && npx vitest run   # 全量：0 错、全绿
-git add -- frontend/src/lib/marketApi.ts frontend/src/lib/chartView.ts frontend/src/lib/indicatorLang.ts frontend/src/lib/__tests__/marketApiCustom.test.ts
+git add -- frontend/src/lib/marketApi.ts frontend/src/lib/chartView.ts frontend/src/lib/indicatorLang.ts frontend/src/lib/__tests__/marketApiCustom.test.ts forensics/gap-matrix.md
 git status --porcelain && git commit -s -m "feat(l3-slice6): marketApi/chartView 类型加宽到 AnyInterval，消费者同笔改口"
 ```
 
