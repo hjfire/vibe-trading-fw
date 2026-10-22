@@ -12,7 +12,7 @@ import {
 } from "@/lib/indicatorStore";
 import type { ScriptCard } from "@/lib/scriptExchange";
 import type { BarLoader } from "@/lib/screener";
-import type { IntervalKey } from "@/lib/marketApi";
+import type { AnyInterval } from "@/lib/marketApi";
 import EditorTab from "./workbench/EditorTab";
 import LibraryTab from "./workbench/LibraryTab";
 import ExchangeTab from "./workbench/ExchangeTab";
@@ -58,7 +58,7 @@ interface IndicatorEditorProps {
   loadBars?: BarLoader;
   /** What the chart is showing right now; an alert rule is written about it. */
   symbol?: string;
-  interval?: IntervalKey;
+  interval?: AnyInterval;
   adjust?: string;
 }
 

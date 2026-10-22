@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { IntervalKey } from "@/lib/marketApi";
+import type { AnyInterval, IntervalKey } from "@/lib/marketApi";
 import { cn } from "@/lib/utils";
 
 /** One row of the interval directory, fully decided by the page. */
@@ -18,7 +18,7 @@ export type PeriodPickerProps = {
   triggerLabel: string;
   /** Which row carries the selected state. `null` while 分时 is on: 分时 is a
    *  view, not a period, so no directory row is the current one. */
-  active: IntervalKey | null;
+  active: AnyInterval | null;
   onPick: (key: IntervalKey) => void;
 };
 

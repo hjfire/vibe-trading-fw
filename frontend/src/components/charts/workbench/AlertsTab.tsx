@@ -14,7 +14,7 @@ import {
   type AlertSeverity,
   type AlertTargetsResponse,
 } from "@/lib/alertsApi";
-import type { IntervalKey } from "@/lib/marketApi";
+import type { AnyInterval } from "@/lib/marketApi";
 import { parseParams, type Draft } from "./types";
 
 /**
@@ -34,7 +34,7 @@ interface AlertsTabProps {
   /** The chart's symbol in loader spelling (e.g. 600519.SH); the rule's symbol. */
   symbol: string;
   /** The chart's interval; rules on 1W/1M cannot be polled by the backend. */
-  interval: IntervalKey;
+  interval: AnyInterval;
   /** The chart's price-adjustment setting; the rule must read the same `close`. */
   adjust: string;
 }

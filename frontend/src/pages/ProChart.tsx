@@ -20,7 +20,7 @@ import {
   isCalendarInterval,
   periodToInterval,
   INTERVALS,
-  type IntervalKey,
+  type AnyInterval, type IntervalKey,
 } from "@/lib/marketApi";
 import { boundsOf, pagingBefore, shapeResponse } from "@/lib/klinePaging";
 import {
@@ -254,12 +254,12 @@ export { canMinuteBars, intervalAllowed, repairInterval } from "@/lib/chartView"
  * candles. Only `viewPeriod` knows which of the two the chart draws.
  */
 export interface ChartView {
-  interval: IntervalKey;
+  interval: AnyInterval;
   timeShare: boolean;
 }
 
 /** The interval whose bars are on screen: 分时 is always a 1-minute view. */
-export function viewPeriod(view: ChartView): IntervalKey {
+export function viewPeriod(view: ChartView): AnyInterval {
   return view.timeShare ? TIME_SHARE_INTERVAL : view.interval;
 }
 
@@ -272,7 +272,7 @@ export function viewPeriod(view: ChartView): IntervalKey {
  */
 export function viewForSymbol(
   symbol: string,
-  interval: IntervalKey,
+  interval: AnyInterval,
   timeShare: boolean,
 ): ChartView {
   return {
@@ -514,7 +514,7 @@ export function ProChart() {
   const [session] = useState(readSession);
   const [symbol, setSymbol] = useState(session.symbol);
   const [input, setInput] = useState(session.symbol);
-  const [interval, setInterval] = useState<IntervalKey>(session.interval);
+  const [interval, setInterval] = useState<AnyInterval>(session.interval);
   // 分时 on top of the candles (local custom ㉖): the same 1-minute bars, drawn
   // as one line for the newest trading session only.
   const [timeShare, setTimeShare] = useState(session.timeShare);
@@ -1958,7 +1958,7 @@ export function ProChart() {
     [symbol, watch],
   );
 
-  const pickInterval = (iv: IntervalKey) => {
+  const pickInterval = (iv: AnyInterval) => {
     if (!intervalAllowed(symbol, iv)) return; // the directory row is disabled too
     setDrawNotice(null);
     // Any directory row also ends 分时: the two are alternative readings of the
@@ -2602,10 +2602,10 @@ export function ProChart() {
       }),
     [symbol],
   );
-  // `?? interval` is a typing necessity, not a fallback: every IntervalKey is in
-  // INTERVALS, so the find always answers.
+  // `?? interval` really does get hit now: a custom collapsed spec is not in
+  // INTERVALS, so the trigger label falls back to the spec string itself.
   const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;
-  const periodActiveKey: IntervalKey | null = timeShare ? null : interval;
+  const periodActiveKey: AnyInterval | null = timeShare ? null : interval;
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
   // highlight, or the chart keeps eating clicks waiting for the next point.
