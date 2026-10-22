@@ -7,6 +7,62 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Maintenance — 2026-10-20
+
+- Warn about unrecognized backtest configuration keys and include the warning
+  in the run card (#1935). Runs still proceed. This is not engine-specific
+  validation: a key read by another engine can still go unused for the selected
+  engine, including `commission_rate` for crypto; #1934 remains open.
+- Return undefined off-diagonal correlations as `null` and show them as muted
+  dashes in the chart, keeping genuine zero correlations distinct (#1933).
+- Save the runner's annualisation factor in the run card and reuse it for
+  standalone revalidation, including calendar-day annualisation (#1915).
+  Legacy cards reconstruct it from configuration and equity timestamps because
+  the original per-symbol price indexes are unavailable; invalid saved factors
+  are rejected.
+- Skip factor benchmarks with fewer than two IC observations and report why,
+  rather than ranking an unestimable sample dispersion as zero (#1918).
+- Reject zero, boolean, fractional and non-finite alpha-benchmark `top` limits
+  instead of substituting a default, truncating or raising unexpectedly (#1910).
+- Reject unknown journal analysis types and unsupported filters instead of
+  returning empty success or claiming a filter was applied (#1911, #1924).
+  Classify `.US` and `.SS` journal symbols by market, preserving share classes
+  such as `BF-B.US` (#1916).
+- Return structured JSON errors for malformed pattern-tool arguments (#1923).
+- Report three-scenario upside as `null` when the current price is nonpositive
+  and reject negative integer projection years (#1921). Reject non-finite hurdle and
+  waterfall inputs while retaining valid finite calculations (#1919).
+- Clamp an explicit zero fund-NAV row limit to one instead of falling back to
+  the 2,000-row default (#1927). Switch CLI numeric units when rounding reaches
+  the next unit boundary (#1926).
+- Reuse one WeCom stream ID throughout each logical reply so streamed chunks
+  update the same response (#1929).
+
+### Maintenance — 2026-10-19
+
+- Weight the newest observation most heavily in `decay_linear`, retaining
+  causal windows and missing-data masks; update the affected synthetic GTJA
+  regression fixture (#1912).
+- Apply ordinary ChiNext/STAR limits to 301/689 codes and Beijing limits to
+  920 and historical 4/8 codes; resolve Beijing symbols correctly in Eastmoney
+  search and Tushare fallbacks (#1913, #1914). Listing-day exemptions and ST
+  status still require information beyond a stock code.
+- Derive SEC Q4 values only for currency flows with matching units, never
+  weighted-average shares, EPS or dimensionless ratios (#1917).
+- Keep event-study fitting data before both the event and its measured window,
+  including post-event windows and a zero estimation gap (#1920).
+- Normalize Futu market-prefixed holdings for risk analysis and cross-broker
+  aggregation, preserving share classes. Invalidate older portfolio snapshots
+  so the next refresh rebuilds holdings under the corrected contract (#1922).
+- Preserve at least four significant digits for nonzero MACD/Bollinger values,
+  including tiny components beside larger values; retain ordinary-price
+  rounding (#1925).
+- Reject materially negative specific variances; retain the existing covariance
+  tolerance of 1e-8 for rounding noise and non-finite input rejection (#1928).
+- Normalize Yahoo `=X` and case-insensitive `.FX` aliases before looking up
+  configured forex spreads and overnight swaps (#1930). Rate assumptions are
+  unchanged; these are not live broker quotes.
+
 ### Maintenance — 2026-10-18
 
 - Preserve explicit zero financial-rigor parameters and hypothesis backtest
