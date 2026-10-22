@@ -107,10 +107,10 @@ describe("换算", () => {
   it("isCustomSpec 也管本仓自己的数值边界：越界的合法文法串不算合法自定义档", () => {
     // 这五枚钉的是「对话框的加入按钮与 URL／会话那道门共用一把尺」——共用的是**跨度**
     // 那把尺（`durationOk` 的一处拼写），不是手打数那把：门侧收到的串里已经没有单位
-    // 这一层，串中那个数就是折算后的跨度，所以 `1000m`（小时档 n=17 折算出来的）合法。
+    // 这一层，串中那个数就是折算后的跨度，所以 `1000m`（跨度界内的合法文法串）合法。
     // N-1（2026-10-22）撤销了「委托 validateDraft」的写法，这枚针的 `1000m` 因此翻面。
     expect(isCustomSpec("999m"), "999m 还在界内").toBe(true);
-    expect(isCustomSpec("1000m"), "1000m 是小时档折算出来的合法跨度，门按跨度判它").toBe(true);
+    expect(isCustomSpec("1000m"), "1000m 是跨度界内的合法文法串，门按跨度判它").toBe(true);
     expect(isCustomSpec("366D"), "366D 还在日历倍数界内").toBe(true);
     expect(isCustomSpec("367D"), "367D 越过日历倍数上限").toBe(false);
     expect(isCustomSpec("9999m"), "9999m 文法合法但本仓不收").toBe(false);
