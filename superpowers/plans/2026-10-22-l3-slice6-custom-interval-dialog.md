@@ -691,6 +691,23 @@ git commit -s -m "feat(l3-slice6): 自定义周期对话框（role=dialog ＋ �
 
 ### Task 4：`PeriodPicker.tsx` 目录加自定义行、入口行与移除按钮
 
+> **2026-10-22 第 4 轮预检：本任务拆成 4a／4b 两席，并修掉本节自身的四处洞（控制席裁定）。下面这段是本任务的权威口径，与后文冲突处以本节为准。**
+>
+> **P-1（任务边界切在接口中间）⇒ 新增 Task 4a。** 本节把 `PeriodOption.key` 加宽到 `AnyInterval`，`onPick` 就必须跟着加宽；参数是反变的（`strictFunctionTypes`），所以 `ProChart.tsx:1961` 的 `const pickInterval = (iv: IntervalKey) =>` 从此当不了 `onPick`，`npx tsc -b` 会在 `ProChart.tsx:2833` 那行红。原计划把这条类型链整个留在 Task 5 Step 2 第 1～3 项，于是 Task 4 自己合不到绿。
+> - **Task 4a＝把 ProChart 的周期状态链从 `IntervalKey` 加宽到 `AnyInterval`：只做类型面、行为零变化、每处改动都必须行内改字（行数守恒）。** 行数守恒在这里是硬约束不是偏好：`grep -rno "ProChart\.tsx:[0-9]\+" forensics/ frontend/src agent/src` 现读＝**85 处命中**（控制席 2026-10-22 读数，席上要自己重取），插一行就把这些按号引用的坐标整体推走一位，而 L2 坐标门只判「行号在不在文件行数范围内」、不判那一行写的是什么——门会照样绿。`AnyInterval` 因此并进既有那行 `type IntervalKey,`（同一物理行里写两枚 specifier，与 `ProChart.tsx:1` 的 `useState, type ChangeEvent` 同形），不开新行。
+> - **4a 的改动点（逐枚按符号现读定位，行号只是写作时读数）：** `ChartView.interval`（写作时在 `:257`）、`viewPeriod` 返回类型（`:262`）、`viewForSymbol` 的 `interval` 参数（`:275`）、`useState<IntervalKey>`（`:517`）、`pickInterval` 参数（`:1961`）、`periodActiveKey` 标注（`:2608`）；再加 `PeriodPicker.tsx` 的两处——它的 `type IntervalKey` import 行改成同时带入 `AnyInterval`（仍是同一行）与 `active: IntervalKey | null` → `AnyInterval | null`（`PeriodPickerProps` 里那行）。**`PeriodOption.key`／`onPick` 不在 4a**，那是 4b 的接口面。`readSession` 里 `"1D" as IntervalKey`（`:288`）与 `interval as IntervalKey`（`:301`）在 4a 保持原样：窄值赋给宽槽位合法，Task 5 Step 2 第 2 项会把 `:301` 换成 `normalizeInterval`。判据＝`npx tsc -b` 绿 ＋ 两份文件 `wc -l` 前后一字不差 ＋ 既有套件零改口全绿（行为没变，任何一枚针改口都是 4a 越界的证据）。
+>
+> **P-2（针的一半天生恒真）**：Step 1 里「内置行没有移除按钮」原写 `within(getByRole("option", { name: "日线" })).queryByRole("button")` 为 null——在选定的行形状下它**恒为 null**：移除按钮是 option 的**兄弟**不是后代，内置行与自定义行都读得到 null，这半枚谁都拒不掉。行形状也不能反过来定：既存 `PeriodPicker.test.tsx:107`／`:115` 断的是 `row.textContent` 逐字等于档位名，把移除按钮嵌进 option 会同时破那两枚针、还写出非法 HTML（button 嵌 button）。⇒ 改判成按可达名点名：`queryByRole("button", { name: /^移除 日线$/ })` 为 null，且自定义行那枚 `getByRole("button", { name: /^移除 / })` 非 null——顺带钉住 `aria-label={`移除 ${option.label}`}` 的拼法。
+>
+> **P-3（简报指向盘面不存在的东西）**：Step 2 说入口行「摆在 listbox 之后但在弹层容器之内」，而当前 DOM 没有第二个容器——`{open && ( <div id role="listbox"> … ) }` 里 listbox 就是浮层本体。⇒ 裁定：新开一枚外层面板 `div` 承接定位与外观类（`absolute left-0 top-full z-50 mt-1 min-w-full rounded-md border bg-background py-1 shadow-lg`），listbox 那枚 `div` 保留 `id="pro-chart-period-menu"`／`role`／`aria-label` 三件、类名交给外层；入口按钮摆在 listbox **之后**、面板之内。id 留在 listbox 是硬要求：既存 `:68-74` 那枚针断的是 `aria-controls === menu.id` 且 `document.getElementById(menu.id) === menu`。
+>
+> **P-4（不可达守卫，与上一轮 M-4 同族）**：Step 2 给移除按钮写的 `onMouseDown={(e) => e.stopPropagation()}` 与 `onClick` 里那半句 `e.stopPropagation()` 在本组件内没有任何可观察后果——兄弟之间不冒泡，而 `document` 上那枚外点监听只看 `wrapRef.contains(target)`，移除按钮就在 `wrapRef` 里，触发不了关目录。⇒ 两处都不写；「按移除不选中那档」由 Step 1 的 `expect(onPick).not.toHaveBeenCalled()` 钉，它覆盖的正是同一种失效形状。
+>
+> **P-5（ARIA 树里多出来的一层）**：行容器那枚 `div` 夹在 `role="listbox"` 与 `role="option"` 之间，按 ARIA 不是 listbox 的合法被拥有元素⇒ 容器写 `role="none"`，让 option 在无障碍树里仍直接归 listbox 所有。移除按钮自己带 `button` 角色、留在 listbox 之下是自家裁定（它既不能嵌进 option——见 P-2——又没有别的合法位置），这条要在注释里写明是裁定不是对面证据。
+>
+> **Task 4b＝原 Task 4 的全部其余内容**（目录行结构、移除按钮、入口行、五枚新针、`ScriptWorkbench.test.tsx:437` 注释重钉、`PeriodPicker.tsx` 十一枚坐标按内容重钉），外加一条它自己**不碰** `ProChart.tsx` 的约束：4a 已经把页面侧类型链加宽，`onPick={pickInterval}` 与 `active={periodActiveKey}` 在 4b 落地时照旧编译。
+
+
 **Files:**
 - Modify: `frontend/src/components/charts/PeriodPicker.tsx`（109 行；`PeriodOption` 加两字段，行结构见 Step 2）
 - Modify: `frontend/src/components/charts/__tests__/PeriodPicker.test.tsx`（**只加 describe 块，既有 21 枚针一字不改**）
@@ -779,6 +796,7 @@ git commit -s -m "feat(l3-slice6): 周期目录支持自定义档行（移除按
 1. 状态：`const [customIntervals, setCustomIntervals] = useState<string[]>(session.customIntervals)`；`interval` 的 `useState<IntervalKey>` 改成 `useState<AnyInterval>`（`:517`）。
 2. `viewPeriod` 返回类型 `AnyInterval`；`readSession` 的 `:301` 那行换成 `normalizeInterval(parsed.interval)`，并新增 `customIntervals: Array.isArray(parsed.customIntervals) ? parsed.customIntervals.filter(isCustomSpec).filter(unique) : []`（**filter 用 `isCustomSpec`，不是 `normalizeInterval`**：会话里躺着一枚 `1D` 当自定义档是脏数据，丢掉而不是显示两行同名）。
 3. `pickInterval(iv: AnyInterval)` 守卫不变（`intervalAllowed` 已加宽）。
+   - **（2026-10-22 第 4 轮预检改口）本项与前两项的类型半已经在 Task 4a 落地**：`ChartView.interval`／`viewPeriod`／`viewForSymbol`／`useState`／`pickInterval`／`periodActiveKey`／`PeriodPickerProps.active` 都已是 `AnyInterval`，且是行内改字（`ProChart.tsx` 行数未变）。Task 5 在这里只剩行为面：会话多一个 `customIntervals` 键、`readSession` 的 `normalizeInterval` 与 `isCustomSpec` 过滤、`periodOptions` 拼自定义行、增删与分时互斥。
 4. `periodOptions`：`INTERVALS.map(...)` 之后 `concat(customIntervals.map((key) => ({ key, label: specLabel(key) ?? key, disabled: !intervalAllowed(symbol, key), custom: true, title: `自定义档：${key} 由基档折叠而成（服务端负责折叠），点「移除」可以从目录里删掉这一档`, onRemove: () => removeCustomInterval(key) })))`。
 5. `addCustomInterval(spec)`：去重后 append、`pickInterval(spec)`、关对话框。`removeCustomInterval(spec)`：从清单里摘掉；**若摘的正是当前周期**，`setView({ interval: "1D", timeShare: false }, true)`，否则只改清单不动当前周期（这就是「按删除不会先换档」那枚针的落点）。
 6. `:810` 写会话时带上 `customIntervals`。
