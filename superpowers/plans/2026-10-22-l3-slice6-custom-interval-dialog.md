@@ -41,7 +41,7 @@
   - `function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: string } | { ok: false; reason: string }`
   - `function draftToSpec(draft: CustomIntervalDraft & { n: number }): string`（2026-10-22 预检改口：原写 `Exclude<CustomIntervalDraft, { n: null }>`，`CustomIntervalDraft` 是单一对象类型不是联合，`Exclude` 分配后原样返回、`null` 剥不掉，strict 下实现体编不过）
   - `function parseSpec(text: string): { unit: "m" | "D" | "W" | "M"; n: number } | null`
-  - `function isCustomSpec(text: string): boolean`（合法**自定义**档＝文法合法 ∧ 非内置八档 ∧ 过 `validateDraft` 那把边界尺。2026-10-22 Task 2 修复轮改口：原写「文法合法**且**不是内置八档之一」，那把尺里没有 `1..999`／分钟≤`1440`／日周月≤`366`，于是 `normalizeInterval("9999m")` 放行、对话框的「加入」却拒收同一枚数 ⇒ 边界改由委托 `validateDraft` 取得，只此一处拼写；下方代码块同批改。既存五枚针（`120m`／`2D` 真、八枚内置假、`0m`／`2h` 假）逐枚推演仍绿，执行席必须当场跑过）
+  - `function isCustomSpec(text: string): boolean`（合法**自定义**档＝文法合法 ∧ 非内置八档 ∧ 过**跨度**那把尺。2026-10-22 Task 2 修复轮改口：原写「文法合法**且**不是内置八档之一」，那把尺里没有 `1..999`／分钟≤`1440`／日周月≤`366`，于是 `normalizeInterval("9999m")` 放行、对话框的「加入」却拒收同一枚数 ⇒ 边界收进谓词，只此一处拼写；下方代码块同批改。**同日 Task 3 Step 0 二次改口**：那一轮实现用「委托 `validateDraft`」取得边界，把只管手打数的 `1..999` 也套到了串上，而串里那个数**已经是折算后的跨度**（小时档 `n=17..24` 造的 `1020m…1440m` 因此「发得出、收不下」）⇒ 委托撤销，两侧改共用的 `durationOk` 一处拼写，spec §4 同日补「两把尺的分界」那条。Task 1 那五枚既存针（`120m`／`2D` 真、八枚内置假、`0m`／`2h` 假）与 I-2 四枚（`999m`／`366D` 真、`367D`／`9999m` 假）逐枚推演仍绿，`1000m` 那枚按跨度翻面为真；执行席必须当场跑过）
   - `function specLabel(text: string): string | null`
   - `function specMs(text: string): number | null`
   - `function specPeriodShape(text: string): { type: "minute" | "day" | "week" | "month"; span: number } | null`
@@ -282,6 +282,9 @@ export function parseSpec(text: string): { unit: SpecUnit; n: number } | null {
 }
 
 export function isCustomSpec(text: string): boolean {
+  // 这枚委托是 2026-10-22 Task 2 修复轮的落地形状，已被 Task 3 Step 0（N-1 裁定）撤销：
+  // 门侧串里那个数**已经是折算后的跨度**，委托会把手打数上限 `1..999` 套到跨度上。
+  // 最终形状只在 Task 3 Step 0 写一遍，这里不重复。
   const shape = specPeriodShape(text);
   return shape !== null && validateDraft({ unit: shape.type, n: shape.span }).ok;
 }
@@ -361,7 +364,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
 - Modify: `forensics/gap-matrix.md:100`（TV-CI-11 那行把 `chartView.ts:34` 的**整行原文逐字**当证据引着；本片既换掉那行的参数类型、又可能因为往 doc 注释里加一句而使函数往下漂一两行 ⇒ 坐标与引文两处都要按落地后的盘面重钉。判态 `部分` 与其余文字一字不动，Task 7 才动判态。）
 - Modify: `forensics/gap-matrix.md` 第 90 行（TV-CI-01）与第 91 行（TV-CI-02）的**说明列**（2026-10-22 执行期补：本笔在 `marketApi.ts` 头部加了一枚 import、又在 `IntervalKey` 之后新开了一个 `AnyInterval` 声明块，这两处插入把该文件里所有被按号引用的行都推走了——动手前现读 `git show HEAD:frontend/src/lib/marketApi.ts | grep -n ""` 的三枚号是 `:18`（`export type IntervalKey`）／`:20`（`export const INTERVALS`）／`:26`（`{ label: "日线", key: "1D" }` 那一行），矩阵第 90 行引前两枚、第 91 行引第三枚，第 73 行那条第①片 T6 的「不漂清单」也把 `marketApi.ts:18`／`:20` 记在案。落地后**逐枚按内容重钉**：姿势＝`grep -n -F '<文档引用的那句逐字文本>' frontend/src/lib/marketApi.ts` 取新号，再 `sed -n '<新号>p'` 读出原文与引用句核对；**号一律你自己现取，别抄任何消息里写好的数字**（第①片那条「不漂」说的是「那一片的 diff 没碰这个文件」，不是「这个文件的号永远不动」——本笔就是碰了，所以那两枚号今天必须搬，这是同一套口径的延续，不是改写历史）。第 90 行那格的说明列末尾要落一句**带日期、落在原地**的追加，交代三件事：其一，新号与旧号各是什么、为什么搬（一枚 import ＋一个声明块）；其二，第 73 行那条「不漂清单」里 `marketApi.ts` 那两枚号自此对本文件失效（照第①片 ④ 那条的规矩：追加声明，不原地覆盖它）；其三，第 109 行那条 2026-10-14 的说明举例写着 `marketApi.ts:20`，它讲的是「这枚号只住在说明列、不在坐标列」这个**归属**，不是行号读数，所以那一行一个字都不改，只在本笔追加里交代它今天读作新号。**行数守恒**：`forensics/gap-matrix.md` 本文件动手前后 `wc -l` 必须同值（第 91／92／98／100 行是被 Task 4 与本笔按**行号**点名的，插一行就把它们全推走）；只许在既有行内改号与追加句子。EOL 照该文件原象（CRLF）守，改完复数 `CR == LF == 行数`、裸 CR／裸 LF 为 0。
 - Modify: `frontend/src/pages/__tests__/MultiChart.test.tsx:59,766`（2026-10-22 执行期补，这是「消费者同笔」在**测试面**的落点：`:766` 那行 `type IntervalKey = Parameters<typeof intervalToPeriod>[0];` 是把「入参类型」当窄类型用，`intervalToPeriod` 一加宽它就变成 `string`，于是 `:936,937,939` 三处把 `IntervalKey[]` 递给 `intervalsForSymbol(…, readonly IntervalKey[])` 当场 TS2345。改法＝**删掉那行派生别名**，把 `type IntervalKey` 并进 `:59` 已有的那枚 `import { intervalToPeriod } from "@/lib/marketApi"`，其余一字不动。别给别名加 casts、也别把 `intervalsForSymbol` 换宽。）
-- Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）＋ 2026-10-22 Task 2 修复轮连带面（评审席两枚 Important，控制席裁定现做，见台账裁定二／三）：**其一（I-2）** Modify `frontend/src/lib/customInterval.ts`——把 `isCustomSpec` 的函数体换成委托 `validateDraft`（正文与上面 Task 1 代码块逐字同形、行数守恒＝四行不动其它行），文件头那段边界注释里「这里把它挡住是为了不让用户按一个必败的按钮」要补一句：同一把尺现在也管 URL／会话读进来的串（`normalizeInterval` 走它），对话框拒收的数门也不收；`MAX_COUNT`／`MINUTES_PER_DAY`／`MAX_CALENDAR_MULTIPLE` 三枚数**一处不重抄**。**`frontend/src/lib/marketApi.ts` 本笔一字不动**——`:155` 那行调的还是同名谓词，这样上一笔刚按内容重钉的矩阵三枚说明列号（`:19`／`:24`／`:30`）不会二次漂移；若发现 `marketApi.ts` 非改不可，先停下报告，别顺手插行。`customInterval.test.ts` 补越界针：`isCustomSpec("999m")` 真／`("1000m")` 假／`("366D")` 真／`("367D")` 假／`("9999m")` 假，外加 `marketApiCustom.test.ts` 里 `normalizeInterval("9999m")` 与 `("5000D")` 各退 `"1D"`。Task 1 那五枚既存针（`customInterval.test.ts:100-105`）改完必须逐枚仍绿——它们红说明委托把内置判定或 `0m`／`2h` 那两半弄坏了，不许改针迁就实现。**其二（I-1）** `marketApiCustom.test.ts` 补四枚退化出口针，让第 6 片的变异探针有处可红：`intervalMsOf("120m")`／`("2D")` 断自定义侧真的在算（左边写手算的字面量 `120 * 60_000`／`2 * 86_400_000`，**不许**拿 `specMs(...)` 当右边——被测函数自己算出的期望值是一枚天生恒绿的针），`intervalMsOf("2d")` 退 `INTERVAL_MS["1D"]`、`intervalToPeriod("2d")` 退 `{ type: "day", span: 1 }` 断坏串侧那两枝（`marketApi.ts:149`／`:86`）确实落在文档说的退化档上。**提交仍一笔带 pathspec，只列三份：`customInterval.ts`＋两枚测试文件**（本计划与控制席的台账由控制席另笔提交，修复席不碰 `superpowers/**` 与 `.superpowers/**`），EOL 照各文件原象（`customInterval.ts`／测试＝CRLF，本计划＝LF），三门（focused 两套＋`tsc -b`）＋全量 vitest 读数按原样贴、不许删那 3 行 `__dirname` 告警。
+- Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）＋ 2026-10-22 Task 2 修复轮连带面（评审席两枚 Important，控制席裁定现做，见台账裁定二／三）：**其一（I-2）** Modify `frontend/src/lib/customInterval.ts`——把 `isCustomSpec` 的函数体换成委托 `validateDraft`（正文与上面 Task 1 代码块逐字同形、行数守恒＝四行不动其它行），文件头那段边界注释里「这里把它挡住是为了不让用户按一个必败的按钮」要补一句：同一把尺现在也管 URL／会话读进来的串（`normalizeInterval` 走它），对话框拒收的数门也不收；`MAX_COUNT`／`MINUTES_PER_DAY`／`MAX_CALENDAR_MULTIPLE` 三枚数**一处不重抄**。**`frontend/src/lib/marketApi.ts` 本笔一字不动**——`:155` 那行调的还是同名谓词，这样上一笔刚按内容重钉的矩阵三枚说明列号（`:19`／`:24`／`:30`）不会二次漂移；若发现 `marketApi.ts` 非改不可，先停下报告，别顺手插行。`customInterval.test.ts` 补越界针：`isCustomSpec("999m")` 真／`("1000m")` 假／`("366D")` 真／`("367D")` 假／`("9999m")` 假，外加 `marketApiCustom.test.ts` 里 `normalizeInterval("9999m")` 与 `("5000D")` 各退 `"1D"`。Task 1 那五枚既存针（`customInterval.test.ts:100-105`）改完必须逐枚仍绿——它们红说明委托把内置判定或 `0m`／`2h` 那两半弄坏了，不许改针迁就实现。**其二（I-1）** `marketApiCustom.test.ts` 补四枚退化出口针，让第 6 片的变异探针有处可红：`intervalMsOf("120m")`／`("2D")` 断自定义侧真的在算（左边写手算的字面量 `120 * 60_000`／`2 * 86_400_000`，**不许**拿 `specMs(...)` 当右边——被测函数自己算出的期望值是一枚天生恒绿的针），`intervalMsOf("2d")` 退 `INTERVAL_MS["1D"]`、`intervalToPeriod("2d")` 退 `{ type: "day", span: 1 }` 断坏串侧那两枝（`marketApi.ts:149`／`:86`）确实落在文档说的退化档上。**提交仍一笔带 pathspec，只列三份：`customInterval.ts`＋两枚测试文件**（本计划与控制席的台账由控制席另笔提交，修复席不碰 `superpowers/**` 与 `.superpowers/**`），EOL 照各文件原象（`customInterval.ts`／测试＝CRLF，本计划＝LF），三门（focused 两套＋`tsc -b`）＋全量 vitest 读数按原样贴、不许删那 3 行 `__dirname` 告警。**（同日 Task 3 Step 0 的 N-1 裁定撤销本节那枚「委托 `validateDraft`」写法——它把只管手打数的 `1..999` 套到了折算跨度上；本节 I-2 的判据「越界的合法文法串不算合法自定义档」仍然成立，只是「越界」按跨度取，故 `("1000m")` 那枚针翻面为真。）**
 - 不许动：`frontend/src/lib/__tests__/udfTransport.test.ts:113`、`frontend/src/lib/__tests__/marketApiPeriods.test.ts:43,50-64`
 
 **Interfaces:**
@@ -574,6 +577,7 @@ git status --porcelain && git commit -s -m "feat(l3-slice6): marketApi/chartView
 **Files:**
 - Create: `frontend/src/components/charts/CustomIntervalDialog.tsx`
 - Create: `frontend/src/components/charts/__tests__/CustomIntervalDialog.test.tsx`
+- Modify（Step 0 的 N-1 裁定件）: `frontend/src/lib/customInterval.ts` ＋ `frontend/src/lib/__tests__/customInterval.test.ts`
 - 参照（不修改）：`frontend/src/components/charts/PeriodPicker.tsx:36-55` 的 Escape／外点关闭写法
 
 **Interfaces:**
@@ -588,6 +592,51 @@ git status --porcelain && git commit -s -m "feat(l3-slice6): marketApi/chartView
   };
   export function CustomIntervalDialog(props: CustomIntervalDialogProps): JSX.Element | null;
   ```
+
+- [ ] **Step 0：边界尺归一（2026-10-22 Task 2 收窄复评的 N-1 裁定，本任务先做，单独一笔提交）**
+
+**洞的形状**：Task 2 修复轮把 `isCustomSpec` 改成委托 `validateDraft`（`customInterval.ts:54-57`），于是串侧那道门把**手打的数**上限 `MAX_COUNT`（`:30`＝999）也套到了串里那个数上。但 `validateDraft` 判的是**草案**：小时档 `n=17..24` 经 `draftToSpec`（`:59-64`）折算成 `1020m…1440m`，手打数 ≤999、折算跨度 ≤1440（`:71-73`）两边都放行，造出来的串回到门侧就被 `1200 > 999` 拒收⇒对话框发得出、`normalizeInterval` 与 Task 5 的会话过滤收不下，刷新后被静默退成 `1D`。今天 `validateDraft` 还没有生产调用方，所以本笔不红；**Step 1 起的对话框就是那枚消费者**，故修复归本任务而不在 Task 2 的返工里顺手改（改 `:71` 会动到未点名的既有判据，复评席明说「本笔不该顺手改」）。
+
+**裁定的读法依据**：spec §4 那句「`n` 必须是 `1..999` 的整数，且单位是分钟/小时时 `60·n`（小时）或 `n`（分钟）不得超过 `1440`」管的是两件事——**用户手打的数**与**折算后的跨度**，各自一把尺。委托写法把前者也套到了后者上。⇒ 归一后的形状：**跨度判据只有一处拼写，两侧都按折算后的串判**；`MAX_COUNT` 退回它本来只管的那件事（手打的数值）。
+
+```ts
+/** 折算后的跨度上限——对话框（`validateDraft`，先过 `mintedShape`）与门（`isCustomSpec`，
+ *  串里那个数就已经是跨度）共用这一处拼写。N-1（2026-10-22）：两侧各写一遍就会漏出
+ *  「对话框发得出、门收不下」的串，那串在会话里被静默退成 `1D`。 */
+function durationOk(minted: { unit: SpecUnit; n: number }): boolean {
+  return minted.unit === "m" ? minted.n <= MINUTES_PER_DAY : minted.n <= MAX_CALENDAR_MULTIPLE;
+}
+
+/** 草案 → 折算后的串形状。`draftToSpec` 用它拼字面量，`validateDraft` 用它判跨度。 */
+function mintedShape(draft: { unit: IntervalUnit; n: number }): { unit: SpecUnit; n: number } {
+  if (draft.unit === "hour") return { unit: "m", n: draft.n * 60 };
+  if (draft.unit === "minute") return { unit: "m", n: draft.n };
+  return { unit: draft.unit === "day" ? "D" : draft.unit === "week" ? "W" : "M", n: draft.n };
+}
+```
+
+三处改动照下面落，其余函数一字不动，`marketApi.ts` 本步一字不动：
+
+1. `draftToSpec`（`:59-64`）函数体换成两行：`const minted = mintedShape(draft);` 再 `` return `${minted.n}${minted.unit}`; ``——拼写仍由这一处对外持有，`mintedShape` 是它的唯一实现者。
+2. `validateDraft`（`:66-80`）保留手打数那几枚判据（`null`／`NaN`／非整数／`<1`／`>MAX_COUNT`），把 `:72-76` 的两段跨度判据换成**一次** `durationOk(mintedShape({ unit: draft.unit, n }))`，原因文案按折算后的单位分岔：`m` 给「分钟档的一档不能跨过多于一天」，`D`／`W`／`M` 给「日／周／月的倍数最多 366」。内置重复判定与返回形状不变。
+3. `isCustomSpec`（`:54-57`）不再委托 `validateDraft`——门侧收到的串里没有「单位」这一层，委托等于把手打数上限套到跨度上。改成 `parseSpec` → 非内置 → `durationOk(parsed)` 三步（`parseSpec` 已拒 `0m` 与坏文法）。**不许**新增第二枚 `MAX_COUNT` 式判据，也不许在 `normalizeInterval` 里就地补尺。
+
+文件头那段边界注释（`:9-13`）末句「两扇门共用下面 `validateDraft` 那一处拼写」要改成按 `durationOk` 说（手打数一把尺、跨度一把尺，跨度只有这一处）；同一笔把 `customInterval.test.ts:100` 那枚 `it` 标题的「文法合法且不是内置八档才算自定义档」补全成含跨度的说法（复评 N-2）。
+
+针面（`customInterval.test.ts`，只动 `:107-115` 那一枚 `it` 与文件里新增一枚）：
+
+- `:111` 那枚 `isCustomSpec("1000m")` 假**翻面为真**，注释理由改成「`1000m` 是小时档折算出来的合法跨度，门按跨度判它」；`999m` 真／`366D` 真／`367D` 假／`9999m` 假四枚**一字不动**（`9999 > 1440`，I-2 那半仍然成立）。
+- 新增一枚**往返针**（复评席点名的「无论哪种修法都该配一枚往返针」）：遍历 `CUSTOM_UNITS` 五枚单位 × `n` 从 1 到 999，凡 `validateDraft` 给 `ok:true` 的 `spec` 必须 `isCustomSpec(spec) === true`。写成循环针，别逐枚枚举那八枚串——要钉的是「发得出就收得下」这条性质，不是那八枚的名字。
+- `marketApiCustom.test.ts` 里 Task 2 修复轮那两枚越界退化针（`normalizeInterval("9999m")`／`("5000D")` 各退 `"1D"`）**必须仍绿、不许翻面**——翻面就是把 I-2 拆回去。
+
+```bash
+cd frontend && npx vitest run src/lib/__tests__/customInterval.test.ts src/lib/__tests__/marketApiCustom.test.ts src/lib/__tests__/marketApiPeriods.test.ts src/lib/__tests__/udfTransport.test.ts && npx tsc -b
+# 期望：四套全绿＋0 错
+git add -- frontend/src/lib/customInterval.ts frontend/src/lib/__tests__/customInterval.test.ts
+git commit -s -m "fix(l3-slice6): 边界尺归一——跨度只判一处，手打数上限退回只管手打的数"
+```
+
+自证（先证这枚往返针能红）：把 `durationOk` 里的 `MINUTES_PER_DAY` 临时换成 `MAX_COUNT`，应当**恰**红往返针与 `1000m` 那枚；还原只从动手前的内存副本写回，改完复跑并取 sha256 与动手前对账。Step 0 全绿提交后，再进 Step 1。
 
 - [ ] **Step 1：写红的针（C 组，逐枚对 spec §6 那张表）**
 
