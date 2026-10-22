@@ -811,6 +811,13 @@ git commit -s -m "feat(l3-slice6): 周期目录支持自定义档行（移除按
    - **叠层监听器的落地细则（2026-10-22 第 3 轮评审补，Task 3 的 M-5）**：`CustomIntervalDialog` 在 `document` 上挂了 `mousedown`／`keydown` 两枚监听（本组件 `useEffect` 里那一对，行号随改动会漂，按符号找），`PeriodPicker` 的浮层也在 `document` 上挂自己的外点／Escape。页面接线时按「对话框开 ⇒ 目录的 `open` 先关」这一条走，就能保证同一趟里 `document` 上只有一套监听在关东西；**针摆在这里**（D 组补一枚）：目录开着时点「添加自定义周期…」⇒ 一趟点击之后对话框是开着的（不是「开了又被目录的外点监听在同一趟里关掉」），且此后按一次 Escape 只关对话框、焦点回到周期按钮。若页面实现改成两套浮层真同时挂着，这枚针就是那条歧路的报警器。
 9. MTF：Task 2 已在 `indicatorLang` 侧挡住；页面里 `:1283` `periodToInterval(period)` 的返回值已是 `AnyInterval`，透传给 `fetchKline` 即可。
 
+> **（2026-10-23 控制席 Task 5 预检补，五枚，全部盘面现读取证）**
+> ①**`readSession` 的返回类型标注要跟着长**：现读 `export function readSession(): ChartView & { symbol: string } {`。上面第 2 项要往返回对象里塞 `customIntervals`，而标注里没有 ⇒ `tsc` 红在缺／多余字面量属性。⇒ 同笔把那行标注改成 `ChartView & { symbol: string; customIntervals: string[] }`（行内改字，不插行）。
+> ②**写会话那枚 `useEffect` 的依赖数组漏不得**：现读那句是 `JSON.stringify({ symbol, interval, timeShare })`，尾行 `}, [symbol, interval, timeShare]);`。第 6 项只说「带上 `customIntervals`」⇒ payload 与**依赖数组**两处都要带上，只改前者时「移除一档而摘的不是当前周期」那一路根本不重跑 effect，会话里那档留在盘上；「加入」那腿恰好顺带改了 `interval`，会把这洞掩盖掉。⇒ 针补一枚：按「移除」（摘非当前档）之后 `localStorage.setItem` 的 payload 不再含那串。
+> ③**`.filter(unique)` 里的 `unique` 盘面不存在**：`grep -rn "export function unique\|const unique" frontend/src/lib/` 零命中，那是本计划写作席造的假符号（与 Task 4 的 P-3 同型）。⇒ 裁定：就地用 `Array.from(new Set(...))` 去重，**不**新开 helper——`addCustomInterval` 已经有「去重后 append」，两处共用一枚 `unique` 反倒是多一份真理。
+> ④**import 面要长**：`isBuiltinInterval`／`normalizeInterval`（都在 `lib/marketApi.ts`）与 `specLabel`／`isCustomSpec`（都在 `lib/customInterval.ts`）四枚**都不在** `ProChart.tsx` 现有 import 里（现读页面只从 `@/lib/chartView` 拿 `intervalAllowed, repairInterval`）⇒ 本任务要扩 `@/lib/marketApi` 那枚 import 块并新增 `@/lib/customInterval` 一行。另两枚已核不撞：`CustomIntervalDialogProps.existing` 是 `readonly string[]`，所以第 8 项那句「内置八档＋自定义串」拼进去合法；`setView(view, reload)` 的第二参数必填，第 5 项那句 `setView({...}, true)` 与签名一致。
+> ⑤**归 Task 5 的文案连带（Task 2 的 parked ③）**：`lib/chartView.ts` 里那句点名「四格图、筛选台」的注释——`screener.ts` 走的是自带窄类型、根本不调 `repairInterval`，所以那句话对筛选台说的比代码做的多。本任务动了页面侧的档位语义，同笔按**符号**现读该注释并按现状改口（行数守恒）；`lib/**` 其余一字不动。
+
 - [ ] **Step 3：绿＋提交**
 
 ```bash
@@ -839,6 +846,13 @@ Task 5 不是行中性任务：新增状态、增删处理函数、对话框渲�
 - Create: `frontend/src/pages/__tests__/ProChartCustomIntervalRedline.test.tsx`（E 组页面半枚就住这里，与 Task 5 的 `ProChartCustomInterval.test.tsx` 分开：前者钉「disabled 只由 `intervalAllowed` 决定」这类形状，后者钉功能闭环）
 - 无生产码改动（除非变异自证揪出真缺陷——那就改，并在报告里单列）
 - **（2026-10-23 从 Task 4a 评审席登记来的两枚文案候选，复评时逐条裁定）**①`AlertsTab.tsx` 头上那句「rules on 1W/1M cannot be polled by the backend」只举了内置两例，而自定义折叠档同样被 `BACKEND_INTERVALS` 白名单拒在服务端之外（判据在 `AlertsTab.tsx` 的 `intervalOk` 那一行）——那句话不是假的，但对外举的例子不全。②`frontend/src/lib/pineAlertRules.ts` 里写在 `interval: string` 头上的那句「in `marketApi`'s `IntervalKey` vocabulary」，自定义档真能走到它（Task 5 之后）就不准了。两枚都是**注释面**，与本节上一条「无生产码改动」不冲突（注释不是码）；改则行数守恒，不改要在报告里写明为什么不改。两枚的 `file:line` 一律当场 `grep -n` 现读，别引用这里写的号。
+
+> **（2026-10-23 控制席归口）Task 1／2／3／4a 各轮评审判「不进当轮返工、归 Task 6」的条目一共这些枚**——它们此前只活在台账里，而执行席只读本节，所以逐条搬进计划。**每枚要么落地、要么在报告里写明不改的理由**，`file:line` 一律当场 `grep -n` 现读，别引用这里写的符号下面的任何号：
+> - **文案复评组**：`marketApi.ts` 里 `AnyInterval` 那句 doc 把「八档 ∪ 合法自定义串」说得过头（它的底层就是 `string`）；同文件 `normalizeInterval` 那句只写「坏串退 `1D`」，没说越界串也退；`customInterval.ts` 头上那句「本文件那条」实际指的是测试文件而不是本文件；同文件 `FRONTEND_ONLY_REJECT` 桶含 `1000m`，「前端越界拒」四个字的对外读法容易被当成「`isCustomSpec` 那道门也拒」，而按跨度判之后 `1000m` 已翻真 ⇒ 补半句归口（说的是手打数那把尺）。
+> - **针面补形组**：`periodToInterval` 拿到非整数 span 时那枚 `??` 出口能铸出 `0m`／`NaNm`（无门）⇒ 补针；`chartView.ts` 里 TV-CI-11 那句红线被拆在同一处两行注释里 ⇒ 逐字针**不许**写成单行 `toContain`；`indicatorLang.ts` 那枚守卫自定义档提前 return 后另一枝永不执行 ⇒ 用假 chart 替身 `getPeriod: () => ({ type: "minute", span: 120 })` 补形；`CustomIntervalDialog.test.tsx` 那枚只把 `min` 钉成字面 `"1"`、没有跨源腿 ⇒ 决定补不补并写明理由；`onAdd("")` 那半分支按当前计划不可达且无针 ⇒ 变异面按名清。
+> - **死针与合表组**：`customInterval.test.ts` 里那半枚「反向」针是恒绿死行（它前面那行已无条件断 `ok === true`，而 `ok: true` 分支没有 `reason` 字段），替代活写法 `expect(custom, "7m").toEqual({ ok: true, spec: "7m" })`；内置表三份（`INTERVALS` 键表／`INTERVAL_MS`／测试内 `builtinLabels`）今天单独漂移仍不红 ⇒ 按 spec §9 的口径决定合不合表，不合要写明。
+> - **复跑组**：`cd agent && python -m pytest tests/test_interval_spec_frontend_align.py -q`（跨语言对账表，Task 1 修复轮只动 TS 面时按条件豁免过）；每枚加宽 helper 的自定义侧／坏串侧各补一枚注入，按 helper 清点，别只跑 spec §9 那十一枚。
+> **门读数顺序**：本节 Step 3 那句「G5 会因 L2 新增坐标（Task 7）而需要先跑一次『缺→部分』的改口」按盘面纠正——Task 6 **不动** `forensics/gap-matrix.md` 的判态行（TV-CI-09／10／11 的「缺→部分」是 Task 7 Step 3 的活），所以 Task 6 这趟 `python tools/forensics_audit.py` 应当在矩阵现状上直接绿；若它红，红的是本任务自己引入的坐标，不是顺序。
 
 - [ ] **Step 1：E 组针**
 
