@@ -737,8 +737,8 @@ class TestRouteServesFolds:
         draws, so this shape cannot tell the two sizings apart. `M-trim` (putting the
         old `folded[1:]` heuristic back) is invisible here for the same reason — the
         fold yields 24 groups and the page wants 12, so dropping the oldest group
-        cannot move the tail. Both readings are in the fix report; the pin that
-        *does* answer to the slack is
+        cannot move the tail. Both mutations were run on this tree, not reasoned to.
+        The pin that *does* answer to the slack is
         `test_two_minute_pages_cut_at_different_before_agree_where_they_overlap`
         above, whose `count = 4` page is not day-aligned.
         """
