@@ -811,12 +811,20 @@ git commit -s -m "feat(l3-slice6): 周期目录支持自定义档行（移除按
    - **叠层监听器的落地细则（2026-10-22 第 3 轮评审补，Task 3 的 M-5）**：`CustomIntervalDialog` 在 `document` 上挂了 `mousedown`／`keydown` 两枚监听（本组件 `useEffect` 里那一对，行号随改动会漂，按符号找），`PeriodPicker` 的浮层也在 `document` 上挂自己的外点／Escape。页面接线时按「对话框开 ⇒ 目录的 `open` 先关」这一条走，就能保证同一趟里 `document` 上只有一套监听在关东西；**针摆在这里**（D 组补一枚）：目录开着时点「添加自定义周期…」⇒ 一趟点击之后对话框是开着的（不是「开了又被目录的外点监听在同一趟里关掉」），且此后按一次 Escape 只关对话框、焦点回到周期按钮。若页面实现改成两套浮层真同时挂着，这枚针就是那条歧路的报警器。
 9. MTF：Task 2 已在 `indicatorLang` 侧挡住；页面里 `:1283` `periodToInterval(period)` 的返回值已是 `AnyInterval`，透传给 `fetchKline` 即可。
 
-> **（2026-10-23 控制席 Task 5 预检补，五枚，全部盘面现读取证）**
+> **（2026-10-23 控制席 Task 5 预检补，六枚，全部盘面现读取证）**
 > ①**`readSession` 的返回类型标注要跟着长**：现读 `export function readSession(): ChartView & { symbol: string } {`。上面第 2 项要往返回对象里塞 `customIntervals`，而标注里没有 ⇒ `tsc` 红在缺／多余字面量属性。⇒ 同笔把那行标注改成 `ChartView & { symbol: string; customIntervals: string[] }`（行内改字，不插行）。
 > ②**写会话那枚 `useEffect` 的依赖数组漏不得**：现读那句是 `JSON.stringify({ symbol, interval, timeShare })`，尾行 `}, [symbol, interval, timeShare]);`。第 6 项只说「带上 `customIntervals`」⇒ payload 与**依赖数组**两处都要带上，只改前者时「移除一档而摘的不是当前周期」那一路根本不重跑 effect，会话里那档留在盘上；「加入」那腿恰好顺带改了 `interval`，会把这洞掩盖掉。⇒ 针补一枚：按「移除」（摘非当前档）之后 `localStorage.setItem` 的 payload 不再含那串。
 > ③**`.filter(unique)` 里的 `unique` 盘面不存在**：`grep -rn "export function unique\|const unique" frontend/src/lib/` 零命中，那是本计划写作席造的假符号（与 Task 4 的 P-3 同型）。⇒ 裁定：就地用 `Array.from(new Set(...))` 去重，**不**新开 helper——`addCustomInterval` 已经有「去重后 append」，两处共用一枚 `unique` 反倒是多一份真理。
 > ④**import 面要长**：`isBuiltinInterval`／`normalizeInterval`（都在 `lib/marketApi.ts`）与 `specLabel`／`isCustomSpec`（都在 `lib/customInterval.ts`）四枚**都不在** `ProChart.tsx` 现有 import 里（现读页面只从 `@/lib/chartView` 拿 `intervalAllowed, repairInterval`）⇒ 本任务要扩 `@/lib/marketApi` 那枚 import 块并新增 `@/lib/customInterval` 一行。另两枚已核不撞：`CustomIntervalDialogProps.existing` 是 `readonly string[]`，所以第 8 项那句「内置八档＋自定义串」拼进去合法；`setView(view, reload)` 的第二参数必填，第 5 项那句 `setView({...}, true)` 与签名一致。
 > ⑤**归 Task 5 的文案连带（Task 2 的 parked ③）**：`lib/chartView.ts` 里那句点名「四格图、筛选台」的注释——`screener.ts` 走的是自带窄类型、根本不调 `repairInterval`，所以那句话对筛选台说的比代码做的多。本任务动了页面侧的档位语义，同笔按**符号**现读该注释并按现状改口（行数守恒）；`lib/**` 其余一字不动。
+> ⑥**分时互斥必须落在 `viewForSymbol` 这个共享谓词里，不能只落在按钮上**（控制席 2026-10-23 盘面现读，`ProChart.tsx:273-282`）：那函数现在逐字是
+> ```ts
+>   return {
+>     interval: repairInterval(symbol, interval),
+>     timeShare: timeShare && intervalAllowed(symbol, TIME_SHARE_INTERVAL),
+>   };
+> ```
+> 而 `intervalAllowed`（`lib/chartView.ts:37`）只看 symbol（`isCalendarInterval(interval) || canMinuteBars(symbol)`），**从不问这一档是不是内置**——`"120m"` 在分钟源上返回 `true`。今天不出事，只因为 `readSession` 在钳位那行把档位压回内置八档（现读逐字 `const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";`）；上面第 2 项正是用 `normalizeInterval(parsed.interval)` 换掉那行，而 `normalizeInterval` **接受合法自定义串** ⇒ 会话里躺着 `{interval: "120m", timeShare: true}` 时，恢复出来就是「折叠档 ＋ 分时同时开」，把第 7 项要立的互斥从背后拆掉。第 7 项那三件（按钮 `disabled`、`title`、`pickTimeShare` 早退）全是**点击面**的门，管不到这条没有按钮参与的路径，而且它红不了任何既存针。⇒ 裁定：互斥门加在共享谓词里，两个入口（会话恢复那处、换 symbol 那处）自动继承——`timeShare: timeShare && intervalAllowed(symbol, TIME_SHARE_INTERVAL) && isBuiltinInterval(interval)`（行内改字，一行还一行；`isBuiltinInterval` 已在 ④ 的 import 扩列里，不新增符号）。`readSession` 的钳位改回「先 `normalizeInterval` 再交给 `viewForSymbol`」，别在钳位里偷偷保留八档假设——那会让自定义档根本进不了目录，与本任务的目标对撞。**针补一枚（D 组）**：喂进一坨 `interval` 是合法自定义串且 `timeShare: true` 的会话 ⇒ 恢复后 `timeShare` 为 `false`，且当前周期仍是那档（目录里那行 `aria-selected="true"`）。
 
 - [ ] **Step 3：绿＋提交**
 
@@ -840,6 +848,7 @@ Task 5 不是行中性任务：新增状态、增删处理函数、对话框渲�
   - 分母自己当场取（控制席 2026-10-23 在第 91／92 两行数到 15 枚裸号，这个数只是线索，不是证据），报告里逐枚列「裸号 → 引用句摘 → 属不属于带日期读数块 → 留／改 → 改后号与 `sed -n '<新号>p'` 原文」。
 - **Step 4 的分母随「本片截至派席时真正改过行数的文件」取全**，不许照抄上面写好的任何一张清单：`grep -rno "ProChart\.tsx:[0-9]\+" forensics/ frontend/src agent/src`、`grep -rno "PeriodPicker\.tsx:[0-9]\+" forensics/ frontend/src agent/src` 与裸号那条式子都要现跑——若 Task 4b 因评审返工再次改动 `PeriodPicker.tsx` 行数，它那批号也会再漂一次，本步是唯一的收口处。
 - **矩阵第 100 行（TV-CI-11）那句「未找到」由本笔转为对外假话，同笔带日期登记**（2026-10-23 控制席裁定，源自 Task 4b 报告 §9 顾虑 3，控制席已 `sed -n '100p'` 现读）：那格里逐字写着「未找到：目录行上『已在列表里／移出』那枚第三格……⇒ 本仓目录没有收藏与移出概念」，而 `ca78a320` 起 `PeriodPicker.tsx` 已有「移除」按钮，本任务又把 `onRemove` 接到页面——那句话从对外读法上不再为真。裁定：**判态 `部分` 不动、`L0 依据` 不断**（收藏格子确实仍没有，宿主持久化仍没有，第 7 片 Step 3 才动判态），但要在**同一物理行内**追加一句带日期的登记，写明本席现读的三件：那枚按钮的 `aria-label` 拼法与其行号、`onRemove` 消费点的行号、复跑命令的新命中数（`grep -rn --include=*.tsx -e "Remove" -e 移出 -e 移除 frontend/src/components/charts/PeriodPicker.tsx` 现跑）。行中性：只在行内追加，矩阵前后 `wc -l` 一字不差（控制席 2026-10-23 现读 125 行，席上自己重取，别拿这个数当证据）。
+- **矩阵复跑命中数登记的归属（2026-10-23 控制席裁定，源自 Task 4b 评审席 Important 1／2）**：那两枚发现都落在 `forensics/gap-matrix.md` 的第 91／92／98／100 四个物理行上，而本任务与 4b 修复轮会先后碰同一批单元。切法按**谁改得动**：4b 修复轮只收 91／92 里那些**不带文件名前缀的裸 `:NN`**（它们指 `PeriodPicker.tsx`，而 4b 之后没人再动那个文件的行数）；**不带日期的复跑命中数**（`移除`／`Remove`／`aria-disabled` 那几把尺在 91／98／100 三行里的「同跑＝0 命中」「命中 6 行」一类断言）连同第 100 行那句「未找到」的登记一律归本步——因为本步还要在同一格里改 `periodTriggerLabel` 的逐字串并换 `onRemove` 的宿主坐标，两笔合成一笔比两席各改一半稳。执行本步时：那些命中数**当场 `grep -c` 自取**，不许引用别处写好的数；登记写成行内带日期子句，旧读数逐字保住，矩阵前后 `wc -l` 一字不差。
 - 两门：`python tools/forensics_audit.py`、`python -m pytest tools/test_forensics_spec.py -q`；报告里把 `grep -rn "ProChart\.tsx:[0-9]" forensics/ frontend/src agent/src` 的命中逐枚列成「号→重钉后的号→引用句摘」的清单（枚数当场数）。
 - 文档面单独一笔盖章提交，pathspec 只列被改的 `forensics/**` 与码内注释文件；码面那笔（Step 3）已经先行，别让两面的改动混在同一笔里。
 
