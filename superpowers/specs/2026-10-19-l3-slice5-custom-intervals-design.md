@@ -56,7 +56,7 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 >
 > （一）本节末「OHLCV 规则逐字沿用 `_merge_to_calendar`（`:494`）那四条」现在指错了地方。那四条规则
 > （开＝组内首根开、收＝组内末根收、高／低＝组内极值、量＝求和，时间戳取组内首根）自 Task 2 起住在
-> `agent/src/api/interval_spec.py:284-287`（`fold_by_keys` 函数体），而 `market_routes.py:494` 已经落进
+> `agent/src/api/interval_spec.py:341-347`（`fold_by_keys` 函数体；跨度由下面（四）2026-10-22 复算，本条 2026-10-20 落笔时读作 `:284-287`、Block B 的（三）读作 `:295-301`，两枚都是当时的现读值，函数体上方只有 docstring 在长），而 `market_routes.py:494` 已经落进
 > `_merge_to_calendar` 委托语句之上的 docstring 里——那里是转述，不是规则本体。委托那一行现在在
 > `market_routes.py:497`。指错行的引用同样是缺陷，即使散文说得对，所以在此改口。
 >
@@ -74,16 +74,16 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 > | `_FUTU_MINUTE_SUFFIXES` | `:92` | `:94` |
 > | `_MINUTE_WINDOW_CAP_DAYS` | `:101` | `:103` |
 > | `_MINUTE_WALL_CLOCK_ZONE` | `:144` | `:146` |
-> | `_merge_to_calendar` | `:494` | `:473`（委托语句 `:497`；规则本体已迁至 `interval_spec.py:284-287`） |
+> | `_merge_to_calendar` | `:494` | `:473`（委托语句 `:497`；规则本体已迁至 `interval_spec.py:341-347`，本格 2026-10-22 复算，见下面（四）） |
 > | `_fetch_calendar_bars` | `:519` | `:500` |
-> | `{source}+{interval}` 那枚 source 后缀 | `:564` | `:545` |
-> | `_split_latest_session` | `:597` | `:578` |
-> | `_kline_sync` | `:631` | `:612` |
-> | `session=latest` 拒绝第一句（合并自周月） | `:649` | `:630` |
-> | `session=latest` 拒绝第二句（`already are one day each`） | `:656` | `:637` |
-> | 返回体 `payload` 三键区 | `:662-668` | `:643-649` |
-> | `interval` 的 `Query(description=...)` | `:766` | `:747` |
-> | 档位不合法那支 400（`if interval not in …`） | `:774` | `:755` |
+> | `{source}+{interval}` 那枚 source 后缀 | `:564` | `:563`（该形状已由 Task 3 扩成 `f"{source}+{label or interval}"`；分钟族那条后缀在 `:702`） |
+> | `_split_latest_session` | `:597` | `:596` |
+> | `_kline_sync` | `:631` | `:639` |
+> | `session=latest` 拒绝第一句（合并自周月） | `:649` | `:710`（`if session == "latest"` 那支的文案在 `:712-713`，逐字 `merged from daily ones, which are one day each already`） |
+> | `session=latest` 拒绝第二句（`already are one day each`） | `:656` | `:717`（文案逐字 `daily bars already are one day each` 在 `:720`） |
+> | 返回体 `payload` 三键区 | `:662-668` | `:723-729` |
+> | `interval` 的 `Query(description=...)` | `:766` | `:827`（`description=` 的文案跨 `:829-833`，Task 3 把它从一行改写成一条规则） |
+> | 档位不合法那支 400（`if interval not in …`） | `:774` | `:842`（守卫拼写已被 Task 3 换成 `if interval_spec.parse_interval(interval) is None:`，400 应答体在 `:843-845`） |
 >
 > （三）Task 3 的四处靶子按现读坐标重述一遍，免得上文的历史行号被当成待改坐标：if/elif/else 那条分派链起于
 > `_kline_sync`（`:612`，三分支分别在 `:619`／`:629`／`:636`）；`session=latest` × 折叠族的拒绝要扩的那一对
@@ -93,6 +93,19 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 > `:525`／`:555-562`）——Task 2 没碰那两个文件（`git diff --name-only 41c75b0c..69c57c5c` 现读只有五枚：
 > `interval_spec.py`／`market_routes.py`／两枚测试／本文），所以此处只声明「未被本次改动波及」，它们自身是否
 > 仍准由 Task 4 复测。
+>
+> （四）**2026-10-22 收尾波复算本表**：上面「现读坐标」那一列是 2026-10-20 Task 2 落地当场读的，之后
+> `market_routes.py` 又被两笔推走一次——`6a45489f`（Task 3 接线，`git show --numstat` 现读该笔对这枚文件
+> 是 `74 17`，hunk 从 `@@ -498,9 +498,14 @@` 起就有六处）与 `cd54c517`（把被删掉的会话对齐辅助换成注释，现读
+> `31 5`，唯一那处增行 hunk 是 `@@ -654,9 +654,37 @@`）。本席按内容重钉了受影响的九格（`{source}+…`
+> 后缀 `:545`→`:563`、`_split_latest_session` `:578`→`:596`、`_kline_sync` `:612`→`:639`、两枚
+> `session=latest` 拒绝句 `:630`→`:710` 与 `:637`→`:717`、`payload` 三键区 `:643-649`→`:723-729`、
+> `Query(description=...)` `:747`→`:827`、400 那支 `:755`→`:842`、以及 `_merge_to_calendar` 那格里
+> 指向 `interval_spec.py` 的规则本体跨度 `:284-287`→`:341-347`），其余七格（`_MAX_BARS`／
+> `_MINUTE_PERIODS`／`_AGG_DAILY_PER_BAR`／`_FUTU_MINUTE_SUFFIXES`／`_MINUTE_WINDOW_CAP_DAYS`／
+> `_MINUTE_WALL_CLOCK_ZONE`／`_fetch_calendar_bars`）复算后与旧读一致，故原样留着。「原文坐标」那一列
+> 是本文落笔时的样子，一字未动。上面（三）那条 Task 3 靶子清单读作**待改坐标的前态**，今天
+> `_kline_sync` 的分派链已是四支（`:656`／`:703`／`:709`／`:716`），不再是三分支。
 
 > **2026-10-20 Task 3 追加（本设计自己的一条论证是假的，外加担保范围收窄）**：本条只更正设计的
 > 论证与引用，不改动上文任何一句历史散文，也不新增任何复刻主张——它谈的是「本仓为什么这样定」，
@@ -126,10 +139,20 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 > 两段），所以**提交后的树**里它是 `interval_spec.py:295-301`（`merged.append(dict(bar))` 在 `:295`、
 > 量在 `:301`；`fold_by_keys` 的 def 在 `:276`，长度守卫在 `:288-289`）。
 
+> **2026-10-22 收尾波追加（分钟族「翻页不重绘」的承重换过地方了：上文 §1 `:17` 那句「分页精确」与本节那枚锚点的散文，一部分还写在一条已被删除的对齐步骤上，一部分压根没写新承重）**：本条只改口承重的归属、登记一枚残留限制，上文任何一句历史散文一字不删，也不新增任何复刻主张。
+>
+> （一）**分钟族的跨页一致由取数尺寸保证，不靠任何对齐步骤**。§1 `:17` 把「分页精确（折叠根的时间戳取组内首根，`before` 游标恒落在组边界）」列为折叠的三条理由之一——那三条对日线族与周月族逐字成立（`market_routes.py:479-483` 的 `_merge_to_calendar` docstring 与 `interval_spec.py:329-332` 的 `fold_by_keys` docstring 都这么写着，规则本体今天在 `interval_spec.py:341-347`，上面 Block B 的（三）所记 `:295-301` 是它那棵树的现读值）；**对分钟族不成立**：`_session_position_keys` 的序号从**被递进来的那个列表的头**起算，`interval_spec.py:283-286` 逐字写着 "the positions are counted from the head of **the list that was handed in** — two pages of one symbol, cut at different ``before``, each count their own positions and draw two grids. So agreement across pages is not something this function can hand out: it is a property of the caller's fetch size."。今天替本页付账的是 `market_routes.py:686-687`——`spec.k > 1` 时在 `count * spec.k + spec.k - 1` 之上再加一整日 `_MINUTE_BARS_PER_DAY[spec.base]`，于是被切开头那一会话折叠出来的组恒落在 `:702` 那句 `folded[-count:]` 的丢弃侧（因果写全在 `:657-668` 那段注释里）。所以 §1 `:17` 那三条理由该按族读：第三条对分钟族是**买来的**，不是「取组内首根时戳」自带出来的。
+>
+> （二）**窗口取不满（`len(bars) < ask`）时，最早那根的会话位置不可判——登记为残留限制、本片无针覆盖，不许写成已解决**：源被自己的历史深度截断时，窗口从源历史开头那处（可能正好在会话中间）铺开，最左一根确实可能是被切会话的第 N 根，那一会话的格就偏在整会话格之外。代码里两处点名而不修：`market_routes.py:680-685`（"Residual limit, registered rather than fixed"）与 `interval_spec.py:300-309`（"The limit that size does **not** buy, and no pin of this slice covers"）。这三枚既存的分钟族针钉的是**别的性质**，都不覆盖这一件（`agent/tests/test_market_kline_custom_intervals.py` 现读 def 行：`:650` 钉两页在重叠区间逐根一致、`:713` 钉满窗服务的是整会话格的后缀、`:760` 钉短窗口「不丢根、不裁页、保住首会话头」——最后一枚恰恰只保证「没裁」，不保证「左缘可判」）。§4 第 2 步那条「§2.2 分页确定性（同一标的两次不同 `before` 取到的重叠区间逐根相等）」因此按族读：分钟族那半边的判据落在尺寸上，取不满这一页的形状本片不判。
+>
+> （三）**本节实现中途引入过一枚对齐辅助，实测不动任何一页服务数据因而删除**：实现波曾加过 `interval_spec.session_aligned`（把分钟窗口的左边缘对齐到会话头），收尾波按差分扫描判它「永不生效」，依「永不生效的钳位就删」的既有先例删掉（提交 `cd54c517`；那笔说明里记着扫描的逐字读数 `served pages compared: 2304 — differences: 0`——**本席没有复跑那趟扫描**，只核了删除后的盘面：`git grep -n session_aligned` 现读 0 命中、rc=1）。`zone` 参数留下，仍被 `fold_bars` 用着（`market_routes.py:701`）。于是本文上文任何把跨页一致归给「对齐窗口左边缘」这种读法的句子一律作废，承重是上面（一）那枚余量。
+
 ### 2.2 日线乘数（`2D`／`3D`…）
 
 按**交易日标签的绝对日序**（`ts_ms // 86_400_000`，日线戳本来就是「交易日标签的 UTC 零点」，所以这一除直接
-还原标签、不吃任何时区表，见 `_calendar_group_key` 的 docstring `:472-486`）÷ k 取整分组。锚在绝对日序上而不是「取到的序列里的第几根」，
+还原标签、不吃任何时区表，见 `_calendar_group_key` 的 docstring——原文坐标 `:472-486`，该函数已随折叠面迁入
+`agent/src/api/interval_spec.py` 并去掉前导下划线，本席 2026-10-22 现读作 `calendar_group_key` 的 `:191-205`，
+而日线这一除的本体今天另住在同文件 `_day_ordinal` 的 `:229-234`）÷ k 取整分组。锚在绝对日序上而不是「取到的序列里的第几根」，
 否则同一支标的两次分页会给出两套分组，翻页时图会重绘——这是 L0 记录之外本片唯一能静态判死的正确性。日线族
 没有分钟族那个跨午休问题：缺交易日只是让某组少一两根（长假后的 `2D` 组可能只有一根），如实少合，不补根。
 
@@ -137,14 +160,24 @@ monthly bars on a `3M` request and look like data」，见 `udf_routes.py:86-94`
 
 把 `_calendar_group_key` 的返回值从 `(iso_year, iso_week)`／`(year, month)` 换成一个**绝对序号**再做除法：
 周用「该 ISO 周的周一距 1970-01-05（ISO 纪元第一个周一）的整周数」，月用 `year * 12 + (month - 1)`。
-用绝对序号而不是 `iso_week // k`，是因为后者会在跨年处撞车（`(2026,1)` 与 `(2025,53)` 同除后可能同组也可能
-不同组，取决于 k 与年份），而现有 docstring 已经为这件事写过一条「bare week number would collide with week 1
+用绝对序号而不是 `iso_week // k`，是因为后者会在跨年处撞车（`(2026,53)` 与 `(2027,1)` 同除后可能同组也可能
+不同组，取决于 k 与年份；这两个数 2026-10-22 之前写的是 `(2026,1)` 与 `(2025,53)`，后一枚构造不出来，见本节末那条带日期更正），而现有 docstring 已经为这件事写过一条「bare week number would collide with week 1
 of next year」；本片把同一个理由接到乘数上。`1W`／`1M` 是 k=1 的退化情形，**必须与今天逐字同形**——这条由
 「摘掉乘数分支后既有 `test_market_kline_coarse.py` 全绿」来判，而不是靠新针。
 
 > **2026-10-19 计划落笔时裁定**：本节引用的 `_calendar_group_key` docstring（原文
-> `market_routes.py:472-486`）随折叠面迁入 `agent/src/api/interval_spec.py`，逐字同行；
-> `market_routes` 里那份已不存在，不留别名。
+> `market_routes.py:472-486`）随折叠面迁入 `agent/src/api/interval_spec.py`，**同行不逐字**（这半句由 2026-10-22 收尾波按现读降级，原写的是「逐字同行」，四处差异逐条列在下一段那条同日追加的更正里）；
+> `market_routes` 里那份已不存在，不留别名（这半句今天仍真：`grep -n "calendar_group_key" agent/src/api/market_routes.py` 现读 0 命中）。
+
+> **2026-10-22 收尾波追加（把上段那句「逐字同行」按现读降到位，再把 §2.3 例子里那枚构造不出来的 ISO 周换掉）**：本条只登记现读差异，上段历史散文一字不删，不新增任何复刻主张。
+>
+> （一）迁址后的那份 docstring 与原文**行数相同、字面不同**，所以「逐字同行」降为「同行不逐字」。凭据＝两侧同长各 15 行的逐字比对：`git show 69c57c5c^:agent/src/api/market_routes.py` 的 `:472-486` 对 `agent/src/api/interval_spec.py` 的 `:191-205` 跑 `diff -u`，本席现读 **一处 hunk、−9 行／＋9 行**（块内第 4-9 与 12-14 行位移），两侧 `wc -l` 各 **15** ⇒ 「同行」这半句仍真。把差异按段落拼回原形再比，字面改动只有两枚符号，且全是**纯插入**（没有任何一处删除）：
+> 1. `_bars_from_frame` → `market_routes._bars_from_frame`（迁出该模块后按裸名找不回，故加模块限定），连同它两侧的反引号由单升双；
+> 2. `timeShare.ts` 的行内代码记号同理由单反引号升成双反引号；
+> 合起来＝4 处插入（一枚 `market_routes.` 前缀＋三枚补上的反引号）；第三段（ISO 周编号那段）拼回后与新文**逐字相同**，位移纯粹来自重新断行。
+> 另记一条**在 docstring 之外**的差：函数本身从 `_calendar_group_key` 改成公开的 `calendar_group_key`（`interval_spec.py:190`），本文 §2.2/§2.3 里凡按旧名写的那两处指的就是这枚函数，本席不改符号名，只在此登记。
+>
+> （二）§2.3 那个撞车例子原写 `(2026,1)` 与 `(2025,53)`——**后一枚构造不出来**：`python -c "import datetime as d; d.date.fromisocalendar(2025,53,1)"` 现读抛 `ValueError: Invalid week: 53`，而 `date(2025,12,29).isocalendar()` 已经是 `(2026, 1, 1)`，所以那两枚数在 ISO 历上既不存在、也谈不上相邻。本席把它换成 `(2026,53)`（周一 `2026-12-28`）与 `(2027,1)`（周一 `2027-01-04`）：两枚都可被 `date.fromisocalendar` 构造且时间上紧邻，于是裸周号除 k 的两种失效当场可算——`53 // 2 == 26` 而 `1 // 2 == 0`（紧邻却分家），`(2026,1)` 与 `(2027,1)` 的 `1 // 2` 同为 `0`（相隔 52 周却同桶）。2015–2031 里真有第 53 周的年份本席逐枚探得 **2015／2020／2026**（配方＝对每个 `y` 试 `date.fromisocalendar(y,53,1)` 并接 `except ValueError`；把这条直接写进列表推导会在第一枚没有 53 周的年份整条抛掉，名单一个都取不到）。同一枚失效形状今天也写在代码侧的 `interval_spec.py:216-217`（`calendar_group_ordinal` 的 docstring 仍举着 `(2025, 53)`）——那是注释面、不在本席这九件之内，此处只登记不代改。
 
 ## 3. 接口与落点
 
