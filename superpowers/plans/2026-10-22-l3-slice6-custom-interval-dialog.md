@@ -359,6 +359,7 @@ git commit -s -m "feat(l3-slice6): lib/customInterval.ts 文法与换算＋前�
 - Modify: `frontend/src/lib/chartView.ts:1,34-40`
 - Modify: `frontend/src/lib/indicatorLang.ts:1102-1122`
 - Modify: `forensics/gap-matrix.md:100`（TV-CI-11 那行把 `chartView.ts:34` 的**整行原文逐字**当证据引着；本片既换掉那行的参数类型、又可能因为往 doc 注释里加一句而使函数往下漂一两行 ⇒ 坐标与引文两处都要按落地后的盘面重钉。判态 `部分` 与其余文字一字不动，Task 7 才动判态。）
+- Modify: `frontend/src/pages/__tests__/MultiChart.test.tsx:59,766`（2026-10-22 执行期补，这是「消费者同笔」在**测试面**的落点：`:766` 那行 `type IntervalKey = Parameters<typeof intervalToPeriod>[0];` 是把「入参类型」当窄类型用，`intervalToPeriod` 一加宽它就变成 `string`，于是 `:936,937,939` 三处把 `IntervalKey[]` 递给 `intervalsForSymbol(…, readonly IntervalKey[])` 当场 TS2345。改法＝**删掉那行派生别名**，把 `type IntervalKey` 并进 `:59` 已有的那枚 `import { intervalToPeriod } from "@/lib/marketApi"`，其余一字不动。别给别名加 casts、也别把 `intervalsForSymbol` 换宽。）
 - Test: `frontend/src/lib/__tests__/marketApiCustom.test.ts`（新）
 - 不许动：`frontend/src/lib/__tests__/udfTransport.test.ts:113`、`frontend/src/lib/__tests__/marketApiPeriods.test.ts:43,50-64`
 
@@ -449,7 +450,10 @@ describe("车道判定与坏串", () => {
   it("BTC 这类没有分钟源的标的：日倍数可答、分钟倍数不可答", () => {
     expect(intervalAllowed("BTCUSDT", "2D")).toBe(true);
     expect(intervalAllowed("BTCUSDT", "120m")).toBe(false);
-    expect(intervalAllowed(".SH000300", "120m")).toBe(true);
+    // 2026-10-22 执行期改口：原写 `.SH000300` 是一枚拼法错的样本——`canMinuteBars` 的逐字
+    // 正则 `/\.(SH|SZ|HK|US)$/i` 只认**后缀**，本仓指数拼法是 `000300.SH`，前缀拼法判 false，
+    // 那枚针在这条线上结构上不可能为真。换成仓内既有测试用的 A 股代码，断的仍是同一件事。
+    expect(intervalAllowed("600519.SH", "120m")).toBe(true);
   });
   it("normalizeInterval：内置原样、自定义原样、坏串退 1D，绝不静默接受", () => {
     expect(normalizeInterval("1D")).toBe("1D");
@@ -545,7 +549,7 @@ export function repairInterval<T extends AnyInterval>(symbol: string, interval: 
   if (!isBuiltinInterval(chartIv)) return;
 ```
 
-`feedLowerBars` 的返回类型是 `Promise<void>`，早退写成裸 `return;` 即成立；`isBuiltinInterval` 是类型谓词，`chartIv` 在这行之后窄回 `IntervalKey`，`:1105` 的 `pickLowerInterval(chartIv, …)` 才继续编译得过——这一枚早退就是「消费者同笔」的全部内容，页面文件一枚都不许动。
+`feedLowerBars` 的返回类型是 `Promise<void>`，早退写成裸 `return;` 即成立；`isBuiltinInterval` 是类型谓词，`chartIv` 在这行之后窄回 `IntervalKey`，`:1105` 的 `pickLowerInterval(chartIv, …)` 才继续编译得过。**页面源文件（`ProChart.tsx`／`MultiChart.tsx`／`PeriodPicker.tsx`／`ChartCell.tsx`）一枚都不许动**——「消费者同笔」在本笔的全部内容就是这三份 lib 文件加 Files 里点名的那两枚测试/证据文件（`MultiChart.test.tsx` 的派生别名、`gap-matrix.md:100` 的引文重钉）。
 
 - [ ] **Step 4：全绿＋提交**
 
@@ -553,7 +557,7 @@ export function repairInterval<T extends AnyInterval>(symbol: string, interval: 
 cd frontend && npx vitest run src/lib/__tests__/marketApiCustom.test.ts src/lib/__tests__/marketApiPeriods.test.ts src/lib/__tests__/udfTransport.test.ts
 # 期望：三套全绿，后两枚一枚针都没改
 cd frontend && npx tsc -b && npx vitest run   # 全量：0 错、全绿
-git add -- frontend/src/lib/marketApi.ts frontend/src/lib/chartView.ts frontend/src/lib/indicatorLang.ts frontend/src/lib/__tests__/marketApiCustom.test.ts forensics/gap-matrix.md
+git add -- frontend/src/lib/marketApi.ts frontend/src/lib/chartView.ts frontend/src/lib/indicatorLang.ts frontend/src/lib/__tests__/marketApiCustom.test.ts frontend/src/pages/__tests__/MultiChart.test.tsx forensics/gap-matrix.md
 git status --porcelain && git commit -s -m "feat(l3-slice6): marketApi/chartView 类型加宽到 AnyInterval，消费者同笔改口"
 ```
 
