@@ -71,18 +71,18 @@ FRONTEND_ONLY_REJECT = ["1000m", "1441m", "367D", "400W", "500M"]
 
 
 @pytest.mark.parametrize("text", AGREED_OK)
-def test_agreed_ok_round_trips_as_itself(self, text):
+def test_agreed_ok_round_trips_as_itself(text):
     assert parse_interval(text) is not None, text
     assert parse_interval(text).interval == text, text
 
 
 @pytest.mark.parametrize("text", AGREED_REJECT)
-def test_agreed_reject_is_refused(self, text):
+def test_agreed_reject_is_refused(text):
     assert parse_interval(text) is None, text
 
 
 @pytest.mark.parametrize("text", FRONTEND_ONLY_REJECT)
-def test_frontend_cap_is_stricter_than_the_server(self, text):
+def test_frontend_cap_is_stricter_than_the_server(text):
     """登记在册的那把额外的尺：服务端收，前端不收。改了这里要先改前端。"""
     assert parse_interval(text) is not None, text
 ```
