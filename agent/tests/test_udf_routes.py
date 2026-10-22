@@ -650,9 +650,9 @@ def test_multiplier_resolutions_are_served_not_rejected(
     ``daily_feed`` is wired too (裁定五): ``2D`` / ``2W`` / ``3M`` fold off the daily
     chain, and leaving it unstubbed would let the request fall through into a real
     ``import akshare`` instead of proving it is served. All six legs do reach
-    ``fold_bars`` (minutes at market_routes.py:673, ``1D`` at :540, week/month at
-    :497), but arriving there is routing, not a folding proof: the fold arithmetic
-    itself was pinned by Task 3 and this pin does not re-open it.
+    ``fold_bars`` (minutes at market_routes.py:701 ``folded =``; ``1D`` at :540, week/month
+    at :497 — re-read 2026-10-22), but arriving there is routing, not a folding proof:
+    the fold arithmetic itself was pinned by Task 3 and this pin does not re-open it.
     """
     asked: list[tuple[str, int]] = []
 
