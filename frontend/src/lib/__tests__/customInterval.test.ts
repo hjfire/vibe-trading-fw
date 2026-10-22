@@ -1,0 +1,119 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  CUSTOM_UNITS,
+  draftToSpec,
+  isCustomSpec,
+  parseSpec,
+  specLabel,
+  specMs,
+  specPeriodShape,
+  validateDraft,
+} from "../customInterval";
+import type { IntervalUnit } from "../customInterval";
+
+const AGREED_OK = ["5m", "7m", "120m", "240m", "999m", "2D", "3W", "4M", "12M", "1m", "1D", "1W", "1M"];
+const AGREED_REJECT = ["", " ", "abc", "m", "0m", "-5m", "2.5m", "1d", "120X", "1S", "1tick", "2h", "M", "D"];
+const FRONTEND_ONLY_REJECT = ["1000m", "1441m", "367D", "400W", "500M"];
+const BUILTIN = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"];
+
+/** 把已解析的串还原成对话框持有的草案（`m` 若是 60 的倍数优先报小时）。 */
+const parseSpecToDraft = (p: { unit: "m" | "D" | "W" | "M"; n: number }): { unit: IntervalUnit; n: number } =>
+  p.unit === "m" && p.n % 60 === 0 && p.n >= 60 ? { unit: "hour", n: p.n / 60 } : { unit: unitOfParsed(p), n: p.n };
+const unitOfParsed = (p: { unit: string }): IntervalUnit =>
+  p.unit === "m" ? "minute" : p.unit === "D" ? "day" : p.unit === "W" ? "week" : "month";
+
+describe("前后端文法对账（Python 侧同名样本表：agent/tests/test_interval_spec_frontend_align.py）", () => {
+  it("文法合法的串，前端也认，并且能原样拼回去", () => {
+    for (const text of AGREED_OK) {
+      const parsed = parseSpec(text);
+      expect(parsed, text).not.toBeNull();
+      if (!BUILTIN.includes(text)) expect(draftToSpec(parseSpecToDraft(parsed!)), text).toBe(text);
+    }
+  });
+  it("文法非法的串一律不认，且不抛", () => {
+    for (const text of AGREED_REJECT) expect(parseSpec(text), text).toBeNull();
+  });
+  it("服务端收、前端越界拒：validateDraft 给原因，parseSpec 照旧收", () => {
+    for (const text of FRONTEND_ONLY_REJECT) {
+      const parsed = parseSpec(text);
+      expect(parsed, text).not.toBeNull();
+      const verdict = validateDraft({ unit: unitOfParsed(parsed!), n: parsed!.n });
+      expect(verdict.ok, text).toBe(false);
+      if (!verdict.ok) expect(verdict.reason.length, text).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("单位表与标签", () => {
+  it("五档，顺序固定，range 家族没有取数面所以不在这里", () => {
+    expect(CUSTOM_UNITS.map((u) => u.unit)).toEqual(["minute", "hour", "day", "week", "month"]);
+    expect(CUSTOM_UNITS.map((u) => u.label)).toEqual(["分钟", "小时", "日", "周", "月"]);
+  });
+  it("小时编译成分钟，不产 `2H`——服务端折叠文法只认 m/D/W/M", () => {
+    expect(draftToSpec({ unit: "hour", n: 2 })).toBe("120m");
+    expect(draftToSpec({ unit: "hour", n: 1 })).toBe("60m");
+    expect(draftToSpec({ unit: "minute", n: 7 })).toBe("7m");
+    expect(draftToSpec({ unit: "day", n: 2 })).toBe("2D");
+    expect(draftToSpec({ unit: "week", n: 2 })).toBe("2W");
+    expect(draftToSpec({ unit: "month", n: 3 })).toBe("3M");
+  });
+  it("标签：满小时报小时，其余报分钟；日历一律「N单位」", () => {
+    expect(specLabel("120m")).toBe("2小时");
+    expect(specLabel("240m")).toBe("4小时");
+    expect(specLabel("7m")).toBe("7分");
+    expect(specLabel("90m")).toBe("90分");
+    expect(specLabel("2D")).toBe("2日");
+    expect(specLabel("3W")).toBe("3周");
+    expect(specLabel("12M")).toBe("12月");
+    expect(specLabel("2h")).toBeNull();
+  });
+  it("与内置八档的标签一个都不撞", () => {
+    const builtinLabels = ["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"];
+    for (const text of ["120m", "7m", "2D", "3W", "12M"]) {
+      expect(builtinLabels, text).not.toContain(specLabel(text));
+    }
+  });
+});
+
+describe("换算", () => {
+  it("ms：分钟道 60_000 起步，日 86_400_000，周 604_800_000，月沿用本仓 30 日口径", () => {
+    expect(specMs("7m")).toBe(7 * 60_000);
+    expect(specMs("120m")).toBe(120 * 60_000);
+    expect(specMs("2D")).toBe(2 * 86_400_000);
+    expect(specMs("3W")).toBe(3 * 604_800_000);
+    expect(specMs("2M")).toBe(2 * 30 * 86_400_000);
+    expect(specMs("1tick")).toBeNull();
+  });
+  it("Period 形状：分钟进 minute 道，日历各回各家，span 就是倍数", () => {
+    expect(specPeriodShape("120m")).toEqual({ type: "minute", span: 120 });
+    expect(specPeriodShape("2D")).toEqual({ type: "day", span: 2 });
+    expect(specPeriodShape("2W")).toEqual({ type: "week", span: 2 });
+    expect(specPeriodShape("3M")).toEqual({ type: "month", span: 3 });
+    expect(specPeriodShape("")).toBeNull();
+  });
+  it("isCustomSpec：文法合法且不是内置八档才算自定义档", () => {
+    expect(isCustomSpec("120m")).toBe(true);
+    expect(isCustomSpec("2D")).toBe(true);
+    for (const text of BUILTIN) expect(isCustomSpec(text), text).toBe(false);
+    expect(isCustomSpec("0m")).toBe(false);
+    expect(isCustomSpec("2h")).toBe(false);
+  });
+});
+
+describe("加入按钮的 enabled 判据（本仓规则，不是对面的初态）", () => {
+  it("空值／非整数／越界都给可见原因，不返回裸 false", () => {
+    expect(validateDraft({ unit: "minute", n: null }).ok).toBe(false);
+    expect(validateDraft({ unit: "minute", n: 0 }).ok).toBe(false);
+    expect(validateDraft({ unit: "hour", n: 25 }).ok).toBe(false); // 1500 分 > 一天
+    expect(validateDraft({ unit: "day", n: 367 }).ok).toBe(false);
+    expect(validateDraft({ unit: "minute", n: 1.5 }).ok).toBe(false);
+    for (const bad of [validateDraft({ unit: "minute", n: null }), validateDraft({ unit: "hour", n: 25 })]) {
+      if (!bad.ok) expect(bad.reason.length).toBeGreaterThan(0);
+    }
+  });
+  it("合法草案给出 spec 串", () => {
+    expect(validateDraft({ unit: "hour", n: 2 })).toEqual({ ok: true, spec: "120m" });
+    expect(validateDraft({ unit: "week", n: 2 })).toEqual({ ok: true, spec: "2W" });
+  });
+});
