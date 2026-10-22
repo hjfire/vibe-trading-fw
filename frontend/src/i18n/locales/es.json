@@ -1,6 +1,6 @@
 {
   "app": {
-    "version": "v0.1.16"
+    "version": "v0.1.18"
   },
   "charts": {
     "noPriceData": "Aún no hay datos de precio para este símbolo",
@@ -33,7 +33,8 @@
       "multiChart": "Cuatro períodos de un símbolo en paralelo, con cursor y ventana de tiempo enlazados.",
       "alerts": "Condiciones de precio, posición y cuenta que te avisan en el canal que ya usas.",
       "warehouse": "Las barras guardadas en esta máquina; los backtests y factores las leen en lugar de la API.",
-      "help": "El manual integrado para todas las páginas del producto."
+      "help": "El manual integrado para todas las páginas del producto.",
+      "paperTrading": "Prueba operaciones diarias con fondos ficticios. No se envían órdenes al bróker. Los resultados excluyen dividendos en efectivo y no representan la rentabilidad total."
     },
     "instructions": {
       "reports": "Primero pide al asistente un backtest de una estrategia y abre aquí sus resultados. Descarga los PDF y documentos generados en el chat desde la conversación original.",
@@ -49,7 +50,8 @@
       "multiChart": "Selecciona los cuatro períodos; con el enlace activo, el cursor y la ventana se mueven a la vez en todas las celdas.",
       "alerts": "Crea la regla y activa el programador local: solo se evalúa mientras está activo. El envío también necesita un canal configurado.",
       "warehouse": "Obtén o importa barras aquí y luego elige el almacén como fuente de datos para trabajar sin conexión sobre las mismas barras.",
-      "help": "Léelo una vez desde el principio y vuelve desde cualquier página cuando una función sea difícil de encontrar."
+      "help": "Léelo una vez desde el principio y vuelve desde cualquier página cuando una función sea difícil de encontrar.",
+      "paperTrading": "Solo se liquidan velas diarias completas. Las estrategias leen días anteriores y ejecutan al cierre del día indicado. Espera 30 minutos tras el cierre habitual; no se programa ejecución automática."
     }
   },
   "layout": {
@@ -85,7 +87,8 @@
     "multiChart": "Gráfico múltiple",
     "alerts": "Alertas",
     "warehouse": "Almacén de datos",
-    "help": "Guía de uso"
+    "help": "Guía de uso",
+    "paperTrading": "Trading simulado"
   },
   "runtime": {
     "monitorBadge": "Monitor de Runtime",
@@ -2502,5 +2505,49 @@
     "limitsNote": "Cada decisión usa una conversación nueva. Los límites se comprueban tras la respuesta y pueden excederse en ese importe. El uso desconocido o un exceso activa el interruptor de parada existente.",
     "pricesNote": "Las tarifas son estimaciones del operador. Use la mayor tarifa de entrada/escritura en caché; se excluyen los descuentos de caché y las llamadas auxiliares.",
     "stopToEdit": "Detenga el ejecutor antes de cambiar estos ajustes."
+  },
+  "paper": {
+    "title": "Trading simulado",
+    "description": "Prueba operaciones diarias con fondos ficticios. No se envían órdenes al bróker. Los resultados excluyen dividendos en efectivo y no representan la rentabilidad total.",
+    "accounts": "Cuentas",
+    "newAccount": "Nueva cuenta simulada",
+    "eligible": "Disponible desde {{date}}; los festivos esperan a la siguiente sesión disponible.",
+    "cash": "Efectivo",
+    "pending": "Pendiente de la primera liquidación",
+    "label": "Nombre de la cuenta",
+    "market": "Mercado",
+    "start": "Inicio",
+    "today": "Hoy",
+    "nextSession": "Próxima sesión bursátil",
+    "initialPositions": "Posiciones iniciales (cantidad y coste medio)",
+    "symbol": "Símbolo (p. ej. AAPL.US)",
+    "quantity": "Cantidad",
+    "cost": "Coste medio",
+    "remove": "Eliminar",
+    "addPosition": "Añadir posición",
+    "create": "Crear cuenta",
+    "working": "Procesando…",
+    "advance": "Liquidar paso diario",
+    "executionNote": "Solo se liquidan velas diarias completas. Las estrategias leen días anteriores y ejecutan al cierre del día indicado. Espera 30 minutos tras el cierre habitual; no se programa ejecución automática.",
+    "date": "Fecha de ejecución",
+    "mode": "Modo de entrada",
+    "orders": "Órdenes explícitas",
+    "strategy": "Archivo de estrategia",
+    "strategyPath": "Ruta dentro de la carpeta strategies del entorno",
+    "side": "Lado",
+    "buy": "Comprar",
+    "sell": "Vender",
+    "addOrder": "Añadir orden",
+    "emptyOrders": "Sin órdenes, solo se valora la cuenta. Las órdenes de mercado se ejecutan al cierre diario; no se simula la ejecución intradía.",
+    "saved": "Libro guardado.",
+    "notSaved": "El libro no cambió. Revisa el resultado antes de reintentar.",
+    "result": "Resultado del paso",
+    "price": "Precio",
+    "fee": "Comisión",
+    "history": "Historial del valor de la cuenta",
+    "nav": "Valor liquidativo",
+    "us": "Acciones de EE. UU. · USD",
+    "hk": "Acciones de Hong Kong · HKD",
+    "cn_a": "Acciones A de China · CNY"
   }
 }

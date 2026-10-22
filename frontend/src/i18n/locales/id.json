@@ -1,6 +1,6 @@
 {
   "app": {
-    "version": "v0.1.16"
+    "version": "v0.1.18"
   },
   "charts": {
     "noPriceData": "Belum ada data harga untuk simbol ini",
@@ -33,7 +33,8 @@
       "multiChart": "Empat periode dari satu simbol berdampingan, dengan crosshair dan jendela waktu yang tertaut.",
       "alerts": "Kondisi harga, posisi, dan akun yang memberi tahu Anda lewat kanal yang sudah Anda pakai.",
       "warehouse": "Bar yang tersimpan di mesin ini; backtest dan evaluasi faktor membacanya, bukan API.",
-      "help": "Manual bawaan untuk setiap halaman produk."
+      "help": "Manual bawaan untuk setiap halaman produk.",
+      "paperTrading": "Uji transaksi harian dengan dana virtual. Tidak ada pesanan yang dikirim ke broker. Hasil tidak mencakup dividen tunai dan bukan imbal hasil total."
     },
     "instructions": {
       "reports": "Minta asisten melakukan backtest strategi terlebih dahulu, lalu buka hasilnya di sini. Unduh PDF dan dokumen yang dibuat di chat dari percakapan asal.",
@@ -49,7 +50,8 @@
       "multiChart": "Pilih empat periode; saat tautan aktif, crosshair dan jendela bergerak bersamaan di semua sel.",
       "alerts": "Buat aturan lalu aktifkan penjadwal lokal — aturan hanya dievaluasi saat ia berjalan. Pengiriman juga memerlukan kanal.",
       "warehouse": "Ambil atau impor bar di sini, lalu pilih gudang sebagai sumber data untuk berjalan luring pada bar yang sama.",
-      "help": "Baca sekali dari awal, lalu kembali dari halaman mana pun saat sulit menemukan fitur."
+      "help": "Baca sekali dari awal, lalu kembali dari halaman mana pun saat sulit menemukan fitur.",
+      "paperTrading": "Hanya candle harian yang selesai dapat diproses. Strategi membaca hari sebelumnya dan dieksekusi pada penutupan hari eksekusi. Tunggu 30 menit setelah penutupan reguler; tidak ada eksekusi otomatis yang dijadwalkan."
     }
   },
   "layout": {
@@ -85,7 +87,8 @@
     "multiChart": "Grafik Multi-Timeframe",
     "alerts": "Peringatan",
     "warehouse": "Gudang data",
-    "help": "Panduan penggunaan"
+    "help": "Panduan penggunaan",
+    "paperTrading": "Trading simulasi"
   },
   "runtime": {
     "monitorBadge": "Monitor Runtime",
@@ -259,16 +262,16 @@
     "deliveryChannelPlaceholder": "telegram, feishu, … (kosongkan agar hasil tetap di aplikasi)",
     "deliveryTargetLabel": "Target channel",
     "deliveryTargetPlaceholder": "ID chat / grup / pengguna",
-    "deliveryFormatLabel": "Email report format",
-    "deliveryFormatDefault": "Channel default (plain text)",
-    "deliveryFormatHtml": "HTML email",
-    "deliveryFormatPdf": "PDF attachment",
+    "deliveryFormatLabel": "Format laporan email",
+    "deliveryFormatDefault": "Bawaan saluran (teks biasa)",
+    "deliveryFormatHtml": "Email HTML",
+    "deliveryFormatPdf": "Lampiran PDF",
     "proposalPdfProtection": "Perlindungan PDF dengan kata sandi",
     "proposalPdfProtectionOn": "Aktif",
     "proposalPdfProtectionOff": "Nonaktif",
-    "deliveryFormatDefaultHint": "Keeps the existing plain-text delivery behavior.",
-    "deliveryFormatHtmlHint": "Shows the full report as sanitized HTML in the email body.",
-    "deliveryFormatPdfHint": "Attaches the full report as PDF and keeps only a short notice in the body.",
+    "deliveryFormatDefaultHint": "Mempertahankan perilaku pengiriman teks biasa yang ada.",
+    "deliveryFormatHtmlHint": "Menampilkan laporan lengkap sebagai HTML yang sudah disanitasi di isi email.",
+    "deliveryFormatPdfHint": "Melampirkan laporan lengkap sebagai PDF dan hanya menyisakan pemberitahuan singkat di isi email.",
     "deliveryHint": "Nonaktif secara default. Ringkasan dikirim setelah run selesai, bukan saat dijadwalkan.",
     "deliveryTargetRequired": "Pilih target untuk channel tersebut, atau kosongkan channel.",
     "delivery_none": "Akan dikirim ke {{channel}} setelah run berikutnya",
@@ -2502,5 +2505,49 @@
     "limitsNote": "Setiap keputusan memakai percakapan baru. Batas diperiksa setelah respons dan dapat terlampaui sebesar respons itu. Penggunaan yang hilang atau anggaran terlampaui memicu sakelar penghentian yang ada.",
     "pricesNote": "Harga adalah perkiraan operator. Gunakan tarif masukan/penulisan cache tertinggi; diskon cache dan panggilan tambahan tidak termasuk.",
     "stopToEdit": "Hentikan runner sebelum mengubah pengaturan."
+  },
+  "paper": {
+    "title": "Trading simulasi",
+    "description": "Uji transaksi harian dengan dana virtual. Tidak ada pesanan yang dikirim ke broker. Hasil tidak mencakup dividen tunai dan bukan imbal hasil total.",
+    "accounts": "Akun",
+    "newAccount": "Akun simulasi baru",
+    "eligible": "Mulai paling awal {{date}}; hari libur menunggu sesi berikutnya yang tersedia.",
+    "cash": "Kas",
+    "pending": "Menunggu penyelesaian pertama",
+    "label": "Nama akun",
+    "market": "Pasar",
+    "start": "Mulai",
+    "today": "Hari ini",
+    "nextSession": "Sesi perdagangan berikutnya",
+    "initialPositions": "Posisi awal (jumlah dan biaya rata-rata)",
+    "symbol": "Simbol (mis. AAPL.US)",
+    "quantity": "Jumlah",
+    "cost": "Biaya rata-rata",
+    "remove": "Hapus",
+    "addPosition": "Tambah posisi",
+    "create": "Buat akun",
+    "working": "Memproses…",
+    "advance": "Selesaikan langkah harian",
+    "executionNote": "Hanya candle harian yang selesai dapat diproses. Strategi membaca hari sebelumnya dan dieksekusi pada penutupan hari eksekusi. Tunggu 30 menit setelah penutupan reguler; tidak ada eksekusi otomatis yang dijadwalkan.",
+    "date": "Tanggal eksekusi",
+    "mode": "Mode masukan",
+    "orders": "Pesanan langsung",
+    "strategy": "Berkas strategi",
+    "strategyPath": "Jalur dalam folder strategies lingkungan runtime",
+    "side": "Sisi",
+    "buy": "Beli",
+    "sell": "Jual",
+    "addOrder": "Tambah pesanan",
+    "emptyOrders": "Tanpa pesanan, hanya valuasi. Pesanan pasar dieksekusi pada penutupan harian; bukan simulasi intrahari.",
+    "saved": "Buku akun tersimpan.",
+    "notSaved": "Buku akun tidak berubah. Tinjau hasil sebelum mencoba lagi.",
+    "result": "Hasil langkah",
+    "price": "Harga",
+    "fee": "Biaya",
+    "history": "Riwayat nilai akun",
+    "nav": "Nilai aset bersih",
+    "us": "Saham AS · USD",
+    "hk": "Saham Hong Kong · HKD",
+    "cn_a": "Saham A Tiongkok · CNY"
   }
 }

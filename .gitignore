@@ -56,18 +56,25 @@ agent/uploads/
 /runs/
 /shadow_runs/
 /shadow_accounts/
+/shadow_reports/
+/strategies/
 /swarm/
 /live/
 /uploads/
 /generated_reports/
 /imports/
 /workspace/
+/alerts/
+/symbol_roster.json
 /auth/
 /connectors/
 /portfolio/
 /scheduled_research/
 /memory/
 /memory_index/
+/memory_index.db
+/memory_index.db-shm
+/memory_index.db-wal
 /cache/
 /data/
 /reports/
@@ -180,3 +187,6 @@ agent/tests/artifacts/
 
 /pixel-office.sqlite3
 /pixel-office.sqlite3-*
+
+# Local simulated account ledgers
+/paper-trading/

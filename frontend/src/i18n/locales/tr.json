@@ -1,6 +1,6 @@
 {
   "app": {
-    "version": "v0.1.16"
+    "version": "v0.1.18"
   },
   "charts": {
     "noPriceData": "Bu sembol için henüz fiyat verisi yok",
@@ -41,7 +41,8 @@
     "multiChart": "Çoklu Grafik",
     "alerts": "Uyarılar",
     "warehouse": "Bar deposu",
-    "help": "Kullanım rehberi"
+    "help": "Kullanım rehberi",
+    "paperTrading": "Sanal işlem"
   },
   "runtime": {
     "monitorBadge": "Çalışma durumu izleyicisi",
@@ -2344,7 +2345,8 @@
       "multiChart": "Bir sembolün dört periyodu yan yana; imleç ve zaman penceresi birbirine bağlı.",
       "alerts": "Fiyat, pozisyon ve hesap koşulları; mesajları zaten okuduğunuz her yerde sizi uyarır.",
       "warehouse": "Bu bilgisayarda saklanan barlar; geri testler ve faktör çalıştırmaları bir API yerine bunları okur.",
-      "help": "Üründeki her sayfa için yerleşik kılavuz."
+      "help": "Üründeki her sayfa için yerleşik kılavuz.",
+      "paperTrading": "Günlük işlemleri sanal fonlarla deneyin. Aracı kuruma emir gönderilmez. Sonuçlar nakit temettüleri içermez ve toplam getiriyi göstermez."
     },
     "instructions": {
       "reports": "Önce araştırma asistanından bir stratejiyi geriye dönük test etmesini isteyin, ardından sonuçları burada açın. PDF ve diğer sohbet belgelerini özgün konuşmadan indirin.",
@@ -2360,7 +2362,8 @@
       "multiChart": "Dört periyodu seçin; bağlantı açıkken imleç ve görünen pencere tüm hücrelerde aynı anda hareket eder.",
       "alerts": "Bir kural oluşturun, ardından yerel zamanlayıcıyı etkinleştirin — kurallar yalnızca çalışırken değerlendirilir. İletim ayrıca yapılandırılmış bir kanal gerektirir.",
       "warehouse": "Buradan barları getirin veya içe aktarın, ardından aynı barlar üzerinde çevrimdışı çalışmak için veri kaynağı olarak depoyu seçin.",
-      "help": "Bir kez baştan okuyun, ardından bir özelliği bulmakta zorlandığınızda herhangi bir sayfadan geri dönün."
+      "help": "Bir kez baştan okuyun, ardından bir özelliği bulmakta zorlandığınızda herhangi bir sayfadan geri dönün.",
+      "paperTrading": "Yalnızca tamamlanmış günlük mumlar işlenir. Stratejiler önceki günleri okur ve işlem gününün kapanışında gerçekleşir. Normal kapanıştan 30 dakika sonrasını bekleyin; otomatik çalıştırma planlanmaz."
     }
   },
   "analysis": {
@@ -2502,5 +2505,49 @@
     "limitsNote": "Her karar yeni bir konuşma başlatır. Sınırlar yanıttan sonra kontrol edilir ve o yanıt kadar aşılabilir. Eksik kullanım veya aşım mevcut durdurma anahtarını tetikler.",
     "pricesNote": "Fiyatlar operatör tahminidir. En yüksek girdi/önbellek yazma ücretini kullanın; önbellek indirimleri ve yardımcı çağrılar dahil değildir.",
     "stopToEdit": "Ayarları değiştirmeden önce çalıştırıcıyı durdurun."
+  },
+  "paper": {
+    "title": "Sanal işlem",
+    "description": "Günlük işlemleri sanal fonlarla deneyin. Aracı kuruma emir gönderilmez. Sonuçlar nakit temettüleri içermez ve toplam getiriyi göstermez.",
+    "accounts": "Hesaplar",
+    "newAccount": "Yeni sanal hesap",
+    "eligible": "{{date}} tarihinden itibaren; tatillerde sonraki uygun seans beklenir.",
+    "cash": "Nakit",
+    "pending": "İlk hesaplama bekleniyor",
+    "label": "Hesap adı",
+    "market": "Piyasa",
+    "start": "Başlangıç",
+    "today": "Bugün",
+    "nextSession": "Sonraki işlem seansı",
+    "initialPositions": "Başlangıç pozisyonları (miktar ve ortalama maliyet)",
+    "symbol": "Sembol (ör. AAPL.US)",
+    "quantity": "Miktar",
+    "cost": "Ortalama maliyet",
+    "remove": "Kaldır",
+    "addPosition": "Pozisyon ekle",
+    "create": "Hesap oluştur",
+    "working": "İşleniyor…",
+    "advance": "Günlük adımı hesapla",
+    "executionNote": "Yalnızca tamamlanmış günlük mumlar işlenir. Stratejiler önceki günleri okur ve işlem gününün kapanışında gerçekleşir. Normal kapanıştan 30 dakika sonrasını bekleyin; otomatik çalıştırma planlanmaz.",
+    "date": "İşlem tarihi",
+    "mode": "Giriş modu",
+    "orders": "Doğrudan emirler",
+    "strategy": "Strateji dosyası",
+    "strategyPath": "Çalışma ortamının strategies klasöründeki yol",
+    "side": "Yön",
+    "buy": "Al",
+    "sell": "Sat",
+    "addOrder": "Emir ekle",
+    "emptyOrders": "Emir yoksa yalnızca değerleme yapılır. Piyasa emirleri günlük kapanışta gerçekleşir; gün içi işlem simülasyonu değildir.",
+    "saved": "Hesap kaydedildi.",
+    "notSaved": "Hesap değişmedi. Yeniden denemeden önce sonucu inceleyin.",
+    "result": "Adım sonucu",
+    "price": "Fiyat",
+    "fee": "Ücret",
+    "history": "Hesap değeri geçmişi",
+    "nav": "Net varlık değeri",
+    "us": "ABD hisseleri · USD",
+    "hk": "Hong Kong hisseleri · HKD",
+    "cn_a": "Çin A hisseleri · CNY"
   }
 }

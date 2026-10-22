@@ -1,6 +1,6 @@
 {
   "app": {
-    "version": "v0.1.16"
+    "version": "v0.1.18"
   },
   "navigation": {
     "menu": "기능 둘러보기",
@@ -27,7 +27,8 @@
       "multiChart": "한 종목의 네 기간을 나란히 두고 십자선과 시간 창을 연동합니다.",
       "alerts": "가격·포지션·계좌 조건을 평소 메시지를 읽는 채널로 알려드립니다.",
       "warehouse": "이 기기에 저장한 바 데이터. 백테스트와 팩터 평가가 API 대신 여기서 읽습니다.",
-      "help": "제품의 모든 페이지를 다루는 내장 매뉴얼입니다."
+      "help": "제품의 모든 페이지를 다루는 내장 매뉴얼입니다.",
+      "paperTrading": "가상 자금으로 일별 거래를 테스트합니다. 증권사에 주문을 보내지 않습니다. 현금 배당을 제외하므로 총수익이 아닙니다."
     },
     "instructions": {
       "reports": "먼저 도우미에게 전략 백테스트를 요청한 후 여기에서 결과를 엽니다. 대화에서 생성한 PDF 등은 원래 대화에서 다운로드하세요.",
@@ -43,7 +44,8 @@
       "multiChart": "네 기간을 선택하고 연동을 켜면 십자선과 표시 창이 모든 칸에서 함께 움직입니다.",
       "alerts": "규칙을 만든 뒤 로컬 스케줄러를 활성화하세요. 실행 중일 때만 평가되고, 전송에는 채널 설정도 필요합니다.",
       "warehouse": "여기서 바를 가져오거나 불러온 뒤 데이터 소스로 저장소를 고르면 같은 바에서 오프라인으로 실행됩니다.",
-      "help": "한 번 처음부터 읽고, 기능을 찾기 어려울 때는 어떤 페이지에서든 여기로 돌아오세요."
+      "help": "한 번 처음부터 읽고, 기능을 찾기 어려울 때는 어떤 페이지에서든 여기로 돌아오세요.",
+      "paperTrading": "완료된 일봉만 결산합니다. 전략은 이전 날짜의 데이터만 읽고 실행일 종가로 체결됩니다. 정규장 종료 후 30분을 기다리세요. 자동 실행은 예약되지 않습니다."
     }
   },
   "layout": {
@@ -79,7 +81,8 @@
     "multiChart": "멀티 타임프레임",
     "alerts": "알림",
     "warehouse": "바 저장소",
-    "help": "사용 안내"
+    "help": "사용 안내",
+    "paperTrading": "모의 거래"
   },
   "runtime": {
     "monitorBadge": "거래 모니터",
@@ -253,16 +256,16 @@
     "deliveryChannelPlaceholder": "telegram, feishu … (비우면 앱 안에만 남습니다)",
     "deliveryTargetLabel": "채널 대상",
     "deliveryTargetPlaceholder": "채팅 / 그룹 / 사용자 ID",
-    "deliveryFormatLabel": "Email report format",
-    "deliveryFormatDefault": "Channel default (plain text)",
-    "deliveryFormatHtml": "HTML email",
-    "deliveryFormatPdf": "PDF attachment",
+    "deliveryFormatLabel": "이메일 보고서 형식",
+    "deliveryFormatDefault": "채널 기본값(일반 텍스트)",
+    "deliveryFormatHtml": "HTML 이메일",
+    "deliveryFormatPdf": "PDF 첨부 파일",
     "proposalPdfProtection": "PDF 비밀번호 보호",
     "proposalPdfProtectionOn": "켜짐",
     "proposalPdfProtectionOff": "꺼짐",
-    "deliveryFormatDefaultHint": "Keeps the existing plain-text delivery behavior.",
-    "deliveryFormatHtmlHint": "Shows the full report as sanitized HTML in the email body.",
-    "deliveryFormatPdfHint": "Attaches the full report as PDF and keeps only a short notice in the body.",
+    "deliveryFormatDefaultHint": "기존 일반 텍스트 전송 방식을 유지합니다.",
+    "deliveryFormatHtmlHint": "전체 보고서를 정제된 HTML로 이메일 본문에 표시합니다.",
+    "deliveryFormatPdfHint": "전체 보고서를 PDF로 첨부하고 본문에는 짧은 안내만 남깁니다.",
     "deliveryHint": "기본은 꺼짐입니다. 브리핑은 예약 시점이 아니라 실행이 **끝난 뒤** 전달됩니다.",
     "deliveryTargetRequired": "해당 채널의 대상을 지정하거나 채널을 비워 주세요.",
     "delivery_none": "다음 실행이 끝나면 {{channel}}(으)로 전달합니다",
@@ -2502,5 +2505,49 @@
     "limitsNote": "결정마다 새 대화를 사용합니다. 응답 후 사용량을 확인하므로 해당 응답만큼 초과할 수 있습니다. 사용량 누락이나 예산 초과 시 기존 중지 스위치가 작동합니다.",
     "pricesNote": "요금은 운영자 추정값입니다. 입력/캐시 쓰기의 가장 높은 요금을 사용하세요. 캐시 할인과 보조 모델 호출은 추정에 포함되지 않습니다.",
     "stopToEdit": "설정을 변경하기 전에 실행기를 중지하세요."
+  },
+  "paper": {
+    "title": "모의 거래",
+    "description": "가상 자금으로 일별 거래를 테스트합니다. 증권사에 주문을 보내지 않습니다. 현금 배당을 제외하므로 총수익이 아닙니다.",
+    "accounts": "계좌",
+    "newAccount": "모의 계좌 만들기",
+    "eligible": "{{date}}부터 시작 가능하며 휴장일에는 다음 거래일을 기다립니다.",
+    "cash": "현금",
+    "pending": "첫 결산 대기",
+    "label": "계좌 이름",
+    "market": "시장",
+    "start": "시작",
+    "today": "오늘",
+    "nextSession": "다음 거래일",
+    "initialPositions": "초기 보유 종목 (수량 및 평균 단가)",
+    "symbol": "종목 (예: AAPL.US)",
+    "quantity": "수량",
+    "cost": "평균 단가",
+    "remove": "삭제",
+    "addPosition": "보유 종목 추가",
+    "create": "계좌 생성",
+    "working": "처리 중…",
+    "advance": "일별 거래 결산",
+    "executionNote": "완료된 일봉만 결산합니다. 전략은 이전 날짜의 데이터만 읽고 실행일 종가로 체결됩니다. 정규장 종료 후 30분을 기다리세요. 자동 실행은 예약되지 않습니다.",
+    "date": "실행 날짜",
+    "mode": "입력 방식",
+    "orders": "직접 주문",
+    "strategy": "전략 파일",
+    "strategyPath": "런타임 strategies 폴더 내 경로",
+    "side": "매매 구분",
+    "buy": "매수",
+    "sell": "매도",
+    "addOrder": "주문 추가",
+    "emptyOrders": "주문이 없으면 평가만 합니다. 시장가 주문은 일별 종가에 체결되며 장중 실행은 모사하지 않습니다.",
+    "saved": "장부를 저장했습니다.",
+    "notSaved": "장부는 변경되지 않았습니다. 결과를 확인한 후 다시 시도하세요.",
+    "result": "실행 결과",
+    "price": "가격",
+    "fee": "수수료",
+    "history": "계좌 가치 기록",
+    "nav": "순자산 가치",
+    "us": "미국 주식 · USD",
+    "hk": "홍콩 주식 · HKD",
+    "cn_a": "중국 A주 · CNY"
   }
 }

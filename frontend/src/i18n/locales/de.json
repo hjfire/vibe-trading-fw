@@ -1,6 +1,6 @@
 {
   "app": {
-    "version": "v0.1.16"
+    "version": "v0.1.18"
   },
   "charts": {
     "noPriceData": "Noch keine Kursdaten für dieses Symbol",
@@ -33,7 +33,8 @@
       "multiChart": "Vier Perioden eines Symbols nebeneinander, mit gekoppeltem Fadenkreuz und Zeitfenster.",
       "alerts": "Preis-, Positions- und Kontobedingungen, die dich im gewohnten Kanal benachrichtigen.",
       "warehouse": "Die auf diesem Rechner gespeicherten Bars; Backtests und Faktortests lesen sie statt der API.",
-      "help": "Das eingebaute Handbuch für alle Seiten des Produkts."
+      "help": "Das eingebaute Handbuch für alle Seiten des Produkts.",
+      "paperTrading": "Tägliche Trades mit virtuellem Kapital testen. Es werden keine Brokeraufträge gesendet. Bardividenden sind nicht enthalten; die Ergebnisse zeigen keine Gesamtrendite."
     },
     "instructions": {
       "reports": "Bitte den Assistenten zuerst um einen Strategie-Backtest und öffne hier die Ergebnisse. Im Chat erstellte PDFs und andere Dokumente lädst du in der ursprünglichen Unterhaltung herunter.",
@@ -49,7 +50,8 @@
       "multiChart": "Vier Perioden wählen; mit aktiver Kopplung bewegen sich Fadenkreuz und Zeitfenster in allen Feldern gleichzeitig.",
       "alerts": "Regel anlegen und danach den lokalen Scheduler aktivieren — Regeln werden nur während seines Laufs geprüft. Für die Zustellung ist zusätzlich ein Kanal nötig.",
       "warehouse": "Hier Bars abrufen oder importieren und danach das Archiv als Datenquelle wählen, um offline auf denselben Bars zu rechnen.",
-      "help": "Einmal von vorn bis unten lesen und von jeder Seite hierher zurück, wenn eine Funktion schwer zu finden ist."
+      "help": "Einmal von vorn bis unten lesen und von jeder Seite hierher zurück, wenn eine Funktion schwer zu finden ist.",
+      "paperTrading": "Nur abgeschlossene Tageskerzen werden abgerechnet. Strategien sehen vorherige Tage und handeln zum Schlusskurs des Ausführungstags. Bitte 30 Minuten nach regulärem Börsenschluss warten; es wird keine automatische Ausführung geplant."
     }
   },
   "layout": {
@@ -85,7 +87,8 @@
     "multiChart": "Multi-Chart",
     "alerts": "Alarme",
     "warehouse": "Kursarchiv",
-    "help": "Anleitung"
+    "help": "Anleitung",
+    "paperTrading": "Simulierter Handel"
   },
   "runtime": {
     "monitorBadge": "Runtime-Monitor",
@@ -259,16 +262,16 @@
     "deliveryChannelPlaceholder": "telegram, feishu … (leer lassen, dann bleibt alles in der App)",
     "deliveryTargetLabel": "Ziel im Kanal",
     "deliveryTargetPlaceholder": "Chat- / Gruppen- / Benutzer-ID",
-    "deliveryFormatLabel": "Email report format",
-    "deliveryFormatDefault": "Channel default (plain text)",
-    "deliveryFormatHtml": "HTML email",
-    "deliveryFormatPdf": "PDF attachment",
+    "deliveryFormatLabel": "E-Mail-Berichtsformat",
+    "deliveryFormatDefault": "Kanalstandard (reiner Text)",
+    "deliveryFormatHtml": "HTML-E-Mail",
+    "deliveryFormatPdf": "PDF-Anhang",
     "proposalPdfProtection": "PDF-Passwortschutz",
     "proposalPdfProtectionOn": "Ein",
     "proposalPdfProtectionOff": "Aus",
-    "deliveryFormatDefaultHint": "Keeps the existing plain-text delivery behavior.",
-    "deliveryFormatHtmlHint": "Shows the full report as sanitized HTML in the email body.",
-    "deliveryFormatPdfHint": "Attaches the full report as PDF and keeps only a short notice in the body.",
+    "deliveryFormatDefaultHint": "Behält die bisherige Zustellung als reinen Text bei.",
+    "deliveryFormatHtmlHint": "Zeigt den vollständigen Bericht als bereinigtes HTML im Nachrichtentext.",
+    "deliveryFormatPdfHint": "Hängt den vollständigen Bericht als PDF an und lässt im Nachrichtentext nur einen kurzen Hinweis.",
     "deliveryHint": "Standardmäßig aus. Das Briefing wird **nach dem Lauf** gesendet, nicht bei der Planung.",
     "deliveryTargetRequired": "Geben Sie ein Ziel für diesen Kanal an, oder leeren Sie das Kanalfeld.",
     "delivery_none": "Wird nach dem nächsten Lauf an {{channel}} gesendet",
@@ -2502,5 +2505,49 @@
     "limitsNote": "Jede Entscheidung beginnt eine neue Unterhaltung. Limits werden nach der Antwort geprüft und können um diese Antwort überschritten werden. Fehlender Verbrauch oder eine Überschreitung löst den vorhandenen Notstopp aus.",
     "pricesNote": "Preise sind Betreiberschätzungen. Den höchsten Eingabe-/Cache-Schreibpreis verwenden; Cache-Rabatte und zusätzliche Modellaufrufe sind nicht enthalten.",
     "stopToEdit": "Vor Änderungen den Runner stoppen."
+  },
+  "paper": {
+    "title": "Simulierter Handel",
+    "description": "Tägliche Trades mit virtuellem Kapital testen. Es werden keine Brokeraufträge gesendet. Bardividenden sind nicht enthalten; die Ergebnisse zeigen keine Gesamtrendite.",
+    "accounts": "Konten",
+    "newAccount": "Neues Simulationskonto",
+    "eligible": "Ab {{date}} möglich; an Feiertagen wird auf die nächste verfügbare Sitzung gewartet.",
+    "cash": "Bargeld",
+    "pending": "Erste Abrechnung ausstehend",
+    "label": "Kontoname",
+    "market": "Markt",
+    "start": "Beginn",
+    "today": "Heute",
+    "nextSession": "Nächster Handelstag",
+    "initialPositions": "Anfangspositionen (Menge und Durchschnittskosten)",
+    "symbol": "Symbol (z. B. AAPL.US)",
+    "quantity": "Menge",
+    "cost": "Durchschnittskosten",
+    "remove": "Entfernen",
+    "addPosition": "Position hinzufügen",
+    "create": "Konto erstellen",
+    "working": "Wird verarbeitet…",
+    "advance": "Tagesschritt abrechnen",
+    "executionNote": "Nur abgeschlossene Tageskerzen werden abgerechnet. Strategien sehen vorherige Tage und handeln zum Schlusskurs des Ausführungstags. Bitte 30 Minuten nach regulärem Börsenschluss warten; es wird keine automatische Ausführung geplant.",
+    "date": "Ausführungsdatum",
+    "mode": "Eingabemodus",
+    "orders": "Explizite Aufträge",
+    "strategy": "Strategiedatei",
+    "strategyPath": "Pfad im strategies-Ordner der Laufzeitumgebung",
+    "side": "Richtung",
+    "buy": "Kaufen",
+    "sell": "Verkaufen",
+    "addOrder": "Auftrag hinzufügen",
+    "emptyOrders": "Ohne Aufträge wird nur bewertet. Marktaufträge werden zum Tagesschluss ausgeführt; keine Intraday-Simulation.",
+    "saved": "Kontobuch gespeichert.",
+    "notSaved": "Kontobuch unverändert. Ergebnis vor erneutem Versuch prüfen.",
+    "result": "Schrittergebnis",
+    "price": "Preis",
+    "fee": "Gebühr",
+    "history": "Kontowertverlauf",
+    "nav": "Nettovermögenswert",
+    "us": "US-Aktien · USD",
+    "hk": "Hongkong-Aktien · HKD",
+    "cn_a": "Chinesische A-Aktien · CNY"
   }
 }
