@@ -1,5 +1,6 @@
 import { authHeaders } from "@/lib/apiAuth";
 import type { KLineData, Period, PeriodType } from "klinecharts";
+import { isCustomSpec, specMs, specPeriodShape } from "./customInterval";
 
 /** Thin client for the chart's bar feed. Kept in its own module (not the
  *  upstream `api.ts`) so daily upstream syncs never conflict.
@@ -17,6 +18,9 @@ import type { KLineData, Period, PeriodType } from "klinecharts";
 
 export type IntervalKey = "1m" | "5m" | "15m" | "30m" | "60m" | "1D" | "1W" | "1M";
 
+/** 目录里可能出现的所有周期拼写：八档内置 ∪ 合法自定义串。 */
+export type AnyInterval = string;
+
 export const INTERVALS: { label: string; key: IntervalKey }[] = [
   { label: "1分", key: "1m" },
   { label: "5分", key: "5m" },
@@ -27,6 +31,14 @@ export const INTERVALS: { label: string; key: IntervalKey }[] = [
   { label: "周线", key: "1W" },
   { label: "月线", key: "1M" },
 ];
+
+/** 这枚串是不是那八档内置之一。守卫从 `INTERVALS` 那张建表派生，不在这里再抄
+ *  一遍八枚串——本仓已经有 `INTERVALS`／`INTERVAL_MS`／`RESOLUTION_BY_INTERVAL`／
+ *  `customInterval.BUILTIN_SPECS` 四份内置表，第五份就是下一次漂移。放在
+ *  `INTERVALS` 之后是因为 `const` 初始化按求值顺序跑。 */
+export function isBuiltinInterval(value: string): value is IntervalKey {
+  return INTERVALS.some((item) => item.key === value);
+}
 
 /**
  * Daily-and-coarser periods, and what KLineChart calls each of them.
@@ -48,16 +60,30 @@ const CALENDAR_PERIODS: { key: IntervalKey; type: PeriodType }[] = [
   { key: "1M", type: "month" },
 ];
 
-/** Daily-or-coarser: these need no intraday source, so every symbol can show them. */
-export function isCalendarInterval(key: IntervalKey): boolean {
-  return CALENDAR_PERIODS.some((c) => c.key === key);
+/** Daily-or-coarser: these need no intraday source, so every symbol can show them.
+ *
+ *  内置那一半仍然查 `CALENDAR_PERIODS`；自定义那一半查不了表——那张表只有八枚内置
+ *  键，它答不出「`2D` 算不算日历道」。判据只能落在单位上：`D`／`W`／`M` 都是服务端
+ *  从同一份日线答案折出来的（`interval_spec` 的折叠基档），不需要第二份分钟源；
+ *  `m` 要。坏串（`specPeriodShape` 给 null）不许自称日历道，否则它就绕过了分钟源这道门。 */
+export function isCalendarInterval(key: AnyInterval): boolean {
+  if (isBuiltinInterval(key)) return CALENDAR_PERIODS.some((c) => c.key === key);
+  const shape = specPeriodShape(key);
+  return shape !== null && shape.type !== "minute";
 }
 
-/** The period object `chart.setPeriod` wants for a toolbar key. */
-export function intervalToPeriod(key: IntervalKey): Period {
+/** The period object `chart.setPeriod` wants for a toolbar key.
+ *
+ *  内置走旧逻辑（日历查表、分钟取 `parseInt`），自定义走 `specPeriodShape`——表里
+ *  没有 `2D` 这一行，也就没有可查的东西。坏串退回 `{type:"day",span:1}`，与本文件
+ *  既有的「degrade to the one period every instrument can serve」同调。 */
+export function intervalToPeriod(key: AnyInterval): Period {
   const calendar = CALENDAR_PERIODS.find((c) => c.key === key);
   if (calendar) return { type: calendar.type, span: 1 };
-  return { type: "minute", span: parseInt(key, 10) };
+  if (isBuiltinInterval(key)) return { type: "minute", span: parseInt(key, 10) };
+  const shape = specPeriodShape(key);
+  if (shape) return shape;
+  return { type: "day", span: 1 };
 }
 
 export interface KlineResponse {
@@ -108,6 +134,26 @@ export const INTERVAL_MS: Record<IntervalKey, number> = {
   "1W": 604_800_000,
   "1M": 30 * 86_400_000,
 };
+
+/** 内置查表；自定义串的 market 拼写同时就是 UDF resolution（`2D`／`120m`／`3W`
+ *  都被服务端 `parse_resolution` 认），所以这里没有字符串 munging——`1M`（月）
+ *  被 lower 成 `1m`（一分钟）就是这条线上的旧事故。 */
+export function resolutionOf(interval: AnyInterval): string {
+  return isBuiltinInterval(interval) ? RESOLUTION_BY_INTERVAL[interval] : interval;
+}
+
+/** 内置查 `INTERVAL_MS`；自定义档不在那张表里（表只有八枚键），所以只能算：
+ *  `specMs` 按单位换算，坏串退回日线那一档的跨度。 */
+export function intervalMsOf(interval: AnyInterval): number {
+  if (isBuiltinInterval(interval)) return INTERVAL_MS[interval];
+  return specMs(interval) ?? INTERVAL_MS["1D"];
+}
+
+/** 会话与 URL 里读出来的串都要过这道门：坏串退 `1D`，不静默带着它去取数。 */
+export function normalizeInterval(value: unknown): AnyInterval {
+  if (typeof value !== "string") return "1D";
+  return isBuiltinInterval(value) || isCustomSpec(value) ? value : "1D";
+}
 
 /**
  * Pick a supported period strictly finer than the chart's own, to back
@@ -194,9 +240,13 @@ export interface QuoteRow {
 }
 
 /** Map a KLineChart Period back to the backend interval string. */
-export function periodToInterval(period: Period): IntervalKey {
+export function periodToInterval(period: Period): AnyInterval {
   const calendar = CALENDAR_PERIODS.find((c) => c.type === period.type);
-  if (calendar) return calendar.key;
+  if (calendar) {
+    // 倍数得跟着进串：`span === 1` 拼回去恰好是表里那枚内置键（`1D`／`1W`／`1M`），
+    // 而 `2W` 这种档位表里根本没有 ⇒ 这一支只能是拼串，不是查表。
+    return `${period.span}${calendar.key.slice(1)}`;
+  }
   if (period.type !== "minute") {
     // `second` / `hour` / `year` have no button on this page. Degrade to the one
     // period every instrument can serve rather than reading `span: 1` off a
@@ -204,7 +254,9 @@ export function periodToInterval(period: Period): IntervalKey {
     return "1D";
   }
   const map: Record<number, IntervalKey> = { 1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "60m" };
-  return map[period.span] ?? "1D";
+  // 分钟侧只有一条 `??` 出口：表里那五枚的拼写一个字节都不动，不在表里的（含 `span > 60`
+  // 的倍数档 `120m`，`map` 最大那枚键就是 `60`）由它按 market 的拼法拼出来，不是查表。
+  return map[period.span] ?? `${period.span}m`;
 }
 
 /**
@@ -225,7 +277,7 @@ export function periodToInterval(period: Period): IntervalKey {
  */
 export async function fetchKline(params: {
   symbol: string;
-  interval: IntervalKey;
+  interval: AnyInterval;
   count?: number;
   adjust?: "none" | "qfq" | "hfq";
   before?: number | null;
@@ -236,7 +288,7 @@ export async function fetchKline(params: {
 }): Promise<KlineResponse> {
   const q = new URLSearchParams();
   q.set("symbol", params.symbol);
-  q.set("resolution", RESOLUTION_BY_INTERVAL[params.interval]);
+  q.set("resolution", resolutionOf(params.interval));
   q.set("countback", String(params.count ?? 500));
   q.set("adjust", params.adjust ?? DEFAULT_ADJUST);
   if (params.before) q.set("to", String(Math.floor(params.before / 1000)));

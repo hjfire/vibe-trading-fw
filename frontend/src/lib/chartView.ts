@@ -1,4 +1,4 @@
-import { isCalendarInterval, type IntervalKey } from "./marketApi";
+import { isCalendarInterval, type AnyInterval } from "./marketApi";
 
 /** Which symbols can have minute bars at all.
  *
@@ -27,15 +27,21 @@ export function canMinuteBars(symbol: string): boolean {
  * gate. Inventing a per-symbol rule for them here would be a fourth copy of a
  * rule the route already owns.
  *
+ * 自定义档按它的单位落车道：`m` 要分钟源，`D`/`W`/`M` 不需要——这条判据的来源是
+ * `interval_spec` 的折叠基档，不是任何 disabled 标记。
+ *
  * Lives here rather than in ProChart.tsx because the multi-chart page asks the
  * same question, and importing it from a 2000-line page would pull that page
  * into the route's chunk.
  */
-export function intervalAllowed(symbol: string, interval: IntervalKey): boolean {
+export function intervalAllowed(symbol: string, interval: AnyInterval): boolean {
   return isCalendarInterval(interval) || canMinuteBars(symbol);
 }
 
-/** The period to actually use after `symbol` changes (or is restored). */
-export function repairInterval(symbol: string, interval: IntervalKey): IntervalKey {
+/** The period to actually use after `symbol` changes (or is restored).
+ *
+ *  泛型让拿着窄类型 `IntervalKey` 的调用方（四格图、筛选台）零改动：结果仍是
+ *  `T | "1D"`，T 本身是内置八档时它就还是 `IntervalKey`。 */
+export function repairInterval<T extends AnyInterval>(symbol: string, interval: T): T | "1D" {
   return intervalAllowed(symbol, interval) ? interval : "1D";
 }

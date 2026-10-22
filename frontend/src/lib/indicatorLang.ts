@@ -3,8 +3,9 @@ import { compilePine, isPineSource, type PineArtifact, type PineFigure } from ".
 import { toBars, type PineBars } from "./pineTypes";
 import { applyPineDrawings, clearPineDrawings, pineGroupId } from "./pineDrawings";
 import {
-  INTERVAL_MS,
   fetchKline,
+  intervalMsOf,
+  isBuiltinInterval,
   periodToInterval,
   pickLowerInterval,
 } from "./marketApi";
@@ -1100,6 +1101,10 @@ async function feedLowerBars(
   const period = getPeriod.call(chart);
   if (!ticker || !period) return;
   const chartIv = periodToInterval(period);
+  // 自定义周期时 MTF 不挑下层档：`pickLowerInterval` 只在内置八档之间选，
+  // 拿「最近的内置细档」冒充会让脚本画的不是它请求的那条时间轴。走早已存在
+  // 的降级路径——不传 lowerBars，builtin 退化成空数组。
+  if (!isBuiltinInterval(chartIv)) return;
   // A single lowerBars series backs the whole chart, so serve the finest
   // requested resolution (the common case is one lower timeframe per script).
   const lowerIv = pickLowerInterval(chartIv, Math.min(...requestedMsList));
@@ -1108,7 +1113,7 @@ async function feedLowerBars(
   if (bars.length < 2) return;
   const first = bars[0].timestamp ?? 0;
   const last = bars[bars.length - 1].timestamp ?? 0;
-  const lowerMs = INTERVAL_MS[lowerIv];
+  const lowerMs = intervalMsOf(lowerIv);
   // Bound the pull: a coarse chart asking for minutes over years would be a
   // huge request, so beyond the cap we only cover the newest part of the window
   // and older chart bars keep their empty (guarded) sub-bar arrays.

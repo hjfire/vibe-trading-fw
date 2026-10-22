@@ -56,7 +56,7 @@ import type { DataLoader, KLineData, Period, SymbolInfo } from "klinecharts";
 import { MultiChart, blockedAny, intervalsForSymbol, readSession, CELL_COUNT } from "../MultiChart";
 import { LIVE_POLL_MS } from "@/components/charts/ChartCell";
 import { BUILTIN_SUB_NAMES } from "@/lib/subIndicators";
-import { intervalToPeriod } from "@/lib/marketApi";
+import { intervalToPeriod, type IntervalKey } from "@/lib/marketApi";
 import { barTimestamps, coarseBarSpanMs, countWithin, windowOfIndices } from "@/lib/mtfSync";
 
 const SESSION_KEY = "multi-chart.session.v1";
@@ -762,8 +762,6 @@ vi.mock("@/lib/marketApi", async (importOriginal) => {
     },
   };
 });
-
-type IntervalKey = Parameters<typeof intervalToPeriod>[0];
 
 /** The cell showing `interval`, found by the period it pushed onto the chart
  *  rather than by creation order, so a test that reorders the grid still means
