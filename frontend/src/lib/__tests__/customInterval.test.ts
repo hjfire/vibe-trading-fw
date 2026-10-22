@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BUILTIN_SPECS,
   CUSTOM_UNITS,
   draftToSpec,
   isCustomSpec,
@@ -10,7 +11,8 @@ import {
   specPeriodShape,
   validateDraft,
 } from "../customInterval";
-import type { IntervalUnit } from "../customInterval";
+import type { IntervalUnit, SpecUnit } from "../customInterval";
+import { INTERVALS } from "../marketApi";
 
 const AGREED_OK = ["5m", "7m", "120m", "240m", "999m", "2D", "3W", "4M", "12M", "1m", "1D", "1W", "1M"];
 const AGREED_REJECT = ["", " ", "abc", "m", "0m", "-5m", "2.5m", "1d", "120X", "1S", "1tick", "2h", "M", "D"];
@@ -18,7 +20,7 @@ const FRONTEND_ONLY_REJECT = ["1000m", "1441m", "367D", "400W", "500M"];
 const BUILTIN = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"];
 
 /** 把已解析的串还原成对话框持有的草案（`m` 若是 60 的倍数优先报小时）。 */
-const parseSpecToDraft = (p: { unit: "m" | "D" | "W" | "M"; n: number }): { unit: IntervalUnit; n: number } =>
+const parseSpecToDraft = (p: { unit: SpecUnit; n: number }): { unit: IntervalUnit; n: number } =>
   p.unit === "m" && p.n % 60 === 0 && p.n >= 60 ? { unit: "hour", n: p.n / 60 } : { unit: unitOfParsed(p), n: p.n };
 const unitOfParsed = (p: { unit: string }): IntervalUnit =>
   p.unit === "m" ? "minute" : p.unit === "D" ? "day" : p.unit === "W" ? "week" : "month";
@@ -28,7 +30,7 @@ describe("前后端文法对账（Python 侧同名样本表：agent/tests/test_i
     for (const text of AGREED_OK) {
       const parsed = parseSpec(text);
       expect(parsed, text).not.toBeNull();
-      if (!BUILTIN.includes(text)) expect(draftToSpec(parseSpecToDraft(parsed!)), text).toBe(text);
+      expect(draftToSpec(parseSpecToDraft(parsed!)), text).toBe(text);
     }
   });
   it("文法非法的串一律不认，且不抛", () => {
@@ -46,7 +48,7 @@ describe("前后端文法对账（Python 侧同名样本表：agent/tests/test_i
 });
 
 describe("单位表与标签", () => {
-  it("五档，顺序固定，range 家族没有取数面所以不在这里", () => {
+  it("五档，顺序固定，区间档家族没有取数面所以不在这里（2026-10-22 评审改口：原名写了对面的档位名，违全局约束）", () => {
     expect(CUSTOM_UNITS.map((u) => u.unit)).toEqual(["minute", "hour", "day", "week", "month"]);
     expect(CUSTOM_UNITS.map((u) => u.label)).toEqual(["分钟", "小时", "日", "周", "月"]);
   });
@@ -73,6 +75,9 @@ describe("单位表与标签", () => {
     for (const text of ["120m", "7m", "2D", "3W", "12M"]) {
       expect(builtinLabels, text).not.toContain(specLabel(text));
     }
+  });
+  it("内置八档表与 `marketApi.ts` 的 `INTERVALS` 键表同集合：谁漂了这枚就红", () => {
+    expect([...BUILTIN_SPECS].sort()).toEqual(INTERVALS.map((item) => item.key).sort());
   });
 });
 
@@ -111,6 +116,12 @@ describe("加入按钮的 enabled 判据（本仓规则，不是对面的初态�
     for (const bad of [validateDraft({ unit: "minute", n: null }), validateDraft({ unit: "hour", n: 25 })]) {
       if (!bad.ok) expect(bad.reason.length).toBeGreaterThan(0);
     }
+    const builtin = validateDraft({ unit: "minute", n: 5 }); // → `5m`：内置档重复分支的可见原因
+    expect(builtin.ok, "5m").toBe(false);
+    if (!builtin.ok) expect(builtin.reason, "5m").toBe("这一档目录里已经有了（它就是内置档）");
+    const custom = validateDraft({ unit: "minute", n: 7 }); // 反向：非内置档不许给同一句（防「恒拒」假通过）
+    expect(custom.ok, "7m").toBe(true);
+    if (!custom.ok) expect(custom.reason, "7m").not.toBe("这一档目录里已经有了（它就是内置档）");
   });
   it("合法草案给出 spec 串", () => {
     expect(validateDraft({ unit: "hour", n: 2 })).toEqual({ ok: true, spec: "120m" });

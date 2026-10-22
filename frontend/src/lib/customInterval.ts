@@ -23,7 +23,7 @@ export const CUSTOM_UNITS: readonly { unit: IntervalUnit; label: string }[] = [
 
 export type CustomIntervalDraft = { unit: IntervalUnit; n: number | null };
 
-type SpecUnit = "m" | "D" | "W" | "M";
+export type SpecUnit = "m" | "D" | "W" | "M";
 
 const MAX_COUNT = 999;
 const MINUTES_PER_DAY = 1440;
@@ -37,7 +37,7 @@ const WEEK_MS = 7 * DAY_MS;
 const MONTH_MS = 30 * DAY_MS;
 
 /** 只有内置八档的拼写会走表；自定义串的推导全在 `parseSpec`／`draftToSpec`。 */
-const BUILTIN_SPECS = new Set(["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"]);
+export const BUILTIN_SPECS = new Set(["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"]);
 
 const SPEC_RE = /^(\d+)([mDWM])$/;
 
