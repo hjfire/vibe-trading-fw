@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { AnyInterval, IntervalKey } from "@/lib/marketApi";
+import type { AnyInterval } from "@/lib/marketApi";
 import { cn } from "@/lib/utils";
 
 /** One row of the interval directory, fully decided by the page. */
 export type PeriodOption = {
-  key: IntervalKey;
+  key: AnyInterval;
   label: string;
   title: string;
   disabled: boolean;
+  /** 自定义档才有；内置行没有移除按钮。 */
+  onRemove?: () => void;
+  custom?: boolean;
 };
 
 export type PeriodPickerProps = {
@@ -19,7 +22,9 @@ export type PeriodPickerProps = {
   /** Which row carries the selected state. `null` while 分时 is on: 分时 is a
    *  view, not a period, so no directory row is the current one. */
   active: AnyInterval | null;
-  onPick: (key: IntervalKey) => void;
+  onPick: (key: AnyInterval) => void;
+  /** 给了才在目录末尾铺出「添加自定义周期…」那枚入口行；不需要入口的宿主就不传。 */
+  onAddCustom?: () => void;
 };
 
 /**
@@ -28,7 +33,13 @@ export type PeriodPickerProps = {
  * button does, and the directory it opens marks the current interval with
  * `aria-selected` on a row whose name equals the trigger's.
  */
-export function PeriodPicker({ options, triggerLabel, active, onPick }: PeriodPickerProps) {
+export function PeriodPicker({
+  options,
+  triggerLabel,
+  active,
+  onPick,
+  onAddCustom,
+}: PeriodPickerProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -76,32 +87,67 @@ export function PeriodPicker({ options, triggerLabel, active, onPick }: PeriodPi
         {triggerLabel}
       </button>
       {open && (
-        <div
-          id="pro-chart-period-menu"
-          role="listbox"
-          aria-label="周期目录"
-          className="absolute left-0 top-full z-50 mt-1 min-w-full rounded-md border bg-background py-1 shadow-lg"
-        >
-          {options.map((option) => (
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-full rounded-md border bg-background py-1 shadow-lg">
+          {/* 外层这一枚面板 div 只承接定位与外观三件；`id`／`role`／`aria-label` 仍住在下面
+              那枚 listbox div 上——既存针断的是入口的 `aria-controls` 逐字等于 listbox 的 `id`，
+              且 `document.getElementById(id)` 取回的就是那枚 listbox。 */}
+          <div
+            id="pro-chart-period-menu"
+            role="listbox"
+            aria-label="周期目录"
+          >
+            {options.map((option) => (
+              <div key={option.key} role="none" className="flex items-center">
+                {/* 行容器夹在 listbox 与 option 之间，按 ARIA 不是 listbox 的合法被拥有元素，
+                    所以写 `role="none"`，让 option 在无障碍树里仍直接归 listbox 所有。 */}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={option.key === active}
+                  disabled={option.disabled}
+                  title={option.title}
+                  onClick={() => {
+                    setOpen(false);
+                    onPick(option.key);
+                  }}
+                  className={cn(
+                    "block whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+                    option.key === active && "bg-muted font-medium",
+                  )}
+                >
+                  {option.label}
+                </button>
+                {/* 移除按钮与选档按钮并排、不嵌进 option：button 里不能再放一枚 button，且既存针
+                    断的是 option 的 textContent 逐字等于档位名。它自带 `button` 角色、留在
+                    `role="listbox"` 之下是本仓**自家的裁定，不是对面证据**——它没有别的合法位置。
+                    两处 stopPropagation 已按第 4 轮预检撤回：兄弟之间不冒泡，而 `document` 上那枚
+                    外点监听只看 `wrapRef.contains(target)`，移除按钮就住在 `wrapRef` 里 ⇒ 按移除
+                    不选中那档，交给「按移除不会选中那一档」那枚针钉，不靠不可达的守卫。 */}
+                {option.custom && (
+                  <button
+                    type="button"
+                    aria-label={`移除 ${option.label}`}
+                    title="从周期目录里移除这一档"
+                    onClick={() => option.onRemove?.()}
+                    className="px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    移除
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* 裁定：入口行不是 option，它是一枚普通 `button`——第③片那 21 枚针里的
+              `getAllByRole("option")` 计数因此不因入口行而漂移。 */}
+          {onAddCustom && (
             <button
-              key={option.key}
               type="button"
-              role="option"
-              aria-selected={option.key === active}
-              disabled={option.disabled}
-              title={option.title}
-              onClick={() => {
-                setOpen(false);
-                onPick(option.key);
-              }}
-              className={cn(
-                "block whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
-                option.key === active && "bg-muted font-medium",
-              )}
+              onClick={onAddCustom}
+              className="block w-full whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted"
             >
-              {option.label}
+              添加自定义周期…
             </button>
-          ))}
+          )}
         </div>
       )}
     </div>

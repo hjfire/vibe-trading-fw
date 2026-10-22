@@ -233,3 +233,77 @@ describe("PeriodPicker 入口自身的亮起与监听撤销", () => {
     expect(removeEventListener).toHaveBeenCalledWith("keydown", expect.any(Function));
   });
 });
+
+describe("自定义档行与添加入口", () => {
+  /** 混进目录的自定义档：`key` 就是一枚普通规格串，`custom` 与 `onRemove` 只有自定义行带。 */
+  const customRow = (label: string, key: string, onRemove?: () => void): PeriodOption => ({
+    key,
+    label,
+    title: `自定义档 ${label} 的说明`,
+    disabled: false,
+    onRemove,
+    custom: true,
+  });
+
+  /** 一内置＋一自定义：两枚按钮并排住在同一枚行容器里，可达名互不含混。 */
+  const builtInPlusCustom = (onRemove?: () => void): PeriodOption[] => [
+    { key: "1D", label: "日线", title: "档位 日线的说明", disabled: false },
+    customRow("2小时", "120m", onRemove),
+  ];
+
+  it("带 custom 的行各有一枚移除按钮，内置行一枚也没有", () => {
+    renderPicker({
+      options: [
+        ...OPTIONS,
+        customRow("2小时", "120m", vi.fn()),
+        customRow("3小时", "180m", vi.fn()),
+      ],
+    });
+    fireEvent.click(trigger());
+    expect(screen.getAllByRole("button", { name: /^移除/ })).toHaveLength(2);
+    // 内置行那枚「移除 日线」谁都造不出来：可达名里带上档位名，才排得掉「把移除按钮
+    // 嵌进 option」那形状（既存 :107／:115 断的是 option 的 textContent 逐字等于档位名）。
+    expect(screen.queryByRole("button", { name: /^移除 日线$/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "移除 2小时" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除 3小时" })).toBeTruthy();
+  });
+
+  it("按移除只移档，不会选中那一档", () => {
+    const onRemove = vi.fn();
+    const onPick = renderPicker({ options: builtInPlusCustom(onRemove) });
+    fireEvent.click(trigger());
+    // 自定义行那枚移除按钮：按可达名点名，不往 option 里找后代。
+    fireEvent.click(screen.getByRole("button", { name: /^移除 / }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("目录行仍是 role=option 一视同仁，添加入口不是", () => {
+    renderPicker({
+      options: [...OPTIONS, customRow("2小时", "120m", vi.fn())],
+      onAddCustom: vi.fn(),
+    });
+    fireEvent.click(trigger());
+    const rows = screen.getAllByRole("option");
+    expect(rows).toHaveLength(9);
+    for (const row of rows) {
+      expect(row).toHaveAttribute("aria-selected");
+    }
+    expect(screen.queryByRole("option", { name: "添加自定义周期…" })).toBeNull();
+  });
+
+  it("给了 onAddCustom 就有入口行，按它只回调 onAddCustom", () => {
+    const onAddCustom = vi.fn();
+    const onPick = renderPicker({ onAddCustom });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "添加自定义周期…" }));
+    expect(onAddCustom).toHaveBeenCalledTimes(1);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("没给 onAddCustom 就没有入口行", () => {
+    renderPicker();
+    fireEvent.click(trigger());
+    expect(screen.queryByRole("button", { name: "添加自定义周期…" })).toBeNull();
+  });
+});
