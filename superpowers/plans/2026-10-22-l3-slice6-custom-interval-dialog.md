@@ -39,7 +39,7 @@
   - `const CUSTOM_UNITS: readonly { unit: IntervalUnit; label: string }[]`（顺序＝分钟／小时／日／周／月）
   - `type CustomIntervalDraft = { unit: IntervalUnit; n: number | null }`
   - `function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: string } | { ok: false; reason: string }`
-  - `function draftToSpec(draft: Exclude<CustomIntervalDraft, { n: null }>): string`
+  - `function draftToSpec(draft: CustomIntervalDraft & { n: number }): string`（2026-10-22 预检改口：原写 `Exclude<CustomIntervalDraft, { n: null }>`，`CustomIntervalDraft` 是单一对象类型不是联合，`Exclude` 分配后原样返回、`null` 剥不掉，strict 下实现体编不过）
   - `function parseSpec(text: string): { unit: "m" | "D" | "W" | "M"; n: number } | null`
   - `function isCustomSpec(text: string): boolean`（文法合法**且**不是内置八档之一）
   - `function specLabel(text: string): string | null`
@@ -149,7 +149,7 @@ const unitOfParsed = (p: { unit: string }): "minute" | "hour" | "day" | "week" |
 
 ```ts
 describe("单位表与标签", () => {
-  it("五档，顺序固定，range 家族没有取数面所以不在这里", () => {
+  it("五档，顺序固定，区间档家族没有取数面所以不在这里（2026-10-22 评审改口：原名写了对面的档位名，违全局约束）", () => {
     expect(CUSTOM_UNITS.map((u) => u.unit)).toEqual(["minute", "hour", "day", "week", "month"]);
     expect(CUSTOM_UNITS.map((u) => u.label)).toEqual(["分钟", "小时", "日", "周", "月"]);
   });
