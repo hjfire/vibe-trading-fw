@@ -2602,8 +2602,8 @@ export function ProChart() {
       }),
     [symbol],
   );
-  // `?? interval` really does get hit now: a custom collapsed spec is not in
-  // INTERVALS, so the trigger label falls back to the spec string itself.
+  // `?? interval` is a real net, not a typing trick: INTERVALS carries only the
+  // eight built-in keys, so a custom spec string would show the raw spec.
   const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;
   const periodActiveKey: AnyInterval | null = timeShare ? null : interval;
 

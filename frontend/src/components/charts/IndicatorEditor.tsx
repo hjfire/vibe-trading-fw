@@ -37,7 +37,7 @@ import {
  * backend alert kernel. Everything runs client-side against the mounted
  * KLineChart instance; scripts persist in localStorage.
  *
- * The props contract is unchanged from ⑩ so ProChart keeps working verbatim;
+ * The props contract is ⑩'s shape, widened only in type by ⑥ on `interval`;
  * `seed` / `symbols` / `onPickSymbol` are the ⑪ additions and `symbol` /
  * `interval` / `adjust` the alert bridge's, all optional.
  */
