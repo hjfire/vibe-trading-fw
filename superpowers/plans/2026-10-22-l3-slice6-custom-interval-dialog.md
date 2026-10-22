@@ -700,7 +700,7 @@ git commit -s -m "feat(l3-slice6): 自定义周期对话框（role=dialog ＋ �
 > - **（2026-10-22 4a 首席 BLOCKED 换来的两处补全，控制席已盘面核实）**
 >   ①**第 10 枚消费点在告警支路上**：`viewPeriod` 加宽后 `ProChart.tsx:3402` 那行 `interval={viewPeriod({ interval, timeShare })}` 喂的是 `IndicatorEditor`，而它的 props 写着 `interval?: IntervalKey`（`IndicatorEditor.tsx:61`，import 在 `:15`），再往下 `AlertsTab.tsx:37` 同样窄。⇒ 4a 要把这两枚 props 也加宽到 `AnyInterval`，并把各自那行 `import type { IntervalKey }` 原地换成 `AnyInterval`（`IntervalKey` 在这两份文件里再无别处使用，所以是换不是加，仍不开新行）。运行时面本来就有闸：`AlertsTab.tsx:156` 拿 `BACKEND_INTERVALS` 白名单算 `intervalOk`，`:361` 在 `!intervalOk` 时给可见提示，`translatePineAlerts` 那一侧的 `TranslateOptions.interval` 早就是 `string`——**这条支路对「档位是不是内置」的判据本来就取自白名单而不是取自类型**，所以加宽不带来任何新行为。`ScreenerTab.tsx:50`／`screener.ts`／`ChartCell.tsx:108` 那三处窄类型**不动**：筛选台与四格图走的是页面自带的窄链（Task 2 已裁过），本片的自定义档不进那两个入口。
 >   ②**改类型必须顺着注释一起改**：`ProChart.tsx:2605-2606` 那两行注释写着「every IntervalKey is in INTERVALS, so the find always answers」，而 `:517` 加宽后这句话对新状态**不再成立**（自定义串不在 `INTERVALS` 里，`?? interval` 那半从「类型必需」变成「真的会走到」）。⇒ 同笔把这两行注释按现状改口，行数守恒（两行还两行）。
->   ②′**（2026-10-23 4a 评审席 I-1，控制席 `sed -n`／`grep -n` 现读核实）上面那句「变成「真的会走到」」写下时即为假**：`c873dc7a` 落完时 `interval` 的写手还全在 `INTERVALS` 门内——`:517` 来自 `readSession`（`:301` 逐字仍是 `INTERVALS.some((i) => i.key === interval)`），`setInterval` 全文只有一枚调用（`:1906`，在 `setView` 体内），而 `setView` 只有三处调用（`:1940` `viewForSymbol`、`:1966` `pickInterval`、`:1975` `pickTimeShare`），`pickInterval` 的唯一入口是 `:2833` `onPick={pickInterval}` 而 `PeriodPicker.tsx:22` 的 `onPick` 那行逐字还是 `(key: IntervalKey) => void`，`periodOptions`（`:2585`）只 `INTERVALS.map` ⇒ 那半句此刻执行不到。⇒ 已落地的注释写成条件句（`a custom spec string **would** show the raw spec`），不用「now」；Task 5 让自定义串真能进来时，那两行注释还要按当时的现状再改口一次（同笔、两行还两行）。
+>   ②′**（2026-10-23 4a 评审席 I-1，控制席 `sed -n`／`grep -n` 现读核实）上面那句「变成「真的会走到」」写下时即为假**：`c873dc7a` 落完时 `interval` 的写手还全在 `INTERVALS` 门内——`:517` 来自 `readSession`（`:301` 逐字仍是 `INTERVALS.some((i) => i.key === interval)`），`setInterval` 全文只有一枚调用（`:1906`，在 `setView` 体内），而 `setView` 只有三处调用（`:1940` `viewForSymbol`、`:1966` `pickInterval`、`:1975` `pickTimeShare`），`pickInterval` 的唯一入口是 `:2833` `onPick={pickInterval}` 而 `PeriodPicker.tsx:22` 的 `onPick` 那行逐字还是 `(key: IntervalKey) => void`，`periodOptions`（`:2585`）只 `INTERVALS.map` ⇒ 那半句此刻执行不到。⇒ 已落地的注释写成条件句（`a custom spec string would show the raw spec`），不用「now」；Task 5 让自定义串真能进来时，那两行注释还要按当时的现状再改口一次（同笔、两行还两行）。
 >
 > **P-2（针的一半天生恒真）**：Step 1 里「内置行没有移除按钮」原写 `within(getByRole("option", { name: "日线" })).queryByRole("button")` 为 null——在选定的行形状下它**恒为 null**：移除按钮是 option 的**兄弟**不是后代，内置行与自定义行都读得到 null，这半枚谁都拒不掉。行形状也不能反过来定：既存 `PeriodPicker.test.tsx:107`／`:115` 断的是 `row.textContent` 逐字等于档位名，把移除按钮嵌进 option 会同时破那两枚针、还写出非法 HTML（button 嵌 button）。⇒ 改判成按可达名点名：`queryByRole("button", { name: /^移除 日线$/ })` 为 null，且自定义行那枚 `getByRole("button", { name: /^移除 / })` 非 null——顺带钉住 `aria-label={`移除 ${option.label}`}` 的拼法。
 >
@@ -820,6 +820,16 @@ git add -- frontend/src/pages/ProChart.tsx frontend/src/pages/__tests__/ProChart
 git status --porcelain && git commit -s -m "feat(l3-slice6): ProChart 接线——自定义档进目录、会话持久化、分时互斥"
 ```
 
+- [ ] **Step 4：坐标重钉（这笔在 `ProChart.tsx` 里插了行，这步不许跳）**
+
+Task 5 不是行中性任务：新增状态、增删处理函数、对话框渲染都要插行 ⇒ `ProChart.tsx` 的行数必变。按号引用的 `ProChart.tsx:<N>` 坐标会整片漂，而三层咬合那把「实现坐标」门**只判行号在文件行数范围内、不判那一行写的是什么**⇒ 门全绿时坐标可以指着无关代码。写作席现读：`grep -rno "ProChart\.tsx:[0-9]\+" forensics/`＝`forensics/gap-matrix.md` 32 枚、`forensics/spec/chart-interaction.md` 4 枚；`frontend/src` 与 `agent/src` 的码内注释另有几十枚（`ProChartHeikinAshi.test.tsx`／`ProChartPanels.test.tsx`／`lib/vpvrChart.ts`／`lib/heikinAshiChart.ts` 等）——分母一律自己当场取。
+
+逐枚姿势：`sed -n '<N>p'` 读出那一行，与引用它的那句话比对；对不上就按**内容**重钉新号，不许拿「整体前移 k 行」平移（插入点前后的号不同动）。判据是「逐枚读出原文与引用句一致」，不是「门绿了」。
+
+- **同笔必改的一处逐字引用（2026-10-23 复评席的新 Minor，控制席盘面核实）**：`forensics/gap-matrix.md` 第 91 行（TV-CI-02）的口径句逐字写着「页面把当前档位那一项的中文 label 原样喂进来：`frontend/src/pages/ProChart.tsx:2607` 逐字 `const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;`，于 :2831 以 `triggerLabel={periodTriggerLabel}` 传入」。Step 2 第 4 项下那条 2026-10-23 补条目把那行改成从 `periodOptions` 取，而 `:2831` 这枚号也随插行漂 ⇒ 本格的新号与新逐字串必须与代码同笔改口；否则矩阵对外说的话与树不符，而两把门谁都看不见。
+- 两门：`python tools/forensics_audit.py`、`python -m pytest tools/test_forensics_spec.py -q`；报告里把 `grep -rn "ProChart\.tsx:[0-9]" forensics/ frontend/src agent/src` 的命中逐枚列成「号→重钉后的号→引用句摘」的清单（枚数当场数）。
+- 文档面单独一笔盖章提交，pathspec 只列被改的 `forensics/**` 与码内注释文件；码面那笔（Step 3）已经先行，别让两面的改动混在同一笔里。
+
 ---
 
 ### Task 6：红线针（E 组）＋变异自证十一枚＋六道门
@@ -828,6 +838,7 @@ git status --porcelain && git commit -s -m "feat(l3-slice6): ProChart 接线—�
 - Modify: `frontend/src/components/charts/__tests__/PeriodPicker.test.tsx`（E 组两枚）
 - Create: `frontend/src/pages/__tests__/ProChartCustomIntervalRedline.test.tsx`（E 组页面半枚就住这里，与 Task 5 的 `ProChartCustomInterval.test.tsx` 分开：前者钉「disabled 只由 `intervalAllowed` 决定」这类形状，后者钉功能闭环）
 - 无生产码改动（除非变异自证揪出真缺陷——那就改，并在报告里单列）
+- **（2026-10-23 从 Task 4a 评审席登记来的两枚文案候选，复评时逐条裁定）**①`AlertsTab.tsx` 头上那句「rules on 1W/1M cannot be polled by the backend」只举了内置两例，而自定义折叠档同样被 `BACKEND_INTERVALS` 白名单拒在服务端之外（判据在 `AlertsTab.tsx` 的 `intervalOk` 那一行）——那句话不是假的，但对外举的例子不全。②`frontend/src/lib/pineAlertRules.ts` 里写在 `interval: string` 头上的那句「in `marketApi`'s `IntervalKey` vocabulary」，自定义档真能走到它（Task 5 之后）就不准了。两枚都是**注释面**，与本节上一条「无生产码改动」不冲突（注释不是码）；改则行数守恒，不改要在报告里写明为什么不改。两枚的 `file:line` 一律当场 `grep -n` 现读，别引用这里写的号。
 
 - [ ] **Step 1：E 组针**
 
