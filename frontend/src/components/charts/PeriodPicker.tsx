@@ -111,7 +111,7 @@ export function PeriodPicker({
                     onPick(option.key);
                   }}
                   className={cn(
-                    "block whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+                    "block grow whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
                     option.key === active && "bg-muted font-medium",
                   )}
                 >

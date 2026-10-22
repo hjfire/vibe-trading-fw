@@ -307,3 +307,52 @@ describe("自定义档行与添加入口", () => {
     expect(screen.queryByRole("button", { name: "添加自定义周期…" })).toBeNull();
   });
 });
+
+describe("目录的两层容器与「移除不关目录」（修复轮 1 补的形状针）", () => {
+  it("档位行的父级是行容器且带 role=none，不是那枚 listbox", () => {
+    // P-5：行容器那枚 div 夹在 listbox 与 option 之间，按 ARIA 不是 listbox 的合法
+    // 被拥有元素，所以要 `role="none"`，让 option 在无障碍树里仍直接归 listbox 所有。
+    // 这根针盯的是容器那一层本身：摘掉 `role="none"`（或把行容器拆掉、让行直接归
+    // listbox）都会把它打红——既存那 21 枚针一枚都不读父级的 role。
+    renderPicker();
+    fireEvent.click(trigger());
+    expect(screen.getByRole("option", { name: "周线" }).parentElement).toHaveAttribute(
+      "role",
+      "none",
+    );
+  });
+
+  it("添加入口那枚按钮的父级不是那枚 listbox", () => {
+    // P-3：入口行住在 listbox 之外、外层面板之内。它带 `button` 角色，一旦挪进
+    // `role="listbox"` 就成了 listbox 的非法被拥有元素——正是本表 P-5 用来判行容器
+    // 的那条理由，入口行不能例外。既存针只断过「入口不是 option」，没断过它住哪儿。
+    renderPicker({ onAddCustom: vi.fn() });
+    fireEvent.click(trigger());
+    const listbox = screen.getByRole("listbox");
+    const entry = screen.getByRole("button", { name: "添加自定义周期…" });
+    expect(entry.parentElement).not.toBeNull();
+    expect(entry.parentElement).not.toBe(listbox);
+  });
+
+  it("按移除之后目录保持开着：listbox 仍在", () => {
+    // P-4 的后半句。两处 `stopPropagation` 撤回的全部理由就是「按移除既不选中也不关
+    // 目录」，而前半句已有针（上面那枚「按移除只移档」），后半句此前只有注释在守。
+    const onRemove = vi.fn();
+    const options: PeriodOption[] = [
+      { key: "1D", label: "日线", title: "档位 日线的说明", disabled: false },
+      {
+        key: "120m",
+        label: "2小时",
+        title: "自定义档 2小时 的说明",
+        disabled: false,
+        onRemove,
+        custom: true,
+      },
+    ];
+    renderPicker({ options });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "移除 2小时" }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("listbox")).toBeTruthy();
+  });
+});
