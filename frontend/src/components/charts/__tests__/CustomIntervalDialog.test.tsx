@@ -123,14 +123,14 @@ describe("CustomIntervalDialog 的加入判据（C-5／C-8／C-9／重复档）"
     typeNumber("2");
     pickUnit("分钟", "日");
     expect(addButton().disabled).toBe(true);
-    expect(screen.getByText(/已经有了/)).toBeTruthy();
+    expect(screen.getByText(/已添加的自定义档/)).toBeTruthy();
   });
 
-  it("数值框的 min／max 与 validateDraft 那把尺同值（max 是按单位抄的提示，抄了就得有针）", () => {
-    // 跨度与手打数的尺都住在 `customInterval.ts`，模块没有把它们端出来，所以输入框的
-    // `max` 只能按单位给一份提示值。提示值不是判据（判据是加入按钮），但它一旦与那把
-    // 尺漂开，用户就会被输入框的上下箭头误导到越界的方向——所以这里逐单位钉两侧：
-    // `max` 本身必须在界内，`max + 1` 必须被拒。
+  it("数值框的上界与 validateDraft 那把跨度尺同界（`unitLimits` 改了或组件自己漂，这枚先红）", () => {
+    // 上界现在由 `customInterval.ts` 的 `unitLimits` 端出来，组件不留字面量；提示值本身
+    // 不是判据（判据是加入按钮那把尺）。这枚针钉的是**跨源**同界：组件送进 DOM 的那枚
+    // `input.max` 与 `validateDraft` 这把尺必须同界，所以逐单位判两侧——`max` 本身在界内、
+    // `max + 1` 被拒。改了尺没改 `unitLimits`（或反过来）时，这两枚里必有一枚红。
     renderDialog();
     let previousLabel = "分钟";
     for (const { unit, label } of CUSTOM_UNITS) {

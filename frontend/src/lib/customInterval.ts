@@ -106,6 +106,16 @@ export function validateDraft(draft: CustomIntervalDraft): { ok: true; spec: str
   return { ok: true, spec };
 }
 
+/** 数值框的 `min`／`max` **提示值**，按单位给。它不是判据（判据只有 `validateDraft`
+ *  那一处），但它必须由 `MAX_COUNT`／`MINUTES_PER_DAY`／`MAX_CALENDAR_MULTIPLE` 算出来——
+ *  spec §4 说「`min`/`max` 与边界同源，不重复写第二遍」，字面量抄进组件就是第二遍。
+ *  同界的可观察形状由对话框那枚针钉：`validateDraft({unit, n: max})` 真、`max + 1` 假。 */
+export function unitLimits(unit: IntervalUnit): { min: number; max: number } {
+  if (unit === "hour") return { min: 1, max: Math.min(MAX_COUNT, Math.floor(MINUTES_PER_DAY / 60)) };
+  if (unit === "minute") return { min: 1, max: Math.min(MAX_COUNT, MINUTES_PER_DAY) };
+  return { min: 1, max: Math.min(MAX_COUNT, MAX_CALENDAR_MULTIPLE) };
+}
+
 export function specLabel(text: string): string | null {
   const parsed = parseSpec(text);
   if (!parsed) return null;

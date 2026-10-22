@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
-import { CUSTOM_UNITS, specLabel, validateDraft } from "@/lib/customInterval";
-import type { IntervalUnit } from "@/lib/customInterval";
+import { CUSTOM_UNITS, specLabel, validateDraft, unitLimits } from "@/lib/customInterval";
 import { cn } from "@/lib/utils";
 
 export type CustomIntervalDialogProps = {
@@ -10,22 +9,6 @@ export type CustomIntervalDialogProps = {
   existing: readonly string[];
   onCancel: () => void;
   onAdd: (spec: string) => void;
-};
-
-/**
- * 数值框 `max` 的**提示值**，按单位给一份。它不是判据——判据只有 `validateDraft`
- * 那一处（跨度尺住在 `customInterval.ts` 的 `durationOk`，那三枚数没有对外端出来，
- * 组件拿不到），这里只是让输入框的上下箭头不往明显越界的方向走。
- *
- * 抄了就有可能漂，所以针面把它钉在可观察的 DOM 属性上逐单位复算两侧
- * （`max` 界内、`max + 1` 越界，见本文件的测试）：尺一动而这里没跟上，那枚针先红。
- */
-const INPUT_MAX: Record<IntervalUnit, number> = {
-  minute: 999,
-  hour: 24,
-  day: 366,
-  week: 366,
-  month: 366,
 };
 
 /** 「这一档已在目录里」的两种来源各给一句：内置档那句由 `validateDraft` 给（它就是
@@ -44,10 +27,10 @@ const NUMBER_INPUT_ID = "custom-interval-number";
  * 那侧没有任何读数证明对面锁了焦点，不发明凭据里没有的行为。单位按钮的可达名只念
  * 一次单位标签（对面那枚展开态把标签念了两遍，那是可达性反模式，不复刻）。
  *
- * 签名不带返回类型标注（与 `PeriodPicker.tsx` 同形，靠 TS 推断）：简报给的
- * `JSX.Element | null` 在本仓的 `@types/react` 19 下认不下全局 `JSX` 命名空间，
- * `tsc -b` 报 `error TS2503: Cannot find namespace 'JSX'`；而且这枚对话框没有
- * 「渲染 null」那一态——开合由调用方挂载决定，所以 `| null` 也没有对象可返回。
+ * 签名不带返回类型标注：`@types/react` 19 的 `JSX` 命名空间住在 React 模块**内**、没有
+ * 全局声明，所以简报给的 `JSX.Element | null` 认不下——`tsc -b` 报 `error TS2503`，要写
+ * 只能写成 `React.JSX.Element | null`；而本组件没有「渲染 null」那一态（开合由调用方挂载
+ * 决定），故那枚标注整体不取、也不补 `React.` 前缀，与 `PeriodPicker.tsx` 同形靠推断。
  */
 export function CustomIntervalDialog({ existing, onCancel, onAdd }: CustomIntervalDialogProps) {
   // 状态存的是弹层里那一行本身，所以按钮上的标签与传给 `validateDraft` 的单位出自同一次
@@ -150,8 +133,8 @@ export function CustomIntervalDialog({ existing, onCancel, onAdd }: CustomInterv
         <input
           id={NUMBER_INPUT_ID}
           type="number"
-          min={1}
-          max={INPUT_MAX[selected.unit]}
+          min={unitLimits(selected.unit).min}
+          max={unitLimits(selected.unit).max}
           step={1}
           value={n === null ? "" : String(n)}
           onChange={(event) => {
@@ -188,7 +171,7 @@ export function CustomIntervalDialog({ existing, onCancel, onAdd }: CustomInterv
           onClick={() => {
             // 再算一次，不用渲染时那个结论：按钮可点与真正发出之间不许有任何陈旧。
             const current = validateDraft({ unit: selected.unit, n });
-            onAdd(current.ok && !existing.includes(current.spec) ? current.spec : "");
+            onAdd(current.ok ? current.spec : "");
           }}
           className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
