@@ -839,6 +839,7 @@ Task 5 不是行中性任务：新增状态、增删处理函数、对话框渲�
   - 句子不带日期、对外说的是**当下形状** ⇒ 裸号按**内容**重钉，一句话里不许并存两代号。控制席现读的那枚样板（号要自己重取）：「形状说全：…浮层那枚 `id`（`PeriodPicker.tsx:95`）只随 :78 的 `{open && (` 在开态进 DOM」——前半已随 4b 钉到 155 行时代，后半那枚裸号还留在 109 行时代。
   - 分母自己当场取（控制席 2026-10-23 在第 91／92 两行数到 15 枚裸号，这个数只是线索，不是证据），报告里逐枚列「裸号 → 引用句摘 → 属不属于带日期读数块 → 留／改 → 改后号与 `sed -n '<新号>p'` 原文」。
 - **Step 4 的分母随「本片截至派席时真正改过行数的文件」取全**，不许照抄上面写好的任何一张清单：`grep -rno "ProChart\.tsx:[0-9]\+" forensics/ frontend/src agent/src`、`grep -rno "PeriodPicker\.tsx:[0-9]\+" forensics/ frontend/src agent/src` 与裸号那条式子都要现跑——若 Task 4b 因评审返工再次改动 `PeriodPicker.tsx` 行数，它那批号也会再漂一次，本步是唯一的收口处。
+- **矩阵第 100 行（TV-CI-11）那句「未找到」由本笔转为对外假话，同笔带日期登记**（2026-10-23 控制席裁定，源自 Task 4b 报告 §9 顾虑 3，控制席已 `sed -n '100p'` 现读）：那格里逐字写着「未找到：目录行上『已在列表里／移出』那枚第三格……⇒ 本仓目录没有收藏与移出概念」，而 `ca78a320` 起 `PeriodPicker.tsx` 已有「移除」按钮，本任务又把 `onRemove` 接到页面——那句话从对外读法上不再为真。裁定：**判态 `部分` 不动、`L0 依据` 不断**（收藏格子确实仍没有，宿主持久化仍没有，第 7 片 Step 3 才动判态），但要在**同一物理行内**追加一句带日期的登记，写明本席现读的三件：那枚按钮的 `aria-label` 拼法与其行号、`onRemove` 消费点的行号、复跑命令的新命中数（`grep -rn --include=*.tsx -e "Remove" -e 移出 -e 移除 frontend/src/components/charts/PeriodPicker.tsx` 现跑）。行中性：只在行内追加，矩阵前后 `wc -l` 一字不差（控制席 2026-10-23 现读 125 行，席上自己重取，别拿这个数当证据）。
 - 两门：`python tools/forensics_audit.py`、`python -m pytest tools/test_forensics_spec.py -q`；报告里把 `grep -rn "ProChart\.tsx:[0-9]" forensics/ frontend/src agent/src` 的命中逐枚列成「号→重钉后的号→引用句摘」的清单（枚数当场数）。
 - 文档面单独一笔盖章提交，pathspec 只列被改的 `forensics/**` 与码内注释文件；码面那笔（Step 3）已经先行，别让两面的改动混在同一笔里。
 
