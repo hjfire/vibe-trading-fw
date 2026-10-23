@@ -153,7 +153,7 @@ describe("readSession preserves the interval the symbol can actually serve", () 
 
   it("keeps 5m for an A-share", () => {
     seedSession("600519.SH", "5m");
-    expect(readSession()).toEqual({ symbol: "600519.SH", interval: "5m", timeShare: false });
+    expect(readSession()).toEqual({ symbol: "600519.SH", interval: "5m", timeShare: false, customIntervals: [] }); // 整对象比对：第⑥片起会话多一枚目录键
   });
 
   it("keeps 5m for HK, which the old A-share-only rule forced onto 1D", () => {
@@ -194,12 +194,12 @@ describe("readSession preserves the interval the symbol can actually serve", () 
   // drop them onto 1-minute candles.
   it("restores 分时, and keeps the K-line choice underneath it", () => {
     localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol: "700.HK", interval: "15m", timeShare: true }));
-    expect(readSession()).toEqual({ symbol: "700.HK", interval: "15m", timeShare: true });
+    expect(readSession()).toEqual({ symbol: "700.HK", interval: "15m", timeShare: true, customIntervals: [] });
   });
 
   it("drops 分时 for a symbol with no minute source, same as the button does", () => {
     localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol: "BTC-USDT", interval: "1D", timeShare: true }));
-    expect(readSession()).toEqual({ symbol: "BTC-USDT", interval: "1D", timeShare: false });
+    expect(readSession()).toEqual({ symbol: "BTC-USDT", interval: "1D", timeShare: false, customIntervals: [] });
   });
 
   it("treats anything but a true flag as off", () => {

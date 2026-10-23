@@ -137,12 +137,12 @@ export function PeriodPicker({
               </div>
             ))}
           </div>
-          {/* 裁定：入口行不是 option，它是一枚普通 `button`——第③片那 21 枚针里的
-              `getAllByRole("option")` 计数因此不因入口行而漂移。 */}
+          {/* 裁定两则：入口行不是 option，是一枚普通 `button`（`getAllByRole("option")` 的计数因此不因它漂）。
+              且入口是「换一层浮层」：关目录、焦点压回入口、再交出去——移除那枚按钮相反，是就地改清单，不关任何东西。 */}
           {onAddCustom && (
             <button
               type="button"
-              onClick={onAddCustom}
+              onClick={() => { setOpen(false); triggerRef.current?.focus(); onAddCustom(); }}
               className="block w-full whitespace-nowrap px-3 py-1 text-left text-xs hover:bg-muted"
             >
               添加自定义周期…

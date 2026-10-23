@@ -17,7 +17,9 @@ import {
   DEFAULT_ADJUST,
   fetchKline,
   intervalToPeriod,
+  isBuiltinInterval,
   isCalendarInterval,
+  normalizeInterval,
   periodToInterval,
   INTERVALS,
   type AnyInterval, type IntervalKey,
@@ -40,6 +42,8 @@ import {
 } from "@/lib/barReplay";
 import { ReplayBar } from "@/components/charts/ReplayBar";
 import { PeriodPicker, type PeriodOption } from "@/components/charts/PeriodPicker";
+import { CustomIntervalDialog } from "@/components/charts/CustomIntervalDialog";
+import { isCustomSpec, specLabel } from "@/lib/customInterval";
 import {
   AVG_PRICE_NAME,
   DEFAULT_CANDLE_BAR_SPACE,
@@ -269,6 +273,12 @@ export function viewPeriod(view: ChartView): AnyInterval {
  * because the minute-interval rule and the 分时 rule are the same rule — 分时 is
  * 1-minute data wearing a line — and entry 46 in 项目档案.md is about what
  * happens when that gets spelled twice.
+ *
+ * The second half of the sentence is new with the custom catalogue: a folded
+ * spec (`120m`, `2W`) is *also* a period, and the server refuses it together
+ * with `session=latest`. 分时 therefore yields to any non-builtin interval, and
+ * it yields *here* rather than on the button, because the two entry points above
+ * have no button in front of them.
  */
 export function viewForSymbol(
   symbol: string,
@@ -277,31 +287,59 @@ export function viewForSymbol(
 ): ChartView {
   return {
     interval: repairInterval(symbol, interval),
-    timeShare: timeShare && intervalAllowed(symbol, TIME_SHARE_INTERVAL),
+    timeShare: timeShare && intervalAllowed(symbol, TIME_SHARE_INTERVAL) && isBuiltinInterval(interval),
   };
 }
 
-/** Last viewed symbol, interval and view (local custom ⑪→㉖): the chart should
- * reopen where it was left. A stale triple is repaired, not trusted — minute
- * bars do not exist for every instrument, and 分时 is made of minute bars. */
-export function readSession(): ChartView & { symbol: string } {
-  const fallback = { symbol: DEFAULT_SYMBOL, interval: "1D" as IntervalKey, timeShare: false };
+/** Last viewed symbol, interval, view and custom catalogue (local custom ⑪→㉖,
+ *  plus the 第⑥片 directory): the chart should reopen where it was left. A stale
+ *  record is repaired, not trusted — minute bars do not exist for every
+ *  instrument, 分时 is made of minute bars, and a hand-edited catalogue can only
+ *  ever hold strings the gate itself would accept. */
+export function readSession(): ChartView & { symbol: string; customIntervals: string[] } {
+  const fallback = {
+    symbol: DEFAULT_SYMBOL,
+    interval: "1D" as IntervalKey,
+    timeShare: false,
+    customIntervals: [] as string[],
+  };
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return fallback;
     const obj: unknown = JSON.parse(raw);
     if (!obj || typeof obj !== "object") return fallback;
-    const { symbol, interval, timeShare } = obj as {
+    const { symbol, interval, timeShare, customIntervals } = obj as {
       symbol?: unknown;
       interval?: unknown;
       timeShare?: unknown;
+      customIntervals?: unknown;
     };
     const next =
       typeof symbol === "string" && symbol.trim() ? symbol.trim().toUpperCase() : DEFAULT_SYMBOL;
-    const span = INTERVALS.some((i) => i.key === interval) ? (interval as IntervalKey) : "1D";
+    // The old clamp was `INTERVALS.some(...) ? interval : "1D"`, which cannot
+    // tell a folded spec from garbage and would keep the catalogue unreachable.
+    // `normalizeInterval` asks the real question: built-in eight, or a spec the
+    // gate accepts.
+    const span = normalizeInterval(interval);
+    // Built-in spellings in that list are dirty data (`isCustomSpec` refuses
+    // them), not a second row with the same name. Duplicates are dropped inline
+    // rather than through a shared `unique` helper — the add path below owns the
+    // same rule, and a second copy of it would be a second truth.
+    const custom = Array.from(
+      new Set(
+        Array.isArray(customIntervals)
+          ? customIntervals.filter((key): key is string => typeof key === "string" && isCustomSpec(key))
+          : [],
+      ),
+    );
     // Strict `=== true`, so a corrupted or hand-edited bucket cannot turn the
-    // chart into a line nobody asked for.
-    return { symbol: next, ...viewForSymbol(next, span, timeShare === true) };
+    // chart into a line nobody asked for. The 分时/折叠档 exclusion is not spelled
+    // again here: `viewForSymbol` is the one place it lives.
+    return {
+      symbol: next,
+      customIntervals: custom,
+      ...viewForSymbol(next, span, timeShare === true),
+    };
   } catch {
     return fallback;
   }
@@ -518,6 +556,10 @@ export function ProChart() {
   // 分时 on top of the candles (local custom ㉖): the same 1-minute bars, drawn
   // as one line for the newest trading session only.
   const [timeShare, setTimeShare] = useState(session.timeShare);
+  // The custom catalogue, in the user's own order: the strings are the rows, and
+  // the rows are the only place a folded spec can come from.
+  const [customIntervals, setCustomIntervals] = useState<string[]>(session.customIntervals);
+  const [customDialogOpen, setCustomDialogOpen] = useState(false);
   // The view as it stands on the chart right now. `getBars` runs in a closure
   // the library holds, so it cannot read React state; this is what tells it
   // whether to ask for a page of bars or for one session.
@@ -804,14 +846,20 @@ export function ProChart() {
     }
   }, [watch]);
 
-  // Remember where the chart was left (local custom ⑪, extended by ㉖).
+  // Remember where the chart was left (local custom ⑪, extended by ㉖, and by the
+  // 第⑥片 catalogue). `customIntervals` is in the payload *and* in the dependency
+  // array: removing a row that is not the current interval changes nothing else,
+  // so an effect that only watched the view would leave that row on disk.
   useEffect(() => {
     try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ symbol, interval, timeShare }));
+      localStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({ symbol, interval, timeShare, customIntervals }),
+      );
     } catch {
       /* quota errors are non-fatal for a convenience feature */
     }
-  }, [symbol, interval, timeShare]);
+  }, [symbol, interval, timeShare, customIntervals]);
 
   // Panel visibility (L3 第①片): one session key, deviation-only, the only writer
   // being this composition point. Scattering the write over the six `set*` call
@@ -1968,6 +2016,12 @@ export function ProChart() {
 
   const pickTimeShare = () => {
     if (!intervalAllowed(symbol, TIME_SHARE_INTERVAL)) return; // the button is disabled too
+    // 分时 is a *1-minute* view of the current day. A folded spec cannot ride along:
+    // the server answers `session=latest` only for builtin intervals, so the pair
+    // would be a request that is guaranteed to fail. Same predicate as the button's
+    // `disabled` and the directory's row gate — the exclusion itself lives in
+    // `viewForSymbol`, which is what makes session restore honest.
+    if (!isBuiltinInterval(interval)) return;
     setDrawNotice(null);
     // Toggling back off restores the user's own K-line period rather than
     // dropping them on 1-minute candles, because `interval` was never
@@ -2578,16 +2632,43 @@ export function ProChart() {
   // first answer not in yet), which is why the badge takes the nullable type
   // instead of the JSX checking for it.
   const lineBadge = timeShareBadge(sessionInfo);
+  // 加入一档（票面甲 Step 2 第 5 项）：去重后追加、立刻把它变成当前周期、收掉对话框。
+  // 目录那一层浮层的开关住在 `PeriodPicker` 入口行的 `onClick` 里（预检 ⑧），页面只认
+  // `customDialogOpen` 这一枚状态——它拿不到组件内部的 `open`。
+  const addCustomInterval = (spec: string) => {
+    setCustomDialogOpen(false);
+    if (!isCustomSpec(spec)) return; // 对话框的坏草案那一路发的是空串，目录不收
+    setCustomIntervals(
+      customIntervals.includes(spec) ? customIntervals : [...customIntervals, spec],
+    );
+    pickInterval(spec);
+  };
+
+  // 摘掉一档：只改清单，不动当前周期——「按移除不会先换档」那枚针的落点。唯一的例外是
+  // 摘的正是当前档，那时目录里再也没有一行声称被选中（按钮会念裸串），所以回到日线并重
+  // 新取一次数。
+  // 「当前档」读 `viewRef`，不读 `interval`：这枚处理器是被 `periodOptions` 那枚 `useMemo`
+  // 的闭包抓住后交给目录的，而那枚 memo 的依赖只有 `[symbol, customIntervals]`（预检 ⑦）——
+  // 先点行、再摘行的那条路上，快照里的 `interval` 还是换档之前的，守卫会把它判成「摘的不是
+  // 当前档」。`viewRef` 是页面自己维护的「图此刻的视图」：`setView` 每次同时写它和
+  // `setInterval`，所以它才是当下的事实，也是 `setView` 自己算 `periodChanged` 用的那把尺。
+  const removeCustomInterval = (spec: string) => {
+    setCustomIntervals(customIntervals.filter((key) => key !== spec));
+    if (viewRef.current.interval === spec) setView({ interval: "1D", timeShare: false }, true);
+  };
+
   // The interval directory's rows: the copy and the gate stay here because they
   // are the page's rules (`intervalAllowed` is asked by 分时 and by the repair on
   // symbol switch too). `active` is null while 分时 is on — 分时 is not a period,
   // so no directory row may claim to be the current one (㉖).
   const periodOptions = useMemo<PeriodOption[]>(
     () =>
-      INTERVALS.map((i) => {
+      INTERVALS.map((i): PeriodOption => {
         // Greyed out only where no source can answer at all. Whether OpenD
         // is up is not knowable from here, so HK/US stay enabled and the
         // route's own error names the cause when the gateway sleeps.
+        // The `PeriodOption` annotation is load-bearing: unannotated, `INTERVALS.map`
+        // infers `key: IntervalKey` and the `concat` below refuses a folded spec.
         const disabled = !intervalAllowed(symbol, i.key);
         return {
           key: i.key,
@@ -2599,12 +2680,25 @@ export function ProChart() {
               ? "日线链：周线/月线把日线按自然周/自然月合并，复权口径与日线一致"
               : "分钟线优先取 FutuOpenD，A股在其未应答时落回新浪",
         };
-      }),
-    [symbol],
+      }).concat(
+        // 自定义行拼在目录末尾：名字与入口按钮共用 `specLabel`（同一把尺，不许一边拿串
+        // 一边拿名），门与内置行问的是同一枚 `intervalAllowed`。
+        customIntervals.map((key) => ({
+          key,
+          label: specLabel(key) ?? key,
+          disabled: !intervalAllowed(symbol, key),
+          custom: true,
+          title: `自定义档：${key} 由基档折叠而成（服务端负责折叠），点「移除」可以从目录里删掉这一档`,
+          onRemove: () => removeCustomInterval(key),
+        })),
+      ),
+    // `customIntervals` 漏进依赖数组就是那条「加入的档不出现在目录里」的静默错，
+    // 而且它会连带把入口按钮的名字打成裸串。`interval` 不在这里读，所以不进依赖。
+    [symbol, customIntervals],
   );
-  // `?? interval` is a real net, not a typing trick: INTERVALS carries only the
-  // eight built-in keys, so a custom spec string would show the raw spec.
-  const periodTriggerLabel = INTERVALS.find((i) => i.key === interval)?.label ?? interval;
+  // 名字从**拼好的目录**里取：内置行读 `INTERVALS` 的 label、自定义行读 `specLabel`。
+  // `?? interval` 因此只剩「档位没有对应行」那一张网，不再是「非内置档一律念裸串」。
+  const periodTriggerLabel = periodOptions.find((o) => o.key === interval)?.label ?? interval;
   const periodActiveKey: AnyInterval | null = timeShare ? null : interval;
 
   // Esc abandons the tool in hand. The half-drawn overlay has to go with the
@@ -2683,13 +2777,17 @@ export function ProChart() {
               1-minute bars the minute rows of the period directory fetch and
               shows one trading session of them as a line, so it sits with them
               and shares their gate — see `intervalAllowed`, which this button
-              and every directory row ask. */}
+              and every directory row ask. The 第⑥片 catalogue adds a second half
+              to that gate: a folded spec is a period the line cannot ride on, so
+              the button also asks `isBuiltinInterval` and says why. */}
           <button
-            disabled={!intervalAllowed(symbol, TIME_SHARE_INTERVAL)}
+            disabled={!intervalAllowed(symbol, TIME_SHARE_INTERVAL) || !isBuiltinInterval(interval)}
             title={
               timeShare
                 ? "回到 K 线（分时不自动推送，重新进入即取最新）"
-                : "分时：最近一个交易日的分钟线 + 均价（需 FutuOpenD，支持 .SH/.SZ/.HK/.US）"
+                : !isBuiltinInterval(interval)
+                  ? `分时只画当日 1 分钟线；当前档位 ${interval} 是折叠档，分时不能与折叠档同时（服务端会拒绝 session=latest）`
+                  : "分时：最近一个交易日的分钟线 + 均价（需 FutuOpenD，支持 .SH/.SZ/.HK/.US）"
             }
             className={cn(
               "rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
@@ -2831,7 +2929,19 @@ export function ProChart() {
             triggerLabel={periodTriggerLabel}
             active={periodActiveKey}
             onPick={pickInterval}
+            onAddCustom={() => setCustomDialogOpen(true)}
           />
+          {/* 叠两层浮层没有凭据、也没有可用形状，所以入口那一次点击把目录关掉、只留
+              对话框——**这条是自家裁定，对面的证据只到共存为止**（票面甲 Step 2 第 8 项＋预检 ⑧）。
+              开关住在 `PeriodPicker` 入口行的 `onClick` 里：`open` 是组件内部状态，页面拿不到，
+              而焦点归还也由那一处做（对话框整份不碰焦点）。 */}
+          {customDialogOpen && (
+            <CustomIntervalDialog
+              existing={[...INTERVALS.map((i) => i.key), ...customIntervals]}
+              onCancel={() => setCustomDialogOpen(false)}
+              onAdd={addCustomInterval}
+            />
+          )}
         </div>
         <div className="mx-2 h-5 w-px bg-border" />
         <ReplayBar
