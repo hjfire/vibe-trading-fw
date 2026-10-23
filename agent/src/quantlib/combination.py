@@ -166,11 +166,15 @@ def _ic_stats(ic: pd.Series) -> dict[str, Any]:
             "n_obs": 0,
         }
     mean = float(clean.mean())
-    std = float(clean.std(ddof=1)) if count > 1 else 0.0
+    # A sample standard deviation needs two observations; one IC is a point,
+    # not a spread. Reporting 0.0 claims the IC is perfectly stable on the
+    # strength of a single date, which is why ir and weight_turnover already
+    # answer None for the same sample size.
+    std = float(clean.std(ddof=1)) if count > 1 else None
     return {
         "ic_mean": mean,
         "ic_std": std,
-        "ir": (mean / std) if std > 0 else None,
+        "ir": (mean / std) if std is not None and std > 0 else None,
         "ic_positive_ratio": float((clean > 0).mean()),
         "n_obs": count,
     }
