@@ -451,4 +451,26 @@ describe("request.security_lower_tf producer (MTF.5 auto-fetch)", () => {
     expect(fetchKlineMock).not.toHaveBeenCalled();
     expect(registered.length).toBe(1); // only the degraded first apply
   });
+
+  it("MTF：图上的周期是自定义折叠档时不挑下层档，守卫之后那一枝一步都不走", async () => {
+    // 归口（针面补形组）：`feedLowerBars` 里 `if (!isBuiltinInterval(chartIv)) return;` 那枚守卫
+    // 之前没有针——既存两枚一枚让图报不出 symbol（在守卫之前就退），一枚让图报内置日线（穿过
+    // 守卫去取 1m）。自定义档那条路必须「不传 lowerBars、走既有空数组降级」，所以这里用假 chart
+    // 替身把 `getPeriod` 打到折叠档上：`periodToInterval` 因此给出 `120m`，非内置 ⇒ 守卫退。
+    // 可观察面＝不发起任何一次下层档取数，且注册表里只多那一次降级挂载（没有第二次带 lowerBars 的重挂）。
+    const before = registered.length;
+    const chart = {
+      getDataList: () => daily,
+      removeIndicator: vi.fn(),
+      createIndicator: vi.fn(),
+      getSymbol: () => ({ ticker: "0700.HK" }),
+      getPeriod: () => ({ type: "minute", span: 120 }),
+    };
+    expect(
+      applyUserIndicator(chart as never, { id: "p3", label: "x", code, params: [], kind: "pane" }),
+    ).toBeNull();
+    await Promise.resolve();
+    expect(fetchKlineMock).not.toHaveBeenCalled();
+    expect(registered.length).toBe(before + 1);
+  });
 });

@@ -17,7 +17,8 @@ import { INTERVALS } from "../marketApi";
 const AGREED_OK = ["5m", "7m", "120m", "240m", "999m", "2D", "3W", "4M", "12M", "1m", "1D", "1W", "1M"];
 const AGREED_REJECT = ["", " ", "abc", "m", "0m", "-5m", "2.5m", "1d", "120X", "1S", "1tick", "2h", "M", "D"];
 const FRONTEND_ONLY_REJECT = ["1000m", "1441m", "367D", "400W", "500M"];
-const BUILTIN = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"];
+// 键表从 `INTERVALS` 派生：手抄那一份漂了没有一枚针会红，因为它只给自己出题（归口「死针与合表组」，理由见报告 §4）。
+const BUILTIN = INTERVALS.map((item) => item.key);
 
 /** 把已解析的串还原成对话框持有的草案（`m` 若是 60 的倍数优先报小时）。 */
 const parseSpecToDraft = (p: { unit: SpecUnit; n: number }): { unit: IntervalUnit; n: number } =>
@@ -71,7 +72,9 @@ describe("单位表与标签", () => {
     expect(specLabel("2h")).toBeNull();
   });
   it("与内置八档的标签一个都不撞", () => {
-    const builtinLabels = ["1分", "5分", "15分", "30分", "60分", "日线", "周线", "月线"];
+    // 标签表同样从 `INTERVALS` 派生：把 `60分` 那枚的 label 改成 `2小时` 时，手抄的那份
+    // 不会跟着改，于是这枚针对着真实目录里的撞名放行（报告 §4「合表不合、抄本派生」那条裁定的可观察面）。
+    const builtinLabels = INTERVALS.map((item) => item.label);
     for (const text of ["120m", "7m", "2D", "3W", "12M"]) {
       expect(builtinLabels, text).not.toContain(specLabel(text));
     }
@@ -131,8 +134,9 @@ describe("加入按钮的 enabled 判据（本仓规则，不是对面的初态�
     expect(builtin.ok, "5m").toBe(false);
     if (!builtin.ok) expect(builtin.reason, "5m").toBe("这一档目录里已经有了（它就是内置档）");
     const custom = validateDraft({ unit: "minute", n: 7 }); // 反向：非内置档不许给同一句（防「恒拒」假通过）
-    expect(custom.ok, "7m").toBe(true);
-    if (!custom.ok) expect(custom.reason, "7m").not.toBe("这一档目录里已经有了（它就是内置档）");
+    expect(custom, "7m").toEqual({ ok: true, spec: "7m" });
+    // 旧写法的后半句是恒绿死行：上一行已无条件断 `ok === true`，而 `ok: true` 分支没有 `reason` 字段。
+    // `toEqual` 整对象把两半一次钉死：恒拒的写法与铸错 spec 的写法都会在这里红。
   });
   it("合法草案给出 spec 串", () => {
     expect(validateDraft({ unit: "hour", n: 2 })).toEqual({ ok: true, spec: "120m" });

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CUSTOM_UNITS, validateDraft } from "@/lib/customInterval";
+import { CUSTOM_UNITS, unitLimits, validateDraft } from "@/lib/customInterval";
 
 import { CustomIntervalDialog, type CustomIntervalDialogProps } from "../CustomIntervalDialog";
 
@@ -137,7 +137,10 @@ describe("CustomIntervalDialog 的加入判据（C-5／C-8／C-9／重复档）"
       pickUnit(previousLabel, label);
       previousLabel = label;
       const input = numberInput();
-      expect(input.min).toBe("1");
+      // 两向都要钉，少一枚就是假话：只断字面 `"1"` 时，组件改成自己写数（只要那数还是 1）不红；
+      // 只断 `unitLimits(unit).min` 时，那把尺的下界漂了两侧同漂也不红。
+      expect(input.min, `${label}：min 也得从 unitLimits 端出来，不是组件自己写的字面量`).toBe(String(unitLimits(unit).min));
+      expect(input.min, `${label}：下界的契约就是 1（尺漂了这枚先红，别让它两侧同漂）`).toBe("1");
       const max = Number(input.max);
       expect(Number.isInteger(max) && max > 0, `${label}：max 得是个具体的数`).toBe(true);
       expect(validateDraft({ unit, n: max }).ok, `${label}：max=${max} 应当在界内`).toBe(true);

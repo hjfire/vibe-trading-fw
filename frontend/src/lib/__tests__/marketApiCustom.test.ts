@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  INTERVALS,
   INTERVAL_MS,
   RESOLUTION_BY_INTERVAL,
   intervalMsOf,
@@ -10,11 +11,15 @@ import {
   normalizeInterval,
   periodToInterval,
   resolutionOf,
-  type IntervalKey,
 } from "../marketApi";
 import { intervalAllowed } from "../chartView";
+import { isCustomSpec } from "../customInterval";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
-const BUILTIN = ["1m", "5m", "15m", "30m", "60m", "1D", "1W", "1M"] as IntervalKey[];
+// 八枚键从 `INTERVALS` 派生，不在测试里抄第二份：抄的那份漂了不红，因为它只给自己出题
+// （两张 `Record<IntervalKey, …>` 表由编译器钉死，报告 §4 那条合表裁定附 `tsc` 读数）。
+const BUILTIN = INTERVALS.map((item) => item.key);
 
 describe("内置八档在加宽后逐字节不变", () => {
   it("resolutionOf 就是那张旧表", () => {
@@ -101,5 +106,35 @@ describe("车道判定与坏串", () => {
     for (const key of BUILTIN) expect(isBuiltinInterval(key), key).toBe(true);
     expect(isBuiltinInterval("2D")).toBe(false);
     expect(isBuiltinInterval("")).toBe(false);
+  });
+});
+
+describe("加宽留下的两处形状（阶段 C 归口：针面补形组）", () => {
+  it("periodToInterval 的分钟侧只有一条 `??` 出口，它不设门：非整数 span 原样铸进串里", () => {
+    // 归口点名的形状：`map[period.span] ?? `${period.span}m`` 对 `span: 0`／`span: NaN`
+    // 不拒绝、只拼字，于是铸出词表外的串。本页走不到它——页面自己的 Period 全部出自
+    // `intervalToPeriod`（span 恒为正整数），其余由库给。所以这两枚钉的是**当下真的这么拼**
+    // （哪天加门，先红在这里），不是「应该这么拼」；那枚 `??` 出口此前一枚针也没有。
+    expect(periodToInterval({ type: "minute", span: 0 })).toBe("0m");
+    expect(periodToInterval({ type: "minute", span: Number.NaN })).toBe("NaNm");
+    // 渗漏出去的串进不了任何一道门：既不是内置八档，也不是合法自定义档，所以它冒充不了档位。
+    for (const leaked of ["0m", "NaNm"]) {
+      expect(isBuiltinInterval(leaked), leaked).toBe(false);
+      expect(isCustomSpec(leaked), leaked).toBe(false);
+    }
+  });
+
+  it("chartView.ts 里 TV-CI-11 那句红线仍是一句、仍拆在同一处的两行注释里", () => {
+    // 逐字针**不许**写成单行 `toContain`：那句话被注释按行折断，单行断言只看得见半句，
+    // 把后半句整行删掉都不会红。所以这里先按逐字取回第一行、再断第二行**紧跟**在它下面，
+    // 最后把两行拼回去断那句完整的话。
+    const src = readFileSync(resolve(process.cwd(), "src/lib/chartView.ts"), "utf8").replace(/\r\n/g, "\n");
+    const lines = src.split("\n");
+    const head = " * 自定义档按它的单位落车道：`m` 要分钟源，`D`/`W`/`M` 不需要——这条判据的来源是";
+    const tail = " * `interval_spec` 的折叠基档，不是任何 disabled 标记。";
+    const at = lines.indexOf(head);
+    expect(at, "红线第一行逐字仍在 `chartView.ts`").toBeGreaterThanOrEqual(0);
+    expect(lines[at + 1], "第二行必须紧跟第一行：句子住在两行里，挪开或删掉都算断").toBe(tail);
+    expect(`${head}\n${tail}`).toContain("不是任何 disabled 标记。");
   });
 });

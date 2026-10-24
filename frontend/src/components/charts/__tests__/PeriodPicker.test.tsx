@@ -331,7 +331,7 @@ describe("目录的两层容器与「移除不关目录」（修复轮 1 补的�
     const listbox = screen.getByRole("listbox");
     const entry = screen.getByRole("button", { name: "添加自定义周期…" });
     expect(entry.parentElement).not.toBeNull();
-    expect(entry.parentElement).not.toBe(listbox);
+    expect(listbox.contains(entry)).toBe(false);
   });
 
   it("按移除之后目录保持开着：listbox 仍在", () => {
@@ -354,5 +354,113 @@ describe("目录的两层容器与「移除不关目录」（修复轮 1 补的�
     fireEvent.click(screen.getByRole("button", { name: "移除 2小时" }));
     expect(onRemove).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("listbox")).toBeTruthy();
+  });
+});
+
+describe("阶段 C 补形：disabled 位的唯一来源、行容器里的移除、入口行的三件事", () => {
+  /** E 组组件半枚的三行目录：两行内置＋一行自定义，`disabled` 位由调用方一次性决定。 */
+  const rowsOf = (disabledOf: (key: string) => boolean): PeriodOption[] => [
+    { key: "1D", label: "日线", title: "档位 日线的说明", disabled: disabledOf("1D") },
+    { key: "1W", label: "周线", title: "档位 周线的说明", disabled: disabledOf("1W") },
+    {
+      key: "120m",
+      label: "2小时",
+      title: "自定义档 2小时 的说明",
+      disabled: disabledOf("120m"),
+      custom: true,
+      onRemove: vi.fn(),
+    },
+  ];
+
+  /** 可达结构＝「谁在树上、叫什么、选中是谁、移除按钮有几枚」，不含禁用位本身。 */
+  const reachableShape = () => ({
+    options: screen.getAllByRole("option").map((row) => [
+      row.textContent,
+      row.getAttribute("aria-selected"),
+    ]),
+    removes: screen.getAllByRole("button", { name: /^移除/ }).map((b) => b.textContent),
+  });
+
+  const disabledRowCount = (container: HTMLElement): number =>
+    container.querySelectorAll("button[disabled]").length;
+
+  it("E-1 组件面：同一组行只改 disabled 位 ⇒ 可达结构逐字不变，禁用枚数随动", () => {
+    // 票面乙 Step 1 的组件半枚：目录行的 `disabled` 位只能跟着入参走。组件若从 label／
+    // `custom` 标记／「别的行这一趟被禁过」推定可用性，第三向（只禁自定义那一行）就对不上，
+    // 而前两向照样绿——所以三向都得跑在同一枚针里。
+    const all = renderPickerHost({ options: rowsOf(() => false), onAddCustom: vi.fn() });
+    fireEvent.click(trigger());
+    const shape = reachableShape();
+    expect(disabledRowCount(all.container)).toBe(0);
+    all.unmount();
+
+    const blocked = renderPickerHost({ options: rowsOf(() => true), onAddCustom: vi.fn() });
+    fireEvent.click(trigger());
+    expect(reachableShape()).toEqual(shape);
+    expect(disabledRowCount(blocked.container)).toBe(3);
+    blocked.unmount();
+
+    const mixed = renderPickerHost({
+      options: rowsOf((key) => key === "120m"),
+      onAddCustom: vi.fn(),
+    });
+    fireEvent.click(trigger());
+    expect(reachableShape()).toEqual(shape);
+    expect(disabledRowCount(mixed.container)).toBe(1);
+    expect((screen.getByRole("option", { name: "2小时" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("option", { name: "日线" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("E-1 的布局载体：档位行按钮的类串含 `grow` 而不含 `w-full`（本片新增的唯一一枚布局类针）", () => {
+    // 归口（4b 修复轮 C 项）：档位行按钮类串里那枚 `grow` 是「选中态底色铺满 label 那一段、
+    // 又不把同行的『移除』挤出 `role="none"` 行容器」这件事的载体，按票面没配针。样式类在
+    // jsdom 里没有渲染面（摘掉它本套件零红，读数见报告 §4），所以类串本身是唯一钉得住的地方。
+    // 既存三枚 `className` 针钉的都是选中态 `bg-muted font-medium`，没有一枚读布局类。
+    renderPicker();
+    fireEvent.click(trigger());
+    const row = screen.getByRole("option", { name: "周线" });
+    expect(row.className).toContain("grow");
+    expect(row.className).not.toContain("w-full");
+  });
+
+  it("M-2：『移除』与同行那枚 option 共用同一枚父级，且那枚父级带 role=none", () => {
+    // 方向要说清：这条钉的是「移除留在行容器里」这件事**成立**，不是钉它不在 listbox 里。
+    // `role="listbox"` 之下留着一枚 `button` 是本仓写在 `PeriodPicker.tsx:120-125` 的**自家裁定**
+    // （它没有别的合法位置），不是缺陷，所以这里不许把它钉成红。
+    // 既存针里 `:254` 只按可达名数按钮枚数、`:312` 断的是 option 的父级，两枚都没断过
+    // 「移除的父级＝option 的父级」这一层——那段形状此前只有注释在守。
+    const options: PeriodOption[] = [
+      { key: "1D", label: "日线", title: "档位 日线的说明", disabled: false },
+      {
+        key: "120m",
+        label: "2小时",
+        title: "自定义档 2小时 的说明",
+        disabled: false,
+        onRemove: vi.fn(),
+        custom: true,
+      },
+    ];
+    renderPicker({ options });
+    fireEvent.click(trigger());
+    const row = screen.getByRole("option", { name: "2小时" });
+    const remove = screen.getByRole("button", { name: "移除 2小时" });
+    expect(remove.parentElement).not.toBeNull();
+    expect(remove.parentElement).toBe(row.parentElement);
+    expect(remove.parentElement).toHaveAttribute("role", "none");
+  });
+
+  it("⑧：点入口行之后目录已关、onAddCustom 恰交出一次、焦点压回入口按钮", () => {
+    // 预检 ⑧ 的组件半枚（C1 那笔只落了组件改动，这枚针按清单 §5 第 7 项由阶段 C 补）。
+    // 它与上面 M-2 相反：入口是「换一层浮层」⇒ **要**关目录；移除是「就地改清单」⇒ **不**关目录
+    // （后半句住在既存那枚「按移除之后目录保持开着」里）。两枚不许写成同一条断言。
+    const onAddCustom = vi.fn();
+    const onPick = renderPicker({ onAddCustom });
+    fireEvent.click(trigger());
+    expect(screen.getByRole("listbox", { name: "周期目录" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "添加自定义周期…" }));
+    expect(screen.queryByRole("listbox", { name: "周期目录" })).toBeNull();
+    expect(onAddCustom).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(trigger());
+    expect(onPick).not.toHaveBeenCalled();
   });
 });
