@@ -33,7 +33,7 @@ interface AlertsTabProps {
   getChart: () => Nullable<Chart>;
   /** The chart's symbol in loader spelling (e.g. 600519.SH); the rule's symbol. */
   symbol: string;
-  /** The chart's interval; rules on 1W/1M cannot be polled by the backend. */
+  /** Chart interval; anything outside `BACKEND_INTERVALS` - 1W/1M and every custom fold - cannot be polled. */
   interval: AnyInterval;
   /** The chart's price-adjustment setting; the rule must read the same `close`. */
   adjust: string;

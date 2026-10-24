@@ -2,7 +2,7 @@
  * 自定义周期档的文法与换算——前端唯一持有这把尺的地方。
  *
  * 文法不是这里发明的：它是服务端 `agent/src/api/interval_spec.py` 的 `_FOLDED_RE`
- * （`^(\d+)([mDWM])$`）加内置八档。两侧对账由两份逐字同表的测试钉住（本文件那条
+ * （`^(\d+)([mDWM])$`）加内置八档。两侧对账由两份逐字同表的测试钉住（`customInterval.test.ts` 那条
  * 与 `agent/tests/test_interval_spec_frontend_align.py`），共享夹具是假的对齐，
  * 所以谁也不 import 谁。
  *

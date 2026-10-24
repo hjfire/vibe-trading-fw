@@ -18,7 +18,7 @@ import { isCustomSpec, specMs, specPeriodShape } from "./customInterval";
 
 export type IntervalKey = "1m" | "5m" | "15m" | "30m" | "60m" | "1D" | "1W" | "1M";
 
-/** 目录里可能出现的所有周期拼写：八档内置 ∪ 合法自定义串。 */
+/** 周期串的拼写域。类型底层就是 `string`，不做穷举；目录里真会出现的两族＝八档内置 ∪ `isCustomSpec` 认可的串。 */
 export type AnyInterval = string;
 
 export const INTERVALS: { label: string; key: IntervalKey }[] = [
@@ -149,7 +149,7 @@ export function intervalMsOf(interval: AnyInterval): number {
   return specMs(interval) ?? INTERVAL_MS["1D"];
 }
 
-/** 会话与 URL 里读出来的串都要过这道门：坏串退 `1D`，不静默带着它去取数。 */
+/** 会话与 URL 里读出来的串都要过这道门：文法坏串与跨度越界串都退 `1D`，不静默带着它去取数（越界那半判在 `isCustomSpec`）。 */
 export function normalizeInterval(value: unknown): AnyInterval {
   if (typeof value !== "string") return "1D";
   return isBuiltinInterval(value) || isCustomSpec(value) ? value : "1D";

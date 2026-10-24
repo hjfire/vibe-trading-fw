@@ -65,7 +65,7 @@ export interface PineAlertPlan {
 
 export interface TranslateOptions {
   symbol: string;
-  /** Chart interval key, in `marketApi`'s `IntervalKey` vocabulary. */
+  /** Chart interval, in `marketApi`'s `AnyInterval` spelling: built-in keys plus custom folds. */
   interval: string;
   adjust?: string;
   targets?: string[];
