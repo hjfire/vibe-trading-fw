@@ -479,7 +479,7 @@ describe("/pro-chart 多标的叠加对比", () => {
 
   it("对比交回 0 根却带着 source：小字只许说主图那半句", async () => {
     // `marketApi.ts:260`/`:265` 的形状：`s:"ok"` 时 `columnsToBars` 交空数组、`source` 照抄后端那格
-    // ⇒ `cmpStatus.source` 非空而 `cmpReady` 为假（`ProChart.tsx:661-662` 问的是 `bars.length > 0`）。
+    // ⇒ `cmpStatus.source` 非空而 `cmpReady` 为假（`ProChart.tsx:758-759` 问的是 `bars.length > 0`）。
     // 那一屏按钮说的是「数据还没到位」，正下方若还在讲「对 fake-cmp」，两句话互相打脸。
     h.cmpBars = [];
     render(<ProChart />);

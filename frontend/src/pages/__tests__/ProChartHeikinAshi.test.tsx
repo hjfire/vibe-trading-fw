@@ -17,7 +17,7 @@ import { ProChart } from "../ProChart";
  * 两条主判据：
  * 1. 样式只有一个合成点。`chartStyles` 整个对象会被主题 effect 在每次换主题时重推，
  *    所以「九色透明」这个状态只要没进推送点的第四个实参，切主题就会把真蜡烛刷回来——
- *    本文件那条切主题的测试钉的是**第四个实参**（同 `ProChartLegend.test.tsx:150` 的形状）。
+ *    本文件那条切主题的测试钉的是**第四个实参**（同 `ProChartLegend.test.tsx:154` 的形状）。
  *    **依赖数组**那一半归下面第二个 describe（T4「挂卸与互斥」）的第一条：那里只有 `haOn`
  *    在动，`dark`/`timeShare`/`legend` 一格都没变，所以把 `haOn` 从数组里摘掉，那一次点击
  *    就不会有任何 `setStyles`，最后一格仍是挂载时那份调色板色 ⇒ 判据当场红。
@@ -28,9 +28,9 @@ import { ProChart } from "../ProChart";
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
   // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
-  // （`ProChart.tsx:1106`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // （`ProChart.tsx:1304`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
   // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
-  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1372` 那一处会写）
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1635` 那一处会写）
   // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
@@ -61,7 +61,7 @@ const h = vi.hoisted(() => ({
 
 /**
  * 页面唯一的数据入口。替身只驱动 `init`：本片不分页，但 `init` 必须真的被回答一次，
- * 因为 `setBarCount`（`ProChart.tsx:1208`）只在那一次发生，而按钮的 disabled 判据读它。
+ * 因为 `setBarCount`（`ProChart.tsx:1407`）只在那一次发生，而按钮的 disabled 判据读它。
  */
 function ask(): void {
   if (!h.loader) throw new Error("页面没有装 DataLoader");
@@ -109,7 +109,7 @@ function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
 }
 
-/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1106`）carried it. */
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1304`）carried it. */
 function initBarColors(): Record<string, unknown> {
   return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
@@ -132,7 +132,7 @@ vi.mock("klinecharts", () => ({
   registerLocale: vi.fn(),
   dispose: vi.fn(),
   // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
-  // （`ProChart.tsx:1106`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // （`ProChart.tsx:1304`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
   // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
   init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
     h.initStyles.push(options?.styles ?? {});
@@ -204,7 +204,7 @@ vi.mock("klinecharts", () => ({
         realTo: h.list.length,
       }),
       // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-      // 那句「leave the zoom alone」（`ProChart.tsx:930`），这正是本片要的分支。
+      // 那句「leave the zoom alone」（`ProChart.tsx:1100`），这正是本片要的分支。
       getDom: () => undefined,
     };
   },
@@ -291,9 +291,9 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  // 上一条读的是 `h.styles`——那是主题 effect（`ProChart.tsx:1372`）在挂载那一次的推送。
-  // 这一条读的是 `h.initStyles`：`init` 的 `styles` 选项（`:1106`），首屏真正落到图上的
-  // 第一份样式。两个推送点必须各有各的 bucket，因为把 `:1106` 的第四个实参写成常量 `true`
+  // 上一条读的是 `h.styles`——那是主题 effect（`ProChart.tsx:1635`）在挂载那一次的推送。
+  // 这一条读的是 `h.initStyles`：`init` 的 `styles` 选项（`:1304`），首屏真正落到图上的
+  // 第一份样式。两个推送点必须各有各的 bucket，因为把 `:1304` 的第四个实参写成常量 `true`
   // 只脏 init 那一格——主题 effect 拿的是当时的 `haOn`（默认关＝false），`h.styles` 仍是
   // 调色板色，上一条照绿，而用户首屏那一眼已经是「真蜡烛被九个透明色藏掉、图上却没有
   // 任何平均K线实体」。方向也反过来钉一次：开着偏好时那两个推送点由上面第 2 条管。
@@ -314,7 +314,7 @@ describe("/pro-chart 平均K线的样式链", () => {
 
   // 这是「样式只有一个合成点」那条的身份面：拿**两格同为「关」**的推送比 `candle.bar` 的引用。
   // 只比「关 vs 开」比不出 hoist——那两格今天本来就不同引用（一个是现拼的字面量，一个是
-  // `CANDLE_HIDDEN`）。把 `chartStyles` 的调色板那一支（`ProChart.tsx:322-332`）提到模块作用域
+  // `CANDLE_HIDDEN`）。把 `chartStyles` 的调色板那一支（`ProChart.tsx:390-398`）提到模块作用域
   // 当常量，这两格就变成同一个引用：内容一样、身份也一样，任何一处往里写都会脏掉另一处，
   // 而「每次现合成」这条契约就悄悄没了。判据是引用，不是内容。
   it("两格同为「关」的推送，`candle.bar` 是两个字面量对象（把调色板 hoist 成常量即红）", async () => {
@@ -339,8 +339,8 @@ describe("/pro-chart 平均K线的样式链", () => {
     render(<ProChart />);
     await flush();
     // 首屏有两个合成点，各钉一次——只读 `last` 的话 init 点没人管：
-    // - `init` 的 `styles` 选项（`ProChart.tsx:1106`）＝真机落到图上的第一份样式；
-    // - 主题 effect（`:1372`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
+    // - `init` 的 `styles` 选项（`ProChart.tsx:1304`）＝真机落到图上的第一份样式；
+    // - 主题 effect（`:1635`，本页唯一的 `setStyles` 出口）挂载那一次＝`h.styles[0]`，
     //   挂载时它也正是 `last`（首屏只有这一次 `setStyles`）。
     const last = pushCount() - 1;
     const initColors = initBarColors();
@@ -352,11 +352,11 @@ describe("/pro-chart 平均K线的样式链", () => {
     expect(candleType(last)).toBe("candle_solid");
   });
 
-  // 这条钉的是**主题推送点（`ProChart.tsx:1372` 那一行 `setStyles`）的第四个实参**：换主题时
+  // 这条钉的是**主题推送点（`ProChart.tsx:1635` 那一行 `setStyles`）的第四个实参**：换主题时
   // 页面把整个 `chartStyles` 重推一遍，重推那一次的 `candle.bar` 必须仍是九色透明（那一格
   // 写成常量，调色板值就当场把真蜡烛刷回图上，而挂载着的 HA 指标还在画它的平滑蜡烛）。
-  // 这条自己钉不到**依赖数组 `:1329`**：叫醒它的是 `dark`，闭包拿到的已经是当前 `haOn`
-  // ⇒ 单看这条，把 `:1329` 里的 `haOn` 删掉仍绿。那一格的钉子由下面 T4 那组的第一条负责
+  // 这条自己钉不到**依赖数组 `:1636`**：叫醒它的是 `dark`，闭包拿到的已经是当前 `haOn`
+  // ⇒ 单看这条，把 `:1636` 里的 `haOn` 删掉仍绿。那一格的钉子由下面 T4 那组的第一条负责
   // ——那里只动 `haOn`，`dark`/`timeShare`/`legend` 一格都没变。
   it("开着 HA 切主题：主题重推那一次的第四个实参仍九色透明，type 仍 candle_solid", async () => {
     localStorage.setItem(HEIKIN_ASHI_PREFS_KEY, "1");
@@ -410,7 +410,7 @@ describe("/pro-chart 平均K线的样式链", () => {
 describe("/pro-chart 平均K线的挂卸与互斥", () => {
   // `beforeEach` 已经 `seed()` 过，bar 是有的；`h.created` 之所以在点之前清一次，
   // 是因为 init 那一路 `syncPriceOverlay`/`syncSubPanes` 已经创建过 MA／VOL／MACD
-  // （`ProChart.tsx:1324` 与 `:1330`），计数判据要数的是「这次点按钮创建了几个」。
+  // （`ProChart.tsx:1532` 与 `:1538`），计数判据要数的是「这次点按钮创建了几个」。
   // `h.indicators` 与 `h.styles` **不许**清：它们是「主图现在载着什么」的唯一真相，
   // 清掉就把「挂 HA 不吃掉 MA」那条钉成了假绿。
   const haCreates = () => h.created.filter((c) => (c as { name?: string }).name === "HEIKIN_ASHI");
@@ -496,7 +496,7 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
     expect(button.getAttribute("title")).toContain("图上还没有数据");
     // 原来这里 `h.created = []` 再点一次、断 `haCreates()` 长度为 0，已经删掉：`disabled` 一成立
     // jsdom 和真浏览器都不派发事件，那句永远绿——同一个理由写在 `ProChartReplay.test.tsx:560-563`。
-    // 而挂载 effect（`ProChart.tsx:1385` 那一格的依赖数组）读 `[haOn, timeShare]`、没有 barCount 门：挂载是视图
+    // 而挂载 effect（`ProChart.tsx:1648` 那一格的依赖数组）读 `[haOn, timeShare]`、没有 barCount 门：挂载是视图
     // 偏好，与数据条数无关 ⇒ 偏好开＋零根 bar 时 HA 在挂载那一次就上了图，且先删后挂保证恰好一份。
     // 这条的可杀处：给 effect 加上 `barCount > 0` 门、或把 `syncHeikinAshi` 的创建分支摘掉（挂载那一次就
     // 不会再有任何 `HEIKIN_ASHI` 实例）⇒ 长度不是 1；上一条则可把 `disabled` 的门改成只看 `timeShare`。
@@ -530,7 +530,7 @@ describe("/pro-chart 平均K线的挂卸与互斥", () => {
 
   // `main.tsx:29` 是用 `React.StrictMode` 挂起来的：开发态每次挂载，effect 都跑两遍
   // （挂→卸→挂）。第二遍的 `chartRef.current` 是新图表对象，而 `h.indicators` 里第一次
-  // 挂上去的那一份还在 ⇒ 走的就是 `syncHeikinAshi`（`ProChart.tsx:996`）的
+  // 挂上去的那一份还在 ⇒ 走的就是 `syncHeikinAshi`（`ProChart.tsx:1169`）的
   // `live.length === 0` 那一夹。这一夹不是洁癖：`createIndicator(value, true)` 永远是追加
   // （`ChartImp.createIndicator` 先给 create mint 一个新 id，`StoreImp.addIndicator` 的
   // de-dup 用带 id 的过滤去查，永远匹配不上，dist 15270 ⇄ 14150），夹子摘掉就是主图多一个
@@ -578,7 +578,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     expect(onIdx).toBeGreaterThan(mountIdx);
     expect(styleAt(onIdx)).not.toBe(styleAt(mountIdx));
     // 「关」那一格的 `candle.bar` 更不许是 `CANDLE_HIDDEN` 本身：把那九个 transparent 交出去
-    // 就等于把藏蜡烛的键交给页面之外持有；今天它是每次现拼的字面量（`ProChart.tsx:322-332`）。
+    // 就等于把藏蜡烛的键交给页面之外持有；今天它是每次现拼的字面量（`ProChart.tsx:390-398`）。
     expect(barColors(mountIdx)).not.toBe(CANDLE_HIDDEN);
 
     // R12 的第三腿：数据面判据要量到**切换之后**，而不是只量「开」那一次。卸载路径同样是 HA
@@ -600,7 +600,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     // 「init 那一路 restoreDrawings 本来就可能重写若干次，把它当 0 判是在钉替身」换来的增量钉
     // 永远绿：不是页面重写少，而是替身一个都不交。现在种子线是真的带 `points`，页面只要在
     // 这两次穿越里碰一次画线面——`overrideOverlay`（重锚／改样式／改可见性）或者就地改实例的
-    // 锚点——就当场红。`before` 取在挂载之后，所以 init 那一路（`ProChart.tsx:1234`）的
+    // 锚点——就当场红。`before` 取在挂载之后，所以 init 那一路（`ProChart.tsx:1477`）的
     // `restoreDrawings` 落在快照之前，判的是「穿越期间」的增量 0，不是数组为空。
     render(<ProChart />);
     await flush();
@@ -636,7 +636,7 @@ describe("/pro-chart 平均K线的真值边界（spec §五/§七·4）", () => 
     render(<ProChart />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "图例" }));
-    // label 原文就是带括号这一串（`ProChart.tsx:3031`）；写成「指标图例显示规则」会
+    // label 原文就是带括号这一串（`ProChart.tsx:3263`）；写成「指标图例显示规则」会
     // `Unable to find label` ——那是替身替测试编了个不存在的控件名。
     fireEvent.change(screen.getByLabelText("指标图例显示规则（含主图 MA／均价）"), { target: { value: "none" } });
     await flush();

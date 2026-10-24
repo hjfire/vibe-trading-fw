@@ -16,7 +16,7 @@ import { heikinAshi, type HaRow } from "./heikinAshi";
  *    （缺口向量：某根真实 high=2 而 haHigh=15）。反过来，像素量绝不能进 result。
  * 3. `candle.bar` 的九个颜色键（`CandleBarColor` = 3 填充 + 3 边框 + 3 影线）是藏原生蜡烛的唯一
  *    杠杆；`candle.type` 那个键归分时开关所有，抢它会破坏 `chartStyles` 的顺序契约
- *    （`ProChart.tsx:294-298`），`priceMark` 整棵子树归图例偏好所有（`chartLegend.ts:109-115`），
+ *    （`ProChart.tsx:377-381`），`priceMark` 整棵子树归图例偏好所有（`chartLegend.ts:109-115`），
  *    HA 侧不写它。
  *
  * 图例只出一行「平均K线 开/高/低/收」：`figures` 声明两键（高低）就够包络轴，而
@@ -134,7 +134,7 @@ interface TooltipParams {
 /**
  * 涨色判据用 **HA 自己**的开收，不用真实收叠——这是 Heikin-Ashi 的定义（spec §二·7），
  * 也正是「趋势段读成连续色块」的来源。本仓把边框色与影线色都映射到同一支
- * `CANDLE_COLORS.up/down/noChange`（`ProChart.tsx:302-310`、`ChartCell.tsx:70-75` 三对同值），
+ * `CANDLE_COLORS.up/down/noChange`（`ProChart.tsx:390-398`、`ChartCell.tsx:144-149` 三对同值），
  * 所以库的 `stroke_fill` 实体在我们这里退化成一次 `fillRect`；palette 若哪天把边框色拆开，
  * 这一行要补 `strokeRect`。
  */

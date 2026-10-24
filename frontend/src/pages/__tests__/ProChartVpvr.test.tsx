@@ -41,9 +41,9 @@ import { ProChart } from "../ProChart";
 const h = vi.hoisted(() => ({
   styles: [] as Array<Record<string, unknown>>,
   // `init` 第二个入参里的 `styles` 选项，单独一格：那是 **init 推送点**
-  // （`ProChart.tsx:1106`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
+  // （`ProChart.tsx:1304`）唯一的出口，真机上首屏第一份样式就是它。不接住它，那一次调用
   // 就把合成好的对象丢进黑洞，`chartStyles(dark, session.timeShare, legend, false)` 写错
-  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1372` 那一处会写）
+  // 也一个字都不会红。与 `styles`（`setStyles` 的录制，只有主题 effect `:1635` 那一处会写）
   // 分开记，两个推送点各有各的钉子，下标不会互相顶掉。
   initStyles: [] as Array<Record<string, unknown>>,
   indicators: [] as Array<{ name: string; paneId: string; id: string }>,
@@ -58,7 +58,7 @@ const h = vi.hoisted(() => ({
   // 每次 `removeOverlay` 收到的过滤条件原样一份（M5）。只**记录**、不施加删除：施加删除会把
   // `h.overlays[0]` 的下标语义改掉（「分布不写画线面」那条读的就是这一格的 `points`），记录调用
   // 不动下标 ⇒ 「整面清画线」这一类回归从此读得到。同上一格的口径：判据是「没长」，不是「为空」
-  // ——挂载那一路（`ProChart.tsx:1262` 换标的/换周期时的整面清）本来就会调它一次。
+  // ——挂载那一路（`ProChart.tsx:1461` 换标的/换周期时的整面清）本来就会调它一次。
   removedOverlays: [] as Array<Record<string, unknown>>,
   // 图上现存的画线，**有内容**（R13）。以前下面那格 `getOverlays` 返回的是常量空集，
   // 于是「切 HA 不重锚画线」那条针在页面上任何一轮遍历里都没有候选——结构性不可红。
@@ -86,7 +86,7 @@ const h = vi.hoisted(() => ({
 
 /**
  * 页面唯一的数据入口。替身只驱动 `init`：本片不分页，但 `init` 必须真的被回答一次，
- * 因为 `setBarCount`（`ProChart.tsx:1208`）只在那一次发生，而按钮的 disabled 判据读它。
+ * 因为 `setBarCount`（`ProChart.tsx:1407`）只在那一次发生，而按钮的 disabled 判据读它。
  */
 function ask(): void {
   if (!h.loader) throw new Error("页面没有装 DataLoader");
@@ -144,7 +144,7 @@ function barColors(i: number): Record<string, unknown> {
   return (styleAt(i) as { candle?: { bar?: Record<string, unknown> } }).candle?.bar ?? {};
 }
 
-/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1106`）carried it. */
+/** `candle.bar` as the **init 推送点**（`init` 的 `styles` 选项，`ProChart.tsx:1304`）carried it. */
 function initBarColors(): Record<string, unknown> {
   return (h.initStyles[0] as { candle?: { bar?: Record<string, unknown> } } | undefined)?.candle?.bar ?? {};
 }
@@ -167,7 +167,7 @@ vi.mock("klinecharts", () => ({
   registerLocale: vi.fn(),
   dispose: vi.fn(),
   // 接住 `init` 的 `styles` 选项再交回同一张方法面：那是 **init 推送点**
-  // （`ProChart.tsx:1106`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
+  // （`ProChart.tsx:1304`）唯一的出口。不接，页面在那儿合成好的对象就被替身扔掉，
   // `chartStyles(dark, session.timeShare, legend, false)` 写错也不会红（见 `h.initStyles`）。
   init: (_host: unknown, options?: { styles?: Record<string, unknown> }) => {
     h.initStyles.push(options?.styles ?? {});
@@ -241,7 +241,7 @@ vi.mock("klinecharts", () => ({
       // 不新开一个桶：新开桶就等于承认「overlay 通道与画线面是两回事」，而 spec §〇 第 2 条怕的
       // 恰恰是它进的是同一个落盘通道。
       // 返回值给的是库的形状（一个真 id）而不是 `true`：页面 `createOverlay` 只有 `armTool`
-      // （`ProChart.tsx:2003`）一处、不吃返回值，但 `chartDrawings.restoreDrawings:671-683` 吃
+      // （`ProChart.tsx:2345`）一处、不吃返回值，但 `chartDrawings.restoreDrawings:671-683` 吃
       // 它的真假来分「上图的」与「停放面的」——交回 `undefined` 会把每一张种进桶里的画线都停进
       // 停放面，交回 `true` 也不如交回一个像样的 id（针 H 之后这条链还在，别把它喂坏）。
       createOverlay: (o: Record<string, unknown>) => {
@@ -250,8 +250,8 @@ vi.mock("klinecharts", () => ({
         return id;
       },
       // M5（补牙）：这一格以前是 `removeOverlay: vi.fn()`——**只吞不记**。页面确实调它
-      // （`:1262` 换标的/换周期时的整面清、`:1877`/`:1882` 停放面、`:2037` 清画线、`:2106` 按 id，
-      // 五处本席当场 `grep -n removeOverlay` 读到），而真库 `ChartImp.prototype.removeOverlay`
+      // （`:1461` 换标的/换周期时的整面清、`:2159`/`:2164` 停放面、`:2482` 按 id，
+      // 页面四处本席当场 `grep -n removeOverlay` 读到；第五处「清画线」2026-10-17 起改走 `chartDrawings.ts:1012`），而真库 `ChartImp.prototype.removeOverlay`
       // （klinecharts 10.0.3，`dist/index.esm.js:15403`）会把命中的线从 store 里**删掉**⇒ 替身什么都不做，
       // 于是「画线面没被动」那条判据只覆盖「移动锚点／新增线」，**不覆盖删线**：真库若整面清，
       // `h.overlays` 会变空，而 `h.overlays[0].points` 读到的仍是种下的那条，恒绿。
@@ -279,7 +279,7 @@ vi.mock("klinecharts", () => ({
         realTo: h.list.length,
       }),
       // jsdom 里没有真的盒子：`fitSessionToWidth` 读到 `undefined` 宽度就走它自己
-      // 那句「leave the zoom alone」（`ProChart.tsx:930`），这正是本片要的分支。
+      // 那句「leave the zoom alone」（`ProChart.tsx:1100`），这正是本片要的分支。
       getDom: () => undefined,
     };
   },
@@ -476,7 +476,7 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
     // I3（升针）：以前只 `toContain("面积线")`——整句没有一格被钉住，而 spec §七·4 的字面量与
     // 交付串恰好差在中间那一小句（`按高低价摊派` vs `按 [low, high] 与档的重叠摊派`）。控制端已裁定
     // **保留交付串**（那一版把摊派的分母说清了），spec 侧由控制端改；针这边升成逐字，动一个字就红。
-    // 参照点是 `ProChart.tsx:2381` 那一格的字面量，不是本测试自己造的第二份权威。
+    // 参照点是 `ProChart.tsx:2841` 那一格的字面量，不是本测试自己造的第二份权威。
     expect(screen.getByRole("button", { name: "量分布" }).getAttribute("title")).toBe(
       "分时是面积线，分档量能要按 [low, high] 与档的重叠摊派，这里没有可摊的区间",
     );
@@ -506,7 +506,7 @@ describe("/pro-chart 量分布的挂卸与互斥", () => {
     expect(vpLive()).toHaveLength(1);
   });
 
-  // 针牙②：`syncVpvr` 的 `live.slice(1)` 那一支（`ProChart.tsx:1039`）在页面自己的状态机里
+  // 针牙②：`syncVpvr` 的 `live.slice(1)` 那一支（`ProChart.tsx:1209`）在页面自己的状态机里
   // 到不了——全仓挂 VPVR 的入口只有那一处，而它只在 `live.length === 0` 时才走，所以「页面
   // 挂出来的那份图」里 VPVR 永远是 0 或 1 份，那条 `forEach` 是个空转（判据 F 打在上面永不红）。
   // 但第二份是**库侧真实存在**的起始态：`ChartImp.createIndicator`
@@ -588,7 +588,7 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     const anchor = JSON.stringify(h.overlays[0].points);
     const overrides = h.overridden.length;
     // M5（补牙）：删线那一路。判据是「没长」而不是「等于空」——挂载那一路自己就调过一次
-    // 整面清（`ProChart.tsx:1262` `chart.removeOverlay()`，换标的/换周期的那一支，本席当场
+    // 整面清（`ProChart.tsx:1461` `chart.removeOverlay()`，换标的/换周期的那一支，本席当场
     // 把这一格改成 `toBe(0)` 试过：读数是 **1**，三次点击前后都是同一格 ⇒ `toEqual([])` 的写法
     // 天生红在挂载那一步，判不到 VPVR）。所以基线取在挂载之后。
     const removals = h.removedOverlays.length;
@@ -641,12 +641,12 @@ describe("/pro-chart 量分布的真值边界（spec §八）", () => {
     await flush();
     // I1（补牙）：基线以前取在**「开」那次点击之后**（旧 `mid`），于是这条实际比的是
     // 「开之后 == 关之后」，「开前」那一格从未参与比较——`syncVpvr` 的挂载支
-    // （`ProChart.tsx:1031-1043`）若将来顺手回写一次桶，那次写会**留在**桶里，两侧读到同一个串
+    // （`ProChart.tsx:1201-1213`）若将来顺手回写一次桶，那次写会**留在**桶里，两侧读到同一个串
     // ⇒ 针恒绿，这一半是空的；而它是 spec §〇 那条决定性裁定（走 overlay 通道会往
     // `pro-chart.drawings.v1` 写假画线）在 CI 里唯一的长期防线。基线挪到挂载之后、点击之前。
     //
     // 起点仍是「挂载之后」而不是「render 之前」：挂载那一路本来就有权吸回越界锚点并回写
-    // （`ProChart.tsx:1263` 读桶，`ProChart.tsx:1274` 的 `fixed.moved > 0 || fixed.dropped > 0` 才
+    // （`ProChart.tsx:1462` 读桶，`ProChart.tsx:1473` 的 `fixed.moved > 0 || fixed.dropped > 0` 才
     // `saveDrawings`），吸回发生在这一行**之前**，那是本片之外的事，不归这条管。这条只管一件事：
     // 开／关 VPVR 不是任何一次 `saveDrawings` 的理由——所以两侧各与挂载态比一次，而不是互相干。
     const afterMount = localStorage.getItem("pro-chart.drawings.v1");

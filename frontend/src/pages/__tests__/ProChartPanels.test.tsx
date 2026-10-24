@@ -61,7 +61,7 @@ function runLoad(): void {
     period: { type: "day", span: 1 },
     symbol: { ticker: "600519.SH" },
     // The callback is the only way bars reach the double's `getDataList`, and
-    // the restore path needs `lastBarTimestamp(bars)` (`ProChart.tsx:1403`) —
+    // the restore path needs `lastBarTimestamp(bars)` (`ProChart.tsx:1468`) —
     // a `() => []` answer would leave 清单 disabled, and every `drawings` pin
     // below would then be asserting nothing at all.
     callback: (data) => {
@@ -105,7 +105,7 @@ vi.mock("klinecharts", () => ({
       h.overlays.push(o);
       return o.id;
     }),
-    // The page clears a chart with `chart.removeOverlay()` (`:1396`), so the
+    // The page clears a chart with `chart.removeOverlay()` (`:1461`), so the
     // double has to accept the no-argument form as well as `{ id }`.
     removeOverlay: vi.fn(({ id }: { id?: string } = {}) => {
       h.overlays = id ? h.overlays.filter((o) => o.id !== id) : [];
@@ -207,7 +207,7 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
   // 一起带走，红法只说「某一枚不对」。按 `it.each` 拆开，覆盖面不变，一圈一个断言，
   // 标题直接报出是哪一枚。每一圈都是新会话（文件级 `beforeEach` 清 `sessionStorage`，
   // `mountWithOneDrawing` 先 `cleanup()`），所以「逐枚只含自己的键」这句话仍然算数。
-  // 工作台那枚没有 `aria-label`，可达名来自文本（接线后现读 ProChart.tsx:2765-2772），
+  // 工作台那枚没有 `aria-label`，可达名来自文本（接线后现读 ProChart.tsx:2972-2979），
   // 所以那一格的 `name` 给的是正则。评审 F2：四枚都读 `aria-pressed`，包括它。
   const fourSwitches: Array<[string | RegExp, string]> = [
     ["副图指标", "subIndicator"],
@@ -252,7 +252,7 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
     expect(screen.getByRole("button", { name: "图例" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "画线清单" }).getAttribute("aria-pressed")).toBe("true");
     // 评审 F2：spec §5(2) 那句「带着这条会话记录重新挂载 ⇒ 四枚开关都读得到 aria-pressed=true」
-    // 的第四枚。这一格读的是**页面**（`ProChart.tsx:2765-2772` 那枚入口按钮自报 pressed），
+    // 的第四枚。这一格读的是**页面**（`ProChart.tsx:2972-2979` 那枚入口按钮自报 pressed），
     // 不是替身 —— 下面那行 `mock-close-workbench` 因此不再是工作台唯一的证据。
     expect(screen.getByRole("button", { name: /指标公式/ }).getAttribute("aria-pressed")).toBe("true");
     expect(stored()).toEqual({ workbench: true, subIndicator: true, drawings: true, legend: true });
@@ -287,14 +287,14 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
  *
  * 每格带两枚动作（评审 修复轮 F2「让形状追上声明」，不是把注释改口）：`openName` 打开、
  * `closeName` 关回去；`aria-pressed` 一律从 `openName` 读，四枚入口都自报状态（现读
- * `:2779` subPanelOpen／`:2902` legendPanelOpen／`:2845` drawPanelOpen／`:2767` indPanelOpen）。
- * 前三格 `closeName === openName` —— 那三枚是真翻转（现读 `ProChart.tsx:2783`
- * `setSubPanelOpen((v) => !v)`、`:2904` `setLegendPanelOpen((v) => !v)`、`toggleDrawPanel`
- * `:2296-2299` `setDrawPanelOpen((open) => !open)`）。
+ * `:2986` subPanelOpen／`:3134` legendPanelOpen／`:3077` drawPanelOpen／`:2974` indPanelOpen）。
+ * 前三格 `closeName === openName` —— 那三枚是真翻转（现读 `ProChart.tsx:2990`
+ * `setSubPanelOpen((v) => !v)`、`:3136` `setLegendPanelOpen((v) => !v)`、`toggleDrawPanel`
+ * `:2416-2419` `setDrawPanelOpen((open) => !open)`）。
  * **第四格的关闭为什么必须借替身 handle**：页面那枚入口按钮的 `onClick` 是
- * `openFormulaPanel`（现读 `ProChart.tsx:762-765`），体内只有 `setFormulaError(null);` ＋
- * `:764 setIndPanelOpen(true);` —— 单向打开、没有关闭分支，所以点第二次什么都没关，
- * 唯一能把工作台关回去的可达点是遮罩 `onClose`（现读 `:3260`），它在替身里就是那枚
+ * `openFormulaPanel`（现读 `ProChart.tsx:821-824`），体内只有 `setFormulaError(null);` ＋
+ * `:823 setIndPanelOpen(true);` —— 单向打开、没有关闭分支，所以点第二次什么都没关，
+ * 唯一能把工作台关回去的可达点是遮罩 `onClose`（现读 `:3505`），它在替身里就是那枚
  * `mock-close-workbench`（本文件 `:143-149`）。上一版四格都点同一枚按钮两次、注释却写
  * 「开一次、关一次」，对第四格是不实的声明，本轮改的是针的形状而不是那句注释。
  *
@@ -303,15 +303,15 @@ describe("/pro-chart 面板开关的会话级持久化", () => {
  *
  * 这四格在实现之前就是绿的，这是本任务如实要记的形状；判别力由变异自证补上——
  * Task 3 那席往 `toggleDrawPanel` 塞一行 `replaceState` ⇒ 「画线清单」红；本轮 修复轮 1
- * 往 `ProChart.tsx:2783` 之后塞一行 `replaceState` ⇒ 「副图指标」红（两枚不同格，各证一次本体）。
- * 注意本仓确实有写 URL 的动作，但它不在这四格里：`stripQueryKey`（`ProChart.tsx:416`，
- * 写点 `:422`）只在 `?s=`／`?d=` 在场时才落笔，盘上没有那两个参数时它 `:419` 早退。
+ * 往 `ProChart.tsx:2990` 之后塞一行 `replaceState` ⇒ 「副图指标」红（两枚不同格，各证一次本体）。
+ * 注意本仓确实有写 URL 的动作，但它不在这四格里：`stripQueryKey`（`ProChart.tsx:462`，
+ * 写点 `:468`）只在 `?s=`／`?d=` 在场时才落笔，盘上没有那两个参数时它 `:465` 早退。
  */
 const fourOpenActions: Array<[string, string | RegExp, string | RegExp]> = [
   ["副图指标", "副图指标", "副图指标"],
   ["图例", "图例", "图例"],
   ["画线清单", "画线清单", "画线清单"],
-  // 工作台那枚入口没有 `aria-label`，可达名来自文本（现读 ProChart.tsx:2765-2772），
+  // 工作台那枚入口没有 `aria-label`，可达名来自文本（现读 ProChart.tsx:2972-2979），
   // 所以给正则 —— 和上面四枚开关那组同判据。关闭动作换成替身 handle，理由见上面那段。
   ["指标公式工作台", /指标公式/, "mock-close-workbench"],
 ];
@@ -339,13 +339,13 @@ describe("/pro-chart 四个打开动作对 URL 的净变化为零（TV-CI-06 的
 /**
  * `?s=` 分享链接优先（T3 第二根针）。
  *
- * 链接是在**模块作用域**被捕获的（`ProChart.tsx:398` `let pendingShare = readShareQuery();`），
+ * 链接是在**模块作用域**被捕获的（`ProChart.tsx:444` `let pendingShare = readShareQuery();`），
  * 所以必须先换 `window.location` 再 `vi.resetModules()` ＋ 动态 `import("../ProChart")` ——
  * 和 `ProChartDrawings.test.tsx:1731-1769` 那根 `?d=` 针同一配方。
  *
  * 预置的是 `{"workbench":false}`。按 `chartPanels.ts:37-44` 的严格读取，`false` 本来也读成关，
  * 所以这根针钉的不是「真赢过假」，而是**挂载时初值来自盘、随后被链接的 `setIndPanelOpen(true)`
- * （`:1622`）覆盖并回写盘**：偏差编码 ⇒ 全 false 时键被删 ⇒ 若链接没打开工作台，这里读到的是
+ * （`:1687`）覆盖并回写盘**：偏差编码 ⇒ 全 false 时键被删 ⇒ 若链接没打开工作台，这里读到的是
  * `null` 而不是 `{ workbench: true }`。所以断言不许写成 `toBeNull()` 来「过」。
  */
 it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话键", async () => {
@@ -353,7 +353,7 @@ it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话
   cleanup();
   sessionStorage.setItem(PANELS_KEY, JSON.stringify({ workbench: false }));
   // `?s=` 一侧有公开的写侧编码器（`scriptExchange.ts:233` `createShareLink(card, base)`），
-  // 所以这里用真码，不用夹具。解码只在 `out.ok` 时才走到 `:1622` 那句 setIndPanelOpen(true)，
+  // 所以这里用真码，不用夹具。解码只在 `out.ok` 时才走到 `:1687` 那句 setIndPanelOpen(true)，
   // 故卡片必须能过 `readCard`：`code` 是非空字符串就够，dialect 缺省会由 pickDialect 推。
   const { createShareLink } = await import("@/lib/scriptExchange");
   const { url } = await createShareLink(
@@ -390,7 +390,7 @@ it("?s= 分享链接打开工作台：链接优先，且这次真的写进会话
     const workbenchHandle = await screen.findByRole("button", { name: "mock-close-workbench" });
     expect(workbenchHandle).toBeTruthy();
     // 跨 describe 取不到 Task 2 那枚 `stored()`（它声明在持久化块的作用域里），直接读键。
-    // 写点（`ProChart.tsx:803-810` 的合成 `useEffect`）跟在面板状态之后，同一把条件等待的尺。
+    // 写点（`ProChart.tsx:868-875` 的合成 `useEffect`）跟在面板状态之后，同一把条件等待的尺。
     await waitFor(() => {
       expect(JSON.parse(sessionStorage.getItem(PANELS_KEY) ?? "null")).toEqual({ workbench: true });
     });

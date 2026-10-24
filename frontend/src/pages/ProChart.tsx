@@ -362,7 +362,7 @@ function chartStyles(dark: boolean, timeShare = false, legend: LegendPrefs, ha: 
   const type: CandleType = timeShare ? "area" : "candle_solid";
   // `heikinAshiActive` is the one predicate both channels read: the styles side
   // asks it here, and the mount effect that mounts/unmounts the indicator (第④片
-  // T4, `:1491`) asks the same one — so the two cannot drift: an HA that is painted
+  // T4, `:1641`) asks the same one — so the two cannot drift: an HA that is painted
   // but not mounted would show nine invisible rectangles and nothing else, and the
   // reverse would show real candles under a button reading 已开.
   const haShown = heikinAshiActive(ha, timeShare);
@@ -630,7 +630,7 @@ export function ProChart() {
   // page behaves exactly as it did before this feature existed.
   const [magnet, setMagnet] = useState<MagnetMode>(() => loadMagnet());
   // The mirror the closures read. The symbol/interval swap lives inside the
-  // DataLoader closure built once per chart (`:1185`), so it can only ever see a
+  // DataLoader closure built once per chart (`:1309`), so it can only ever see a
   // ref — and `restoreDrawings` there has to stamp the same `mode` the toolbar
   // armed with, or a line comes back from storage with a different magnet
   // behaviour than the one the user is drawing with. Same reason as
@@ -678,7 +678,7 @@ export function ProChart() {
   // `loading` 的初值跟着**恢复出来的开关**走，而不是恒假：`cmpOn` 与 `cmpSymbol` 同源于
   // `loadCompare()`（上面那三格），恢复成「开」必带一个非空标的，两格那一刻都已就位。留一格假的
   // "不在飞"在初值上，读得到的代价是 effect 跑起来之前那一帧里按钮那句说的是「结果为空」。
-  // 一个例外如实记着（第三席的 S3-4）：`timeShare` 来自**会话键**（`localStorage` 的 `SESSION_KEY`，见 282 行）而不是偏好，
+  // 一个例外如实记着（第三席的 S3-4）：`timeShare` 来自**会话键**（`localStorage` 的 `SESSION_KEY`，见 307 行）而不是偏好，
   // 与上面两格不同源 ⇒ 「`cmpOn` 真 ＋ 分时态」那一格守卫直接早退，这一格会一路真到用户切回蜡烛。
   // 那一屏读不到它（title 第 1 支排在所有 `cmpStatus` 分支之前），所以形状不动、只把话说对。
   const [cmpStatus, setCmpStatus] = useState<CmpStatus>(() => {
@@ -721,7 +721,7 @@ export function ProChart() {
   // it up once the bank is done.
   const anchorNoteRef = useRef<{ bad?: boolean; text: string } | null>(null);
   // --- Bar Replay（本地定制 ㊺）-----------------------------------------------------------
-  // The DataLoader closure is built once per chart (`:1185`), so it can only read the ref;
+  // The DataLoader closure is built once per chart (`:1309`), so it can only read the ref;
   // `replay` is the mirror the toolbar renders. `syncReplayUi` is the only writer of the
   // mirror, and it derives everything from the ref — the two cannot drift, and a stale
   // closure can never pass an old cursor or `playing` flag forward (Task 4's loop depends
@@ -1156,7 +1156,7 @@ export function ProChart() {
   /**
    * Put the Heikin-Ashi overlay on the price pane, or take it off (第④片).
    *
-   * Same 先删后挂 shape as `syncPriceOverlay` for the same reason (`:1000-1010`):
+   * Same 先删后挂 shape as `syncPriceOverlay` for the same reason (`:1136-1154`):
    * `createIndicator(value, true)` always appends — `ChartImp.createIndicator` (dist 15270)
    * mints a fresh `create.id` before `StoreImp.addIndicator` (dist 14150) de-dups, and a
    * filter carrying an id matches on id alone (dist 14179) — so "is it already up?" cannot
@@ -1183,7 +1183,7 @@ export function ProChart() {
   /**
    * Put the volume-profile histogram on the price pane, or take it off (第⑤片).
    *
-   * Same 先删后挂 shape as `syncHeikinAshi` (`:1045`, body `:1045-1057`) for the same reason:
+   * Same 先删后挂 shape as `syncHeikinAshi` (`:1169`, body `:1169-1181`) for the same reason:
    * `createIndicator(value, true)` always appends (`ChartImp.createIndicator` mints a fresh
    * id before `StoreImp.addIndicator` de-dups, and a filter carrying an id matches on id
    * alone — dist 15270 ⇄ 14150), so "is it already up?" cannot be answered by the library
@@ -2246,7 +2246,7 @@ export function ProChart() {
 
   /**
    * Flip 平均K线. Nothing else has to happen here: `haOn` is in the theme effect's
-   * dependency list (`:1486`, nine colours) *and* in the mount effect's (`:1498`,
+   * dependency list (`:1636`, nine colours) *and* in the mount effect's (`:1648`,
    * indicator), so the two channels both move from the same state change. Unlike
    * `toggleMagnet` there is no live object to re-apply — a magnet is a property of
    * drawings that already exist, an HA is a repaint.
@@ -2260,7 +2260,7 @@ export function ProChart() {
 
   /**
    * Flip the volume-profile switch. Same three writes as `toggleHeikinAshi`
-   * (`:2072`, body `:2072-2077`) and for the same reason: the ref breaks the stale-closure tie, the state
+   * (`:2254`, body `:2254-2259`) and for the same reason: the ref breaks the stale-closure tie, the state
    * drives the effect, the pref outlives the session. Nothing to re-apply — VPVR is a
    * repaint, not a property of objects that already exist.
    */

@@ -24,7 +24,7 @@ import { valueAreaOf, volumeProfile, VPVR_ROWS, type ProfileBar, type VolumeProf
  *    **之后**把锁放回（`:3194 this._lockSeriesPrecision = false`），于是 `:14160` 的
  *    `_synchronizeIndicatorSeriesPrecision` 经 `:14221 indicator.setSeriesPrecision(pricePrecision)`
  *    与 `:3226` 那道「未锁才写」的门，把声明的 `precision: 2` 覆写成 symbol 的 `pricePrecision`，
- *    而本仓写死 `ProChart.tsx:1319` `chart.setSymbol({ …, pricePrecision: 2, … })` ⇒ 对 `Math.min`
+ *    而本仓写死 `ProChart.tsx:1527` `chart.setSymbol({ …, pricePrecision: 2, … })` ⇒ 对 `Math.min`
  *    不贡献新值。注意这条通道是**推导**出来的：本片的读数面没有一格判轴的小数位
  *    （`getRange()` 那三条活体读数只有 from／to／realRange），所以它按「已推导、未取证」登记。
  * 2. **`draw` 照样会被调**：`IndicatorView.drawImp` 的门只有 `indicator.visible`

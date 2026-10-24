@@ -74,8 +74,8 @@ const LIVE_TAIL = 2;
 
 /** The columns that make a tail read worth writing. `_addData` matches the tail by
  *  timestamp alone (dist 13486, 13495), so this is the cell's own 「nothing moved」
- *  test: a column the feed starts sending (`udf_routes.py:452-457` →
- *  `marketApi.ts:177-184`) has to be added here too, or a bar that only changes
+ *  test: a column the feed starts sending (`udf_routes.py:426-431` →
+ *  `marketApi.ts:223-229`) has to be added here too, or a bar that only changes
  *  there is never written and the header never sees it. */
 function sameBar(a: KLineData, b: KLineData): boolean {
   return (
