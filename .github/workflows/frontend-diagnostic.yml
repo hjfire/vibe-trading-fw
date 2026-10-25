@@ -1,0 +1,75 @@
+# Temporary diagnostic for the `frontend` leg of CI, added 2026-10-25.
+#
+# The `frontend` leg has been reporting `failure` on two consecutive pushes
+# (`e55e9fde`, `00699ba8`) while the same tree is green in four local full-suite
+# runs. The job log itself is not anonymously readable (`/actions/jobs/<id>/logs`
+# answers 403, the web-UI log endpoints answer 404), so no failing test name has
+# ever reached this side. This workflow re-runs the same three commands on the
+# same runner image and writes the failure list plus the runtime coordinates
+# into the job summary, which IS readable through
+# `/repos/<owner>/<repo>/check-runs/<id>` without a token.
+#
+# It changes nothing about the `CI` workflow and holds no write permissions.
+# The trigger names only the slice branch that carries this file, so the
+# diagnostic never runs against `main`. Delete this file once the red is
+# attributed.
+name: frontend-diagnostic
+on:
+  push:
+    branches: [feat/l3-slice6-interval-catalogue-l0]
+permissions:
+  contents: read
+
+jobs:
+  frontend-diagnostic:
+    name: frontend diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and build (clone of the CI leg)
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Frontend tests (captured)
+        shell: bash
+        run: |
+          cd frontend
+          set -o pipefail
+          npx vitest run --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/vitest.log"
+
+      - name: Failure list into the job summary
+        if: '!cancelled()'
+        shell: bash
+        run: |
+          {
+            echo "## frontend-diagnostic"
+            echo "- node: $(node -v)  v8: $(node -p 'process.versions.v8')  icu: $(node -p 'process.versions.icu')  tz: $(node -p 'process.versions.tz')  openssl: $(node -p 'process.versions.openssl')"
+            echo "- nproc: $(nproc)  mem: $(awk '/MemTotal/{print $2}' /proc/meminfo) kB  os: $(. /etc/os-release && echo "$PRETTY_NAME $VERSION_CODENAME")"
+            echo "- vitest: $(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/node_modules/vitest/package.json | head -1)  vite: $(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/node_modules/vite/package.json | head -1)  jsdom: $(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/node_modules/jsdom/package.json | head -1)"
+            echo
+            if [ -f "$RUNNER_TEMP/vitest.log" ]; then
+              echo '### names'
+              echo '```text'
+              sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/vitest.log" \
+                | grep -nE "^[[:space:]]*(FAIL|×|✕)|Error:|timed out|Unhandled" | head -80
+              echo '```'
+              echo '### tail'
+              echo '```text'
+              sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/vitest.log" \
+                | awk 'f || /Failed Tests|Unhandled Errors|^\s*(Test Files|Tests|Duration) /{f=1; print}' \
+                | head -220
+              echo '```'
+            else
+              echo "no vitest log — an earlier step died"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
