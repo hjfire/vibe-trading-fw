@@ -242,9 +242,28 @@ class SessionService:
         return self.store.list_sessions(limit)
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session."""
-        self.event_bus.clear(session_id)
-        return self.store.delete_session(session_id)
+        """Delete an idle session after purging its searchable text.
+
+        Args:
+            session_id: Session to delete.
+
+        Returns:
+            Whether the on-disk session existed and was deleted.
+
+        Raises:
+            SessionBusyError: If a run could recreate the deleted content.
+            Exception: If the search purge fails; the on-disk session remains
+                available so the user can retry instead of receiving false success.
+        """
+        with self._inflight_lock:
+            if session_id in self._inflight:
+                raise SessionBusyError("Stop the active run before deleting its session")
+            # Purge even when the directory is absent: a retry can clear stale
+            # index rows left by an older version or an interrupted deletion.
+            self._search_index.remove_session(session_id)
+            deleted = self.store.delete_session(session_id)
+            self.event_bus.clear(session_id)
+            return deleted
 
     async def send_message(
         self,
