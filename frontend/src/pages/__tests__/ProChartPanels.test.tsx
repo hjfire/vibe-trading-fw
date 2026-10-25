@@ -143,7 +143,7 @@ vi.mock("@/components/charts/WatchList", () => ({ default: () => null }));
 vi.mock("@/components/charts/IndicatorEditor", () => ({
   // Only the callback contract is modelled: the page hands the workbench an
   // `onClose` that sets `indPanelOpen` false, and that path must reach storage.
-  // The real mask lives at `IndicatorEditor.tsx:250`; its contents are out of scope here.
+  // The real mask lives at `IndicatorEditor.tsx:306`; its contents are out of scope here.
   default: ({ open, onClose }: { open: boolean; onClose: () => void }) =>
     open ? <button type="button" onClick={onClose}>mock-close-workbench</button> : null,
 }));

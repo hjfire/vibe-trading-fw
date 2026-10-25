@@ -83,7 +83,7 @@ describe("SourcePrioritySettings", () => {
     expect(await screen.findByText("Data Source Priority")).toBeInTheDocument();
     // a_share is the first market: its default head renders as a row. The gate has
     // to be the **row**, not the heading above: the heading renders synchronously
-    // *before* the `{loading ? …}` branch (`SourcePrioritySettings.tsx:166`), so
+    // *before* the `{loading ? …}` branch (`SourcePrioritySettings.tsx:167`), so
     // awaiting it is satisfied on the first frame and says nothing about the rows —
     // a synchronous `getByText("tencent")` behind that heading therefore raced the
     // fetch, while every other case in the file (which gates on

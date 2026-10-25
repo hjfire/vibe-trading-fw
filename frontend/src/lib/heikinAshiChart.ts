@@ -29,7 +29,7 @@ import { heikinAshi, type HaRow } from "./heikinAshi";
 export const HEIKIN_ASHI_NAME = "HEIKIN_ASHI";
 export const HEIKIN_ASHI_SHORT_NAME = "平均K线";
 
-/** 布尔偏好的最省键形，照磁吸 `pro-chart.magnet.v1`（`chartDrawings.ts:1028`）。 */
+/** 布尔偏好的最省键形，照磁吸 `pro-chart.magnet.v1`（`chartDrawings.ts:1114`）。 */
 export const HEIKIN_ASHI_PREFS_KEY = "pro-chart.heikin-ashi.v1";
 
 /**

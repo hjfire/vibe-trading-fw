@@ -451,7 +451,7 @@ describe("/pro-chart 多标的叠加对比", () => {
   });
 
   it("数据到达前一次都不挂；到达那一轮必须挂上（§十·②b / R10）", async () => {
-    // 第一轮让对比取数交回**空数组**（`no_data` 的真实形状，`marketApi.ts:260`）：store 里
+    // 第一轮让对比取数交回**空数组**（`no_data` 的真实形状，`marketApi.ts:312`）：store 里
     // 那个键有内容位但 bars 为空 ⇒ ready 为假。未就绪不挂是 §六 那枚谓词第三格的定义。
     h.cmpBars = [];
     render(<ProChart />);
@@ -478,7 +478,7 @@ describe("/pro-chart 多标的叠加对比", () => {
   });
 
   it("对比交回 0 根却带着 source：小字只许说主图那半句", async () => {
-    // `marketApi.ts:260`/`:265` 的形状：`s:"ok"` 时 `columnsToBars` 交空数组、`source` 照抄后端那格
+    // `marketApi.ts:312`/`:317` 的形状：`s:"ok"` 时 `columnsToBars` 交空数组、`source` 照抄后端那格
     // ⇒ `cmpStatus.source` 非空而 `cmpReady` 为假（`ProChart.tsx:758-759` 问的是 `bars.length > 0`）。
     // 那一屏按钮说的是「数据还没到位」，正下方若还在讲「对 fake-cmp」，两句话互相打脸。
     h.cmpBars = [];

@@ -434,7 +434,7 @@ describe("脚本工作台页签的无障碍角色", () => {
 
     // 裁定二只管 tab→panel 这一条线：本片不给六枚 tab 发 aria-controls，因为条件发它
     // 需要同时给页身面板补上 id 与 aria-labelledby，那是另一片的范围（仓内两条形状都可达：
-    // PeriodPicker.tsx:76 的「open 才发 aria-controls」、WelcomeScreen.tsx:346 的
+    // PeriodPicker.tsx:76 的「open 才发 aria-controls」、WelcomeScreen.tsx:351 的
     // 「只渲染选中页身 + role=tabpanel」）。针因此只逐枚钉六枚 tab，不数整棵抽屉——
     // 否则六段页身将来任何一页正当加一枚可折叠区，都会为无关的事把这根针判红。
     for (const t of tabs) {
