@@ -115,7 +115,7 @@ describe("the inventory", () => {
     await screen.findByText("Bar warehouse");
     // Twice on purpose: once as the store-wide total, once on the 1D line. The
     // two must agree, so a totals bug shows up here rather than silently.
-    expect(screen.getAllByText("742,000")).toHaveLength(2);
+    expect((await screen.findAllByText("742,000")).length).toBe(2);
     expect(screen.getAllByText("56.0MB")).toHaveLength(2);
     expect(screen.getByText("2016-01-04 → 2026-09-04")).toBeInTheDocument();
     expect(screen.getByText("11")).toBeInTheDocument();
