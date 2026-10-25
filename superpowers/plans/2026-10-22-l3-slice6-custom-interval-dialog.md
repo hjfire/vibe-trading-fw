@@ -884,7 +884,7 @@ Task 5 不是行中性任务：新增状态、增删处理函数、对话框渲�
 
 ```bash
 cd frontend && npx tsc -b; npx vitest run; npx vite build
-python tools/test_wiki_drift.py -q; python tools/forensics_audit.py; python -m pytest tools/test_forensics_spec.py -q
+python -X utf8 -m pytest tools/test_wiki_drift.py -q -m "not local_archive"; python tools/forensics_audit.py; python -m pytest tools/test_forensics_spec.py -q   # 2026-10-25 收口修：G4 这条原先写的是 `python tools/test_wiki_drift.py -q`，而那枚文件没有 `__main__` 跑手——直接执行收 0 条用例、回 rc=0，是假绿。改成 pytest 形，选择器照 CI（`.github/workflows/repowiki-freshness.yml:85`）
 bash tools/wiki_freshness_gate.sh; bash tools/ci_grep_gates.sh | sed -r 's/\x1b\[[0-9;]*m//g'
 ```
 
