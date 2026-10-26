@@ -1,0 +1,119 @@
+# Post-hoc attribution for the `CI` workflow's legs, added 2026-10-26.
+#
+# Why this exists and the previous instrument did not: the `frontend` leg goes
+# red and green on BYTE-IDENTICAL trees. Tree 4e58342c691a0924b59a400e90a99c4f49214c3b
+# is the `frontend` subtree of e55e9fde / 00699ba8 / b12d556d / f61153b9, and that
+# one tree has produced red on runs 40172858724 and 40176155310 and green on runs
+# 40184113344 and 40205498081. So the question is not "is this a regression" (it
+# is not) but "which test flips" — and the failing test NAME never reached this
+# side: `/actions/jobs/<id>/logs` answers 403 anonymously, the rendered job page
+# never fills its log panel without a session, and `$GITHUB_STEP_SUMMARY` reads
+# back as length 0. The anonymous check-run annotation surface does answer 200,
+# but on those red legs it carried only "Process completed with exit code 1".
+#
+# What this file does instead: it reproduces nothing. It fires AFTER a `CI` run
+# completes, holds a job token with `actions: read`, downloads the log of each
+# failed job through the authenticated endpoint — the channel a token can open
+# and a bare IP address cannot — and re-emits the failure lines as check-run
+# annotations, which ARE anonymously readable. The next red `CI` run names its
+# own failing tests without anyone logging in. Whether the token really can read
+# those logs is reported by this job's own `log-http` annotation, not assumed.
+#
+# `workflow_run` only executes the copy of this file on the default branch, and
+# only after the watched workflow completes. Read-only permissions, and
+# `.github/workflows/test.yml` (upstream-owned, protected by the ownership gate
+# in tools/test_wiki_drift.py) stays byte-for-byte untouched.
+name: frontend-red-reporter
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    name: name the failing tests
+    if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      API: https://api.github.com/repos/${{ github.repository }}
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download each failed job's log and annotate the failure lines
+        shell: bash
+        run: |
+          set -u
+          auth="Authorization: Bearer $TOKEN"
+
+          # Workflow-command escaping has two tiers: % , CR and LF are special in
+          # both the data and the properties; , and : are additional property
+          # separators. Titles are properties, messages are data — so the title
+          # gets the wider map. Newlines are dropped rather than escaped because
+          # annotations are one line each by design.
+          emit() {
+            local t m
+            t=$(printf '%s' "$1" | tr -d '\r\n' \
+                | sed -e 's/%/%25/g' -e 's/,/%2C/g' -e 's/:/%3A/g')
+            m=$(printf '%s' "$2" | tr -d '\r\n' | sed -e 's/%/%25/g' | cut -c1-240)
+            printf '::notice title=%s::%s\n' "$t" "$m"
+          }
+
+          strip() { sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r//g'; }
+
+          emit "run" "run=$RUN_ID conclusion=$CONCLUSION"
+
+          # One page holds a run this size, but do not assume it.
+          page=1
+          failed=""
+          while :; do
+            if ! curl -sS -f -H "$auth" -H "Accept: application/vnd.github+json" \
+               -o "$RUNNER_TEMP/jobs-p$page.json" \
+               "$API/actions/runs/$RUN_ID/jobs?per_page=100&page=$page"; then
+              emit "jobs-endpoint" "http failed for run $RUN_ID page $page"
+              break
+            fi
+            # ":" is inside the payload's own values, so the pair is joined with a
+            # separator the log names cannot contain, and spaces are underscored.
+            failed="$failed $(jq -r '.jobs[]
+              | select(.conclusion != "success" and .conclusion != "skipped")
+              | "\(.id)=\(.name)"' "$RUNNER_TEMP/jobs-p$page.json" | tr ' ' '_')"
+            n=$(jq '.jobs | length' "$RUNNER_TEMP/jobs-p$page.json")
+            [ "${n:-0}" -lt 100 ] && break
+            page=$((page + 1))
+          done
+
+          if [ -z "${failed// /}" ]; then
+            emit "no-failed-job" "run $RUN_ID concluded $CONCLUSION but no job had a failing conclusion"
+            exit 0
+          fi
+
+          for spec in $failed; do
+            job_id="${spec%%=*}"
+            job_name="${spec#*=}"
+            log="$RUNNER_TEMP/job-$job_id.log"
+            emit "failed-job" "$job_name id=$job_id"
+
+            code=$(curl -sS -o "$log" -w '%{http_code}' -L \
+              -H "$auth" -H "Accept: application/vnd.github+json" \
+              "$API/actions/jobs/$job_id/logs" || echo 000)
+            size=$(wc -c < "$log" 2>/dev/null || echo 0)
+            emit "log-http" "$job_name http=$code bytes=$size"
+            [ "$code" = "200" ] && [ "$size" -gt 0 ] || continue
+
+            # vitest prints the aggregate, then each failing file/test, then the
+            # reason. A check run holds only a limited number of annotations, so
+            # every bucket is deliberately short and the failing-test lines get
+            # the largest share.
+            strip < "$log" | grep -aE "(Test Files|Tests)[[:space:]]+[0-9]+ (failed|passed)" \
+              | tail -2 | while IFS= read -r l; do emit "aggregate" "$l"; done
+            strip < "$log" | grep -aE "(^|[[:space:]])FAIL[[:space:]]|×[[:space:]]|Test timed out|Unhandled|worker exited|Channel closed" \
+              | head -18 | while IFS= read -r l; do emit "failing" "$l"; done
+            # The tail is where an unhandled worker death leaves its trace.
+            strip < "$log" | tail -6 | while IFS= read -r l; do emit "tail" "$l"; done
+          done
