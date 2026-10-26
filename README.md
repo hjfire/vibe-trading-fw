@@ -52,6 +52,8 @@
 
 > ⚠️ **Security warning:** The X account `VibeTrading_HKU`, Virtuals project `101845`, and token contract `0x640BDBF77b6447E8b7DB7894cED84BD1c40571f4` are not official Vibe-Trading assets. We have never launched or endorsed any token or memecoin. Do not buy, connect a wallet, or sign anything. [Details](SECURITY.md#official-channels--impersonation).
 
+- **2026-10-25** 🛠️ **Session, market-data and calculation fixes (unreleased)**: Deleting a session also removes its search entries, and chat titles update correctly when the first message includes attachments or Swarm instructions ([#1970](https://github.com/HKUDS/Vibe-Trading/pull/1970), [#1969](https://github.com/HKUDS/Vibe-Trading/pull/1969)). Fix prematurely truncated CCXT history, Nobitex daily dates and Tiingo class-share symbols ([#1999](https://github.com/HKUDS/Vibe-Trading/pull/1999), [#1989](https://github.com/HKUDS/Vibe-Trading/pull/1989), [#2010](https://github.com/HKUDS/Vibe-Trading/pull/2010)). Preserve small trade/chart prices, correct GTJA factor formulas and VWAP units, and reject ambiguous boolean flags before changing state ([fix](https://github.com/HKUDS/Vibe-Trading/commit/6dafa4cde)). These fixes are on `main` for the next release.
+
 - **2026-10-24** 🛠️ **MCP, backtest and search fixes (unreleased)**: MCP loads the runtime `.env`, while shell tools still require explicit opt-in at startup ([#1974](https://github.com/HKUDS/Vibe-Trading/pull/1974)). Report assumed futures leverage ([#1972](https://github.com/HKUDS/Vibe-Trading/pull/1972)), preserve fractional-day spans in annualization ([#1971](https://github.com/HKUDS/Vibe-Trading/pull/1971)), and try enabled Sogou/Bing fallbacks when ddgs returns no results ([fix](https://github.com/HKUDS/Vibe-Trading/commit/0d946491c)).
 
 - **2026-10-23** 🛠️ **Model, portfolio and futures fixes (unreleased)**: Direct MiniMax connections default to M3.1 Flash and retain reasoning across tool calls ([#1936](https://github.com/HKUDS/Vibe-Trading/pull/1936)). Longbridge exposes cash by currency and financing limits across Agent, CLI, API and Web ([#1940](https://github.com/HKUDS/Vibe-Trading/pull/1940)). Correct global futures routing, contract multipliers and micro-contract fees, with explicit warnings when pricing defaults are used ([#1965](https://github.com/HKUDS/Vibe-Trading/pull/1965)). Also fix portfolio error redaction, audit rotation, IC statistics, numeric parsing and Weixin attachment collisions. Details in [CHANGELOG](CHANGELOG.md).
@@ -950,6 +952,8 @@ Beyond bars, `src/entities` ingests irregular dated cash flows (NAVs, capital
 calls, coupons) and `cashflow_performance` reports XIRR / MOIC / DPI / TVPI /
 TWR / Modified Dietz / MWR over them. This path is deliberately parallel to the
 bar engines so a `nav` column can never reach one and get priced as a close.
+Flows use the holder's sign convention: a transfer into the portfolio is
+negative, and a transfer out is positive.
 
 </details>
 

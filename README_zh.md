@@ -52,6 +52,8 @@
 
 > ⚠️ **安全警告：** X 账号 `VibeTrading_HKU`、Virtuals 项目 `101845` 及代币合约 `0x640BDBF77b6447E8b7DB7894cED84BD1c40571f4` 均非 Vibe-Trading 官方。我们从未发行或背书任何代币或 meme 币。请勿购买、连接钱包或签名。[详细说明](SECURITY.md#official-channels--impersonation)。
 
+- **2026-10-25** 🛠️ **会话、行情与计算修复（尚未发版）**：删除会话时同步清除搜索记录，首条消息带附件或 Swarm 指令时也能正确更新聊天标题（[#1970](https://github.com/HKUDS/Vibe-Trading/pull/1970)、[#1969](https://github.com/HKUDS/Vibe-Trading/pull/1969)）。修复 CCXT 历史行情提前截断、Nobitex 日线日期及 Tiingo 分类股代码映射（[#1999](https://github.com/HKUDS/Vibe-Trading/pull/1999)、[#1989](https://github.com/HKUDS/Vibe-Trading/pull/1989)、[#2010](https://github.com/HKUDS/Vibe-Trading/pull/2010)）。保留小额成交和图表价格精度，修正 GTJA 因子公式与 VWAP 单位，并在改变状态前拒绝含义不明的布尔参数（[修复](https://github.com/HKUDS/Vibe-Trading/commit/6dafa4cde)）。以上已进入 `main`，随下一版本发布。
+
 - **2026-10-24** 🛠️ **MCP、回测与搜索修复（尚未发版）**：MCP 加载运行时 `.env`，Shell 工具仍需在启动时显式启用（[#1974](https://github.com/HKUDS/Vibe-Trading/pull/1974)）。报告期货默认杠杆假设（[#1972](https://github.com/HKUDS/Vibe-Trading/pull/1972)），年化计算保留时间跨度中的小数天数（[#1971](https://github.com/HKUDS/Vibe-Trading/pull/1971)），ddgs 返回空结果时继续尝试已启用的搜狗／Bing 备用源（[修复](https://github.com/HKUDS/Vibe-Trading/commit/0d946491c)）。
 
 - **2026-10-23** 🛠️ **模型、组合与期货修复（尚未发版）**：直连 MiniMax 默认使用 M3.1 Flash，并在工具调用间保留推理历史（[#1936](https://github.com/HKUDS/Vibe-Trading/pull/1936)）。Longbridge 按币种展示现金及融资额度，贯通 Agent、CLI、API 和网页端（[#1940](https://github.com/HKUDS/Vibe-Trading/pull/1940)）。修复全球期货路由、合约乘数与微型合约手续费，使用默认定价参数时明确告警（[#1965](https://github.com/HKUDS/Vibe-Trading/pull/1965)）。同时修复组合错误信息脱敏、审计日志轮转、IC 统计、数值解析和微信附件文件冲突。详情见 [CHANGELOG](CHANGELOG.md)。
