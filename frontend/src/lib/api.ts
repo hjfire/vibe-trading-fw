@@ -148,6 +148,7 @@ export interface PortfolioPosition {
   priced: boolean;
   updated_at: string;
   pricing_basis?: string;
+  price_as_of?: string;
   price_error?: string;
 }
 
@@ -324,6 +325,11 @@ export interface ConnectorOnboarding {
   secret_storage: "os_keyring" | null;
 }
 
+export interface SocketEndpoint {
+  host: string;
+  port: number;
+}
+
 export interface LocalConnection {
   portfolio_eligible?: boolean;
   id: string;
@@ -333,6 +339,9 @@ export interface LocalConnection {
   account_ref: string;
   /** True when this connection reads nothing until an account is selected. */
   account_selection_required: boolean;
+  endpoint?: SocketEndpoint | null;
+  effective_endpoint?: SocketEndpoint;
+  endpoint_error?: string;
   connector: string;
   environment: "paper" | "live";
   transport: "local_tws" | "remote_mcp" | "broker_sdk" | "local_plugin";
@@ -502,6 +511,11 @@ export const api = {
     request<{ status: string; credential_status: Record<string, boolean> }>(
       `/api/connections/${encodeURIComponent(connectionId)}/credentials`,
       { method: "POST", body: JSON.stringify({ values }) },
+    ),
+  saveConnectionEndpoint: (connectionId: string, endpoint: SocketEndpoint) =>
+    request<{ status: string }>(
+      `/api/connections/${encodeURIComponent(connectionId)}/endpoint`,
+      { method: "PUT", body: JSON.stringify(endpoint) },
     ),
   checkConnection: (connectionId: string) =>
     request<{ status: string; connection_id: string; report: Record<string, unknown> }>(

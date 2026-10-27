@@ -2348,7 +2348,9 @@
       "accountDefault": " · پیش‌فرض کارگزار",
       "accountDeactivated": " · غیرفعال‌شده",
       "accountSave": "استفاده از این حساب",
-      "accountSaved": "حساب ذخیره شد."
+      "accountSaved": "حساب ذخیره شد.",
+      "host": "میزبان",
+      "port": "درگاه"
     },
     "imports": {
       "title": "وارد کردن extraETF Investments",
@@ -2373,7 +2375,8 @@
       "current": "ارزش فعلی",
       "targetValue": "ارزش هدف",
       "change": "تغییر ارزش"
-    }
+    },
+    "quoteAsOf": "قیمت در {{time}}"
   },
   "analysis": {
     "updated": "به‌روز شد",

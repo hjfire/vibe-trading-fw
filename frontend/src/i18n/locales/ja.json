@@ -2348,7 +2348,9 @@
       "accountDefault": "・ブローカーの既定",
       "accountDeactivated": "・無効化済み",
       "accountSave": "この口座を使う",
-      "accountSaved": "口座を保存しました。"
+      "accountSaved": "口座を保存しました。",
+      "host": "ホスト",
+      "port": "ポート"
     },
     "imports": {
       "title": "extraETF Investments をインポート",
@@ -2373,7 +2375,8 @@
       "current": "現在の評価額",
       "targetValue": "目標額",
       "change": "変更額"
-    }
+    },
+    "quoteAsOf": "{{time}} 時点の価格"
   },
   "analysis": {
     "updated": "更新済み",

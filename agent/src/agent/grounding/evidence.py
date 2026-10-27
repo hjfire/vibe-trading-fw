@@ -182,7 +182,8 @@ _METADATA_COUNT_TAILS = frozenset(
 )
 
 # Money-denominated fields a currency-marked figure may quote besides a price:
-# a market-data row's amount, and the backtest engine's equity and P&L leaves.
+# a market-data row's amount, the backtest engine's equity and P&L leaves, and the
+# opening and closing valuation of a reported period.
 _AMOUNT_FIELDS = frozenset(
     {
         "amount",
@@ -195,6 +196,8 @@ _AMOUNT_FIELDS = frozenset(
         "total_pnl",
         "avg_pnl",
         "notional",
+        "value_start",
+        "value_end",
     }
 )
 
@@ -1258,7 +1261,12 @@ class _EvidenceMixin:
         unit = unit.strip().upper() if isinstance(unit, str) else None
         metric_currency = {"RMB": "CNY", "CNH": "CNY"}.get(unit, unit) if unit in _CURRENCY_CODES else None
 
-        def visit(value: Any, path: str, timestamp: str | None = None) -> None:
+        def visit(
+            value: Any,
+            path: str,
+            timestamp: str | None = None,
+            declared_currency: str | None = None,
+        ) -> None:
             nonlocal remaining
             if remaining <= 0:
                 return
@@ -1278,7 +1286,12 @@ class _EvidenceMixin:
                             if tool_name == "get_sec_filings"
                             and path.startswith("data.metric.points[")
                             and path.endswith("].val")
-                            else _infer_currency(symbol or "")
+                            else (
+                                declared_currency
+                                if declared_currency
+                                and _leaf_name(path) in _AMOUNT_FIELDS
+                                else _infer_currency(symbol or "")
+                            )
                         ),
                         venue=_infer_venue(symbol or ""),
                     )
@@ -1286,6 +1299,13 @@ class _EvidenceMixin:
                 remaining -= 1
                 return
             if isinstance(value, dict):
+                # An object that names its own ISO currency ("currency": "USD")
+                # denominates the amount leaves beside it; nothing else inherits it.
+                sibling = value.get("currency")
+                sibling = sibling.strip().upper() if isinstance(sibling, str) else None
+                local_currency = (
+                    {"RMB": "CNY", "CNH": "CNY"}.get(sibling, sibling) if sibling in _CURRENCY_CODES else None
+                )
                 local_timestamp = next(
                     (
                         str(value[key])
@@ -1303,10 +1323,11 @@ class _EvidenceMixin:
                         item,
                         f"{path}.{key}" if path else str(key),
                         local_timestamp,
+                        local_currency,
                     )
             elif isinstance(value, list):
                 for index, item in enumerate(value):
-                    visit(item, f"{path}[{index}]", timestamp)
+                    visit(item, f"{path}[{index}]", timestamp, declared_currency)
 
         visit(payload, "")
 
@@ -1506,4 +1527,3 @@ class _EvidenceMixin:
                 )
             )
             room -= 1
-

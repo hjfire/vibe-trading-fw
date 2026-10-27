@@ -2348,7 +2348,9 @@
       "accountDefault": " · Broker-Standard",
       "accountDeactivated": " · deaktiviert",
       "accountSave": "Dieses Konto verwenden",
-      "accountSaved": "Konto gespeichert."
+      "accountSaved": "Konto gespeichert.",
+      "host": "Host",
+      "port": "Port"
     },
     "imports": {
       "title": "extraETF Investments importieren",
@@ -2373,7 +2375,8 @@
       "current": "Aktueller Wert",
       "targetValue": "Zielwert",
       "change": "Wertänderung"
-    }
+    },
+    "quoteAsOf": "Kursstand: {{time}}"
   },
   "analysis": {
     "updated": "Aktualisiert",

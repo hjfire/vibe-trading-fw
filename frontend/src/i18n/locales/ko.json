@@ -2348,7 +2348,9 @@
       "accountDefault": " · 브로커 기본값",
       "accountDeactivated": " · 비활성화됨",
       "accountSave": "이 계좌 사용",
-      "accountSaved": "계좌를 저장했습니다."
+      "accountSaved": "계좌를 저장했습니다.",
+      "host": "호스트",
+      "port": "포트"
     },
     "imports": {
       "title": "extraETF Investments 가져오기",
@@ -2373,7 +2375,8 @@
       "current": "현재 금액",
       "targetValue": "목표 금액",
       "change": "변경 금액"
-    }
+    },
+    "quoteAsOf": "{{time}} 기준 시세"
   },
   "analysis": {
     "updated": "업데이트됨",

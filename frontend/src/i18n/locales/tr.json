@@ -2302,7 +2302,9 @@
       "accountDefault": " · aracı kurum varsayılanı",
       "accountDeactivated": " · devre dışı",
       "accountSave": "Bu hesabı kullan",
-      "accountSaved": "Hesap kaydedildi."
+      "accountSaved": "Hesap kaydedildi.",
+      "host": "Sunucu",
+      "port": "Bağlantı noktası"
     },
     "imports": {
       "title": "extraETF Investments içe aktar",
@@ -2327,7 +2329,8 @@
       "current": "Mevcut değer",
       "targetValue": "Hedef değer",
       "change": "Değer değişimi"
-    }
+    },
+    "quoteAsOf": "{{time}} itibarıyla fiyat"
   },
   "navigation": {
     "menu": "Özelliklere göz at",
