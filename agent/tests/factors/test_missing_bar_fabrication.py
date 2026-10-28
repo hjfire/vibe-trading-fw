@@ -21,6 +21,10 @@ value computed from the observations it saw. ``test_a_smoother_skips_the_gap``
 pins that: the gap bar itself is NaN (the registry masks it), the next bar is
 not, and the later values are not the gap-free ones.
 
+The four chip alphas are state carriers of the same kind (the whole prior
+distribution is the state); their concentration_change_20 additionally blanks
+again 20 rows after the gap because its lookback reaches the gap bar.
+
 Four alphas the sweep still flags — ``alpha101_013``, ``alpha101_016``,
 ``gtja191_083``, ``gtja191_099``, all ``rank(ts_cov(rank(x), rank(y), 5))`` —
 are the oracle's own artifact, not a dependence: their flagged cells sit 10 to
@@ -121,6 +125,7 @@ def _base() -> dict[str, np.ndarray]:
         "val:pb",
         "val:ps_ttm",
         "val:dv_ttm",
+        "val:turnover_rate",
     ):
         base[name] = rng.integers(32, 96, (_T, _N)) / 64.0
     return base
@@ -205,6 +210,18 @@ SMOOTHERS = [
     "gtja191_188",
 ]
 
+# Recursive state carriers outside the GTJA smoothers: the chip engine mixes
+# yesterday's whole distribution into today's, so after a gap it continues from
+# the state it saw (the #1463 policy). concentration_change_20 additionally
+# re-reads the gap bar 20 rows later and is legitimately NaN there, which is why
+# these alphas are exempt from the value oracle but are NOT added to SMOOTHERS.
+CHIP_STATEFUL = {
+    "chip_cost_deviation",
+    "chip_profit_ratio",
+    "chip_concentration",
+    "chip_concentration_change_20",
+}
+
 
 @pytest.mark.parametrize("alpha_id", SMOOTHERS)
 def test_a_smoother_skips_the_gap(alpha_id: str) -> None:
@@ -260,8 +277,11 @@ def _all_alpha_ids() -> list[str]:
 @pytest.mark.parametrize("alpha_id", _all_alpha_ids())
 def test_no_finite_value_after_a_gap_differs_from_the_gap_free_one(alpha_id: str) -> None:
     """The value oracle: sees comparison gates the perturbation oracle cannot."""
-    if alpha_id in set(SMOOTHERS) | RESIDUE_ARTIFACTS | PARTIAL_WINDOWS | BENCHMARK_FROM_THE_PANEL:
-        pytest.skip("classified above: smoother, residue artifact, partial window or panel benchmark")
+    if alpha_id in set(SMOOTHERS) | CHIP_STATEFUL | RESIDUE_ARTIFACTS | PARTIAL_WINDOWS | BENCHMARK_FROM_THE_PANEL:
+        pytest.skip(
+            "classified above: smoother / state carrier / residue artifact / "
+            "partial window / panel benchmark"
+        )
     registry = get_default_registry()
     deps = set(registry.get(alpha_id).meta.get("columns_required", []))
     base = _base()
@@ -282,7 +302,14 @@ def test_no_finite_value_after_a_gap_differs_from_the_gap_free_one(alpha_id: str
 
 def test_the_value_oracle_exemptions_are_real_alphas() -> None:
     known = set(_all_alpha_ids())
-    assert (RESIDUE_ARTIFACTS | PARTIAL_WINDOWS | BENCHMARK_FROM_THE_PANEL | set(SMOOTHERS)) <= known
+    exempt = (
+        RESIDUE_ARTIFACTS
+        | PARTIAL_WINDOWS
+        | BENCHMARK_FROM_THE_PANEL
+        | set(SMOOTHERS)
+        | CHIP_STATEFUL
+    )
+    assert exempt <= known
 
 
 # Each gate's longest input reach in bars (see the comment above its mask).
