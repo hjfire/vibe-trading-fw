@@ -268,20 +268,24 @@ _CN_FUTURES_MAIN_RE = re.compile(r"^[A-Z]{1,2}0$")
 
 
 
-def _is_forex(code: str) -> bool:
-    """Detect forex pairs by matching against AKShare's symbol_market_map.
+#: akshare <= 1.19 and >= 1.20 each expose the table at one of these two paths.
+_FOREX_TABLE_MODULES = ("akshare.forex.cons", "akshare.fx.cons_forex")
 
-    Issue #54 — forex symbols (EURUSD, GBPUSD, etc.) have no exchange suffix
-    and previously fell through to the A-share endpoint.
-    """
-    # Accept the canonical slash form (EUR/USD) too, so the forex fallback
-    # chain (mt5 → akshare) actually engages for project-style codes.
+
+def _is_forex(code: str) -> bool:
+    """Detect forex pairs via AKShare's symbol_market_map (issue #54: pairs carry
+    no exchange suffix and fell through to the A-share endpoint). Slash forms fold in
+    for the mt5 chain; akshare 1.20 moved the table to akshare.fx.cons_forex, so both
+    layouts resolve and a miss logs instead of quietly returning False."""
     upper = code.upper().removesuffix(".FX").replace("/", "")
-    try:
-        from akshare.forex.cons import symbol_market_map
-    except Exception:
-        return False
-    return upper in symbol_market_map
+    for name in _FOREX_TABLE_MODULES:
+        try:
+            table = getattr(__import__(name, fromlist=["symbol_market_map"]), "symbol_market_map")
+        except (ImportError, AttributeError):
+            continue
+        return upper in table
+    logger.warning("akshare has no symbol_market_map at %s", " / ".join(_FOREX_TABLE_MODULES))
+    return False
 
 
 @register
