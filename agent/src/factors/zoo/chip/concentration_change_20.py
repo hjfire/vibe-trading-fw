@@ -1,4 +1,12 @@
-"""Chip concentration change over 20 trading days."""
+"""Chip concentration change over 20 trading days.
+
+concentration_t - concentration_{t-20}. Negative values mean the cost basis is
+converging. NaN until 20 rows of history exist and wherever either endpoint is
+NaN.
+
+Self-implemented from public definitions: no third-party code was copied and
+no cyq_* endpoint is called.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +16,6 @@ from src.factors.chips import chip_metrics
 
 __alpha_meta__ = {
     "id": "chip_concentration_change_20",
-    "nickname": "Chip concentration change over 20 days",
     "theme": ["microstructure"],
     "formula_latex": (
         r"\mathrm{concentration}_t - \mathrm{concentration}_{t-20}"
@@ -18,14 +25,6 @@ __alpha_meta__ = {
     "frequency": ["1d"],
     "decay_horizon": 20,
     "min_warmup_bars": 21,
-    "notes": (
-        "20-trading-day change of the chip cost dispersion "
-        "(concentration_t - concentration_{t-20}). Negative values mean the "
-        "cost basis is converging. NaN until 20 rows of history exist and "
-        "wherever either endpoint is NaN. Self-implemented from public "
-        "definitions; no third-party code copied and no cyq_* endpoint is "
-        "called."
-    ),
 }
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -59,8 +61,13 @@ def test_metadata_contract() -> None:
         assert meta["min_warmup_bars"] == (
             21 if alpha_id.endswith("change_20") else 1
         ), alpha_id
-        assert "no third-party code copied" in meta["notes"], alpha_id
-        assert "no cyq_* endpoint is called" in meta["notes"], alpha_id
+
+
+def test_zoo_docstring_records_provenance() -> None:
+    package = importlib.import_module("src.factors.zoo.chip")
+    doc = package.__doc__ or ""
+    assert "no third-party code copied" in doc
+    assert "no cyq_* endpoint is called" in doc
 
 
 def test_missing_turnover_column_skips() -> None:

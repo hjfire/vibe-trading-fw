@@ -827,22 +827,6 @@
   "qlib158_cntp60": {
    "en": "A missing close leaves window+1 rolling rows NaN; on sparse panels this can trigger the >95% NaN registry guard (from ~5% missing bars).",
    "zh": "一个缺失的收盘价会使 window+1 行滚动结果为 NaN；在稀疏面板上，这可能触发注册表的 >95% NaN 守卫（缺失 bar 达 ~5% 起）。"
-  },
-  "chip_cost_deviation": {
-   "en": "Daily triangular chip distribution on [low, high] with the mode at the typical price (high+low+close)/3, mixed by turnover into a turnover-weighted holding-cost distribution; this factor is the close's relative deviation from the mean chip cost. Self-implemented from public definitions; no third-party code copied and no cyq_* endpoint is called. Price levels are taken as the panel supplies them: on forward-adjusted panels the historical cost level scales with corporate actions.",
-   "zh": "按日线 [low, high] 上的三角分布、众数取典型价 (high+low+close)/3，以换手率混合成换手加权的持仓成本分布；本因子为收盘价相对平均筹码成本的偏离，正值表示价格位于平均持仓成本之上。按公开定义自研，未搬第三方代码，也不调用 cyq_* 端点。使用面板给出的价格口径：前复权面板上的历史成本会随除权缩放。"
-  },
-  "chip_profit_ratio": {
-   "en": "Share of the modelled chip mass whose cost is at or below today's close, i.e. the estimated fraction of holders in profit. Daily triangular distributions are mixed by turnover; a missing bar leaves the state untouched. Self-implemented from public definitions; no third-party code copied and no cyq_* endpoint is called. A cent-aligned close is exact; an off-grid close is linearly interpolated inside its bin.",
-   "zh": "模型筹码中成本不高于当日收盘价的质量占比，即获利盘比例的估计。每日三角分布按换手率混合，缺失 bar 保持状态不变。按公开定义自研，未搬第三方代码，也不调用 cyq_* 端点。整分收盘价精确；非整分收盘价在所在价格格内线性插值。"
-  },
-  "chip_concentration": {
-   "en": "Cost dispersion of the chip distribution: (q95 - q05) / (q95 + q05) of the modelled holding cost, with quantile prices taken at bin midpoints. Higher = a more dispersed cost basis (the public field is named concentration, but its direction is dispersion). Self-implemented from public definitions; no third-party code copied and no cyq_* endpoint is called.",
-   "zh": "筹码成本离散度：(q95 − q05) / (q95 + q05)，分位价格取价格格中点。数值越大＝成本越分散（公开字段叫「集中度」，方向是离散度）。按公开定义自研，未搬第三方代码，也不调用 cyq_* 端点。"
-  },
-  "chip_concentration_change_20": {
-   "en": "20-trading-day change of the chip cost dispersion (concentration_t - concentration_{t-20}). Negative values mean the cost basis is converging. NaN until 20 rows of history exist and wherever either endpoint is NaN. Self-implemented from public definitions; no third-party code copied and no cyq_* endpoint is called.",
-   "zh": "筹码成本离散度的 20 个交易日变化（concentration_t − concentration_{t−20}）。负值表示成本区间在收敛。历史不足 20 行或任一端为 NaN 时为 NaN。按公开定义自研，未搬第三方代码，也不调用 cyq_* 端点。"
   }
  },
  "nicknames": {
@@ -1377,22 +1361,6 @@
   "fund_roe": {
    "en": "ROE - return on equity (PIT-safe fundamentals)",
    "zh": "ROE - 净资产收益率，基于时点正确（PIT）基本面"
-  },
-  "chip_cost_deviation": {
-   "en": "Chip cost deviation: close vs turnover-weighted average cost",
-   "zh": "筹码成本偏离：收盘价相对换手加权平均成本"
-  },
-  "chip_profit_ratio": {
-   "en": "Chip profit ratio: modelled share of holders in profit",
-   "zh": "筹码获利比例：模型口径的获利盘占比"
-  },
-  "chip_concentration": {
-   "en": "Chip concentration: (q95-q05)/(q95+q05) cost dispersion",
-   "zh": "筹码集中度：(q95−q05)/(q95+q05) 成本离散度"
-  },
-  "chip_concentration_change_20": {
-   "en": "Chip concentration change over 20 days",
-   "zh": "筹码集中度 20 日变化"
   }
  },
  "themes": {
