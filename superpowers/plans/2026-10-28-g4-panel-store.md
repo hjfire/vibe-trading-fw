@@ -148,8 +148,9 @@ git commit -s -m "feat(factors): deterministic panel store with tamper detection
     `ValueError: the environment variable is longer than 32767 characters`
     （Windows 平台环境变量上限，均与本片路径无关）。
   - 门 C `ci_grep_gates.sh`：rc=1，只红 `[gate b]`；54 枚命中文件逐枚
-    `git ls-files --error-unmatch` 判未跟踪；本片五枚文件 `grep -ci worldquant`
-    全 0 ⇒ 跟踪面零贡献。
+    `git ls-files --error-unmatch` 判未跟踪；本片五枚文件对商标 needle 的
+    计数全 0 ⇒ 跟踪面零贡献（2026-10-29 更正：原文逐字抄了带 needle 的命令，
+    使计划自身在干净检出里被该门命中；改口后 HEAD 的干净 worktree 里 rc=0）。
   - 门 D 三件工具测试：`1 failed, 51 passed`，唯一红为
     `test_force_added_internal_documents_fail[docs/notes with spaces\nand newline.md]`
     （Windows 文件名不允许换行，平台既知红）。
