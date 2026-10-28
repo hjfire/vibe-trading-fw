@@ -71,8 +71,8 @@
 # Fault 4, from the run that finally named something (40628740325, 2026-10-28): the
 # per-step annotation cap. The Checks runs docs say "GitHub Actions are limited to 10
 # warning annotations and 10 error annotations per step", and `::notice` lands in the
-# warning bucket. That body asked for 32 notices on that two-leg run and GitHub kept the
-# first ten, which is precisely what the anonymous payload still holds: `run`,
+# warning bucket. The harness that serves that same two-leg payload counts the old body at
+# 40 notice requests and truncates at the tenth, whose titles match the real payload: `run`,
 # `failed-job`, `log-http`, `aggregate`, then six `failing` lines — no `why`, no `tail`,
 # no `census`, and not one line of the second leg. A budget harness (local scratch, not
 # in the repo: the step body pulled out of this file verbatim, fake curl and
