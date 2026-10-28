@@ -23,6 +23,45 @@
 # only after the watched workflow completes. Read-only permissions, and
 # `.github/workflows/test.yml` (upstream-owned, protected by the ownership gate
 # in tools/test_wiki_drift.py) stays byte-for-byte untouched.
+#
+# What run 7 of this workflow taught us, added 2026-10-28: it died with "Process
+# completed with exit code 1" on a run whose two red legs were `test / Python
+# 3.11` and `test / Python 3.14`, and it named nothing. Three faults. The flag
+# fault is a CONJUNCTION, which a four-regime matrix over the pre-fix body
+# settled — same harness, same real two-leg job list, same real 3.3 MB pytest
+# log, only the runner flags varying, and each arm reads its own regime back out
+# of the summary line (a `${VAR:-}` style default would otherwise have silently
+# turned the no-flags arm into the full-flag arm and made -e look fatal alone):
+#   1. `shell: bash` reaches the script already carrying -e AND -o pipefail. A
+#      grep that matches nothing returns 1, pipefail promotes that to a pipeline
+#      failure, and -e makes a failed pipeline fatal — so a zero-match bucket was
+#      a crash, not a reading. Neither flag alone kills: `-e` only and
+#      `pipefail` only both returned rc=0 with naming buckets present; only the
+#      pair reproduced run 7 line for line (run, failed-job, log-http, then
+#      silence, rc=1, ONE failed-job annotation for a run that had two).
+#   2. both extraction regexes were vitest-shaped. pytest prints `FAILED f.py::t`
+#      and a `86 failed, 21744 passed ... in 1591.08s` tally; neither pattern
+#      matched, so even a surviving run would have named zero tests.
+# A third fault surfaced while verifying the fix, against the real 3.3 MB log of the
+# merged tree's own test run: a single broad FAIL|ERROR bucket is also wrong, because
+# pytest's `___ ERROR collecting x.py ___` section headers sit at the TOP of the file and
+# filled all 12 slots, crowding out the 86 test names in the summary at the bottom.
+# Names and reasons are therefore separate buckets now, names first.
+#
+# Which line carries which fault, by mutation of the FIXED body rather than by
+# assertion: moving the greps into process substitutions is what removes the crash path.
+# On a well-formed jobs payload, deleting `set +e`, deleting `set +o pipefail`, deleting
+# both, or deleting neither all return rc=0 with the same per-job 1 aggregate / 12 names /
+# 2 reasons / 1 tail — so the naming fix is not the flags' credit, and an earlier draft of
+# this header, which said it was, died to exactly that mutation. The flags earn their place
+# one layer up, on the payload path: when the jobs json stops parsing (a rate-limited HTML
+# error page looks exactly like that to jq), the unguarded `n=$(jq ...)` assignment is
+# fatal under -e, and only `set +e` prevents it — drop that line and the job dies after the
+# `run` annotation; keep it and the reporter lives long enough to say `no-failed-job`.
+# `set +o pipefail` is redundant the moment `set +e` is present, and stays because every
+# pipeline added to this file later would otherwise have to remember its own `|| true`.
+# Both are fixed below, and "this log has no lines of that shape" is now reported
+# by the `census` annotation instead of by the job's own red cross.
 name: frontend-red-reporter
 on:
   workflow_run:
@@ -49,6 +88,16 @@ jobs:
         shell: bash
         run: |
           set -u
+          # Explicit, because the runner does not ask: `shell: bash` reaches this script
+          # already carrying -e AND -o pipefail, and it is that pair — not either flag
+          # alone — that used to turn a zero-match grep into a dead reporter (header,
+          # fault 1). A read-only reporter has no command whose failure should end the
+          # report, so both come back off here rather than being tiptoed around in every
+          # pipeline below. `set +e` is the line with the proof: with a jobs payload that
+          # stops parsing, removing only it brings the job back down to rc=1 right after
+          # the `run` annotation, at the one assignment below that has no `||` guard.
+          set +e
+          set +o pipefail
           auth="Authorization: Bearer $TOKEN"
 
           # Workflow-command escaping has two tiers: % , CR and LF are special in
@@ -65,6 +114,48 @@ jobs:
           }
 
           strip() { sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r//g'; }
+
+          # Counted loops, not `grep | head | while`: `head` closes the pipe after its
+          # share, grep then dies of SIGPIPE (141), and the old `| while` form ran emit
+          # in a subshell so the count could not be reported back. `|| true` is the point
+          # — a bucket that finds nothing is a reading, not a crash.
+          emit_grep() {
+            local title="$1" limit="$2" src="$3" re="$4" n=0 l
+            while IFS= read -r l; do
+              [ "$n" -ge "$limit" ] && break
+              emit "$title" "$l"
+              n=$((n + 1))
+            done < <(strip < "$src" | grep -aE "$re" || true)
+            census="$census $title=$n"
+          }
+
+          emit_tail() {
+            local title="$1" limit="$2" src="$3" n=0 l
+            while IFS= read -r l; do
+              emit "$title" "$l"
+              n=$((n + 1))
+            done < <(strip < "$src" | tail -n "$limit" || true)
+            census="$census $title=$n"
+          }
+
+          # Two runners, two shapes, and nothing anchors at start-of-line because every
+          # line of a downloaded Actions log carries an ISO timestamp prefix. vitest
+          # prints `FAIL src/x.test.ts > case` and a `Test Files  1 failed | 122 passed`
+          # pair; pytest prints `FAILED agent/tests/x.py::case - AssertionError` plus one
+          # `86 failed, 21744 passed, 197 skipped in 1591.08s` tally (the short summary is
+          # on by default, -r fE, so CI needs no flag for these lines to exist).
+          AGG_RE='(Test Files|Tests)[[:space:]]+[0-9]+ (failed|passed)|[0-9]+ (failed|errors?)([,:]| in )|no tests ran'
+          # Names and reasons are SEPARATE buckets, because one bucket got them both
+          # wrong: on the 2026-10-28 merged-tree log the first 12 lines matching a broad
+          # FAIL|ERROR pattern were pytest's own `___ ERROR collecting x.py ___` section
+          # headers, which sit at the top of the file, so the 86 actual test names in the
+          # short summary at the bottom never reached an annotation. NAMES is the payload;
+          # WHY is allowed to be pushed out of the way. The bare `FAIL` alternative has no
+          # trailing requirement on purpose — the first draft asked for a `>` after the
+          # file token, which vitest puts after a space, and only the per-case lines
+          # matched while the per-file FAIL line vanished.
+          NAMES_RE='(^|[[:space:]])FAILED[[:space:]]+[^[:space:]]+::|(^|[[:space:]])FAIL[[:space:]]+|×[[:space:]]+[^[:space:]]'
+          WHY_RE='Test timed out|Unhandled|worker exited|Channel closed|[Ee]rror collecting|[Ee]rror at (setup|teardown)'
 
           emit "run" "run=$RUN_ID conclusion=$CONCLUSION"
 
@@ -93,10 +184,13 @@ jobs:
             exit 0
           fi
 
+          census=""
+          seen=0
           for spec in $failed; do
             job_id="${spec%%=*}"
             job_name="${spec#*=}"
             log="$RUNNER_TEMP/job-$job_id.log"
+            seen=$((seen + 1))
             emit "failed-job" "$job_name id=$job_id"
 
             code=$(curl -sS -o "$log" -w '%{http_code}' -L \
@@ -106,14 +200,19 @@ jobs:
             emit "log-http" "$job_name http=$code bytes=$size"
             [ "$code" = "200" ] && [ "$size" -gt 0 ] || continue
 
-            # vitest prints the aggregate, then each failing file/test, then the
-            # reason. A check run holds only a limited number of annotations, so
-            # every bucket is deliberately short and the failing-test lines get
-            # the largest share.
-            strip < "$log" | grep -aE "(Test Files|Tests)[[:space:]]+[0-9]+ (failed|passed)" \
-              | tail -2 | while IFS= read -r l; do emit "aggregate" "$l"; done
-            strip < "$log" | grep -aE "(^|[[:space:]])FAIL[[:space:]]|×[[:space:]]|Test timed out|Unhandled|worker exited|Channel closed" \
-              | head -18 | while IFS= read -r l; do emit "failing" "$l"; done
+            # Annotation budget: a check run holds only a limited number, so the test
+            # NAMES get the largest share and the per-job total stays
+            # 1 + 1 + 2 + 12 + 3 + 2 = 21 even when every leg of the run is red.
+            emit_grep "aggregate" 2 "$log" "$AGG_RE"
+            emit_grep "failing" 12 "$log" "$NAMES_RE"
+            emit_grep "why" 3 "$log" "$WHY_RE"
             # The tail is where an unhandled worker death leaves its trace.
-            strip < "$log" | tail -6 | while IFS= read -r l; do emit "tail" "$l"; done
+            emit_tail "tail" 2 "$log"
           done
+
+          # Self-reporting, because `named=0` is the difference between "this shape is
+          # unknown" and "the token could not read the log" — and exit 0 on purpose: the
+          # run being reported on is already red, and a second red workflow on top of it
+          # buries the reading this job exists to produce.
+          emit "census" "failed_jobs=$seen$census"
+          exit 0
