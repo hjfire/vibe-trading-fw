@@ -16,8 +16,13 @@
 # failed job through the authenticated endpoint — the channel a token can open
 # and a bare IP address cannot — and re-emits the failure lines as check-run
 # annotations, which ARE anonymously readable. The next red `CI` run names its
-# own failing tests without anyone logging in. Whether the token really can read
-# those logs is reported by this job's own `log-http` annotation, not assumed.
+# own failing tests without anyone logging in.
+#
+# Whether the token really can read those logs is no longer an open question: run
+# 40628740325 of 2026-10-28 answered `test / Python 3.14 http=200 bytes=1588512`,
+# so the authenticated channel works and came back with names in it. What that run
+# did NOT do is name its other leg, and the reason is fault 4 below — the failure
+# was in how the annotation budget was allocated, not in the log download.
 #
 # `workflow_run` only executes the copy of this file on the default branch, and
 # only after the watched workflow completes. Read-only permissions, and
@@ -62,6 +67,34 @@
 # pipeline added to this file later would otherwise have to remember its own `|| true`.
 # Both are fixed below, and "this log has no lines of that shape" is now reported
 # by the `census` annotation instead of by the job's own red cross.
+#
+# Fault 4, from the run that finally named something (40628740325, 2026-10-28): the
+# per-step annotation cap. The Checks runs docs say "GitHub Actions are limited to 10
+# warning annotations and 10 error annotations per step", and `::notice` lands in the
+# warning bucket. That body asked for 32 notices on that two-leg run and GitHub kept the
+# first ten, which is precisely what the anonymous payload still holds: `run`,
+# `failed-job`, `log-http`, `aggregate`, then six `failing` lines — no `why`, no `tail`,
+# no `census`, and not one line of the second leg. A budget harness (local scratch, not
+# in the repo: the step body pulled out of this file verbatim, fake curl and
+# jq serving the real two-leg job list and two pytest logs of that shape) reproduces the
+# same ten and the same truncation point without waiting for a red run. So the arithmetic
+# this file used to carry in its comments — `1 + 1 + 2 + 12 + 3 + 2 = 21`, "even when every
+# leg of the run is red" — was not a budget but an overshoot. Spending 21 per leg meant the
+# first leg ate the ten and the run lost its own self-report along with its second leg,
+# and it read as success from the runner side because every emit returned 0.
+#
+# What the body does now: the ten are spent on purpose — one card for the run, then
+# whatever slots the census did not reserve, then the census — and the slots are handed
+# round-robin over the legs so one leg's 86 names cannot starve another's. Names are
+# deduplicated before they are spent (pytest prints each one twice, in the FAILURES body
+# and again in the short summary), and one notice carries a whole row of names rather
+# than a line, because the limit counts annotations, not their length. The rest goes to
+# `$GITHUB_STEP_SUMMARY`, whose documented limit is 1 MiB per step instead of 10 items —
+# a bonus for anyone holding a session, since the anonymous reading of it is the length-0
+# thing named at the top of this file. That is why the annotation share is allocated by
+# arithmetic rather than by a guard inside emit (a guard there turned out to be
+# unreachable and was probed out), and why the census reports `names=`/`chunks=`/`sent=`
+# per leg: a leg that got no slot is a reading now, not a silence.
 name: frontend-red-reporter
 on:
   workflow_run:
@@ -95,10 +128,25 @@ jobs:
           # report, so both come back off here rather than being tiptoed around in every
           # pipeline below. `set +e` is the line with the proof: with a jobs payload that
           # stops parsing, removing only it brings the job back down to rc=1 right after
-          # the `run` annotation, at the one assignment below that has no `||` guard.
+          # the `run` annotation, at the `n=$(jq ...)` assignment below — the one line
+          # that still has no `||` guard, on purpose.
           set +e
           set +o pipefail
           auth="Authorization: Bearer $TOKEN"
+
+          # The cap is the platform's number, not a preference (header, fault 4). It is
+          # enforced by the budget arithmetic in pass 2 (`CAP - notices - 1`), not by a
+          # check inside emit: a guard there was probed and found unreachable — every path
+          # through this body requests at most CAP notices by construction, so the guard
+          # could not be made to fire and its `refused=` counter would have read 0 forever.
+          NOTICE_CAP=10
+          # Characters per notice. The cap counts annotations, not their length, so one
+          # notice can carry a row of names; 1000 is what stays readable in the UI.
+          MSG_MAX=1000
+          notices=0
+          DIR="$RUNNER_TEMP/report"
+          rm -rf "$DIR"
+          mkdir -p "$DIR"
 
           # Workflow-command escaping has two tiers: % , CR and LF are special in
           # both the data and the properties; , and : are additional property
@@ -109,33 +157,43 @@ jobs:
             local t m
             t=$(printf '%s' "$1" | tr -d '\r\n' \
                 | sed -e 's/%/%25/g' -e 's/,/%2C/g' -e 's/:/%3A/g')
-            m=$(printf '%s' "$2" | tr -d '\r\n' | sed -e 's/%/%25/g' | cut -c1-240)
+            m=$(printf '%s' "$2" | tr -d '\r\n' | sed -e 's/%/%25/g' | cut -c1-"$MSG_MAX")
             printf '::notice title=%s::%s\n' "$t" "$m"
+            notices=$((notices + 1))
           }
 
-          strip() { sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r//g'; }
+          # The census is not special-cased here — its slot is reserved by the budget
+          # arithmetic in pass 2 (`NOTICE_CAP - notices - 1`), so the run card, the name
+          # slots and the census cannot exceed ten together. Delete that `- 1` and a
+          # flooded leg pushes the census itself off the surface, which is the reading the
+          # budget harness checks for.
 
-          # Counted loops, not `grep | head | while`: `head` closes the pipe after its
-          # share, grep then dies of SIGPIPE (141), and the old `| while` form ran emit
-          # in a subshell so the count could not be reported back. `|| true` is the point
-          # — a bucket that finds nothing is a reading, not a crash.
-          emit_grep() {
-            local title="$1" limit="$2" src="$3" re="$4" n=0 l
-            while IFS= read -r l; do
-              [ "$n" -ge "$limit" ] && break
-              emit "$title" "$l"
-              n=$((n + 1))
-            done < <(strip < "$src" | grep -aE "$re" || true)
-            census="$census $title=$n"
+          # ANSI off, CR off, and the runner's ISO timestamp prefix off too: every line of
+          # a downloaded log starts with `2026-10-28T03:59:39.5525664Z `, which is 26
+          # characters of nothing, and spending the notice budget on it is how the previous
+          # version fit six names where a dozen would go.
+          strip() {
+            sed -E -e 's/\x1b\[[0-9;]*m//g' \
+                   -e 's/\r//g' \
+                   -e 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z //'
           }
 
-          emit_tail() {
-            local title="$1" limit="$2" src="$3" n=0 l
-            while IFS= read -r l; do
-              emit "$title" "$l"
-              n=$((n + 1))
-            done < <(strip < "$src" | tail -n "$limit" || true)
-            census="$census $title=$n"
+          # The lossless surface: documented at 1 MiB per step, against ten items for
+          # annotations, so anything the budget cannot hold is written here rather than
+          # dropped. Unset outside a runner, hence the guard.
+          sum() {
+            [ -n "${GITHUB_STEP_SUMMARY:-}" ] || return 0
+            printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Deduplicated, bounded, and never `grep | head | while`: `head` closes the pipe
+          # after its share, grep dies of SIGPIPE (141), and the old `| while` form ran
+          # emit in a subshell so the count could not be reported back. `sed -n 1,Np`
+          # bounds the output for the same reason `head` would, without the signal, and
+          # `|| true` makes an empty bucket a reading instead of a crash.
+          collect_grep() {
+            local limit="$1" src="$2" re="$3"
+            strip < "$src" | grep -aE "$re" | awk '!seen[$0]++' | sed -n "1,${limit}p" || true
           }
 
           # Two runners, two shapes, and nothing anchors at start-of-line because every
@@ -157,62 +215,149 @@ jobs:
           NAMES_RE='(^|[[:space:]])FAILED[[:space:]]+[^[:space:]]+::|(^|[[:space:]])FAIL[[:space:]]+|×[[:space:]]+[^[:space:]]'
           WHY_RE='Test timed out|Unhandled|worker exited|Channel closed|[Ee]rror collecting|[Ee]rror at (setup|teardown)'
 
-          emit "run" "run=$RUN_ID conclusion=$CONCLUSION"
+          emit "run" "run=$RUN_ID conclusion=$CONCLUSION — names below, full report in this job's step summary"
 
-          # One page holds a run this size, but do not assume it.
+          # One page holds a run this size, but do not assume it. id, name and conclusion
+          # are joined with a TAB because a job name contains spaces (`test / Python 3.14`)
+          # and the previous version's `tr ' ' '_'` was only there to survive word
+          # splitting: it is what made every leg read back as `test_/_Python_3.14`.
           page=1
-          failed=""
+          : > "$DIR/legs"
           while :; do
             if ! curl -sS -f -H "$auth" -H "Accept: application/vnd.github+json" \
-               -o "$RUNNER_TEMP/jobs-p$page.json" \
+               -o "$DIR/jobs-p$page.json" \
                "$API/actions/runs/$RUN_ID/jobs?per_page=100&page=$page"; then
               emit "jobs-endpoint" "http failed for run $RUN_ID page $page"
               break
             fi
-            # ":" is inside the payload's own values, so the pair is joined with a
-            # separator the log names cannot contain, and spaces are underscored.
-            failed="$failed $(jq -r '.jobs[]
+            jq -r '.jobs[]
               | select(.conclusion != "success" and .conclusion != "skipped")
-              | "\(.id)=\(.name)"' "$RUNNER_TEMP/jobs-p$page.json" | tr ' ' '_')"
-            n=$(jq '.jobs | length' "$RUNNER_TEMP/jobs-p$page.json")
+              | "\(.id)\t\(.name)\t\(.conclusion)"' "$DIR/jobs-p$page.json" >> "$DIR/legs"
+            n=$(jq '.jobs | length' "$DIR/jobs-p$page.json")
             [ "${n:-0}" -lt 100 ] && break
             page=$((page + 1))
           done
 
-          if [ -z "${failed// /}" ]; then
+          if [ ! -s "$DIR/legs" ]; then
             emit "no-failed-job" "run $RUN_ID concluded $CONCLUSION but no job had a failing conclusion"
+            sum "## CI red report — run $RUN_ID, conclusion $CONCLUSION"
+            sum "No failed job on this run, so there is nothing to name."
+            emit "census" "legs=0 used=$notices cap=$NOTICE_CAP"
             exit 0
           fi
 
-          census=""
-          seen=0
-          for spec in $failed; do
-            job_id="${spec%%=*}"
-            job_name="${spec#*=}"
-            log="$RUNNER_TEMP/job-$job_id.log"
-            seen=$((seen + 1))
-            emit "failed-job" "$job_name id=$job_id"
+          # Pass 1: read every leg, write its detail to the summary and its name chunks to
+          # a file. No notice is spent here, so a run with six legs cannot exhaust the
+          # budget on the first one before the rest have been read. Per-leg readings go
+          # into arrays and the census is composed after pass 2, because the sent= count
+          # is not knowable while the legs are still being read.
+          leg_count=0
+          leg_stat=()
+          : > "$DIR/leg-names"
+          while IFS=$'\t' read -r job_id job_name conclusion; do
+            [ -n "$job_id" ] || continue
+            leg_count=$((leg_count + 1))
+            log="$DIR/job-$job_id.log"
+            names="$DIR/leg-$leg_count.names"
+            chunks="$DIR/leg-$leg_count.chunks"
+            : > "$names"
+            : > "$chunks"
+            printf '%s\n' "$job_name" >> "$DIR/leg-names"
 
             code=$(curl -sS -o "$log" -w '%{http_code}' -L \
               -H "$auth" -H "Accept: application/vnd.github+json" \
               "$API/actions/jobs/$job_id/logs" || echo 000)
             size=$(wc -c < "$log" 2>/dev/null || echo 0)
-            emit "log-http" "$job_name http=$code bytes=$size"
-            [ "$code" = "200" ] && [ "$size" -gt 0 ] || continue
 
-            # Annotation budget: a check run holds only a limited number, so the test
-            # NAMES get the largest share and the per-job total stays
-            # 1 + 1 + 2 + 12 + 3 + 2 = 21 even when every leg of the run is red.
-            emit_grep "aggregate" 2 "$log" "$AGG_RE"
-            emit_grep "failing" 12 "$log" "$NAMES_RE"
-            emit_grep "why" 3 "$log" "$WHY_RE"
-            # The tail is where an unhandled worker death leaves its trace.
-            emit_tail "tail" 2 "$log"
+            if [ "$code" != "200" ] || [ "$size" -le 0 ]; then
+              leg_stat[$leg_count]="id=$job_id http=$code bytes=$size unread"
+              sum "### leg $leg_count: $job_name (id=$job_id)"
+              sum "- log: http=$code bytes=$size — the token could not read this log."
+              continue
+            fi
+
+            collect_grep 400 "$log" "$NAMES_RE" > "$names"
+            collect_grep 2 "$log" "$AGG_RE" > "$DIR/leg-$leg_count.agg"
+            collect_grep 20 "$log" "$WHY_RE" > "$DIR/leg-$leg_count.why"
+            strip < "$log" | tail -n 10 > "$DIR/leg-$leg_count.tail"
+
+            nn=$(grep -c . "$names" 2>/dev/null || true)
+            tally=$(sed -n '1p' "$DIR/leg-$leg_count.agg")
+
+            # Chunk the names: as many per notice as fit in MSG_MAX, so eight slots carry
+            # dozens of names instead of eight lines. ` | ` joins them. A name longer than
+            # MSG_MAX still gets its own chunk and emit's cut truncates it, which the
+            # census then shows as sent=chunks-1 at best.
+            buf=""
+            while IFS= read -r l; do
+              [ -n "$l" ] || continue
+              if [ -n "$buf" ] && [ $(( ${#buf} + ${#l} + 3 )) -gt "$MSG_MAX" ]; then
+                printf '%s\n' "$buf" >> "$chunks"
+                buf=""
+              fi
+              if [ -z "$buf" ]; then buf="$l"; else buf="$buf | $l"; fi
+            done < "$names"
+            [ -n "$buf" ] && printf '%s\n' "$buf" >> "$chunks"
+            nchunks=$(grep -c . "$chunks" 2>/dev/null || true)
+            leg_stat[$leg_count]="id=$job_id http=$code bytes=$size names=${nn:-0} chunks=${nchunks:-0}"
+
+            sum "### leg $leg_count: $job_name (id=$job_id) — ${conclusion:-unknown}"
+            sum "- log: http=$code bytes=$size"
+            sum "- tally: ${tally:-(no aggregate line)}"
+            sum "- ${nn:-0} failing test line(s), deduplicated, timestamp prefix stripped:"
+            sum '```text'
+            while IFS= read -r l; do [ -n "$l" ] && sum "$l"; done < "$names"
+            sum '```'
+            sum "- reasons (up to 20, deduplicated):"
+            sum '```text'
+            while IFS= read -r l; do [ -n "$l" ] && sum "$l"; done < "$DIR/leg-$leg_count.why"
+            sum '```'
+            sum "- last 10 lines:"
+            sum '```text'
+            while IFS= read -r l; do [ -n "$l" ] && sum "$l"; done < "$DIR/leg-$leg_count.tail"
+            sum '```'
+          done < "$DIR/legs"
+
+          # Pass 2: spend what is left of the budget round-robin over the legs — one chunk
+          # from leg 1, one from leg 2, then back to leg 1. This is the starvation guard:
+          # the 2026-10-28 run lost `test / Python 3.11` completely because leg 1's
+          # twelve-name bucket, its reasons and its tail were emitted in sequence ahead of
+          # it. The census slot is subtracted here rather than hoped for, so the name
+          # budget is whatever the run card and the census left, not a fixed eight.
+          budget=$((NOTICE_CAP - notices - 1))
+          [ "$budget" -gt 0 ] || budget=0
+          sent=()
+          emitted=0
+          row=1
+          while [ "$emitted" -lt "$budget" ]; do
+            any=""
+            i=1
+            while [ "$i" -le "$leg_count" ]; do
+              line=$(sed -n "${row}p" "$DIR/leg-$i.chunks" 2>/dev/null)
+              if [ -n "$line" ]; then
+                emit "failing" "$(sed -n "${i}p" "$DIR/leg-names") :: $line"
+                sent[$i]=$(( ${sent[$i]:-0} + 1 ))
+                any=1
+                emitted=$((emitted + 1))
+                [ "$emitted" -lt "$budget" ] || break
+              fi
+              i=$((i + 1))
+            done
+            [ -n "$any" ] || break
+            row=$((row + 1))
+          done
+          i=1
+          census=""
+          while [ "$i" -le "$leg_count" ]; do
+            census="$census L$i[${leg_stat[$i]} sent=${sent[$i]:-0}]"
+            i=$((i + 1))
           done
 
           # Self-reporting, because `named=0` is the difference between "this shape is
           # unknown" and "the token could not read the log" — and exit 0 on purpose: the
           # run being reported on is already red, and a second red workflow on top of it
           # buries the reading this job exists to produce.
-          emit "census" "failed_jobs=$seen$census"
+          emit "census" "legs=$leg_count name_budget=$budget names_sent=$emitted used=$notices/$NOTICE_CAP$census"
+          sum "- census: legs=$leg_count name_budget=$budget names_sent=$emitted used=$notices/$NOTICE_CAP$census"
+          sum "- notices emitted: $notices of the $NOTICE_CAP a step keeps."
           exit 0
