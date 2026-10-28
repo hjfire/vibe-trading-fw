@@ -145,6 +145,37 @@ def _is_tv_page_record(url_field: str) -> bool:
     return host == TV_PAGE_HOST or host.endswith(f".{TV_PAGE_HOST}")
 
 
+# 自家站点的 host 白名单（生成侧 `doc_tables.py` 用它把「观察自己的页面」与「观察三方页」
+# 分开）。这里只认逐字 host：IP 变体、`.local` 之类等真出现再加——活树实测只有 localhost
+# 与 127.0.0.1 两种形状，提前铺一张大表就是把没发生的事写进代码。
+SELF_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
+
+
+def record_keys(path: Path) -> dict[str, str]:
+    """一份 L0 记录的点号键面（与 ``_meta_keys`` 逐字同一把尺）。
+
+    生成器不许自带第二个解析器：同一事实两处实现，下一份记录的写法一变就会漂成两种真相。
+    """
+    return _meta_keys(_read(path))
+
+
+def record_target_kind(path: Path) -> str:
+    """``目标 URL`` 的 host 类：``三方``／``自家``／``其他``／``无 URL``。
+
+    「三方」与审计的第三方标记红线同一判据（``_is_tv_page_record``，按 host 不按子串）；
+    「无 URL」是根本没有这一键或值为空——它与「有 URL 但判不出 host」分开，后者记 ``其他``。
+    """
+    url_field = record_keys(path).get("目标 URL", "")
+    if not url_field:
+        return "无 URL"
+    if _is_tv_page_record(url_field):
+        return "三方"
+    host = _url_host(url_field)
+    if host and host in SELF_HOSTS:
+        return "自家"
+    return "其他"
+
+
 def _audit_l0(path: Path, rel: str, repo_root: Path) -> tuple[list[str], str | None]:
     """One L0 record -> (violations, declared 用途／UNCAPTURABLE／None)."""
     v: list[str] = []
