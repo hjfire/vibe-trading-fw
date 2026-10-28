@@ -4,7 +4,8 @@ Enforces the Alpha-Zoo pure-function contract (see
 ``docs/alpha-zoo/spec.md`` §"Alpha 纯函数契约"):
 
 * Allowed imports (whitelist): ``pandas``, ``numpy``, ``scipy[.*]``,
-  ``src.factors.base``, ``__future__``, ``typing``, ``math``, ``dataclasses``.
+  ``src.factors.base``, ``src.factors.chips``, ``__future__``, ``typing``,
+  ``math``, ``dataclasses``.
 * Forbidden names (anywhere in the module — load, attribute access, string
   argument of ``getattr``): ``os``, ``sys``, ``subprocess``, ``socket``,
   ``urllib``, ``requests``, ``httpx``, ``aiohttp``, ``pathlib``, ``Path``,
@@ -43,8 +44,12 @@ _ALLOWED_IMPORT_ROOTS: frozenset[str] = frozenset(
         "dataclasses",
     }
 )
-# ``src.factors.base`` is the only operator import accepted from this repo.
-_ALLOWED_REPO_IMPORT = "src.factors.base"
+# In-repo imports accepted by this gate. Both modules are pure computation:
+# ``base`` holds the shared cross-sectional operators, ``chips`` the chip
+# distribution engine. Anything with I/O stays out.
+_ALLOWED_REPO_IMPORTS: frozenset[str] = frozenset(
+    {"src.factors.base", "src.factors.chips"}
+)
 
 _FORBIDDEN_NAMES: frozenset[str] = frozenset(
     {
@@ -108,7 +113,7 @@ def _is_allowed_import(module: str) -> bool:
     """Decide whether an import statement target is on the whitelist."""
     if not module:
         return False
-    if module == _ALLOWED_REPO_IMPORT:
+    if module in _ALLOWED_REPO_IMPORTS:
         return True
     head = module.split(".", 1)[0]
     return head in _ALLOWED_IMPORT_ROOTS
