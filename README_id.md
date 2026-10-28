@@ -909,7 +909,7 @@ Bar: 1m / 5m / 15m / 30m / 1H / 4H / 1D, plus mingguan / bulanan (1W / 1M, diban
 </details>
 
 <details>
-<summary><b>Quant Library</b> <sub>309 fungsi teruji dalam 25 modul, dapat dipanggil dari setiap transport</sub></summary>
+<summary><b>Quant Library</b> <sub>319 fungsi teruji dalam 26 modul, dapat dipanggil dari setiap transport</sub></summary>
 
 `src/quantlib` menyimpan satu implementasi teruji untuk setiap matematika finansial yang dibutuhkan agent.
 Skill **mengimpor** fungsi-fungsi ini alih-alih membawa formula di dalam
