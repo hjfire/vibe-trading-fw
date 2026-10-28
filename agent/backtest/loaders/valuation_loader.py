@@ -7,9 +7,9 @@ anchor. Missing dates and non-CN symbols stay NaN; nothing is fabricated.
 
 Field whitelist: only the ``daily_basic`` columns already proven by the
 ``extra_fields`` merge in ``backtest/loaders/tushare.py`` are served
-(``pe``, ``pe_ttm``, ``pb``, ``ps_ttm``, ``dv_ttm``). Any other ``val:`` field
-is rejected with a ``ValueError`` at load time rather than silently NaN-ed, so
-a factor declaring an unsupported field fails loudly.
+(``pe``, ``pe_ttm``, ``pb``, ``ps_ttm``, ``dv_ttm``, ``turnover_rate``). Any
+other ``val:`` field is rejected with a ``ValueError`` at load time rather
+than silently NaN-ed, so a factor declaring an unsupported field fails loudly.
 
 US/HK supply is deferred (proposal §4 Tier 2 note): non-CN symbols simply get
 no data here, and factors declaring ``val:`` columns SkipAlpha on universes
@@ -33,9 +33,17 @@ from backtest.loaders.tushare import (
 
 logger = logging.getLogger(__name__)
 
-#: ``daily_basic`` columns the ``val:`` namespace serves. ``dv_ttm`` is in
-#: percent units (股息率TTM, %); consumers z-score it, which is scale-invariant.
-VALUATION_FIELDS: tuple[str, ...] = ("pe", "pe_ttm", "pb", "ps_ttm", "dv_ttm")
+#: ``daily_basic`` columns the ``val:`` namespace serves. ``dv_ttm`` (股息率TTM)
+#: and ``turnover_rate`` (换手率) are both in percent units; consumers either
+#: z-score them (scale-invariant) or divide by 100 at the engine boundary.
+VALUATION_FIELDS: tuple[str, ...] = (
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps_ttm",
+    "dv_ttm",
+    "turnover_rate",
+)
 
 #: Fields the free baostock fallback can serve, mapped to their
 #: ``query_history_k_data_plus`` column names (#1789 follow-up #3).

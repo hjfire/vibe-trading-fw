@@ -332,7 +332,20 @@ def test_runner_rejects_val_field_outside_whitelist() -> None:
 def test_val_whitelist_covers_exactly_the_daily_basic_fields() -> None:
     from backtest.loaders.valuation_loader import VALUATION_FIELDS
 
-    assert VALUATION_FIELDS == ("pe", "pe_ttm", "pb", "ps_ttm", "dv_ttm")
+    assert VALUATION_FIELDS == (
+        "pe",
+        "pe_ttm",
+        "pb",
+        "ps_ttm",
+        "dv_ttm",
+        "turnover_rate",
+    )
+
+
+def test_turnover_rate_is_a_supported_val_field() -> None:
+    from backtest.loaders.valuation_loader import validate_valuation_fields
+
+    assert validate_valuation_fields(["turnover_rate"]) == ["turnover_rate"]
 
 
 def test_missing_token_degrades_to_nan_frames(
