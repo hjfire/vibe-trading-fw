@@ -21,6 +21,7 @@ Submodules:
   var_backtest Kupiec/Christoffersen coverage tests and the Basel traffic light
   multipletesting  Deflated Sharpe, CSCV/PBO and BH-FDR search corrections
   crossvalidation  Purged + embargoed splits for overlapping financial labels
+  selection    Walk-forward parameter selection with a deflated-Sharpe guard
   eventstudy   Abnormal returns around dated events (CAR/CAAR, Patell, BMP)
   factormodel  Cross-sectional style exposures, factor returns, style drift
   neutralization  Per-observation OLS/WLS factor residuals and cross-sectional PCA
