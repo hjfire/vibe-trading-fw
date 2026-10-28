@@ -40,6 +40,9 @@ L0 的六把必填键（`L0_REQUIRED_KEYS`）：
   （它那趟的过滤口径里没有 browser 块，故写明取自 `targets.txt:16-20`，已就地披露＝合法）；`tv-a1-page.md`
   与 `tv-a16-storage.md` 的 `浏览器：` 也提到 `targets.txt`，但那是**本趟 stdout 自带 browser 块**、拿挂载趟
   做旁证，不属于例外。写新记录时把这三种形状分清：本趟读数／本趟读数＋旁证／跨趟来源（必须披露 `文件:行号`）。
+- 2026-10-28：上面那句「25 份／23 份」是 2026-10-14 的一次性读数，不回改；`l0/` 的现量口径
+  以 `forensics/l0-census.md` 为准——那份表由 `python -X utf8 tools/doc_tables.py --write`
+  生成、`--check` 判陈旧（状态／用途／六键齐／`evidence_id` 合法／目标 host 类逐份可判）。
 - 正文任何位置出现 `parse_failures` 字样时，`完整性：` 那一行里也必须出现它（不解释就是没看）。
 - `用途` 只能是 `harness`／`规格`／`基线`；声明 `harness` 时正文必须带上
   `sha256(tools/rea_probe_site/app.js 按 LF 归一)` 那 64 位十六进制现算值。
