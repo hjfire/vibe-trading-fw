@@ -157,3 +157,11 @@ git commit -s -m "feat(factors): deterministic panel store with tamper detection
   - 门 E `tools/test_wiki_drift.py`：`240 passed in 82.32s`，rc=0。
   - 门 F `wiki_freshness_gate.sh`：`wiki stale pages: 447 (threshold 439)`，rc=1；
     本片未动 `wiki/`／`repowiki/`，水位读数与 G3 相同 ⇒ 零贡献。
+- **CI 生产复读（2026-10-29）**：修复提交 `6666ae33` 触发的 run
+  `40767498608` 九腿全绿——`Windows desktop source lifecycle`、
+  `Hash lock / macOS ARM64`、`Hash lock / Windows x64`、
+  `Hash lock / Linux x64`、`test / Python 3.11`、`test / Python 3.14`、
+  `frontend`、`Windows 11 ARM64 / Python 3.14 background lifecycle`、
+  `Windows Server 2025 x64 / Python 3.14 background lifecycle` 逐一现读
+  job 载荷均 `success`。首跑 `40766440427` 的两条红腿（3.11／3.14）红因即
+  上述自喂 needle，修复后未再出现。
