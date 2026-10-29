@@ -390,4 +390,11 @@ merge（不 rebase），合后复跑门 A 与档案读档门。推送后复读 C
   35 枚命中文件全部未跟踪（tracked=0），本片文件商标零命中；D
   `1 failed, 51 passed`（Windows 换行文件名既知红）；E `240 passed`；
   F `447 (threshold 439)` rc=1（与 §7.32～§7.37 同读数）；前端零改动。
+- 2026-10-29 推送与 CI 复读：推送前 `git ls-remote origin refs/heads/main`
+  ＝`d86b806c`，本地 `3c195bdd` 为其直接后继，快进推送成功
+  （`d86b806c..3c195bdd`）。匿名 check-runs 复读：九腿全部 `success`
+  （Hash lock ×3、Windows 生命周期 ×3、frontend、test/3.11、test/3.14），
+  「name the failing tests」条件腿 `skipped`。逐腿注解：四腿各 1 枚
+  `notice`（ubuntu-latest 将于 2026-10-19 迁移 Ubuntu 26 ×3、macOS ARM64
+  排队时长 ×1），零代码相关注解。
 
