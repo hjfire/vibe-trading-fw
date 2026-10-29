@@ -161,3 +161,10 @@ merge（不 rebase），合后复跑门 A 与档案读档门。推送后复读 C
   9 errors`，FAILED 名集合与 G4 基线逐名相等（新增红 0、消失 0）；首跑新增
   的另一枚 `test_concurrent_saves_use_distinct_temporary_files` 是已登记
   Windows 时序 flake（同树单跑一红一绿）。
+- 2026-10-29：推送 `2e1cb84a` 后 `CI` 九腿全绿（`test / Python 3.11`、
+  `test / Python 3.14`、`frontend`、三腿 `Hash lock`、两腿 Windows 3.14
+  后台生命周期、`Windows desktop source lifecycle` 均 success），
+  `frontend-red-reporter` 因整跑无失败腿而 skipped；四条腿各带 1 枚注解，
+  逐枚读取均为 runner 环境 notice（Ubuntu 26 迁移、macOS arm64 排队），
+  零代码相关注解。本片对本地门 B 既有 FAILED 名集合的贡献仍为新增 0、
+  消失 0。
