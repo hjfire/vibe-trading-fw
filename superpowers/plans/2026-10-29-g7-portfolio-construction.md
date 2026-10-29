@@ -320,4 +320,10 @@ merge（不 rebase），合后复跑门 A 与档案读档门。推送后复读 C
   即可。
 - 2026-10-29：变异实读见 Task 3 表；基线 `62 passed`，模块 sha256 前后
   一致。
+- 2026-10-29：推送后复读 d86b806c：check-runs 共 10 条＝九腿全部
+  success（Hash lock ×3、Windows 生命周期 ×3、frontend、test / Python
+  3.11、test / Python 3.14）＋「name the failing tests」skipped（无失败
+  时的预期姿态）。四腿各 1 枚注解且全为 notice：macOS ARM64＝runner
+  容量排队提示；frontend 与两条 test 腿＝`ubuntu-latest` 自 2026-10-19
+  起迁移 Ubuntu 26 的提示。零代码相关注解。
 
