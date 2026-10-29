@@ -396,3 +396,14 @@ merge（不 rebase），合后复跑门 A 与档案读档门。推送后复读 C
   tracked=0，本片提交面 12 枚文件商标计数全 0；D `1 failed, 51 passed`
   （Windows 换行文件名既知红）；E `240 passed`；F `447 (threshold 439)`
   rc=1（与 §7.32～§7.38 同读数）。前端三门免跑（本片零 `frontend/**`）。
+- 2026-10-29 CI 复读（`4b7ed084`，run 40807874201）：九腿中 8 腿
+  success；`test / Python 3.11` **cancelled**＝作业 20m 上限（依赖安装步
+  02:41:54→02:49:27 共 7m33s，同树 3.14 腿仅 51s；测试步
+  02:49:42→03:01:59 共 12m17s 被切），注解为 `The job has exceeded the
+  maximum execution time of 20m0s` 与 `The operation was canceled.`，
+  **无任何测试失败名**；本机同树门 B 新增红 0。`name the failing tests`
+  仪器在该自然红上首次触发并 success（6s、3 枚 notice），census 注解
+  `legs=1 name_budget=8 names_sent=0 used=1/10 L1[id=123231028497
+  http=200 bytes=143159 names=0 chunks=0 sent=0]`——红腿是超时型、日志里
+  没有可发的失败用例名，仪器不再自死。为取得同树外部绿读数，以本 docs
+  提交重触发一次 CI。
