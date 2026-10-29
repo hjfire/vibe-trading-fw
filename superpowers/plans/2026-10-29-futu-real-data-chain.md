@@ -687,3 +687,19 @@ git push origin main
 
 匿名面：`curl -sS -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/hjfire/vibe-trading-fw/commits/<sha>/check-runs?per_page=50'`；
 九腿 success 即收口，红腿先归因再报告。
+
+---
+
+## 执行期偏差（2026-10-29 回填）
+
+1. 实现 `panels.close.columns.size`（计划草案误写 `panels.columns.size`，`FutuPanels`
+   无 `.columns`）。
+2. 分页抽成 `_request_pages`；`import futu` 的 `ImportError` 单独转
+   `FutuPanelsError`；`today` 类型校验前移到连接前。
+3. 测试 31 例（草案 20 余条），补并集不变式、`as_of` 边界差分、前缀==全量、
+   `note_success` 正反两针。
+4. 变异 M3 首跑注入串缩进错误（`IndentationError`，rc=2）→ 修正后八针全判别；
+   引擎无缺陷，harness 缺陷已记录。
+5. 活体：6 标的 × 681 根、末根 2026-10-28 < as_of、turnover 0.869%、两份面板写读回
+   `futu:opend`；cp936 控制台需 `PYTHONIOENCODING=utf-8`。
+6. 门册与档案读数见 `项目档案.md` §7.40。

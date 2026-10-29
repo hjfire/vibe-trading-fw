@@ -229,3 +229,26 @@ python agent/scripts/futu_chain_probe.py \
 - `limit_pool` → 取 `streak` 写 `limit_streak` 面板；
 - `panel_digest` 记录输入面板摘要；写后 `read_panel` 读回并打印 rows/cols；
 - `--strict` 时任一标的失败即 exit 1；默认部分失败仍 exit 0 但打印失败表。
+
+## 12. 执行期偏差与实读（2026-10-29 回填）
+
+1. 计划草案的 `panels.columns.size` 不存在（`FutuPanels` 无 `.columns`），实现改为
+   `panels.close.columns.size`；四张价格表索引/列一致，取其一即等价。
+2. 分页请求抽成 `_request_pages` 私有函数，`fetch_daily_panels` 主循环只负责失败
+   归集；行为与 §6 冻结口径一致（`max_pages`、重复 page key、`no rows`、`RET_OK`
+   四条分支逐条落测）。
+3. `import futu` 的 `ImportError` 单独转成 `FutuPanelsError`（附安装提示），不落进
+   `open_context` 的失败分支，也不 latch 冷却。
+4. `today` 的类型校验提前到连接前（草案在归一化才校验）；非法 `today` 不会先建连接。
+5. 测试从计划的 20 余条补到 31 例：新增并集不变式两条（所有输出帧共享同一
+   index/columns、每行严格 `< as_of`）、`as_of` 边界差分针、前缀==全量针、
+   只有当日 bar 的标的产不出列、`note_success` 正反两针。
+6. 活体实读（2026-10-29，本机 OpenD）：`turnover_rate=0.00869 → 0.869%`、
+   `last_close=11.47` 对应 `close=11.31`；6 标的 × 681 根（2024-01-02..2026-10-28）；
+   `AuType.NONE` 的字符串值为 `'None'`、`KL_FIELD.ALL` 为 `''`，SDK 签名
+   `request_history_kline(code, start, end, ktype, autype, fields, max_count, page_req_key, ...)`
+   与计划草案一致。
+7. 变异 M3 首跑因注入串缩进少 8 空格触发 `IndentationError`（rc=2，1 error），
+   修正注入串后八针全部判别；这是 harness 的注入缺陷，不是引擎缺陷。
+8. 活体脚本在 cp936 控制台下中文名乱码，实跑加 `PYTHONIOENCODING=utf-8`；
+   脚本本身不设编码，保持调用方决定。
