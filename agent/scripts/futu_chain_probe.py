@@ -13,7 +13,6 @@ panels under ``--out``. Failures for individual symbols are printed; with
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
