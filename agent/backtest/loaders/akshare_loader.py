@@ -6,6 +6,7 @@ data aggregator covering Chinese and global markets.  No API token required.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -264,12 +265,16 @@ def _sina_contract(code: str) -> str:
 
 _CN_FUTURES_MAIN_RE = re.compile(r"^[A-Z]{1,2}0$")
 
-
-
-
-
-#: akshare <= 1.19 and >= 1.20 each expose the table at one of these two paths.
-_FOREX_TABLE_MODULES = ("akshare.forex.cons", "akshare.fx.cons_forex")
+#: AKShare moved the forex symbol map between releases: ``akshare.forex.cons``
+#: existed up to 1.19.x and ``akshare.fx.cons_forex`` carries it from 1.20.0 on,
+#: where the whole ``akshare.forex`` package was deleted. requirements only pin
+#: ``akshare>=1.12.0``, so both layouts have to be probed — importing a single
+#: hard-coded path silently degrades forex detection to "never a forex pair",
+#: which routes FX symbols to the A-share endpoint.
+_FOREX_SYMBOL_MAP_MODULES = (
+    "akshare.fx.cons_forex",  # akshare >= 1.20.0
+    "akshare.forex.cons",  # akshare <= 1.19.x
+)
 
 
 def _is_forex(code: str) -> bool:
@@ -278,13 +283,15 @@ def _is_forex(code: str) -> bool:
     for the mt5 chain; akshare 1.20 moved the table to akshare.fx.cons_forex, so both
     layouts resolve and a miss logs instead of quietly returning False."""
     upper = code.upper().removesuffix(".FX").replace("/", "")
-    for name in _FOREX_TABLE_MODULES:
+    for module_name in _FOREX_SYMBOL_MAP_MODULES:
         try:
-            table = getattr(__import__(name, fromlist=["symbol_market_map"]), "symbol_market_map")
-        except (ImportError, AttributeError):
+            module = importlib.import_module(module_name)
+            symbol_market_map = module.symbol_market_map
+        except (ImportError, AttributeError):  # layout moved again, or module unavailable
             continue
-        return upper in table
-    logger.warning("akshare has no symbol_market_map at %s", " / ".join(_FOREX_TABLE_MODULES))
+        if upper in symbol_market_map:
+            return True
+    logger.warning("akshare has no symbol_market_map at %s", " / ".join(_FOREX_SYMBOL_MAP_MODULES))
     return False
 
 

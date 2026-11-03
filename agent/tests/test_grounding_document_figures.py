@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.agent.grounding import GroundingLedger
 
 REPORT = """第一节 经营回顾
@@ -162,6 +164,168 @@ def test_an_error_envelope_records_nothing(tmp_path: Path) -> None:
 
     result = ledger.validate_final_answer(
         _declared("年报显示毛利率 41.2%。", "41.2% | observed | 毛利率 | ar2025.pdf")
+    )
+
+    assert not result.valid
+
+
+@pytest.mark.parametrize("ref", ["doc-1", "read_document", "ar2025.pdf", "doc-1::document.figure"])
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [("763,154,445.01", "763,154,445.01 元"), ("191,586,814.48", "1.92亿元")],
+)
+def test_document_table_amount_can_be_restated_with_a_unit(
+    tmp_path: Path, ref: str, value: str, written: str,
+) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", f"单位：元\n| 项目 | 金额 |\n| 营业收入 | {value} |")
+    result = ledger.validate_final_answer(
+        _declared(f"营业收入为 {written}。", f"{written} | observed | 营业收入 | {ref}")
+    )
+    assert result.valid, result.issues
+
+
+@pytest.mark.parametrize("written", ["863,154,445.01 元", "763,154,445.01 USD", "763,154,445.01%"])
+def test_document_unit_restatement_does_not_invent_value_currency_or_ratio(
+    tmp_path: Path, written: str,
+) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "| 营业收入 | 763,154,445.01 |")
+    result = ledger.validate_final_answer(
+        _declared(f"营业收入为 {written}。", f"{written} | observed | 营业收入 | doc-1")
+    )
+    assert not result.valid
+
+
+def test_document_unit_restatement_keeps_exact_source_binding(tmp_path: Path) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "| 营业收入 | 763,154,445.01 |")
+    _read_document(ledger, document.with_name("other.pdf"), "doc-2", "| 营业收入 | 863,154,445.01 |")
+    result = ledger.validate_final_answer(
+        _declared("营业收入为 863,154,445.01 元。", "863,154,445.01 元 | observed | 营业收入 | doc-1")
+    )
+    assert not result.valid
+
+
+@pytest.mark.parametrize("formula", ["39.66% - 38.96%", "39.66 - 38.96"])
+def test_document_percentage_points_can_be_declared_as_written(tmp_path: Path, formula: str) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "毛利率分别为 39.66% 和 38.96%。")
+    result = ledger.validate_final_answer(
+        _declared("毛利率上升 0.70个百分点。", f"0.70个百分点 | derived | {formula} | doc-1")
+    )
+    assert result.valid, result.issues
+
+
+def test_document_percentage_point_derivation_still_needs_both_operands(tmp_path: Path) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "毛利率为 39.66%。")
+    result = ledger.validate_final_answer(
+        _declared("毛利率上升 0.70个百分点。", "0.70个百分点 | derived | 39.66% - 38.96% | doc-1")
+    )
+    assert not result.valid
+
+
+def test_money_can_be_derived_from_explicitly_referenced_document_cells(tmp_path: Path) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "| 本期 | 上期 |\n| 763,154,445.01 | 663,154,445.01 |")
+    result = ledger.validate_final_answer(
+        _declared("营业收入增加 1.00亿元。", "1.00亿元 | derived | 763154445.01 - 663154445.01 | doc-1")
+    )
+    assert result.valid, result.issues
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "North segment 154,700 165,200 6.79%",
+        "North segment 165,200",
+        "| Segment | Amount |\n| North | 165,200 |",
+    ],
+)
+def test_document_grouped_integer_grounds_a_quoted_table_cell(
+    tmp_path: Path,
+    text: str,
+) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", text)
+
+    result = ledger.validate_final_answer(
+        _declared(
+            "| Segment | Amount |\n|---|---|\n| North | 165,200 |",
+            "165,200 | observed | North segment | doc-1",
+        )
+    )
+
+    assert result.valid, result.issues
+
+
+@pytest.mark.parametrize("value", ["265,200", "2025.00", "3400"])
+def test_document_integer_claims_still_need_matching_observed_evidence(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(
+        ledger,
+        document,
+        "doc-1",
+        "Report year 2025. Staff 3400. North segment 165,200.",
+    )
+
+    result = ledger.validate_final_answer(
+        _declared(
+            f"| Item | Amount |\n|---|---|\n| North | {value} |",
+            f"{value} | observed | North segment | doc-1",
+        )
+    )
+
+    assert not result.valid
+
+
+def test_document_grouped_integer_keeps_the_referenced_source(tmp_path: Path) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    _read_document(ledger, document, "doc-1", "North segment 165,200")
+    _read_document(
+        ledger,
+        document.with_name("other.pdf"),
+        "doc-2",
+        "North segment 265,200",
+    )
+
+    result = ledger.validate_final_answer(
+        _declared(
+            "| Segment | Amount |\n|---|---|\n| North | 265,200 |",
+            "265,200 | observed | North segment | doc-1",
+        )
+    )
+
+    assert not result.valid
+
+
+@pytest.mark.parametrize("inside_run", [False, True])
+def test_document_grouped_integer_cannot_launder_generated_artifacts(
+    tmp_path: Path,
+    inside_run: bool,
+) -> None:
+    ledger, document = _ledger_with_upload(tmp_path)
+    if inside_run:
+        document = ledger.run_dir / "report.md"
+    else:
+        ledger.ingest_tool_result(
+            tool_name="write_file",
+            arguments={"path": str(document)},
+            result=json.dumps({"status": "ok", "path": str(document)}),
+            call_id="model-write-doc",
+            success=True,
+        )
+    _read_document(ledger, document, "doc-1", "North segment 165,200")
+
+    result = ledger.validate_final_answer(
+        _declared(
+            "| Segment | Amount |\n|---|---|\n| North | 165,200 |",
+            "165,200 | observed | North segment | doc-1",
+        )
     )
 
     assert not result.valid

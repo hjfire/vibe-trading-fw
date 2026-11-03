@@ -28,7 +28,8 @@
       "alerts": "価格・ポジション・口座の条件を、普段読んでいるチャネルに通知します。",
       "warehouse": "このマシンに保存したバー。バックテストと因子評価はAPIの代わりにここを読みます。",
       "help": "製品の全ページを扱う内蔵マニュアルです。",
-      "paperTrading": "仮想資金で日次取引を検証します。証券会社へ注文は送りません。現金配当を含まず、総収益ではありません。"
+      "paperTrading": "仮想資金で日次取引を検証します。証券会社へ注文は送りません。現金配当を含まず、総収益ではありません。",
+      "researchArtifacts": "証拠に基づく分析をセッション間で保存して再利用します。"
     },
     "instructions": {
       "reports": "まずアシスタントに戦略のバックテストを依頼し、ここで結果を開きます。会話で作成した PDF などは元の会話からダウンロードします。",
@@ -45,7 +46,8 @@
       "alerts": "ルールを作成後にローカルスケジューラを有効化してください。稼働中のみ評価され、配信にはチャネル設定も必要です。",
       "warehouse": "ここでバーを取得・取り込み、データソースに倉庫を選ぶと同じバーでオフライン実行できます。",
       "help": "一度最初から読み、機能が見つからないときはどのページからでも戻ってください。",
-      "paperTrading": "確定した日足のみを使用します。戦略は前日までのデータを読み、執行日の終値で約定します。通常の取引終了から30分お待ちください。自動実行は設定されません。"
+      "paperTrading": "確定した日足のみを使用します。戦略は前日までのデータを読み、執行日の終値で約定します。通常の取引終了から30分お待ちください。自動実行は設定されません。",
+      "researchArtifacts": "過去の分析を検索し、任意のリビジョンを開くか、新しい証拠で関連リビジョンを作成します。古い結論は変更されません。"
     }
   },
   "layout": {
@@ -82,7 +84,41 @@
     "alerts": "アラート",
     "warehouse": "バー倉庫",
     "help": "使い方の案内",
-    "paperTrading": "模擬取引"
+    "paperTrading": "模擬取引",
+    "researchArtifacts": "リサーチ成果物"
+  },
+  "researchArtifacts": {
+    "subject": "研究主題",
+    "dataAsOf": "データ基準日",
+    "saving": "保存中…",
+    "saveError": "リサーチ成果物を保存できません。",
+    "evidenceMissing": "証拠参照がありません",
+    "createdNotice": "リビジョン {{id}} を作成しました。",
+    "emptyHint": "分析を保存すると、後のセッションで結論と証拠を再利用できます。",
+    "emptyTitle": "リサーチ成果物はまだありません",
+    "save": "リサーチを保存",
+    "universe": "ユニバース（任意）",
+    "loadError": "リサーチ成果物を読み込めません。",
+    "formTitleNew": "リサーチを保存",
+    "verification": "検証状態",
+    "additionalEvidence": "追加の証拠 URI（1行に1件）",
+    "revise": "このリビジョンから新しいリビジョンを作成",
+    "completeness": "完全性",
+    "searchPlaceholder": "主題・ユニバース・本文を検索",
+    "newResearch": "新規リサーチ",
+    "formTitleRevision": "関連リビジョンを作成",
+    "content": "研究本文",
+    "subtitle": "証拠に基づく分析をセッション間で再利用し、過去のリビジョンを上書きしません。",
+    "history": "リビジョン履歴",
+    "optionalLinks": "任意の関連 ID",
+    "title": "リサーチ成果物",
+    "close": "閉じる",
+    "idempotentNotice": "同一の内容と 出典情報 は {{id}} に既に存在します。",
+    "evidence": "根拠資料",
+    "hypothesis_id": "仮説 ID",
+    "goal_id": "目標 ID",
+    "session_id": "セッション ID",
+    "run_id": "実行 ID"
   },
   "runtime": {
     "monitorBadge": "取引モニター",
@@ -420,6 +456,7 @@
     "taskSubtitle": "銘柄・戦略・ポートフォリオについて聞いてください。データ取得から計算まで、すべての手順をお見せします。",
     "quickActions": "クイックアクション",
     "browseAllExamples": "すべての例を見る",
+    "featured": "おすすめの例",
     "greetings": {
       "morning1": "おはようございます。",
       "morning2": "おはようございます。いつでもどうぞ。",
@@ -480,6 +517,9 @@
     "reasoningEffortHigh": "高",
     "reasoningEffortXhigh": "超高",
     "reasoningEffortMax": "最大",
+    "reasoningEffortMinimal": "最小",
+    "reasoningEffortUltra": "超高",
+    "reasoningEffortPersistent": "持続",
     "reasoningEffortDesc": "対応モデルの推論の深さを調整します。高いほど複雑な分析に有効な場合がありますが、時間がかかります。未対応のプロバイダーでは無視されることがあります。「なし（明示）」は推論を無効にしたままフィールドを明示送信し、一部の OpenAI モデルはツール利用時にこれが必要です。",
     "reasoningEffortReset": "選択したモデルは {{level}} に対応していないため、プロバイダーのデフォルトに戻しました。",
     "localApiAccess": "ローカル API アクセス",

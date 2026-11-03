@@ -34,7 +34,8 @@
       "alerts": "Preis-, Positions- und Kontobedingungen, die dich im gewohnten Kanal benachrichtigen.",
       "warehouse": "Die auf diesem Rechner gespeicherten Bars; Backtests und Faktortests lesen sie statt der API.",
       "help": "Das eingebaute Handbuch für alle Seiten des Produkts.",
-      "paperTrading": "Tägliche Trades mit virtuellem Kapital testen. Es werden keine Brokeraufträge gesendet. Bardividenden sind nicht enthalten; die Ergebnisse zeigen keine Gesamtrendite."
+      "paperTrading": "Tägliche Trades mit virtuellem Kapital testen. Es werden keine Brokeraufträge gesendet. Bardividenden sind nicht enthalten; die Ergebnisse zeigen keine Gesamtrendite.",
+      "researchArtifacts": "Beleggestützte Analysen sitzungsübergreifend speichern und wiederverwenden."
     },
     "instructions": {
       "reports": "Bitte den Assistenten zuerst um einen Strategie-Backtest und öffne hier die Ergebnisse. Im Chat erstellte PDFs und andere Dokumente lädst du in der ursprünglichen Unterhaltung herunter.",
@@ -51,7 +52,8 @@
       "alerts": "Regel anlegen und danach den lokalen Scheduler aktivieren — Regeln werden nur während seines Laufs geprüft. Für die Zustellung ist zusätzlich ein Kanal nötig.",
       "warehouse": "Hier Bars abrufen oder importieren und danach das Archiv als Datenquelle wählen, um offline auf denselben Bars zu rechnen.",
       "help": "Einmal von vorn bis unten lesen und von jeder Seite hierher zurück, wenn eine Funktion schwer zu finden ist.",
-      "paperTrading": "Nur abgeschlossene Tageskerzen werden abgerechnet. Strategien sehen vorherige Tage und handeln zum Schlusskurs des Ausführungstags. Bitte 30 Minuten nach regulärem Börsenschluss warten; es wird keine automatische Ausführung geplant."
+      "paperTrading": "Nur abgeschlossene Tageskerzen werden abgerechnet. Strategien sehen vorherige Tage und handeln zum Schlusskurs des Ausführungstags. Bitte 30 Minuten nach regulärem Börsenschluss warten; es wird keine automatische Ausführung geplant.",
+      "researchArtifacts": "Frühere Analysen suchen, Revisionen öffnen oder mit neuen Belegen eine verknüpfte Revision erstellen. Ältere Schlussfolgerungen bleiben unverändert."
     }
   },
   "layout": {
@@ -88,7 +90,41 @@
     "alerts": "Alarme",
     "warehouse": "Kursarchiv",
     "help": "Anleitung",
-    "paperTrading": "Simulierter Handel"
+    "paperTrading": "Simulierter Handel",
+    "researchArtifacts": "Recherche-Artefakte"
+  },
+  "researchArtifacts": {
+    "subject": "Forschungsthema",
+    "dataAsOf": "Datenstand",
+    "saving": "Speichern…",
+    "saveError": "Recherche-Artefakt konnte nicht gespeichert werden.",
+    "evidenceMissing": "Keine Belegreferenzen vorhanden",
+    "createdNotice": "Revision {{id}} erstellt.",
+    "emptyHint": "Speichere eine Analyse, um ihre Schlussfolgerungen und Belege in späteren Sitzungen wiederzuverwenden.",
+    "emptyTitle": "Noch keine Recherche-Artefakte",
+    "save": "Recherche speichern",
+    "universe": "Universum (optional)",
+    "loadError": "Recherche-Artefakte konnten nicht geladen werden.",
+    "formTitleNew": "Recherche speichern",
+    "verification": "Verifizierung",
+    "additionalEvidence": "Zusätzliche Beleg-URIs (eine pro Zeile)",
+    "revise": "Ausgehend von dieser Revision überarbeiten",
+    "completeness": "Vollständigkeit",
+    "searchPlaceholder": "Thema, Universum oder Inhalt suchen",
+    "newResearch": "Neue Recherche",
+    "formTitleRevision": "Verknüpfte Revision erstellen",
+    "content": "Inhalt der Recherche",
+    "subtitle": "Beleggestützte Analysen sitzungsübergreifend wiederverwenden, ohne frühere Revisionen zu überschreiben.",
+    "history": "Revisionsverlauf",
+    "optionalLinks": "Optionale verknüpfte IDs",
+    "title": "Recherche-Artefakte",
+    "close": "Schließen",
+    "idempotentNotice": "Identischer Inhalt und identische Provenienz existieren bereits in {{id}}.",
+    "evidence": "Belegquellen",
+    "hypothesis_id": "Hypothesen-ID",
+    "goal_id": "Ziel-ID",
+    "session_id": "Sitzungs-ID",
+    "run_id": "Lauf-ID"
   },
   "runtime": {
     "monitorBadge": "Runtime-Monitor",
@@ -426,6 +462,7 @@
     "taskSubtitle": "Frag nach einer Aktie, einer Strategie oder deinem Portfolio — ich hole die Daten, rechne alles durch und zeige jeden Schritt.",
     "quickActions": "Schnellaktionen",
     "browseAllExamples": "Alle Beispiele durchsuchen",
+    "featured": "Ausgewählte Beispiele",
     "greetings": {
       "morning1": "Guten Morgen.",
       "morning2": "Morgen — ich bin bereit, wenn du es bist.",
@@ -470,6 +507,9 @@
     "reasoningEffortHigh": "Hoch",
     "reasoningEffortXhigh": "Sehr hoch",
     "reasoningEffortMax": "Maximal",
+    "reasoningEffortMinimal": "Minimal",
+    "reasoningEffortUltra": "Ultra",
+    "reasoningEffortPersistent": "Anhaltend",
     "reasoningEffortDesc": "Steuert die Reasoning-Tiefe bei unterstützten Modellen. Höhere Stufen können die komplexe Analyse verbessern, dauern aber länger; nicht unterstützte Anbieter ignorieren diese Einstellung möglicherweise. Keine (explizit) sendet das Feld mit deaktiviertem Reasoning — einige OpenAI-Modelle benötigen dies, um Tools zu verwenden.",
     "reasoningEffortReset": "Das gewählte Modell unterstützt {{level}} nicht; auf den Anbieter-Standard zurückgesetzt.",
     "useDefaultModel": "Standardmodell verwenden",

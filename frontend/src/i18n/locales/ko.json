@@ -28,7 +28,8 @@
       "alerts": "가격·포지션·계좌 조건을 평소 메시지를 읽는 채널로 알려드립니다.",
       "warehouse": "이 기기에 저장한 바 데이터. 백테스트와 팩터 평가가 API 대신 여기서 읽습니다.",
       "help": "제품의 모든 페이지를 다루는 내장 매뉴얼입니다.",
-      "paperTrading": "가상 자금으로 일별 거래를 테스트합니다. 증권사에 주문을 보내지 않습니다. 현금 배당을 제외하므로 총수익이 아닙니다."
+      "paperTrading": "가상 자금으로 일별 거래를 테스트합니다. 증권사에 주문을 보내지 않습니다. 현금 배당을 제외하므로 총수익이 아닙니다.",
+      "researchArtifacts": "근거 기반 분석을 세션 간에 저장하고 재사용합니다."
     },
     "instructions": {
       "reports": "먼저 도우미에게 전략 백테스트를 요청한 후 여기에서 결과를 엽니다. 대화에서 생성한 PDF 등은 원래 대화에서 다운로드하세요.",
@@ -45,7 +46,8 @@
       "alerts": "규칙을 만든 뒤 로컬 스케줄러를 활성화하세요. 실행 중일 때만 평가되고, 전송에는 채널 설정도 필요합니다.",
       "warehouse": "여기서 바를 가져오거나 불러온 뒤 데이터 소스로 저장소를 고르면 같은 바에서 오프라인으로 실행됩니다.",
       "help": "한 번 처음부터 읽고, 기능을 찾기 어려울 때는 어떤 페이지에서든 여기로 돌아오세요.",
-      "paperTrading": "완료된 일봉만 결산합니다. 전략은 이전 날짜의 데이터만 읽고 실행일 종가로 체결됩니다. 정규장 종료 후 30분을 기다리세요. 자동 실행은 예약되지 않습니다."
+      "paperTrading": "완료된 일봉만 결산합니다. 전략은 이전 날짜의 데이터만 읽고 실행일 종가로 체결됩니다. 정규장 종료 후 30분을 기다리세요. 자동 실행은 예약되지 않습니다.",
+      "researchArtifacts": "이전 분석을 검색하고,원하는 리비전을 열거나, 새 증거로 연결된 리비전을 만드세요. 이전 결론은 변경되지 않습니다."
     }
   },
   "layout": {
@@ -82,7 +84,41 @@
     "alerts": "알림",
     "warehouse": "바 저장소",
     "help": "사용 안내",
-    "paperTrading": "모의 거래"
+    "paperTrading": "모의 거래",
+    "researchArtifacts": "연구 산출물"
+  },
+  "researchArtifacts": {
+    "completeness": "완전성",
+    "optionalLinks": "선택적 연결 ID",
+    "formTitleNew": "연구 저장",
+    "verification": "검증 상태",
+    "subject": "연구 주제",
+    "createdNotice": "리비전 {{id}}을(를) 만들었습니다.",
+    "emptyHint": "분석을 저장하면 이후 세션에서 결론과 근거를 재사용할 수 있습니다.",
+    "newResearch": "새 연구",
+    "emptyTitle": "아직 연구 산출물이 없습니다",
+    "save": "연구 저장",
+    "evidenceMissing": "첨부된 증거 참조가 없습니다",
+    "saveError": "연구 산출물을 저장하지 못했습니다.",
+    "additionalEvidence": "추가 증거 URI(줄당 하나)",
+    "subtitle": "이전 리비전을 덮어쓰지 않고 근거 기반 분석을 세션 간에 재사용합니다.",
+    "revise": "이 리비전을 바탕으로 수정",
+    "history": "리비전 기록",
+    "searchPlaceholder": "주제, 유니버스 또는 내용 검색",
+    "loadError": "연구 산출물을 불러오지 못했습니다.",
+    "close": "닫기",
+    "universe": "유니버스(선택 사항)",
+    "title": "연구 산출물",
+    "dataAsOf": "데이터 기준일",
+    "content": "연구 내용",
+    "saving": "저장 중…",
+    "idempotentNotice": "동일한 내용과 출처 정보가 {{id}}에 이미 있습니다.",
+    "formTitleRevision": "연결된 리비전 만들기",
+    "evidence": "근거 자료",
+    "hypothesis_id": "가설 ID",
+    "goal_id": "목표 ID",
+    "session_id": "세션 ID",
+    "run_id": "실행 ID"
   },
   "runtime": {
     "monitorBadge": "거래 모니터",
@@ -420,6 +456,7 @@
     "taskSubtitle": "종목, 전략, 포트폴리오에 대해 물어보세요. 데이터 수집부터 계산까지 모든 과정을 보여드립니다.",
     "quickActions": "빠른 작업",
     "browseAllExamples": "모든 예시 보기",
+    "featured": "추천 예시",
     "greetings": {
       "morning1": "좋은 아침입니다.",
       "morning2": "좋은 아침입니다. 언제든 시작하세요.",
@@ -480,6 +517,9 @@
     "reasoningEffortHigh": "높음",
     "reasoningEffortXhigh": "매우 높음",
     "reasoningEffortMax": "최대",
+    "reasoningEffortMinimal": "최소",
+    "reasoningEffortUltra": "초고",
+    "reasoningEffortPersistent": "지속",
     "reasoningEffortDesc": "지원되는 모델의 추론 깊이를 조절합니다. 높을수록 복잡한 분석에 도움이 될 수 있지만 더 오래 걸리며, 지원하지 않는 제공자는 이 설정을 무시할 수 있습니다. '없음(명시)'은 추론을 끈 상태로 필드를 명시적으로 전송하며, 일부 OpenAI 모델은 도구를 사용할 때 이 값이 필요합니다.",
     "reasoningEffortReset": "선택한 모델은 {{level}}을(를) 지원하지 않아 제공자 기본값으로 되돌렸습니다.",
     "localApiAccess": "로컬 API 액세스",

@@ -98,6 +98,12 @@ OVERLAP_FILES: tuple[str, ...] = (
 
 #: Per-side literals, keyed by the paths of OVERLAP_FILES. A file missing from
 #: a side's dict is not silently unchecked: it has to show up in NO_ANCHORS.
+#: Re-pin log (2026-11-03 sync): upstream's own README/SKILL lines moved the MCP
+#: tool count 82 -> 84, which made the seven `theirs` needles below read `vanished`.
+#: `agent/mcp_server.py` is untouched on our side and `agent/tests/test_readme_counts.py`
+#: re-derives that number from the running server, so 84 is the code truth and the
+#: needles follow it. Re-pinning a literal is maintenance; deleting a row is not, and
+#: MAX_DECLARED_HOLES is what makes that cost a red.
 ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
     'ours': {
         'README.md': ('   `VALID_SOURCES` in `agent/backtest/loaders/registry.py`.',),
@@ -131,13 +137,13 @@ ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     'theirs': {
         'README.md': ('For strict factor benchmarks, pass `--training-cutoff YYYY-MM-DD` to',),
-        'README_ar.md': ('│   ├── mcp_server.py               # MCP server — 82 tools for OpenClaw / Claude Desktop',),
-        'README_es.md': ('│   ├── mcp_server.py               # Servidor MCP — 82 herramientas para OpenClaw / Claude Desktop',),
-        'README_id.md': ('│   ├── mcp_server.py               # MCP server — 82 tools for OpenClaw / Claude Desktop',),
-        'README_ja.md': ('│   ├── mcp_server.py               # MCP サーバー — OpenClaw / Claude Desktop 向け 82 tools',),
-        'README_ko.md': ('│   ├── mcp_server.py               # MCP server — 82 tools for OpenClaw / Claude Desktop',),
-        'README_zh.md': ('│   ├── mcp_server.py               # MCP server —— 82 个工具，面向 OpenClaw / Claude Desktop',),
-        'agent/SKILL.md': ('## Available MCP Tools (82)',),
+        'README_ar.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
+        'README_es.md': ('│   ├── mcp_server.py               # Servidor MCP — 84 herramientas para OpenClaw / Claude Desktop',),
+        'README_id.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
+        'README_ja.md': ('│   ├── mcp_server.py               # MCP サーバー — OpenClaw / Claude Desktop 向け 84 tools',),
+        'README_ko.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
+        'README_zh.md': ('│   ├── mcp_server.py               # MCP server —— 84 个工具，面向 OpenClaw / Claude Desktop',),
+        'agent/SKILL.md': ('## Available MCP Tools (84)',),
         'agent/backtest/loader_health.py': (
             'def sanitize_evidence(text: str) -> str | None:',
             'class _LoaderWarningCollector(logging.Handler):',
