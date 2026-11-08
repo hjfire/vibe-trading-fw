@@ -150,7 +150,9 @@ cd frontend && npx vite build >> /c/Users/fire/AppData/Local/Temp/arch/baseline/
 cd agent && python -m pytest tests/test_channel_config_meta.py -q > /c/Users/fire/AppData/Local/Temp/arch/baseline/channel.txt 2>&1; echo "channel rc=$?"
 ```
 
-期望 A/B/C/channel 全 rc=0。vitest 的 `Test Files`／`Tests` 枚数**当场读、当场记**，不要引用本计划里的任何数字。若 B 有红，先定因（已登记 flake 还是真红），真红就停下报告。
+期望 A/B/C 全 rc=0。vitest 的 `Test Files`／`Tests` 枚数**当场读、当场记**，不要引用本计划里的任何数字。若 B 有红，先定因（已登记 flake 还是真红），真红就停下报告。
+
+channel 腿的判据**不是 rc=0**，而是「FAILED 名字集合与基线相同、新增红为 0」：本机缺 `nh3`（上游自己在 `agent/requirements.txt:79` 与 `pyproject.toml:88` 声明的依赖），使这一腿在未改动树上就恒红。取分母的方式是当场 `grep -n '^FAILED' …/baseline/channel.txt`，**不要抄本计划里的名字**。定因证据与裁定见本文件末尾「执行期偏差」的 2026-11-08 条。**不装包、不动 Python 工具链、不改这三枚测试。**
 
 - [ ] **Step 4: 记录 EOL 与 sha256**
 
@@ -837,7 +839,7 @@ A 必须 rc=0。B 与 Task 0 基线比：`Test Files` 数 +1（新守卫文件�
 cd agent && python -m pytest tests/test_channel_config_meta.py -q; echo "channel rc=$?"
 ```
 
-期望与 Task 0 基线同读数、rc=0。这是本片唯一的后端可见面（`agent/tests/test_channel_config_meta.py:1076` 读前端 `en.json`，只沿 `hint["help_key"]` 走 channel 配置字段，与 15 枚键无交集）。
+判据是「FAILED 名字集合与 Task 0 基线相同、新增红为 0」，**不是 rc=0**（本机缺 `nh3`，该腿恒红；见「执行期偏差」2026-11-08 条）。取基线名字集合：`grep '^FAILED' /c/Users/fire/AppData/Local/Temp/arch/baseline/channel.txt | sort`，与本次输出的同名集合做 `diff`，必须为空。这是本片唯一的后端可见面（`agent/tests/test_channel_config_meta.py:1076` 读前端 `en.json`，只沿 `hint["help_key"]` 走 channel 配置字段，与 15 枚键无交集）。
 
 - [ ] **Step 9: 提交（显式 pathspec）**
 
@@ -1142,7 +1144,7 @@ for p in paths:
 cd agent && python -m pytest tests/test_channel_config_meta.py -q; echo "channel rc=$?"
 ```
 
-与 Task 0 基线同读数、rc=0。全量后端腿本片免跑：唯一的后端可见面就是这一枚文件读前端 `en.json`，已由 Task 5 的逐叶对账证明 en 的有效 bundle 未变（且该测试只走 channel 配置字段路径，与 15 枚键无交集）。
+判据同 Task 4 Step 8：FAILED 名字集合与 Task 0 基线逐名相同、新增红为 0，**不要求 rc=0**（本机缺 `nh3`，恒红；见「执行期偏差」2026-11-08 条）。全量后端腿本片免跑：唯一的后端可见面就是这一枚文件读前端 `en.json`，已由 Task 5 的逐叶对账证明 en 的有效 bundle 未变（且该测试只走 channel 配置字段路径，与 15 枚键无交集）。
 
 ---
 
@@ -1333,4 +1335,32 @@ gh run list --branch main --limit 5
 
 ## 执行期偏差（执行时回填）
 
-- 待执行。所有读数由执行席当场测，本节不预填。
+### 2026-11-08 — Task 0 基线：channel 腿在未改动树上恒红，判据改为名字集合比对
+
+**读数（当场测，源文件在仓库外 `%TEMP%/arch/baseline/`）**
+
+- 树状态：`main`，HEAD `9df83cbb`，工作树除两枚既存未跟踪路径外干净。
+- `frontend_rc.txt`：A rc=0、B rc=0、C rc=0、**channel rc=1**。
+- `frontend.txt`：`Test Files 164 passed (164)`、`Tests 2609 passed (2609)`、`Start at 19:04:36`、`Duration 144.10s`。
+- `channel.txt`：`3 failed, 77 passed, 10 skipped in 2.28s`；三枚 FAILED 名字见该文件 `^FAILED` 行（`test_unloadable_adapter_is_handled_gracefully`、`test_split_never_leaks_secret_keys_in_values[email]`、`…[slack]`）。
+- `gate_rc.txt`：H rc=1、I rc=1（既存恒红，`gateI_tracked.txt` 的 TRACKED 为 0）。
+
+**定因（systematic-debugging Phase 1–3，未改任何代码）**
+
+调用链：`tests/test_channel_config_meta.py:812` → `src/channels/registry.py:163` 的 `importlib.import_module` → `src/channels/email.py:24` → `src/channels/rich_text.py:9` 的 `import nh3` → `ModuleNotFoundError: No module named 'nh3'`。异常被测试的 `except Exception` 吞掉后，断言「加载失败应降级为空 hints」不成立（email 多出 33 项、slack 多出 12 项），因为 hints 走的是另一条不依赖该模块的路径。
+
+三条证据证明**与本片零关系、与 fork 零关系**：
+
+1. `importlib.util.find_spec('nh3')` 返回 `None`（解释器 `…\Python311\python.exe`）——本机缺包。
+2. `nh3` 是**上游自己声明**的依赖：`git show upstream/main:agent/requirements.txt` 第 79 行 `nh3>=0.2.18`，`pyproject.toml:88` 同；`git show upstream/main:agent/src/channels/rich_text.py` 第 9 行就是 `import nh3`。
+3. 四枚涉事文件（`test_channel_config_meta.py`／`rich_text.py`／`email.py`／`registry.py`）的 `git rev-parse HEAD:<path>` 与 `git rev-parse upstream/main:<path>` **blob 哈希逐一相同**；`git -C <repo root> diff --stat upstream/main -- <五枚路径>` 输出为空。本片改动面全在 `frontend/**`，不含任何后端文件。
+
+**裁定**
+
+- 记为本片的**基线分母**，不修。Task 0 Step 3、Task 4 Step 8、Task 7 Step 4 的判据已同步改为「FAILED 名字集合与基线逐名相同、新增红为 0」，不再要求 rc=0。
+- **不装 `nh3`、不动 Python 工具链**（长期约束：工具链一律不许动；Never silently install system dependencies）。装包会把恒红门变成绿门，反而丢掉「本片 0 贡献」的可比性。
+- 不调阈值、不改门、不清白名单、不改这三枚测试。
+
+**方法论留痕（差点报出假绿）**
+
+第一次跑的 `git diff --stat upstream/main -- agent/...` 输出为空，我一度把它当成「与上游相同」的证据。实际上 Bash 的工作目录当时停在 `frontend/`（门 A/B/C 留下的），pathspec 相对 cwd 解析 ⇒ 匹配不到任何文件 ⇒ **空输出是零命中的假绿**。改用 `git -C <repo root>` 重跑，并另用 `git rev-parse HEAD:<path>`（这条永远相对仓库根）做 blob 等式独立复核，两者一致才采信。教训与既有记忆条目「计数口径造出的假缺陷／零命中先验通道」同型：**凡是「空输出即通过」的判据，先证通道真的能命中。**
