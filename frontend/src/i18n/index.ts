@@ -3,6 +3,7 @@ import { initReactI18next } from "react-i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { safeRemove } from "@/lib/storage";
 import en from "./locales/en.json";
+import { forkEn, forkLoaders } from "./fork";
 
 // Language registry — keep in sync with the Layout switcher and README_xx.md.
 // `dir` flags whether the language is right-to-left so the app can mirror the
@@ -60,7 +61,12 @@ async function loadLanguage(code: LazyLanguageCode): Promise<void> {
     for (let attempt = 0; attempt < LOCALE_LOAD_ATTEMPTS; attempt += 1) {
       try {
         const { default: resources } = await localeLoaders[code]();
+        // Both bundles are registered in one synchronous block: adding the
+        // upstream one first would let an observer see a half-merged locale.
+        // Inside the try so a failed overlay shares the retry and fallback path.
+        const { default: forkResources } = await forkLoaders[code]();
         i18n.addResourceBundle(code, "translation", resources, true, true);
+        i18n.addResourceBundle(code, "translation", forkResources, true, true);
         loadedLanguages.add(code);
         return;
       } catch (error) {
@@ -137,7 +143,10 @@ i18n
   .use(initReactI18next)
   .init({
     resources: {
-      en: { translation: en },
+      // i18next keeps this object by reference and deep-merges into it in place,
+      // so hand it a copy -- otherwise the overlay's keys leak back into the
+      // imported en.json module.
+      en: { translation: JSON.parse(JSON.stringify(en)) },
     },
     initAsync: false,
     // Default to English for everyone on first visit; only an explicit toggle
@@ -162,6 +171,11 @@ i18n
       lookupLocalStorage: "i18nextLng",
     },
   });
+
+// Fork copy lives outside locales/ so upstream edits there never collide with
+// ours. Deep-merge, not spread: navigation.descriptions is an upstream branch
+// that this overlay extends rather than replaces.
+i18n.addResourceBundle("en", "translation", forkEn, true, true);
 
 applyDocumentDirection(i18n.language || "en");
 i18n.on("initialized", () => {

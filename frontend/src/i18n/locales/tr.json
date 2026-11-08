@@ -37,11 +37,6 @@
     "about": "Hakkında",
     "sessionsLoadFailed": "Konuşmalar yüklenemiyor.",
     "pixelOffice": "Piksel Ofis",
-    "proChart": "Profesyonel Grafik",
-    "multiChart": "Çoklu Grafik",
-    "alerts": "Uyarılar",
-    "warehouse": "Bar deposu",
-    "help": "Kullanım rehberi",
     "paperTrading": "Sanal işlem",
     "researchArtifacts": "Araştırma çıktıları"
   },
@@ -2391,11 +2386,6 @@
       "runtime": "Aracı kurum bağlantılarını ve işlem çalışma durumunu kontrol edin.",
       "settings": "Modelleri, veri kaynaklarını ve aracı kurum bağlantılarını yapılandırın.",
       "pixelOffice": "Araştırma görevlerini planlayın ve atayın. Atama yürütmeyi başlatmaz; rütbeler yalnızca etikettir ve işlem yetkisi vermez.",
-      "proChart": "Profesyonel grafikte tek sembol: çizim araçları, göstergeler, Heikin-Ashi, hacim profili ve bar oynatma.",
-      "multiChart": "Bir sembolün dört periyodu yan yana; imleç ve zaman penceresi birbirine bağlı.",
-      "alerts": "Fiyat, pozisyon ve hesap koşulları; mesajları zaten okuduğunuz her yerde sizi uyarır.",
-      "warehouse": "Bu bilgisayarda saklanan barlar; geri testler ve faktör çalıştırmaları bir API yerine bunları okur.",
-      "help": "Üründeki her sayfa için yerleşik kılavuz.",
       "paperTrading": "Günlük işlemleri sanal fonlarla deneyin. Aracı kuruma emir gönderilmez. Sonuçlar nakit temettüleri içermez ve toplam getiriyi göstermez.",
       "researchArtifacts": "Kanıta dayalı analizleri oturumlar arasında kaydedin ve yeniden kullanın."
     },
@@ -2409,11 +2399,6 @@
       "runtime": "Önce Ayarlar veya Portföy’de bir aracı kurum bağlantısı kurun. Kullanılabilir işlemler, kurumun yeteneklerine ve verdiğiniz yetkiye bağlıdır.",
       "settings": "Başlamak için bir model yapılandırın. Gerektikçe veri kaynakları veya aracı kurum bağlantıları ekleyin; kamuya açık piyasa araştırması için aracı kurum hesabı gerekmez.",
       "pixelOffice": "Araştırma görevlerini planlayın ve atayın. Atama yürütmeyi başlatmaz; rütbeler yalnızca etikettir ve işlem yetkisi vermez.",
-      "proChart": "Bir sembol ve periyot seçin, ardından çizmek, gösterge değiştirmek veya geçmişi bar bar oynatmak için araç çubuğunu kullanın.",
-      "multiChart": "Dört periyodu seçin; bağlantı açıkken imleç ve görünen pencere tüm hücrelerde aynı anda hareket eder.",
-      "alerts": "Bir kural oluşturun, ardından yerel zamanlayıcıyı etkinleştirin — kurallar yalnızca çalışırken değerlendirilir. İletim ayrıca yapılandırılmış bir kanal gerektirir.",
-      "warehouse": "Buradan barları getirin veya içe aktarın, ardından aynı barlar üzerinde çevrimdışı çalışmak için veri kaynağı olarak depoyu seçin.",
-      "help": "Bir kez baştan okuyun, ardından bir özelliği bulmakta zorlandığınızda herhangi bir sayfadan geri dönün.",
       "paperTrading": "Yalnızca tamamlanmış günlük mumlar işlenir. Stratejiler önceki günleri okur ve işlem gününün kapanışında gerçekleşir. Normal kapanıştan 30 dakika sonrasını bekleyin; otomatik çalıştırma planlanmaz.",
       "researchArtifacts": "Önceki analizleri arayın, herhangi bir revizyonu açın veya yeni kanıtla bağlantılı revizyon oluşturun. Eski sonuçlar değişmez."
     }

@@ -29,11 +29,6 @@
       "runtime": "Confira conexões de corretoras e o estado de execução das operações.",
       "settings": "Configure modelos, fontes de dados e conexões de corretoras.",
       "pixelOffice": "Planeje e atribua tarefas de pesquisa. A atribuição não inicia a execução; os cargos são rótulos e não concedem permissões de negociação.",
-      "proChart": "Um símbolo no gráfico profissional: ferramentas de desenho, indicadores, Heikin-Ashi, perfil de volume e replay de barras.",
-      "multiChart": "Quatro períodos de um símbolo lado a lado, com cursor e janela de tempo vinculados.",
-      "alerts": "Condições de preço, posição e conta que avisam você no canal que já usa.",
-      "warehouse": "As barras salvas nesta máquina; backtests e fatores leem daqui em vez da API.",
-      "help": "O manual embutido para todas as páginas do produto.",
       "paperTrading": "Teste operações diárias com recursos fictícios. Nenhuma ordem é enviada à corretora. Os resultados excluem dividendos em dinheiro e não representam retorno total.",
       "researchArtifacts": "Salve e reutilize análises baseadas em evidências entre sessões."
     },
@@ -47,11 +42,6 @@
       "runtime": "Primeiro configure uma conexão de corretora em Configurações ou Carteira. As operações disponíveis dependem dos recursos da corretora e da sua autorização.",
       "settings": "Configure um modelo para começar. Adicione dados ou conexões de corretoras conforme necessário; pesquisas com dados públicos de mercado não exigem conta em corretora.",
       "pixelOffice": "Planeje e atribua tarefas de pesquisa. A atribuição não inicia a execução; os cargos são rótulos e não concedem permissões de negociação.",
-      "proChart": "Escolha símbolo e período e use a barra de ferramentas para desenhar, trocar indicadores ou reproduzir barra a barra.",
-      "multiChart": "Selecione os quatro períodos; com o vínculo ativo, o cursor e a janela se movem juntos em todas as células.",
-      "alerts": "Crie a regra e ative o agendador local — ela só é avaliada enquanto estiver ativo. O envio também exige um canal configurado.",
-      "warehouse": "Busque ou importe barras aqui e depois escolha o armazém como fonte de dados para rodar offline nas mesmas barras.",
-      "help": "Leia uma vez do começo ao fim e volte de qualquer página quando difícil encontrar um recurso.",
       "paperTrading": "Somente candles diários completos são liquidados. As estratégias leem dias anteriores e executam no fechamento do dia indicado. Aguarde 30 minutos após o fechamento regular; nenhuma execução automática é agendada.",
       "researchArtifacts": "Pesquise análises anteriores, abra qualquer revisão ou crie uma revisão vinculada com novas evidências. Conclusões antigas permanecem inalteradas."
     }
@@ -85,11 +75,6 @@
     "about": "Sobre",
     "sessionsLoadFailed": "Não foi possível carregar as conversas.",
     "pixelOffice": "Escritório pixel",
-    "proChart": "Gráfico Pro",
-    "multiChart": "Gráfico múltiplo",
-    "alerts": "Alertas",
-    "warehouse": "Armazém de dados",
-    "help": "Guia de uso",
     "paperTrading": "Negociação simulada",
     "researchArtifacts": "Artefatos de pesquisa"
   },

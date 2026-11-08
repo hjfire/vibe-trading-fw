@@ -29,11 +29,6 @@
       "runtime": "Periksa koneksi broker dan status pelaksanaan perdagangan.",
       "settings": "Atur model, sumber data, dan koneksi broker.",
       "pixelOffice": "Rencanakan dan tugaskan riset. Penugasan tidak memulai eksekusi; pangkat hanya label dan tidak memberikan izin transaksi.",
-      "proChart": "Satu simbol di chart profesional: alat gambar, indikator, Heikin-Ashi, profil volume, dan replay bar.",
-      "multiChart": "Empat periode dari satu simbol berdampingan, dengan crosshair dan jendela waktu yang tertaut.",
-      "alerts": "Kondisi harga, posisi, dan akun yang memberi tahu Anda lewat kanal yang sudah Anda pakai.",
-      "warehouse": "Bar yang tersimpan di mesin ini; backtest dan evaluasi faktor membacanya, bukan API.",
-      "help": "Manual bawaan untuk setiap halaman produk.",
       "paperTrading": "Uji transaksi harian dengan dana virtual. Tidak ada pesanan yang dikirim ke broker. Hasil tidak mencakup dividen tunai dan bukan imbal hasil total.",
       "researchArtifacts": "Simpan dan gunakan kembali analisis berbasis bukti antarsesi."
     },
@@ -47,11 +42,6 @@
       "runtime": "Atur koneksi broker di Pengaturan atau Portofolio terlebih dahulu. Tindakan perdagangan yang tersedia bergantung pada kemampuan broker dan otorisasi Anda.",
       "settings": "Atur model untuk memulai. Tambahkan data atau koneksi broker sesuai kebutuhan; riset data pasar publik tidak memerlukan akun broker.",
       "pixelOffice": "Rencanakan dan tugaskan riset. Penugasan tidak memulai eksekusi; pangkat hanya label dan tidak memberikan izin transaksi.",
-      "proChart": "Pilih simbol dan periode, lalu pakai bilah alat untuk menggambar, mengganti indikator, atau memutar riwayat bar demi bar.",
-      "multiChart": "Pilih empat periode; saat tautan aktif, crosshair dan jendela bergerak bersamaan di semua sel.",
-      "alerts": "Buat aturan lalu aktifkan penjadwal lokal — aturan hanya dievaluasi saat ia berjalan. Pengiriman juga memerlukan kanal.",
-      "warehouse": "Ambil atau impor bar di sini, lalu pilih gudang sebagai sumber data untuk berjalan luring pada bar yang sama.",
-      "help": "Baca sekali dari awal, lalu kembali dari halaman mana pun saat sulit menemukan fitur.",
       "paperTrading": "Hanya candle harian yang selesai dapat diproses. Strategi membaca hari sebelumnya dan dieksekusi pada penutupan hari eksekusi. Tunggu 30 menit setelah penutupan reguler; tidak ada eksekusi otomatis yang dijadwalkan.",
       "researchArtifacts": "Cari analisis sebelumnya, buka revisi apa pun, atau buat revisi tertaut dengan bukti baru. Kesimpulan lama tetap tidak berubah."
     }
@@ -85,11 +75,6 @@
     "about": "Tentang",
     "sessionsLoadFailed": "Percakapan tidak dapat dimuat.",
     "pixelOffice": "Kantor piksel",
-    "proChart": "Grafik Pro",
-    "multiChart": "Grafik Multi-Timeframe",
-    "alerts": "Peringatan",
-    "warehouse": "Gudang data",
-    "help": "Panduan penggunaan",
     "paperTrading": "Trading simulasi",
     "researchArtifacts": "Artefak riset"
   },

@@ -29,11 +29,6 @@
       "runtime": "Comprueba conexiones de brókeres y el estado de ejecución de operaciones.",
       "settings": "Configura modelos, fuentes de datos y conexiones de brókeres.",
       "pixelOffice": "Planifica y asigna tareas de investigación. La asignación no inicia la ejecución; los rangos son etiquetas y no conceden permisos de negociación.",
-      "proChart": "Un símbolo en gráfico profesional: herramientas de dibujo, indicadores, Heikin-Ashi, perfil de volumen y reproducción de barras.",
-      "multiChart": "Cuatro períodos de un símbolo en paralelo, con cursor y ventana de tiempo enlazados.",
-      "alerts": "Condiciones de precio, posición y cuenta que te avisan en el canal que ya usas.",
-      "warehouse": "Las barras guardadas en esta máquina; los backtests y factores las leen en lugar de la API.",
-      "help": "El manual integrado para todas las páginas del producto.",
       "paperTrading": "Prueba operaciones diarias con fondos ficticios. No se envían órdenes al bróker. Los resultados excluyen dividendos en efectivo y no representan la rentabilidad total.",
       "researchArtifacts": "Guarda y reutiliza análisis respaldados por evidencia entre sesiones."
     },
@@ -47,11 +42,6 @@
       "runtime": "Primero configura una conexión de bróker en Ajustes o Cartera. Las operaciones disponibles dependen de sus capacidades y de tu autorización.",
       "settings": "Configura un modelo para empezar. Añade datos o conexiones de brókeres según lo necesites; investigar datos públicos de mercado no requiere una cuenta de bróker.",
       "pixelOffice": "Planifica y asigna tareas de investigación. La asignación no inicia la ejecución; los rangos son etiquetas y no conceden permisos de negociación.",
-      "proChart": "Elige símbolo y período y usa la barra de herramientas para dibujar, cambiar indicadores o reproducir el histórico barra a barra.",
-      "multiChart": "Selecciona los cuatro períodos; con el enlace activo, el cursor y la ventana se mueven a la vez en todas las celdas.",
-      "alerts": "Crea la regla y activa el programador local: solo se evalúa mientras está activo. El envío también necesita un canal configurado.",
-      "warehouse": "Obtén o importa barras aquí y luego elige el almacén como fuente de datos para trabajar sin conexión sobre las mismas barras.",
-      "help": "Léelo una vez desde el principio y vuelve desde cualquier página cuando una función sea difícil de encontrar.",
       "paperTrading": "Solo se liquidan velas diarias completas. Las estrategias leen días anteriores y ejecutan al cierre del día indicado. Espera 30 minutos tras el cierre habitual; no se programa ejecución automática.",
       "researchArtifacts": "Busca análisis anteriores, abre cualquier revisión o crea una revisión vinculada con nueva evidencia. Las conclusiones anteriores no cambian."
     }
@@ -85,11 +75,6 @@
     "about": "Acerca de",
     "sessionsLoadFailed": "No se pueden cargar las conversaciones.",
     "pixelOffice": "Oficina de píxeles",
-    "proChart": "Gráfico Pro",
-    "multiChart": "Gráfico múltiple",
-    "alerts": "Alertas",
-    "warehouse": "Almacén de datos",
-    "help": "Guía de uso",
     "paperTrading": "Trading simulado",
     "researchArtifacts": "Artefactos de investigación"
   },

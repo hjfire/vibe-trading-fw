@@ -9,18 +9,41 @@ import { SUPPORTED_LANGUAGES } from "@/i18n";
  * The sidebar label, its tooltip, and the expandable "How to use …" block under
  * PageHelp are three separate locale lookups keyed by the same navigation item
  * id. A missing key renders as the literal dotted path in every language — a
- * visible defect no behavioural test of a page would notice. Upstream now owns
- * the item list (components/layout/navigation.ts) and nine locale files, so the
- * pair can drift on either side of a merge.
+ * visible defect no behavioural test of a page would notice. Upstream owns the
+ * item list (components/layout/navigation.ts) and eleven locale files; the five
+ * fork entries live in i18n/fork/, so the pair can drift on either side.
  *
  * The expected key set is derived from NAVIGATION_GROUPS rather than written
  * out, so adding an entry without its copy fails here.
  */
 
 const localesDir = resolve(__dirname, "../i18n/locales");
+const overlayDir = resolve(__dirname, "../i18n/fork");
+
+function readJson(path: string): Record<string, any> {
+  return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+// Mirrors i18next's addResourceBundle(code, "translation", fork, true, true):
+// recurse while both sides are branch objects, overlay wins at leaves, keys on
+// only one side survive. Reading a single file would call a missing overlay green.
+function deepMerge(base: Record<string, any>, overlay: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = { ...base };
+  for (const [key, value] of Object.entries(overlay)) {
+    const existing = out[key];
+    const bothBranches =
+      value !== null && typeof value === "object" && !Array.isArray(value) &&
+      existing !== null && typeof existing === "object" && !Array.isArray(existing);
+    out[key] = bothBranches ? deepMerge(existing, value) : value;
+  }
+  return out;
+}
 
 function readLocale(code: string): Record<string, any> {
-  return JSON.parse(readFileSync(resolve(localesDir, `${code}.json`), "utf-8"));
+  return deepMerge(
+    readJson(resolve(localesDir, `${code}.json`)),
+    readJson(resolve(overlayDir, `${code}.json`)),
+  );
 }
 
 const navItems = NAVIGATION_GROUPS.flatMap((group) => [...group.items]);
