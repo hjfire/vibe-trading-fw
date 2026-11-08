@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "alerts": "Uyarılar",
+    "help": "Kullanım rehberi",
+    "multiChart": "Çoklu Grafik",
+    "proChart": "Profesyonel Grafik",
+    "warehouse": "Bar deposu"
+  },
+  "navigation": {
+    "descriptions": {
+      "alerts": "Fiyat, pozisyon ve hesap koşulları; mesajları zaten okuduğunuz her yerde sizi uyarır.",
+      "help": "Üründeki her sayfa için yerleşik kılavuz.",
+      "multiChart": "Bir sembolün dört periyodu yan yana; imleç ve zaman penceresi birbirine bağlı.",
+      "proChart": "Profesyonel grafikte tek sembol: çizim araçları, göstergeler, Heikin-Ashi, hacim profili ve bar oynatma.",
+      "warehouse": "Bu bilgisayarda saklanan barlar; geri testler ve faktör çalıştırmaları bir API yerine bunları okur."
+    },
+    "instructions": {
+      "alerts": "Bir kural oluşturun, ardından yerel zamanlayıcıyı etkinleştirin — kurallar yalnızca çalışırken değerlendirilir. İletim ayrıca yapılandırılmış bir kanal gerektirir.",
+      "help": "Bir kez baştan okuyun, ardından bir özelliği bulmakta zorlandığınızda herhangi bir sayfadan geri dönün.",
+      "multiChart": "Dört periyodu seçin; bağlantı açıkken imleç ve görünen pencere tüm hücrelerde aynı anda hareket eder.",
+      "proChart": "Bir sembol ve periyot seçin, ardından çizmek, gösterge değiştirmek veya geçmişi bar bar oynatmak için araç çubuğunu kullanın.",
+      "warehouse": "Buradan barları getirin veya içe aktarın, ardından aynı barlar üzerinde çevrimdışı çalışmak için veri kaynağı olarak depoyu seçin."
+    }
+  }
+}

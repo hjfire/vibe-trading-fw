@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "alerts": "Peringatan",
+    "help": "Panduan penggunaan",
+    "multiChart": "Grafik Multi-Timeframe",
+    "proChart": "Grafik Pro",
+    "warehouse": "Gudang data"
+  },
+  "navigation": {
+    "descriptions": {
+      "alerts": "Kondisi harga, posisi, dan akun yang memberi tahu Anda lewat kanal yang sudah Anda pakai.",
+      "help": "Manual bawaan untuk setiap halaman produk.",
+      "multiChart": "Empat periode dari satu simbol berdampingan, dengan crosshair dan jendela waktu yang tertaut.",
+      "proChart": "Satu simbol di chart profesional: alat gambar, indikator, Heikin-Ashi, profil volume, dan replay bar.",
+      "warehouse": "Bar yang tersimpan di mesin ini; backtest dan evaluasi faktor membacanya, bukan API."
+    },
+    "instructions": {
+      "alerts": "Buat aturan lalu aktifkan penjadwal lokal — aturan hanya dievaluasi saat ia berjalan. Pengiriman juga memerlukan kanal.",
+      "help": "Baca sekali dari awal, lalu kembali dari halaman mana pun saat sulit menemukan fitur.",
+      "multiChart": "Pilih empat periode; saat tautan aktif, crosshair dan jendela bergerak bersamaan di semua sel.",
+      "proChart": "Pilih simbol dan periode, lalu pakai bilah alat untuk menggambar, mengganti indikator, atau memutar riwayat bar demi bar.",
+      "warehouse": "Ambil atau impor bar di sini, lalu pilih gudang sebagai sumber data untuk berjalan luring pada bar yang sama."
+    }
+  }
+}

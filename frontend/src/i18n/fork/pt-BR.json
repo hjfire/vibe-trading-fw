@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "alerts": "Alertas",
+    "help": "Guia de uso",
+    "multiChart": "Gráfico múltiplo",
+    "proChart": "Gráfico Pro",
+    "warehouse": "Armazém de dados"
+  },
+  "navigation": {
+    "descriptions": {
+      "alerts": "Condições de preço, posição e conta que avisam você no canal que já usa.",
+      "help": "O manual embutido para todas as páginas do produto.",
+      "multiChart": "Quatro períodos de um símbolo lado a lado, com cursor e janela de tempo vinculados.",
+      "proChart": "Um símbolo no gráfico profissional: ferramentas de desenho, indicadores, Heikin-Ashi, perfil de volume e replay de barras.",
+      "warehouse": "As barras salvas nesta máquina; backtests e fatores leem daqui em vez da API."
+    },
+    "instructions": {
+      "alerts": "Crie a regra e ative o agendador local — ela só é avaliada enquanto estiver ativo. O envio também exige um canal configurado.",
+      "help": "Leia uma vez do começo ao fim e volte de qualquer página quando difícil encontrar um recurso.",
+      "multiChart": "Selecione os quatro períodos; com o vínculo ativo, o cursor e a janela se movem juntos em todas as células.",
+      "proChart": "Escolha símbolo e período e use a barra de ferramentas para desenhar, trocar indicadores ou reproduzir barra a barra.",
+      "warehouse": "Busque ou importe barras aqui e depois escolha o armazém como fonte de dados para rodar offline nas mesmas barras."
+    }
+  }
+}

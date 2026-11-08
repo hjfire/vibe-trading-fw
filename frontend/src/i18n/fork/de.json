@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "alerts": "Alarme",
+    "help": "Anleitung",
+    "multiChart": "Multi-Chart",
+    "proChart": "Pro-Chart",
+    "warehouse": "Kursarchiv"
+  },
+  "navigation": {
+    "descriptions": {
+      "alerts": "Preis-, Positions- und Kontobedingungen, die dich im gewohnten Kanal benachrichtigen.",
+      "help": "Das eingebaute Handbuch für alle Seiten des Produkts.",
+      "multiChart": "Vier Perioden eines Symbols nebeneinander, mit gekoppeltem Fadenkreuz und Zeitfenster.",
+      "proChart": "Ein Symbol im Profi-Chart: Zeichenwerkzeuge, Indikatoren, Heikin-Ashi, Volumenprofil und Bar-Replay.",
+      "warehouse": "Die auf diesem Rechner gespeicherten Bars; Backtests und Faktortests lesen sie statt der API."
+    },
+    "instructions": {
+      "alerts": "Regel anlegen und danach den lokalen Scheduler aktivieren — Regeln werden nur während seines Laufs geprüft. Für die Zustellung ist zusätzlich ein Kanal nötig.",
+      "help": "Einmal von vorn bis unten lesen und von jeder Seite hierher zurück, wenn eine Funktion schwer zu finden ist.",
+      "multiChart": "Vier Perioden wählen; mit aktiver Kopplung bewegen sich Fadenkreuz und Zeitfenster in allen Feldern gleichzeitig.",
+      "proChart": "Symbol und Periode wählen, dann in der Werkzeugleiste zeichnen, Indikatoren wechseln oder Historie Bar für Bar abspielen.",
+      "warehouse": "Hier Bars abrufen oder importieren und danach das Archiv als Datenquelle wählen, um offline auf denselben Bars zu rechnen."
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "alerts": "Alerts",
+    "help": "Usage guide",
+    "multiChart": "Multi Chart",
+    "proChart": "Pro Chart",
+    "warehouse": "Bar warehouse"
+  },
+  "navigation": {
+    "descriptions": {
+      "alerts": "Price, position and account conditions that notify you wherever you already read messages.",
+      "help": "The built-in manual for every page in the product.",
+      "multiChart": "Four periods of one symbol side by side, with the crosshair and time window linked.",
+      "proChart": "One symbol on a professional chart: drawing tools, indicators, Heikin-Ashi, volume profile and bar replay.",
+      "warehouse": "The bars stored on this machine, which backtests and factor runs read instead of an API."
+    },
+    "instructions": {
+      "alerts": "Create a rule, then enable the local scheduler — rules are only evaluated while it runs. Delivery also needs a configured channel.",
+      "help": "Read it once from the top, then come back from any page when a feature is hard to find.",
+      "multiChart": "Choose the four periods; with linking on, the crosshair and the visible window move across every cell at once.",
+      "proChart": "Pick a symbol and a period, then use the toolbar to draw, switch indicators, or replay history bar by bar.",
+      "warehouse": "Fetch or import bars here, then select the warehouse as the data source to run offline on the same bars."
+    }
+  }
+}
