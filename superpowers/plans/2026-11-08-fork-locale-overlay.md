@@ -1584,3 +1584,28 @@ Step 8 追加写完复跑读档门，D/E rc=0、H／I 对基线 `cmp` 仍 rc=0�
 **裁定**：不改门、不调阈值、不清白名单、**不回拨 `upstream/main` 追踪件**（回拨能造绿，但那是把读数搅浑）。
 登记为「同步前恒红」的第三枚本地门，与 H／I 并列。复绿判据：下一轮把 `c6aaacc5` 并入之后，
 两点尺的 `removed` 重新为 0 ⇒ 豁免成立 ⇒ 该针转绿。引用 F 的读数时必须连带说明当时的 `upstream/main` 指向哪一枚。
+
+#### 2026-11-09 — Step 8 第二枚外部验证分母（文档面落定后的落点 `57a1ac71`）
+
+- 提交 `57a1ac71`（`docs(ledger): record the overlay push, the nine green CI legs and the fetch-induced gate F red`）
+  推送后 run `42565794248`（push 事件）9 腿全部终态、全部 success，红腿＝0：
+  `test / Python 3.14`；`test / Python 3.11`；`frontend`；`Hash lock / Linux x64`；`Hash lock / Windows x64`；
+  `Hash lock / macOS ARM64`；`Windows 11 ARM64 / Python 3.14 background lifecycle`；
+  `Windows Server 2025 x64 / Python 3.14 background lifecycle`；`Windows desktop source lifecycle`。
+- 读数取自仓库外 `arch/jobs_step8_final.json`；脚本逐条断言每条 job 的 `run_id` == `42565794248`、
+  `head_sha` == `57a1ac71c037e66d0293e97ff5c9b7ba8f44048e`，`total_count` == 9。
+  与上一枚分母（`6c5742dd` / `42563825283`）之间只有文档追加，代码树未动 ⇒ 两枚同树绿读数。
+
+#### 2026-11-09 — 剩余片路线图登记（只登记，本计划不实现）
+
+- 落 `superpowers/plans/2026-11-09-decoupling-roadmap.md`，把本轮架构取证固化成可执行顺序：
+  同步轮 → 片②（文档计数再生成器）→ 片③（`registry.py` 搬动改纯追加）→ 路线 A（ProChart 拆解）。
+- 路线图里每个数都现读复核过：窄尺 `2ac20879→b292dfb6` = 76、`→HEAD` = 67；
+  locales 目录相对同步点 diff 为空；对 `upstream/main=c6aaacc5` 的零写入预检 15 枚文件／59 枚 hunk，
+  其中 47 枚落在 README×7 ＋ `agent/SKILL.md`；67 枚里 35 枚上游零改动（休眠）。
+- 落笔时自查纠了两枚数：`ProChart.tsx` 是 **3517** 行（`wc -l` 现读，初稿写 3518）；
+  `test_distribution_skill_manifest.py` 是 **7 枚测试**（初稿按 assert 行写成 8 个断言），
+  与 `test_readme_counts.py` 合跑现读 `122 passed`。合并树号随 `HEAD` 变，故不钉死、只给现取命令。
+- 片②的「撤回上游字节」退路已被零写入探针否证（喂 `2ac20879` 的 README 字节 ⇒ 50 failed / 65 passed，
+  磁盘字节 ⇒ 115 passed），故该片只能是生成器，不能是撤回。探针第一版因 pytest 导入名
+  （`tests.test_readme_counts` 而非 `test_readme_counts`）打在别的对象上而假绿，修法与自证已留痕。
