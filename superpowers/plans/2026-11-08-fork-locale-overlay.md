@@ -1519,3 +1519,68 @@ M7 删掉 registry 里 `tr` 那枚 loader 后 `fork/index.ts(21,3)` TS1360＋`i1
 重钉不删行、不改判据，只换号。其余引用逐枚 `sed -n` 现读核对均命中：
 `PageHelp.tsx:15,19,20`、`SidebarNavigation.tsx:45,49,57`、`ReplayBar.tsx:68,88,94-96`、
 i18next 库 `:307`（`this.data = data || {}`）／`:391`（`getPath`）／`:392`（只拷源）／`:394`（`deepExtend`）／`:91`（函数头）。
+
+### 2026-11-09 — Task 9 Step 5–8：提交 C、快进合入、推送与 CI 复读（落点当场取）
+
+- 提交 C = `6c5742dd`（`docs(ledger): record the fork locale overlay landing`），2 files / 184 insertions / 0 deletions。
+- 提交前自查发现四枚引用行号漂了（`navigationCopy.test.ts` 的 `:97`／`:52`／`:81`、`i18n.test.ts:37`），
+  按内容 `sed -n` 现读重钉为 `:120`／`:75`／`:104`／`:38`，重钉不删行、不改判据。
+- 文档面全部改完之后重跑读档门（同树 before/after）：D `forensics audit: clean` rc=0；
+  E `166 passed` rc=0；F `237 passed, 3 deselected` rc=0；H rc=1 但 `cmp` 基线 rc=0；I rc=1 但 `cmp` 基线 rc=0。
+  两枚恒红门用的是**字节相等**判据，比 FAILED 名字集合更强——字节相同 ⇒ 命中集不可能变。
+- Step 6 快进：`git merge --ff-only feat/fork-locale-overlay` 把 `main` 从 `a6a9bfe0` 前移 3 笔到 `6c5742dd`；
+  `HEAD^{tree}` 与 `feat/fork-locale-overlay^{tree}` 同为 `653b57be0cc013edf456863cf425ebc1d754ecd9`（快进不改树）。
+- Step 7 远程真值：推送前 `git ls-remote origin refs/heads/main` 读到 `b292dfb6`（比本地**落后** 6 笔，
+  含尚未推送的 spec／plan／channel 判据三笔文档），`git merge-base --is-ancestor b292dfb6 HEAD` rc=0、
+  `git rev-list --left-right --count b292dfb6...HEAD` = `0 6` ⇒ 纯快进，未改道 merge。
+  `git push origin HEAD:main` rc=0 回显 `b292dfb6..6c5742dd`；推送后远程真值与本地 `HEAD` 逐字相同。
+- Step 8 CI：run `42563825283`（push 事件，head `6c5742dd`）9 腿全部终态——`Hash lock / Linux x64`＝success；`Hash lock / Windows x64`＝success；`Hash lock / macOS ARM64`＝success；`Windows 11 ARM64 / Python 3.14 background lifecycle`＝success；`Windows Server 2025 x64 / Python 3.14 background lifecycle`＝success；`Windows desktop source lifecycle`＝success；`frontend`＝success；`test / Python 3.11`＝success；`test / Python 3.14`＝success。红腿＝无。
+  逐腿结论取自 `jobs_landing_final.json`，脚本断言每条 job 的 `run_id` 与 `head_sha` 全等于上述两值。
+
+#### 上游在本片期间自我推进：冲突面的现读与口径交代
+
+- 推送后读 `git ls-remote upstream refs/heads/main` = `c6aaacc5`，而本地追踪件仍是 `2ac20879`；
+  `git fetch upstream` 后 `git rev-list --count 2ac20879..c6aaacc5` = 94 笔。
+  这解释了 `b292dfb6` 上那四趟 `Sync upstream` schedule 的 failure——是真新冲突，不是新故障。
+- **口径警告**：`git diff --name-only upstream/main main -- frontend/src/i18n/locales/` 此刻列出 11 枚，
+  那是**上游自己新改的**，不是我们的分叉。本片承诺的判据要对着**上次同步点**读：
+  `git diff --name-only 2ac20879 main -- frontend/src/i18n/locales/` 输出为空（零分叉），
+  同一把尺的窄口径 `git diff --name-only --diff-filter=M 2ac20879 main | wc -l` = 67，与 Task 5 读数相同。
+  换成 `upstream/main` 当尺会读到 453，那是上游 94 笔自改的投影，**不是回归**。下一轮合并落地后两者重新重合。
+- 零写入预检（同一个上游头 `c6aaacc5`，两侧只换我们的提交）：
+  `git merge-tree --write-tree --name-only b292dfb6 upstream/main` ⇒ 16 枚冲突；
+  `git merge-tree --write-tree --name-only main upstream/main` ⇒ 15 枚冲突。
+  差集＝消失 `frontend/src/i18n/locales/en.json`、新增 0 枚。**本轮实际减掉的是 1 枚，不是 11 枚**——
+  上游这 94 笔虽然改了全部 11 枚 locale，但只有 `en.json` 与我们旧分叉撞在同一区域，其余 10 枚旧树也能自动并。
+  结构性收益是长期的：locale 里已无一行自研文案，未来上游改 locale 不可能再与我们的键撞。
+- 前瞻碰撞探针：上游 `2ac20879→c6aaacc5` 在 `en.json` 新增 148 枚叶键，与覆盖层的 15 枚叶键**交集为空**
+  ⇒ 下一轮同步后 `stays out of upstream copy` 那组守卫不会因上游新键翻红。
+- 本片不发起同步合并（超出本片范围），只登记上述读数供下一轮引用；引用前按例重取真值。
+
+#### 门 F 在 `git fetch upstream` 之后翻红：两把尺口径不对称（本片 0 贡献，不改门）
+
+Step 8 追加写完复跑读档门，D/E rc=0、H／I 对基线 `cmp` 仍 rc=0，但 **F 由 rc=0 变 rc=1**：
+`1 failed, 236 passed, 3 deselected`，唯一红针 `test_no_fork_commit_touches_an_upstream_owned_file`，
+断言原文 `upstream-owned files modified by fork commits: ['.gitignore']`。
+
+**根因（现读 `tools/test_wiki_drift.py`，未改一字）**：这枚门用两把口径不同的尺。
+- 罪的名单：`changed_vs_upstream()`（`:2870`）跑 `git diff --name-only upstream/main...HEAD`——**三点**，
+  基于 merge-base。`git merge-base upstream/main HEAD` 现读恒为 `2ac20879`，所以 fetch 前后这份名单都是同一份 1118 枚。
+- 豁免判定：`_upstream_change_is_exempt()`（`:5189`）→ `_gitignore_divergence()`（`:5172`）跑
+  `git diff --unified=0 upstream/main HEAD -- .gitignore`——**两点**，直接对上游头。
+  豁免要求 `removed` 为空、`added` 非空且逐行匹配 `_RUNTIME_IGNORE_LINE`（`:5169` = `/[A-Za-z0-9_.-]+/?`）。
+- 我在 Step 8 里为了取冲突面真值跑了 `git fetch upstream`，把本地追踪件从 `2ac20879` 推到 `c6aaacc5`。
+  上游自己新加的 4 行 `.gitignore`（一枚空行、`# Prerendered docs pages …` 注释、`wiki/docs/latest/`、`wiki/docs/zh/`）
+  在两点尺下变成**我们这侧的删除** ⇒ `removed` 非空 ⇒ 豁免失效 ⇒ `.gitignore` 落进 offender。
+
+**判别力对照（同一套算式、只换 ref，只读）**：喂 `2ac20879` ⇒ `added=['/alerts/','/symbol_roster.json']`、
+`removed=0`、`exempt=True`、`offenders=[]`；喂 `c6aaacc5` ⇒ 同样两枚 added、`removed=4`、`exempt=False`、`offenders=['.gitignore']`。
+两次的三点名单长度都是 1118，逐字同源。
+
+**本片 0 贡献的硬证据**：`git rev-parse HEAD:.gitignore` 与 `git rev-parse b292dfb6:.gitignore`（片前那枚）
+同为 `3545721d1a3edd40744d20a33066ee7a18baaaf9`；`git diff --name-only b292dfb6 HEAD` 里匹配 `UPSTREAM_OWNED` 的路径集合为空。
+外部九腿 CI 在同一棵树上全绿，也佐证这不是树的问题而是本地 ref 的问题。
+
+**裁定**：不改门、不调阈值、不清白名单、**不回拨 `upstream/main` 追踪件**（回拨能造绿，但那是把读数搅浑）。
+登记为「同步前恒红」的第三枚本地门，与 H／I 并列。复绿判据：下一轮把 `c6aaacc5` 并入之后，
+两点尺的 `removed` 重新为 0 ⇒ 豁免成立 ⇒ 该针转绿。引用 F 的读数时必须连带说明当时的 `upstream/main` 指向哪一枚。
