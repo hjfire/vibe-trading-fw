@@ -1364,3 +1364,158 @@ gh run list --branch main --limit 5
 **方法论留痕（差点报出假绿）**
 
 第一次跑的 `git diff --stat upstream/main -- agent/...` 输出为空，我一度把它当成「与上游相同」的证据。实际上 Bash 的工作目录当时停在 `frontend/`（门 A/B/C 留下的），pathspec 相对 cwd 解析 ⇒ 匹配不到任何文件 ⇒ **空输出是零命中的假绿**。改用 `git -C <repo root>` 重跑，并另用 `git rev-parse HEAD:<path>`（这条永远相对仓库根）做 blob 等式独立复核，两者一致才采信。教训与既有记忆条目「计数口径造出的假缺陷／零命中先验通道」同型：**凡是「空输出即通过」的判据，先证通道真的能命中。**
+
+### 2026-11-09 — Task 1–8 执行完毕：计划正文的六处改口 ＋ 三处取证手法留痕
+
+**现读坐标**：分支 `feat/fork-locale-overlay`，起点 `a6a9bfe0`（Task 0 记的 main 是 `9df83cbb`，
+channel 判据那笔计划文档提交把 main 推到了 `a6a9bfe0`；Step 7 已预先写明「plan 自己那笔提交也会推进 main」，
+故按现读起点比对）。`upstream/main` 仍是 `2ac20879`（`git rev-parse --short upstream/main` 现读，本轮未推进）。
+落地提交：`de9aeab0`（提交 A，11 枚覆盖层 JSON）／`bb328849`（提交 B，注册＋撤回）。
+
+#### 改口 1：Task 4 Step 2 的插入点错了（RC-2，半合并态窗口）
+
+计划原文把覆盖层的 `await import` 放在上游 `addResourceBundle` **之后**，两次注册之间隔着一个 await，
+`waitFor(layout.agent)` 能在半合并态通过。活体探针：`store.on("added")` 对 ja 收到两次事件，
+第一次 `agent=string alerts=undefined`，第二次 `alerts="アラート"` ⇒ 窗口真实存在（zh-CN 那次恰好撞上，故只红一支）。
+**实际做法**：把覆盖层 import 提到上游注册**之前**，两次 `addResourceBundle` 落在同一同步块；
+注释讲「同一同步块」而不是「之后追加」。这仍是纯追加（上游那两行原位不动，中间插 4 行）。
+判别力自证：临时改回计划原样，微任务探针读到 `alerts=undefined`；新顺序读到 `alerts="Alarme"`。
+探针从 `arch/index_before_probeM.ts.bak` 按 bytes 还原，md5 `5a6ae2d2b18f1abae8c6f5c7ae1b181a` 与注入前相同。
+
+#### 改口 2：Task 4 Step 3 之后要补一步——init 的 `en` 传深拷贝（RC-1）
+
+计划没有这一步，缺了它 GREEN 首跑红 13 枚。库源码现读坐标
+`frontend/node_modules/i18next/dist/esm/i18next.js`：`:307` `this.data = data || {}`（按引用持有 init 资源）；
+`:391` `pack = getPath(this.data, path) || {}`；`:394` `deepExtend(pack, resources, overwrite)`；
+`:91-105` `deepExtend` 原地写 `target[prop]`；`:392` 的 `JSON.parse(JSON.stringify(resources))` 只拷**源**不拷**靶**。
+后果：导入的 `en.json` 模块对象被污染，上游 `i18n/__tests__/i18n.test.ts:38` 的 `enKeys = collectKeys(en)`
+在副作用之后求值 ⇒ 多出 15 键 ⇒ 10 支 parity 红。活体探针三件：`disk.layout.proChart=undefined`／
+`module.layout.proChart="Pro Chart"`／`store===module: true`。
+**补的那一步**：init 传 `en: { translation: JSON.parse(JSON.stringify(en)) }`（与库 :392 同一手法）。
+修后 `module.layout.proChart=undefined`／`store===module: false`／store 侧仍有值。
+只有 `en` 中招：lazy 侧 `pack` 是新建的 `{}`，源又被拷过，故其余 10 支 disjointness 绿。
+
+#### 改口 3：Task 4 Step 9 的「`index.ts` deleted 列为 0」不再成立
+
+RC-1 那笔把 init 的 `en` 行改写，故 `frontend/src/i18n/index.ts` 实际净 **+15/-1**（现读 `git diff --numstat`）。
+那 1 行删除不是删上游代码，是同一行的改写。其余三处追加仍是零删除。
+`frontend/src/i18next.d.ts` 净 **+2/-1**（277 bytes）。Step 7 的「既有红必须为 0」不变，且已满足。
+
+#### 改口 4：Task 3 Step 3 留的承重问号由 M5 关闭——交叉类型承重，DeepMerge 退路没走
+
+实测 `typeof en & typeof forkEn` 直接可用，门 A rc=0、`arch/typeprobe.txt` 0 字节，故跳过计划备的 DeepMerge 退路。
+当时**不下承重结论**（`TFunctionNonStrict` 可能让任意 string 都过）。M5 把 `i18next.d.ts` 退回 `typeof en` 后
+`tsc -b` rc=1，7 处报错：`PageHelp.tsx(15,45)`／`(19,15)`／`(20,49)` 三处 TS2345，
+`SidebarNavigation.tsx(45,27)` TS2345、`(48,14)` TS2322、`(49,38)` TS2345、`(57,77)` TS2322 ⇒ **承重成立**。
+M7 删掉 registry 里 `tr` 那枚 loader 后 `fork/index.ts(21,3)` TS1360＋`i18n/index.ts(67,50)` TS7053
+⇒ **`satisfies Record<ForkLazyCode, …>` 双向穷尽也承重**。
+
+#### 改口 5：Task 3 Step 5 与 Task 6 的期望红名单过宽（计划正文错，不是代码错／不是 harness 失明）
+
+- **RED-B**：计划预期 `navigationCopy` 还会红 `never ships a key path as its own value`，**实际绿**。
+  定因（现读 `frontend/src/__tests__/navigationCopy.test.ts:120`）：`if (typeof value !== "string") continue;`
+  ——键撤出 locale 后 fork id 的值是 `undefined`，直接跳过，对缺失键天然失明。
+  另两枚 `names every navigation group`（:75）与 `interpolates the feature name into the help heading`（:104）
+  读的是上游自有键，也合法保持绿。**裁定：不改这枚测试去迁就计划**；治它的盲区属另一片，本片不扩。
+  实际分布：`Test Files 2 failed | 1 passed (3)`、`Tests 45 failed | 157 passed (202)`、`Duration 2.60s`；
+  forkOverlay 12 红（runtime 11＋switching 1）、navigationCopy 33 红（11 语言 × 3 类）、上游 i18n.test.ts 全绿。
+- **RED-A**（计划预期一致，无改口）：`Tests 12 failed | 80 passed (92)`、`Duration 5.53s`；
+  12 红＝`stays out of upstream copy` 11 支（11 语言逐名到齐）＋`has at least one fork-owned entry to cover` 1 支；
+  `runtime resolution` 零红；门 A rc=0。
+- **M1**：计划另列的 tooltips／explains 合法保持绿——它们读 `navigation.descriptions.help`／
+  `navigation.instructions.help`，本枚只删 `layout.help`。其非空转由 **M10** 反证（ko 那三支全红）。实红 4 支。
+- **M10**：计划另列的 `carries no key the English overlay lacks` 合法保持绿——空对象不可能携带多余键，
+  该方向在此输入下**真空**。其非空转由 **M2** 反证（de 加 `"probe"` ⇒ 同名针红）。实红 6 支。
+- **M9／M11**：计划另列的 `runtime resolution` 绿。定因：该针右边 `expected = leafValues(overlays[code])`
+  **从同一枚被改的覆盖层 JSON 现读**，左右同变 ⇒ 它是「覆盖层到没到 store」的一致性针，不是译文质量针。
+  译文质量由 copy-quality 与 Turkish 两组拥有；M9 的存在目的（否证「断言写宽了也能全绿」）由 Turkish 针达成。
+  M9 实红 1 支、M11 实红 1 支。
+- **没有一枚注入是全绿的**：11 枚都红（M5／M7 红在 `tsc -b`，其余红在 vitest）。
+  11 枚注入后 sha256 全 match、`git diff --stat` 空、`ALL-RESTORED: True`；还原后三套合跑 rc=0，
+  `Test Files 3 passed (3)`、`Tests 202 passed (202)`、`Duration 2.58s`。逐枚红针名见 `arch/mutations.txt`。
+
+#### 改口 6：Task 5 的叶数基线要点明——「+15」是相对上游，不是相对 `b292dfb6`
+
+现读（`arch/leaf_delta_final.txt`）：上游 locale 各 **2170** 枚叶子，`b292dfb6` 的 locale 各 **2185** 枚，
+本片有效 bundle 各 **2185** 枚。所以相对 `b292dfb6` 是 **added 0／removed 0／changed 0**（11 行全 `EQUAL`），
+相对上游才是 **+15**。执行期一度把这两个基线混成「2170→2185，+15」写进小结，回填时拆开。
+15 枚路径在 11 种语言里是同一个集合：`layout.{proChart,multiChart,alerts,warehouse,help}` 各 1，
+加 `navigation.descriptions.<同 5 id>` 与 `navigation.instructions.<同 5 id>` 各 5。
+冲突面三条现读值（upstream/main=`2ac20879`）：总分叉 **1118**（上一轮 1114）；
+窄尺 `--diff-filter=M` **76→67**；`git diff --name-only upstream/main HEAD -- frontend/src/i18n/locales/` **空**。
+窄尺算术 −11＋2＝67；总尺算术 −11＋13＋2＝+4。两把尺方向相反是设计意图，不矛盾。
+
+#### 恒红门与 channel 腿：cmp 字节相同
+
+- Task 7 与 Task 9 Step 3 两轮都跑了 `cmp`：H 与 I 各自对 Task 0 基线 **rc=0（逐字节相同）**，
+  比计划要求的「名字集合比对」更强。H 读数 `wiki stale pages: 447 (threshold 439)`、
+  `INDEX.md is current (450 pages)`；I 读数 35 枚命中文件、**TRACKED 0 枚**。
+  商标 needle（拼出来喂）在本片 15 枚跟踪/待跟踪文件里逐枚计数 **0**；档案追加块里也是 **0**。
+  **未调阈值、未改门、不清白名单、未动排除表。**
+- Task 9 Step 3 的读档门复跑（档案追加之后）：D rc=0 `forensics audit: clean`；E rc=0 `166 passed in 8.72s`；
+  F rc=0 `237 passed, 3 deselected in 198.74s`；H rc=1 且 cmp rc=0；I rc=1 且 cmp rc=0
+  ⇒ **这次档案追加对四道门 0 贡献**。
+- channel 腿：Task 7 那趟 rc=1，`3 failed, 77 passed, 10 skipped in 1.72s`；FAILED 名字集合与基线 `diff` rc=0。
+  判据按 2026-11-08 那条裁定走名字集合，不要求 rc=0；红因是本机缺 `nh3`，未装。
+
+#### Task 8 活体：读数与三处环境／探针缺陷
+
+- prod 挂载成立（`[prod] Frontend served from …\frontend\dist`，未加 `--dev`，响应头 `server: uvicorn`）。
+  asset 指纹三枚逐字相同＝`assets/index-Dxe_MdcA.js`；`dist/index.html` mtime 与响应头 `last-modified` 同一时刻，
+  也就是门 C 那趟。四门语言 × 三族文案 **`compared 68 readings; mismatches 0`**（64 文案＋4 dir），ar 为 `rtl`，
+  字面点路径泄漏 0 处。Bar Replay 四项与画线四腿（创建／导出／删除／导入）都落地，导入后活图 `getOverlays()` 实读 1 枚。
+  **未来函数自查不适用**（本片不新增指标或信号），按 Step 4 原文如实写明，未编五步自查。
+- **缺陷①：本机 netstat/CIM 的 socket 表读不全。** `netstat -ano` 全量 352 行只有 9 行 LISTENING 且 PID 全为 0、
+  其中没有 8000；`Get-NetTCPConnection -LocalPort 8000 -State Listen` 报 `ObjectNotFound`；
+  但同一 shell 里 `curl -v` 直连成功（`NO_PROXY` 含 127.0.0.1）。⇒ Step 1 要求的「PID 从 netstat 现读」**读不到**，
+  改用三件同源：日志首行 uvicorn 自报 `Started server process [<PID>]`＋`Win32_Process.CommandLine` 与计划命令逐字相同
+  ＋日志文件 birth time == 进程 `CreationDate`。两次停机前都重读前两件确认不是 PID 复用，未杀任何归属未确立的进程。
+- **缺陷②：`taskkill` 不带 `/F` 停不掉**（报「只能强制终止这个进程」），故两次都用 `/F`。
+  第二次那笔后台任务回执因此是 `failed / exit code 1`——那是 TerminateProcess 的退出码，不是启动失败。
+  停后读数：进程计数 0、`curl` rc=7（连接被拒）、`http=000`。
+- **缺陷③：页内探针自己的三枚选择器错。** 播放/暂停按钮**没有 title**（`ReplayBar.tsx:94-96` 只有
+  `{playing ? "暂停" : "播放"}`），按 title 找会抛 `TypeError`；武装态标记不能用
+  `/bg-primary|bg-muted|font-medium|border-primary/`，因为未武装的 className 里就有 `hover:bg-muted`
+  （实测武装后新增的是 ` bg-muted font-medium ring-1 ring-primary`），故标记取 `/ring-primary/`；
+  `画线清单` 按钮在 0 条画线时**不渲染**，改用导出按钮那条带计数的 title 当 oracle。
+  三枚都是探针缺陷、不是产品缺陷；前两枚各浪费了一次手势尝试（第一次画线 0 条就是这么来的）。
+- **既存观察（不在本片修）**：ProChart／ReplayBar 工具栏文案是硬编码中文字面量、不走 i18n
+  （`ReplayBar.tsx:68`／`:88` 等），切 en/ar/tr 时仍是中文。`git diff --name-only a6a9bfe0 HEAD` 里没有
+  `ReplayBar.tsx`／`ProChart.tsx`（现读确认）⇒ 本片之前就存在，登记为后续片候选面。
+
+#### 取证手法留痕（三枚，与既有记忆条目同型）
+
+1. **vitest 即使重定向到文件也写 ANSI 颜色码**：`grep -c '^ FAIL '` 与 Python 字面子串匹配双双零命中，
+   而 `tail -60` 明明显示出行首空格的 ` FAIL `（显示层把 `\x1b[…m` 吃掉了）；`grep -c 'FAIL'`（无锚）→ 12
+   证明文件里确有该词。修法＝解析前 `re.sub(r'\x1b\[[0-9;]*m','',raw)`，另存 `*_plain.txt`。
+   这是「零命中先验通道」的新子型：**显示层与字节层不一致时以字节层为准**。
+2. **含反引号的正文一律不经双引号 shell 传递**：用 `python -c "…"` 写含反引号的 Markdown 会让 bash 执行
+   每一段反引号跨度，`arch/gates_after/summary.txt` 第一版因此被静默删掉若干片段（回读才发现，
+   当时还看到 `fatal: not a git repository`／`world: command not found` 之类的杂音），改用 Write 工具重写。
+3. **Write 工具会吃掉尾换行**：`fork/index.ts` 与守卫测试写完 `ends_nl False`，本仓既有四枚抽样文件全部
+   `ends_nl True`，故按 bytes 层各补一个 `\n`（LF 21→22／181→182），CR 仍为 0；补前已逐字比对与计划代码块相同。
+
+#### Task 9 Step 2 自己的一个脚本缺陷（登记，未影响产物）
+
+追加脚本最后一道断言写成 `block.replace(b"\r\n", b"")`，而 `block` 是 `str` ⇒ `TypeError`。
+**该断言在 `write_bytes` 之后**，所以档案已经写成，且它前面的 CR/LF 增量断言都已通过。
+处置：修断言（`block.encode("utf-8").replace(...)`），然后**只跑校验、不重跑追加**——
+重跑会把同一节追加第二遍。校验读数：追加 28 行、CR 2480→2508、LF 同步、裸 CR/LF 全文件均 0、
+`block is a suffix of file = True`、`git diff --numstat` 为 `28 0`（纯追加、零删除）。
+教训与既有记忆「读数撞上并发写入／还原只从动手前的内存副本写回」同族：**写与校验要分开，校验失败不等于要重写**。
+
+#### 评审形式
+
+**未做独立子代理评审**（用户 2026-10-24 起拒绝 `Agent` 派单），由执行者按同一判据自审。
+自审否证不了「执行者自己看漏的那一类」，故每个数都留了仓库外可复算脚本与原始读数文件
+（`arch/verify_overlay_equivalence.py`／`arch/reconcile_live.py`／`arch/run_mutations.py`／`arch/gates_after/`／`arch/live.txt`）。
+
+#### 坐标重钉（回填后、提交前自查）
+
+回填初稿写下的 `navigationCopy.test.ts:97`／`:52`／`:81` 取的是 RED-B 那趟的读数；Task 4 给该文件 +27/-4 之后行号漂了，已在提交前就地重钉，故上文正文只出现新号，旧号仅留在本段作漂移凭据。
+按内容现读重钉：continue 守卫 `:120`、`names every navigation group` `:75`、
+`interpolates the feature name into the help heading` `:104`（`never ships a key path as its own value` 在 `:110`）。
+`i18n/__tests__/i18n.test.ts` 的 `const enKeys = collectKeys(en …)` 由 `:37` 重钉为 `:38`。
+重钉不删行、不改判据，只换号。其余引用逐枚 `sed -n` 现读核对均命中：
+`PageHelp.tsx:15,19,20`、`SidebarNavigation.tsx:45,49,57`、`ReplayBar.tsx:68,88,94-96`、
+i18next 库 `:307`（`this.data = data || {}`）／`:391`（`getPath`）／`:392`（只拷源）／`:394`（`deepExtend`）／`:91`（函数头）。
