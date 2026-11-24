@@ -98,22 +98,22 @@ OVERLAP_FILES: tuple[str, ...] = (
 
 #: Per-side literals, keyed by the paths of OVERLAP_FILES. A file missing from
 #: a side's dict is not silently unchecked: it has to show up in NO_ANCHORS.
-#: Re-pin log (2026-11-03 sync): upstream's own README/SKILL lines moved the MCP
-#: tool count 82 -> 84, which made the seven `theirs` needles below read `vanished`.
-#: `agent/mcp_server.py` is untouched on our side and `agent/tests/test_readme_counts.py`
-#: re-derives that number from the running server, so 84 is the code truth and the
-#: needles follow it. Re-pinning a literal is maintenance; deleting a row is not, and
-#: MAX_DECLARED_HOLES is what makes that cost a red.
+#: Re-pin log: 2026-11-03 upstream moved MCP 82 -> 84 (seven `theirs` needles,
+#: in place); 2026-11-09 upstream's guides/ restructure moved the tree/loader prose
+#: out of the READMEs and corrected MCP 84 -> 82 — ours README needles re-pin to
+#: the fork's translated intro line, theirs to the new guides/mcp.md link line,
+#: SKILL in place (ours 29, theirs 82 — the heading count is re-derived live by
+#: test_distribution_skill_manifest.py). Re-pin is maintenance; deleting a row is not.
 ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
     'ours': {
-        'README.md': ('   `VALID_SOURCES` in `agent/backtest/loaders/registry.py`.',),
-        'README_ar.md': ('   `VALID_SOURCES` في `agent/backtest/loaders/registry.py`.',),
-        'README_es.md': ('   a `VALID_SOURCES` en `agent/backtest/loaders/registry.py`.',),
-        'README_id.md': ('   `VALID_SOURCES` in `agent/backtest/loaders/registry.py`.',),
-        'README_ja.md': ('vibe-trading warehouse list    # ローカルのバー倉庫：sync / audit / list / sql',),
-        'README_ko.md': ('3. **이름 허용** 으로 설정 검증 통과 —— `agent/backtest/loaders/registry.py`의',),
-        'README_zh.md': ('   `agent/backtest/loaders/registry.py` 的 `_LOADER_MODULES`。',),
-        'agent/SKILL.md': ('| `get_market_data` | Fetch OHLCV data (auto-detect + ordered fallback across 30 sources) | None* |',),
+        'README.md': ('The loader supports **29 market-data sources**, one of them your own on-disk **warehouse**.',),
+        'README_ar.md': ('يدعم المحمّل **29 مصدرا لبيانات السوق**، أحدها مستودع **warehouse** على قرصك.',),
+        'README_es.md': ('Hay **29 fuentes de datos de mercado**, una de ellas tu propio **warehouse** en disco.',),
+        'README_id.md': ('Tersedia **29 sumber data pasar**, salah satunya **warehouse** di disk Anda sendiri.',),
+        'README_ja.md': ('**29種類の市場データソース**に対応（うち1つは自分のオンディスク **warehouse**）。',),
+        'README_ko.md': ('**시장 데이터 소스 29개**를 지원합니다(그중 하나는 자신의 온디스크 **warehouse**).',),
+        'README_zh.md': ('支持 **29 个行情数据源**，其中之一是你自己的本地 **warehouse** 仓库。',),
+        'agent/SKILL.md': ('| `get_market_data` | Fetch OHLCV data (auto-detect + ordered fallback across 29 sources) | None* |',),
         'agent/backtest/loader_health.py': ('EXCLUDED_PUBLIC_SOURCES = {',),
         'agent/backtest/loaders/akshare_loader.py': (
             'def _sina_stock_symbol(code: str) -> Optional[str]:',
@@ -136,14 +136,14 @@ ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     'theirs': {
-        'README.md': ('For strict factor benchmarks, pass `--training-cutoff YYYY-MM-DD` to',),
-        'README_ar.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
-        'README_es.md': ('│   ├── mcp_server.py               # Servidor MCP — 84 herramientas para OpenClaw / Claude Desktop',),
-        'README_id.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
-        'README_ja.md': ('│   ├── mcp_server.py               # MCP サーバー — OpenClaw / Claude Desktop 向け 84 tools',),
-        'README_ko.md': ('│   ├── mcp_server.py               # MCP server — 84 tools for OpenClaw / Claude Desktop',),
-        'README_zh.md': ('│   ├── mcp_server.py               # MCP server —— 84 个工具，面向 OpenClaw / Claude Desktop',),
-        'agent/SKILL.md': ('## Available MCP Tools (84)',),
+        'README.md': ('For other clients or a custom output directory, see the [MCP configurations](guides/mcp.md).',),
+        'README_ar.md': ('للعملاء الآخرين أو لتخصيص مجلد المخرجات راجع [إعدادات MCP](guides/mcp.md).',),
+        'README_es.md': ('Para otros clientes o directorios de salida, consulta la [configuración MCP](guides/mcp.md).',),
+        'README_id.md': ('Untuk klien lain atau direktori keluaran khusus, lihat [konfigurasi MCP](guides/mcp.md).',),
+        'README_ja.md': ('他のクライアントと出力先の変更は [MCP 設定](guides/mcp.md)を参照してください。',),
+        'README_ko.md': ('다른 클라이언트와 출력 폴더 설정은 [MCP 구성](guides/mcp.md)을 참조하세요.',),
+        'README_zh.md': ('其他客户端和自定义输出目录见 [MCP 配置](guides/mcp.md)。',),
+        'agent/SKILL.md': ('## Available MCP Tools (82)',),
         'agent/backtest/loader_health.py': (
             'def sanitize_evidence(text: str) -> str | None:',
             'class _LoaderWarningCollector(logging.Handler):',
