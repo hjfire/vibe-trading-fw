@@ -230,6 +230,7 @@ class DataConfig(_EnvBase):
     alphavantage_api_key: str = Field(alias="ALPHAVANTAGE_API_KEY", default="")
     tiingo_api_key: str = Field(alias="TIINGO_API_KEY", default="")
     fmp_api_key: str = Field(alias="FMP_API_KEY", default="")
+    gildata_features: str = Field(alias="VIBE_TRADING_GILDATA_FEATURES", default="")
     gildata_token: str = Field(alias="GILDATA_TOKEN", default="")
     gildata_base_url: str = Field(
         alias="GILDATA_BASE_URL",
@@ -287,8 +288,6 @@ class DataConfig(_EnvBase):
         alias="VIBE_TRADING_WAREHOUSE_ROOT", default=""
     )
     aliyun_iqs_api_key: str = Field(alias="ALIYUN_IQS_API_KEY", default="")
-    qveris_api_key: str = Field(alias="QVERIS_API_KEY", default="")
-    qveris_base_url: str = Field(alias="QVERIS_BASE_URL", default="")
     tickerall_api_key: str = Field(alias="TICKERALL_API_KEY", default="")
     tickerall_account_id: str = Field(alias="TICKERALL_ACCOUNT_ID", default="")
     tickerall_base_url: str = Field(alias="TICKERALL_BASE_URL", default="")

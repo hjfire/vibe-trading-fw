@@ -10,6 +10,7 @@ export const NAVIGATION_GROUPS = [
   ] },
   { id: "analysis", items: [
     { id: "alphaZoo", to: "/alpha-zoo", icon: Layers },
+    { id: "researchLab", to: "/research-lab", icon: FlaskConical },
     { id: "optionsLab", to: "/options", icon: CandlestickChart },
     { id: "correlation", to: "/correlation", icon: BarChart3 },
     // Local custom ⑧/⑨: the two chart workbench pages. Their own slots are
