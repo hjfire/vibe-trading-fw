@@ -65,7 +65,14 @@ from src.factors.registry import (
 )
 from src.factors.data_availability import build_availability_contract
 from src.factors.research_contract import build_bench_research_contract
-from src.tools.alpha_bench_tool import _MAX_HORIZON, _compute_forward_returns, _load_universe_panel
+from src.tools.alpha_bench_tool import (
+    _MAX_HORIZON,
+    _compute_forward_returns,
+    _load_universe_panel,
+    _prepare_bench_panel,
+    _split_alphas_by_universe_support,
+    _validate_bench_data_requirements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,15 +478,27 @@ def run_bench_strict(
     if not alpha_ids:
         return _finish_error(f"no alphas registered under zoo={zoo!r}")
 
-    # Only pass the source through when it was asked for: callers that patch
-    # this loader with a two-argument stub must keep working.
+    alpha_ids, universe_excluded = _split_alphas_by_universe_support(
+        reg, alpha_ids, universe
+    )
+    if universe_excluded:
+        entry["universe_excluded"] = universe_excluded
+    if not alpha_ids:
+        return _finish_error(
+            f"all {len(universe_excluded)} selected alphas require SEC US filings "
+            f"(fund:* inputs); the {universe!r} universe cannot serve them. "
+            "Choose the S&P 500 universe."
+        )
+
     load_kwargs: dict[str, Any] = {"source": data_source} if data_source else {}
     try:
+        _validate_bench_data_requirements(reg, alpha_ids, universe)
         panel = _load_universe_panel(universe, period, **load_kwargs)
     except (ValueError, NotImplementedError, RuntimeError) as exc:
         return _finish_error(f"universe load failed: {exc}")
 
     try:
+        panel = _prepare_bench_panel(reg, alpha_ids, panel, universe, period)
         return_df = _compute_forward_returns(panel, horizon=horizon)
     except Exception as exc:  # noqa: BLE001
         return _finish_error(f"forward returns failed: {exc}")

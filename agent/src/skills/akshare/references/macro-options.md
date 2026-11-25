@@ -27,7 +27,9 @@ Notes:
 ### Board snapshot — `option_finance_board` (verified OK)
 
 ```python
-df = ak.option_finance_board(symbol="华夏上证50ETF期权", end_month="2609")
+from src.data_gateway.skill_sources import akshare_query
+
+df = akshare_query("option_finance_board", symbol="华夏上证50ETF期权", end_month="2609")
 # cols: 日期, 合约交易代码, 当前价, 涨跌幅, 前结价, 行权价, 数量
 ```
 
@@ -38,7 +40,7 @@ df = ak.option_finance_board(symbol="华夏上证50ETF期权", end_month="2609")
 ### CFFEX index options — `option_cffex_hs300_list_sina` (verified OK)
 
 ```python
-d = ak.option_cffex_hs300_list_sina()   # dict: contract month -> symbol list
+d = akshare_query("option_cffex_hs300_list_sina")   # dict: contract month -> symbol list
 ```
 
 - IO/MO/HO index options. Follow-up spot/greeks calls exist

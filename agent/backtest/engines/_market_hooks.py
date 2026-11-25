@@ -88,6 +88,26 @@ _CN_FUTURES_PRODUCTS = {
     "lc",
 }
 
+# ZCE contract tokens use a one-digit year plus a two-digit month. Keep this
+# separate from the all-exchange product set: IF501, RB501 and CS501 are not
+# valid three-digit spellings for their CFFEX, SHFE and DCE products.
+_ZCE_FUTURES_PRODUCTS = {
+    "ap",
+    "cf",
+    "cj",
+    "cy",
+    "fg",
+    "ma",
+    "oi",
+    "pf",
+    "pk",
+    "rm",
+    "sa",
+    "sr",
+    "ta",
+    "ur",
+}
+
 
 #: The main continuous contract, spelled ``<product>0`` (``RB0``, ``IF0``).
 #: Built from the product whitelist rather than a width rule, because a
@@ -97,13 +117,24 @@ _CN_FUTURES_MAIN_PATTERN = r"^(?:{})0$".format(
     "|".join(sorted(_CN_FUTURES_PRODUCTS, key=len, reverse=True))
 )
 
+# Zhengzhou writes the delivery year/month in three digits (CF501 = a cotton
+# January contract), not the four-digit YYMM form (CF2501) the global rule
+# matches.
+# CF501.ZCE / CF501.CZC already classify, and the futures engine prices the
+# bare spelling at the same multiplier. It matched no routing rule, so the
+# config gate refused it and market detection called it an A-share.
+_CN_FUTURES_DATED3_PATTERN = r"^(?:{})\d{{3}}$".format(
+    "|".join(sorted(_ZCE_FUTURES_PRODUCTS, key=len, reverse=True))
+)
+
 _MARKET_PATTERNS = [
+    (re.compile(r"^[A-Z0-9]{4}\.T$", re.I), "jp_equity"),
     (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "a_share"),
     (re.compile(r"^(51|15|56)\d{4}\.(SZ|SH)$", re.I), "a_share"),
     # US equities: tickers may carry a class-share dot (BRK.B.US, BF.B.US)
     # and a hyphen (e.g. BF-B.US) — same characters as ca/india/uk below.
     (re.compile(r"^[A-Z0-9&.\-]+\.US$", re.I), "us_equity"),
-    (re.compile(r"^\d{3,5}\.HK$", re.I), "hk_equity"),
+    (re.compile(r"^\d{1,5}\.HK$", re.I), "hk_equity"),
     # India equities: NSE (RELIANCE.NS) / BSE (500325.BO); tickers may carry
     # '&' and '-' (e.g. M&M.NS, BAJAJ-AUTO.NS).
     (re.compile(r"^[A-Z0-9&.\-]+\.(NS|BO)$", re.I), "india_equity"),
@@ -124,6 +155,15 @@ _MARKET_PATTERNS = [
     # Vietnam equities: HOSE (VIC.VN). Tickers are three letters in practice;
     # the class stays broad to admit fund certificates and ETF codes.
     (re.compile(r"^[A-Z0-9]+\.VN$", re.I), "vietnam_equity"),
+    # Taiwan equities: TWSE (2330.TW) and TPEx (6488.TWO). Yahoo carries both
+    # suffixes verbatim. The class stays broad to admit lettered ETF codes
+    # (00400A.TW); the anchored ``TWO?`` keeps ``.TO`` (Canada) out of this rule.
+    (re.compile(r"^[A-Z0-9]+\.TWO?$", re.I), "taiwan_equity"),
+    # European venues in Yahoo's suffix spelling: Xetra (SAP.DE), Euronext
+    # Paris (MC.PA) and Amsterdam (ASML.AS), Borsa Italiana (ENI.MI), SIX
+    # (NESN.SW) and Warsaw (PKO.WA). One market, three currencies: the venue
+    # table below decides each line's currency.
+    (re.compile(r"^[A-Z0-9&.\-]+\.(DE|PA|AS|MI|SW|WA)$", re.I), "europe_equity"),
     (re.compile(r"^(?=[A-Z0-9]*[A-Z])[A-Z0-9]+-USDT$", re.I), "crypto"),
     (re.compile(r"^(?=[A-Z0-9]*[A-Z])[A-Z0-9]+/USDT$", re.I), "crypto"),
     # USD-M perpetuals in their documented BASE-USDT-PERP spelling
@@ -156,6 +196,10 @@ _MARKET_PATTERNS = [
         ),
         "futures",
     ),
+    # Bare three-digit ZCE futures (CF501, MA501). The suffixed form is the
+    # pattern above; four-digit bare codes (CF2501, RB2410) hit the YYMM rule
+    # below. Other Chinese exchanges use four-digit delivery codes.
+    (re.compile(_CN_FUTURES_DATED3_PATTERN, re.I), "futures"),
     # Global futures: product+month-code, including digit-bearing products
     # (ESZ4, CLF25, GCM2025, M2KZ4, 6EZ2026). Pure numeric ids stay excluded.
     (re.compile(r"^(?:[A-Z][A-Z0-9]{1,4}|[0-9][A-Z][A-Z0-9]{0,3})[FGHJKMNQUVXZ]\d{1,4}$", re.I), "futures"),
@@ -246,11 +290,16 @@ _MARKET_CURRENCY = {
     "hk_equity": "HKD",
     "india_equity": "INR",
     "kr_equity": "KRW",
+    "jp_equity": "JPY",
     "ca_equity": "CAD",
     "ar_equity": "ARS",
     "br_equity": "BRL",
     "uk_equity": "GBP",
     "vietnam_equity": "VND",
+    "taiwan_equity": "TWD",
+    # Euro-area venues; SIX and Warsaw lines are resolved per venue by
+    # europe_venue_currency().
+    "europe_equity": "EUR",
     # Every crypto pattern in _MARKET_PATTERNS is USDT-quoted, and USDT is
     # carried at its USD peg. This is the one approximation in the table: a
     # depeg would make a crypto+US book wrong by the depeg amount, which is
@@ -286,6 +335,19 @@ _HK_COUNTER_CURRENCY_RANGES: tuple[tuple[int, int, str], ...] = (
 )
 _HK_CODE = re.compile(r"^(\d{3,5})\.HK$", re.I)
 
+# The European market spans three currencies, so the venue suffix decides.
+# Every line on a venue is held to that venue's currency by the loaders
+# (backtest.loaders.base._SINGLE_CURRENCY_VENUES); a USD-quoted ETF line on
+# Euronext or SIX is refused there rather than booked in EUR/CHF.
+_EUROPE_VENUE_CURRENCY: dict[str, str] = {
+    "DE": "EUR",
+    "PA": "EUR",
+    "AS": "EUR",
+    "MI": "EUR",
+    "SW": "CHF",
+    "WA": "PLN",
+}
+
 
 def hk_counter_currency(code: str) -> str | None:
     """Return the currency HKEX's code allocation assigns to a ``.HK`` code.
@@ -311,6 +373,22 @@ def hk_counter_currency(code: str) -> str | None:
     )
 
 
+def europe_venue_currency(code: str) -> str | None:
+    """Return the currency a European venue suffix settles in.
+
+    Args:
+        code: Ticker / symbol string, optionally ``local:``-prefixed.
+
+    Returns:
+        ``"EUR"``, ``"CHF"`` or ``"PLN"`` for a routed European listing,
+        ``None`` for anything else.
+    """
+    symbol = strip_local_prefix(code).strip()
+    if matched_market(symbol) != "europe_equity":
+        return None
+    return _EUROPE_VENUE_CURRENCY[symbol.rpartition(".")[2].upper()]
+
+
 def code_currency(code: str) -> str:
     """Return the supported settlement-currency contract for a symbol.
 
@@ -328,6 +406,8 @@ def code_currency(code: str) -> str:
     market = _detect_market(code)
     if market == "hk_equity":
         return hk_counter_currency(code) or _MARKET_CURRENCY[market]
+    if market == "europe_equity":
+        return europe_venue_currency(code) or _MARKET_CURRENCY[market]
     if market in _MARKET_CURRENCY:
         return _MARKET_CURRENCY[market]
     if market == "forex":
@@ -504,12 +584,10 @@ def calc_crypto_funding_fee(
             carries no historical ``funding_rate`` column.
         applied_set: (symbol, date, hour) dedup set — mutated.
         daily_done_set: (symbol, date) dedup set — mutated.
-        bar_span_hours: Bar span in hours when known. At 8h or wider the
-            settlement count comes from the span (``max(1, span // 8)`` per
-            bar), because a daily bar can never land on the 8h/16h slots:
-            without this a daily-bar run charges a third of the documented
-            funding model (#1290). Narrower bars keep the slot logic below
-            unchanged.
+        bar_span_hours: Intraday bars cover the UTC settlements in
+            [timestamp, timestamp + span). Daily and coarser bars use the
+            configured number of eight-hour periods. Unknown intervals
+            retain the legacy daily fallback.
 
     Returns:
         Fee amount (positive = longs pay, negative = longs receive).
@@ -521,12 +599,28 @@ def calc_crypto_funding_fee(
     hour = timestamp.hour if hasattr(timestamp, "hour") else 0
 
     settlements = 1
-    if bar_span_hours is not None and bar_span_hours >= 8:
+    if bar_span_hours is not None and bar_span_hours >= 24:
         settlements = max(1, int(bar_span_hours // 8))
         key = (symbol, current_date, hour)
         if key in applied_set:
             return 0.0
         applied_set.add(key)
+    elif bar_span_hours is not None:
+        start = pd.Timestamp(timestamp)
+        if start.tzinfo is not None:
+            start = start.tz_convert("UTC")
+        end = start + pd.Timedelta(seconds=bar_span_hours * 3600)
+        step = pd.Timedelta(hours=8)
+        slot = start.ceil("8h")
+        settlements = 0
+        while slot < end:
+            key = (symbol, slot.date(), slot.hour)
+            if key not in applied_set:
+                applied_set.add(key)
+                settlements += 1
+            slot += step
+        if not settlements:
+            return 0.0
     elif hour in FUNDING_HOURS:
         key = (symbol, current_date, hour)
         if key in applied_set:

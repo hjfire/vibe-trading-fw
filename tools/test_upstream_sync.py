@@ -102,7 +102,7 @@ OVERLAP_FILES: tuple[str, ...] = (
 #: in place); 2026-11-09 upstream's guides/ restructure moved the tree/loader prose
 #: out of the READMEs and corrected MCP 84 -> 82 — ours README needles re-pin to
 #: the fork's translated intro line, theirs to the new guides/mcp.md link line,
-#: SKILL in place (ours 29, theirs 82 — the heading count is re-derived live by
+#: SKILL in place (ours 29, theirs 85 after the 2026-11-24 MCP 82 -> 85 move —
 #: test_distribution_skill_manifest.py). Re-pin is maintenance; deleting a row is not.
 ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
     'ours': {
@@ -143,7 +143,7 @@ ANCHORS: dict[str, dict[str, tuple[str, ...]]] = {
         'README_ja.md': ('他のクライアントと出力先の変更は [MCP 設定](guides/mcp.md)を参照してください。',),
         'README_ko.md': ('다른 클라이언트와 출력 폴더 설정은 [MCP 구성](guides/mcp.md)을 참조하세요.',),
         'README_zh.md': ('其他客户端和自定义输出目录见 [MCP 配置](guides/mcp.md)。',),
-        'agent/SKILL.md': ('## Available MCP Tools (82)',),
+        'agent/SKILL.md': ('## Available MCP Tools (85)',),
         'agent/backtest/loader_health.py': (
             'def sanitize_evidence(text: str) -> str | None:',
             'class _LoaderWarningCollector(logging.Handler):',

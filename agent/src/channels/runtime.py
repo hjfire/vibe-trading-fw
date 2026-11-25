@@ -203,9 +203,13 @@ class ChannelRuntime:
                         if events is not None and attempt_id else None)
             try:
                 reply = await self._wait_for_reply(session_id, attempt_id, progress=progress)
-            finally:
+            except BaseException:
                 if progress is not None:
-                    await progress.close()
+                    await progress.close(resuming=True)
+                raise
+            else:
+                if progress is not None:
+                    await progress.close(resuming=False)
             reply_content = reply.content
             try:
                 from src.scheduled_research.proposals import latest_pending_for_session
@@ -371,7 +375,6 @@ class ChannelRuntime:
 
     async def _wait_for_reply(self, session_id: str, attempt_id: str | None, *, progress: Any = None) -> Message:
         deadline = time.monotonic() + self.config.reply_timeout_s
-        last_assistant: Message | None = None
         while time.monotonic() < deadline:
             if progress is not None:
                 await progress.poll()
@@ -379,14 +382,12 @@ class ChannelRuntime:
             for message in reversed(messages):
                 if message.role != "assistant":
                     continue
+                # A reply linked to an earlier attempt answers an earlier
+                # question; sending it here would answer this one wrongly.
                 if attempt_id and message.linked_attempt_id != attempt_id:
-                    if last_assistant is None:
-                        last_assistant = message
                     continue
                 return message
             await asyncio.sleep(self.config.poll_interval_s)
-        if last_assistant is not None:
-            return last_assistant
         raise TimeoutError("timed out waiting for assistant reply")
 
     def _load_session_map(self) -> dict[str, str]:

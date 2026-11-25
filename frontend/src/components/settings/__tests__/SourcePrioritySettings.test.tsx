@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import i18n from "@/i18n";
 import { SourcePrioritySettings } from "@/components/settings/SourcePrioritySettings";
 import { toast } from "sonner";
+import type { SourceOrderEntry } from "@/lib/api";
 
 const apiMock = vi.hoisted(() => ({
   getDataSourceSettings: vi.fn(),
@@ -28,7 +29,7 @@ const A_SHARE_DEFAULT = ["tencent", "mootdx", "eastmoney", "baostock", "akshare"
 const CRYPTO_DEFAULT = ["okx", "binance", "ccxt", "yfinance", "local"];
 const FOREX_DEFAULT = ["mt5", "akshare", "yfinance", "local"];
 
-function sourceOrders(overrides: Record<string, string[]> = {}) {
+function sourceOrders(overrides: Record<string, string[]> = {}): SourceOrderEntry[] {
   const base: Array<[string, string[]]> = [
     ["a_share", A_SHARE_DEFAULT],
     ["crypto", CRYPTO_DEFAULT],
@@ -73,8 +74,37 @@ describe("SourcePrioritySettings", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
+    await i18n.changeLanguage("en");
+  });
+
+  it.each([
+    ["en", "Taiwan Equities"], ["zh-CN", "台湾股票"],
+    ["ja", "台湾株"], ["ko", "대만 주식"],
+    ["ar", "الأسهم التايوانية"], ["fa", "سهام تایوان"],
+    ["es", "Acciones de Taiwán"], ["de", "Taiwanesische Aktien"],
+    ["pt-BR", "Ações de Taiwan"], ["id", "Saham Taiwan"],
+    ["tr", "Tayvan Hisseleri"],
+  ])("renders the Taiwan source-order option in %s", async (language, label) => {
+    await i18n.changeLanguage(language);
+    const settings = dataSourceSettings();
+    settings.source_orders = [{
+      market: "taiwan_equity",
+      env_var: "MARKET_DATA_ORDER_TAIWAN_EQUITY",
+      default_order: ["yahoo", "yfinance", "local"],
+      effective_order: ["yahoo", "yfinance", "local"],
+      override: null,
+      override_invalid: false,
+    }];
+    apiMock.getDataSourceSettings.mockResolvedValue(settings);
+    render(<SourcePrioritySettings />);
+
+    const option = await screen.findByRole("option", { name: label });
+    expect(option).toHaveValue("taiwan_equity");
+    expect(option).not.toHaveTextContent("taiwan_equity");
+    expect(screen.getByRole("combobox")).toHaveValue("taiwan_equity");
+    expect(screen.getByText("yahoo")).toBeInTheDocument();
   });
 
   it("renders the default order for the first market with boundary-disabled reordering", async () => {

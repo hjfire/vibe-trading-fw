@@ -175,6 +175,7 @@ def write_run_card(
     warnings: Sequence[str] | None = None,
     artifact_refs: Sequence[Mapping[str, Any]] | None = None,
     tool_traces: Sequence[Mapping[str, Any]] | None = None,
+    benchmark_input: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Write JSON and Markdown run cards for a backtest run.
 
@@ -190,6 +191,8 @@ def write_run_card(
         artifact_refs: Optional IRR-AGL artifact references.
         tool_traces: Optional tool events. Arguments and results are hashed
             before serialization.
+        benchmark_input: Ticker and artifact path for the reference prices used
+            by this run, with a source timezone when applicable.
 
     Returns:
         The run card payload written to ``run_card.json``.
@@ -219,6 +222,19 @@ def write_run_card(
         "model_provenance": model_provenance,
         "artifacts": _list_artifacts(run_dir),
     }
+    if benchmark_input is not None:
+        card["benchmark_input"] = dict(benchmark_input)
+    if config.get("engine", "daily") == "daily":
+        delay = config.get("intentional_signal_delay_bars", 0)
+        card["signal_timing"] = {
+            "engine_delay_bars": 1,
+            "intentional_signal_delay_bars": delay,
+        }
+        if delay:
+            card["warnings"].append(
+                f"Strategy declares {delay} intentional extra signal-delay bar(s), "
+                "in addition to the engine's next-open execution delay."
+            )
     if "_run_card_bars_per_year" in config:
         card["annualisation"] = {"bars_per_year": config["_run_card_bars_per_year"]}
     normalized_refs = _normalize_artifact_refs(artifact_refs)

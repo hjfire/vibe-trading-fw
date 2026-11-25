@@ -10,7 +10,9 @@ is money flowing in / who is buying" style questions.
 ## 1. Financial indicators — `stock_financial_analysis_indicator` (verified OK)
 
 ```python
-df = ak.stock_financial_analysis_indicator(symbol="600519", start_year="2023")
+from src.data_gateway.skill_sources import akshare_query
+
+df = akshare_query("stock_financial_analysis_indicator", symbol="600519", start_year="2023")
 # 14 rows x 86 cols: 摊薄每股收益, 加权净资产收益率, 每股经营性现金流, ...
 ```
 
@@ -20,7 +22,7 @@ df = ak.stock_financial_analysis_indicator(symbol="600519", start_year="2023")
 ## 2. Valuation time series — `stock_value_em` (verified OK)
 
 ```python
-df = ak.stock_value_em(symbol="600519")
+df = akshare_query("stock_value_em", symbol="600519")
 # cols: 数据日期, 当日收盘价, 总市值, 流通市值, PE(TTM), PE(静), 市净率, PEG值, 市现率...
 ```
 
@@ -31,7 +33,7 @@ df = ak.stock_value_em(symbol="600519")
 ## 3. Earnings reports by quarter — `stock_yjbb_em` (verified OK, slow)
 
 ```python
-df = ak.stock_yjbb_em(date="20250331")   # report period end: 0331/0630/0930/1231
+df = akshare_query("stock_yjbb_em", date="20250331")   # report period end: 0331/0630/0930/1231
 # whole-market table (6000+ rows): 股票代码, 每股收益, 净利润-同比增长, 净资产收益率...
 ```
 
@@ -42,7 +44,7 @@ df = ak.stock_yjbb_em(date="20250331")   # report period end: 0331/0630/0930/123
 ## 4. Northbound / southbound flow — `stock_hsgt_fund_flow_summary_em` (verified OK)
 
 ```python
-df = ak.stock_hsgt_fund_flow_summary_em()
+df = akshare_query("stock_hsgt_fund_flow_summary_em")
 # rows: 沪股通/深股通(北向) + 港股通沪/深(南向) for the latest trading day
 # cols: 交易日, 类型, 板块, 资金方向, 成交净买额, 资金净流入, 当日资金余额, 上涨数, 相关指数...
 ```
@@ -55,7 +57,7 @@ df = ak.stock_hsgt_fund_flow_summary_em()
 ## 5. Dragon-tiger board — `stock_lhb_detail_em` (verified OK)
 
 ```python
-df = ak.stock_lhb_detail_em(start_date="20260817", end_date="20260821")
+df = akshare_query("stock_lhb_detail_em", start_date="20260817", end_date="20260821")
 # cols: 代码, 名称, 上榜日, 解读, 收盘价, 涨跌幅, 龙虎榜净买额, 龙虎榜买入额, ...
 ```
 

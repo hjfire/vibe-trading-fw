@@ -5,7 +5,78 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — 2026-11-14
+
+- Unified provider configuration and discovery across Agent, CLI, API, Swarm
+  and Desktop credential storage. Each client keeps its resolved settings;
+  native adapters honor explicit proxy routing. Cross-origin redirects are
+  refused before forwarding credentials or request bodies.
+- Added Web version checks and opt-in signed Desktop update handling with
+  verification and recovery. Desktop distribution still requires a configured
+  update feed and publisher certificates.
+- Integrated with the current research runtime: direct answer streaming,
+  instrument identity checks and interrupted Swarm continuation remain intact.
+  Obsolete numeric redaction and forced answer rewriting are not restored.
+- Fixed Options Lab comparison translation-key typing so the frontend builds.
+
 ### Fixed
+
+- Memory search uses trigger-safe updates and repairs legacy FTS indexes once
+  on upgrade, preventing stale terms from matching unrelated memories (#2234).
+- Anthropic temperature recovery recognizes the reported field-validation
+  error without treating unrelated extra-input errors as temperature refusals
+  (#2218, #2221); streams are never replayed after emitting output.
+- Signal pairing approvals work for phone/UUID identities without publishing
+  empty denied messages or bypassing disabled-DM and group policies (#2233).
+- Napcat preserves accompanying text when image-size metadata is malformed or
+  overflows, while continuing to enforce the actual download byte limit
+  (#2227, #2230). Mixed-success PDF OCR reports degraded quality (#2228, #2231).
+- AKShare history loaders accept current and legacy A-share, US, HK and FX
+  endpoint names, including the unadjusted A-share companion. Upstream access
+  failures remain visible in public-loader health checks.
+
+- Grounding reads explicit currency and magnitude suffixes in numeric tool
+  fields such as `revenue_usd_bn`, preserving valid currency-marked claims
+  while checking the referenced field in base units.
+- Daily generated strategies now reject detected shifts forwarded to output
+  targets before running, with an actionable correction. Indicator lookbacks
+  remain valid; explicitly intentional extra delays require a configuration
+  declaration and are disclosed in the run card.
+- Grounding preserves full English magnitude units and links rounded, scaled
+  prose to precise observed declarations. The referenced field, currency and
+  written-precision checks remain enforced; undeclared evidence is not widened.
+
+- Shadow-account backtests now pass the requested capital as `initial_cash`,
+  and invalidate cached results produced before that correction.
+- Swarm workers report token-truncated responses as `token_limit`, including
+  partial tool calls. Investment-committee PMs may synthesize their mapped
+  upstream reports without an unnecessary data call; missing or invalid
+  upstream reports retain the existing evidence requirement.
+- Native Anthropic calls default to a configurable 16,384-token output budget
+  rather than depending on model-alias recognition. Set `ANTHROPIC_MAX_TOKENS`
+  explicitly for models with a smaller limit or reports requiring more output.
+
+#### Options Lab
+
+- Volatility surface grids check strike coverage only at requested expiries or
+  their adjacent interpolation slices; unrelated narrow quote slices no longer
+  reject valid grids. Required-slice extrapolation remains refused.
+
+- Switching language during an option-chain refresh no longer leaves loading
+  stuck; late responses after unmount remain ignored.
+- Presets use one strike grid with distinct levels and symmetric wings, so
+  low-priced underlyings do not collapse spreads, condors or butterflies into
+  offsetting positions.
+- The strategy builder stops at the API's 20-leg limit and rejects oversized
+  restored drafts before submitting them; removing legs remains available.
+
+- Quantity inputs preserve their numeric value: fractional contracts remain
+  invalid instead of being silently truncated, and `1e2` means 100 contracts.
+- Option-chain expiration labels retain the source's UTC calendar date in all
+  browser timezones, rather than showing the previous day west of UTC.
+- Retrying a failed chain request keeps its ticker and selected expiration,
+  even after the failed response clears the displayed chain or the ticker
+  input has been edited.
 
 #### Backtest runner, engines and metrics
 
@@ -23,6 +94,39 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   excess return from 22.53% to 18.43% and the information ratio from 0.236 to
   0.172; strategy metrics are unchanged. Runs without a warm-up boundary also
   move, by the first bar's open-to-close.
+- **A code no market rule recognises is refused instead of run on A-share
+  rules**. The engine's trading rules are chosen from the code, and a code no
+  routing rule matched (`BHP.AX`, `7203.T`, `SAP.DE`, `BRK.B`, a bare HK
+  `00700`) fell through to the A-share default: a local
+  dataset under `local:BHP.AX` loaded and ran with T+1, the ±10% band,
+  100-share lots and CNY, and under `yfinance` the same codes ran on US rules.
+  Both runs succeeded. The config check now refuses such a code before any
+  data is fetched and names the suffixes it understands. A bare six-digit code
+  (`600519`) and Yahoo's Shanghai spelling (`600519.SS`) are still read as
+  mainland listings.
+
+#### Research artifacts
+
+- **An empty revision id no longer exports the whole series**.
+  `vibe-trading research-artifact export --from-revision-id= --to-revision-id=`
+  (an unset shell variable, say) treated the empty ids as absent and wrote the
+  full-series export with exit 0. Empty ids are now an error, as they already
+  were over the API.
+
+#### Shadow account
+
+- **A shadow report with no journal no longer claims the real account broke
+  even** (#2205). When no journal path was supplied, the file was missing or
+  unreadable, or the journal had no closed roundtrips, the real side was
+  recorded as `0.0` and the delta as the shadow PnL itself: the report
+  printed a caption like "Shadow 12500.00 | Real 0.00" with a positive Delta
+  PnL, which reads as a measured break-even on the real account.
+  `real_total_pnl` is now `None` on those four paths and the delta is
+  computed only when both sides were measured; the HTML and PDF reports say
+  the real side is unknown instead of printing a number, and they omit the
+  zero-valued attribution rows and counterfactual all-clear when the analysis
+  never ran. Cached results produced before the change miss once and re-run,
+  because a stored `0.0` cannot be told apart from a measured one.
 
 ## [0.1.19] — 2026-11-05
 

@@ -69,7 +69,7 @@ def _args(**overrides):
 @pytest.fixture()
 def _captured(monkeypatch):
     """Replace the runner and the dotenv touch so only the routing is under test."""
-    import src.providers.llm as llm
+    import src.providers.settings as settings
 
     calls: list[dict] = []
 
@@ -78,7 +78,7 @@ def _captured(monkeypatch):
         return _envelope()
 
     monkeypatch.setattr(cli_handlers, "Registry", _FakeReg)
-    monkeypatch.setattr(llm, "_ensure_dotenv", lambda: None)
+    monkeypatch.setattr(settings, "_ensure_dotenv", lambda: None)
     monkeypatch.setattr(cli_handlers, "compare_alphas", fake_compare)
     return calls
 

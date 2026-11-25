@@ -11,10 +11,10 @@ when the user just needs recent minute data.
 ## 1. Sina minute bars — `stock_zh_a_minute` (primary, verified OK)
 
 ```python
-import akshare as ak
+from src.data_gateway.skill_sources import akshare_query
 
 # period: "1" | "5" | "15" | "30" | "60"; adjust: "" | "qfq" | "hfq"
-df = ak.stock_zh_a_minute(symbol="sh600519", period="5", adjust="qfq")
+df = akshare_query("stock_zh_a_minute", symbol="sh600519", period="5", adjust="qfq")
 # columns: day, open, high, low, close, volume   (English, lowercase)
 df["day"] = pd.to_datetime(df["day"])
 df = df.set_index("day").sort_index().astype(float)  # values arrive as strings
@@ -30,7 +30,7 @@ df = df.set_index("day").sort_index().astype(float)  # values arrive as strings
 ## 2. East Money minute bars — `stock_zh_a_hist_min_em` (may be blocked)
 
 ```python
-df = ak.stock_zh_a_hist_min_em(symbol="000001", period="5", adjust="")
+df = akshare_query("stock_zh_a_hist_min_em", symbol="000001", period="5", adjust="")
 # period: 1/5/15/30/60; symbol: pure digits (no suffix)
 ```
 
@@ -44,7 +44,7 @@ df = ak.stock_zh_a_hist_min_em(symbol="000001", period="5", adjust="")
 ## 3. Tick / intraday transaction flow
 
 ```python
-df = ak.stock_intraday_em(symbol="000001")  # 逐笔成交 — also push2-based, may be blocked
+df = akshare_query("stock_intraday_em", symbol="000001")  # 逐笔成交 — also push2-based, may be blocked
 ```
 
 ## Practical rules for the agent

@@ -193,7 +193,7 @@ def test_empty_string_resets_to_default(
     rotated.append(registry.get_default_source_order("a_share")[0])
     monkeypatch.setenv("MARKET_DATA_ORDER_A_SHARE", ",".join(rotated))
     refresh_source_order_overrides()
-    assert registry.FALLBACK_CHAINS["a_share"][0] == rotated[0]
+    assert registry.FALLBACK_CHAINS["a_share"] == rotated
 
     monkeypatch.setenv("MARKET_DATA_ORDER_A_SHARE", "")
     refresh_source_order_overrides()

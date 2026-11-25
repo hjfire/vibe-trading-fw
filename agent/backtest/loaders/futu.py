@@ -16,6 +16,7 @@ from backtest.loaders.base import (
     validate_date_range,
 )
 from backtest.loaders.registry import register
+from src.data_gateway.reads import availability_probe
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ class FutuLoader:
         self._host = cfg.futu_host
         self._port = cfg.futu_port
 
+    @availability_probe
     def is_available(self) -> bool:
         """Return True when FutuOpenD is configured and accepting connections.
 

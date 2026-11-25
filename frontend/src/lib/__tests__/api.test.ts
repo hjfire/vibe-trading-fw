@@ -8,6 +8,16 @@ async function loadApiModule() {
 
 describe("generated report download", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  it("downloads OOS equity CSV with bearer authentication", async () => {
+    vi.stubGlobal("localStorage", { getItem: vi.fn((key) => key === "vibe_trading_api_auth_key" ? "research-key" : "en"), setItem: vi.fn(), removeItem: vi.fn() });
+    const fetch = vi.fn().mockResolvedValue(new Response("return,equity\n0.01,101\n", { headers: { "content-type": "text/csv" } }));
+    vi.stubGlobal("fetch", fetch);
+    const { api } = await loadApiModule();
+    const blob = await api.downloadResearchLabOosEquity("job/1");
+    expect(fetch).toHaveBeenCalledWith("/api/research-lab/jobs/job%2F1/report?format=oos_equity_csv", expect.objectContaining({ headers: { Authorization: "Bearer research-key" } }));
+    expect(await blob.text()).toBe("return,equity\n0.01,101\n");
+  });
+
   it("downloads PDF bytes with bearer authentication and keeps the key out of the URL", async () => {
     vi.stubGlobal("localStorage", { getItem: vi.fn((key) => key === "vibe_trading_api_auth_key" ? "report-test-key" : "en"), setItem: vi.fn(), removeItem: vi.fn() });
     const fetch = vi.fn().mockResolvedValue(new Response("%PDF-contents", { headers: { "content-type": "application/pdf" } }));
@@ -42,6 +52,24 @@ describe("api request helper", () => {
     const { api } = await loadApiModule();
     await expect(api.sendMessage("session", "oversized")).rejects.toMatchObject({
       status: 422, code: "message_too_long", message: expect.stringContaining("Shorten it"),
+    });
+  });
+
+  it("surfaces FastAPI validation arrays instead of reducing them to HTTP 422", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: [{
+        loc: ["body", "observations"],
+        msg: "List should have at most 400 items after validation, not 401",
+        type: "too_long",
+      }],
+    }), { status: 422, headers: { "content-type": "application/json" } })));
+    const { api } = await loadApiModule();
+    await expect(api.computeVolatilitySurface({
+      observations: [{ strike: 90, time_to_expiry: 30 / 365, implied_volatility: 0.24 }],
+      spot: 100,
+    })).rejects.toMatchObject({
+      status: 422,
+      message: "body.observations: List should have at most 400 items after validation, not 401",
     });
   });
   beforeEach(() => {
