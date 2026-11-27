@@ -680,6 +680,30 @@
       "basis": "Nested full-window reach: input requires one bar; delay/delta adds lag; a complete n-row operator adds n-1. A recursive statistic seeds at its first observed input and skips missing observations.",
       "source_sha256": "7df515c46a4630a46544c4bfd220d1d808f919ebc528d671d7a9b24365da5ecb"
     },
+    "chip_concentration": {
+      "minimum_bars": 1,
+      "policy": "full_window",
+      "basis": "The recursive chip distribution seeds from the first valid bar and the central-coverage dispersion is available on that same bar.",
+      "source_sha256": "675bf3cdf8e5bd6084a8e3b65a7e6c985825362dc1c4a9d3d722165b77512ddf"
+    },
+    "chip_concentration_change_20": {
+      "minimum_bars": 21,
+      "policy": "full_window",
+      "basis": "The recursive chip distribution seeds from the first valid bar; a 20-row concentration difference first becomes available at row 21.",
+      "source_sha256": "8c9122f55e035b54738c554ac4c9db3170242132b999bd770a6ff4913d641705"
+    },
+    "chip_cost_deviation": {
+      "minimum_bars": 1,
+      "policy": "full_window",
+      "basis": "The recursive chip mean and its mass seed from the first valid bar, so the close's relative deviation is available immediately.",
+      "source_sha256": "9ecf299af81b1d044dc07ed9b35368559842c08a42a8b284b0f134d877c8a764"
+    },
+    "chip_profit_ratio": {
+      "minimum_bars": 1,
+      "policy": "full_window",
+      "basis": "The recursive chip distribution seeds from the first valid bar and the close's cumulative mass fraction is available on that same bar.",
+      "source_sha256": "b224216178a3ca61d1abc3796cb0068970108cb474cf8c31a7ab90b221eef1a2"
+    },
     "fund_accruals": {
       "minimum_bars": 1,
       "policy": "full_window",

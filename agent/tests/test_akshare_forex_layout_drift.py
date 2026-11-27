@@ -124,8 +124,13 @@ def test_a_broken_akshare_raises_instead_of_answering_not_forex(
     # of why the 1.20 move stayed quiet: any import-time failure was re-read as a
     # routing answer. Narrowed to ImportError/AttributeError, a broken install now
     # reaches the caller instead of being answered.
-    for name in ("akshare", "akshare.forex", "akshare.forex.cons", "akshare.fx"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    # A prior test in the same worker may already have cached the new-layout leaf.
+    cached_leaf = types.ModuleType("akshare.fx.cons_forex")
+    cached_leaf.symbol_market_map = {pair: 119 for pair in _TABLE_KEYS}
+    monkeypatch.setitem(sys.modules, "akshare.fx.cons_forex", cached_leaf)
+    for name in tuple(sys.modules):
+        if name == "akshare" or name.startswith("akshare."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
     hook = _ImportHookFails("akshare", RuntimeError("akshare is half-installed"))
     # First, not last: the real PathFinder answers every akshare name, so a hook
     # appended behind it is never consulted.
